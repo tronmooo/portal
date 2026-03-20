@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import { apiRequest } from "./queryClient";
 
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+
 interface User {
   id: string;
   email: string;
@@ -41,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function checkAuthConfig() {
     try {
-      const res = await fetch("/api/auth/config");
+      const res = await fetch(`${API_BASE}/api/auth/config`);
       const data = await res.json();
       setAuthRequired(data.authRequired);
 
@@ -84,7 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } else {
         // Verify token
-        const res = await fetch("/api/auth/me", {
+        const res = await fetch(`${API_BASE}/api/auth/me`, {
           headers: { Authorization: `Bearer ${tokens.access_token}` },
         });
         if (res.ok) {
@@ -185,7 +187,7 @@ export function installAuthInterceptor() {
       // Try refresh first
       if (memoryTokens?.refresh_token) {
         try {
-          const refreshRes = await originalFetch!("/api/auth/refresh", {
+          const refreshRes = await originalFetch!(`${API_BASE}/api/auth/refresh`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ refresh_token: memoryTokens.refresh_token }),
