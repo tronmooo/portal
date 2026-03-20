@@ -107,10 +107,17 @@ interface SearchResults {
 // ─── Quick Actions ─────────────────────────────────────────────────────────────
 
 const QUICK_ACTIONS = [
-  { label: "Go to Dashboard", icon: LayoutDashboard, path: "/dashboard", shortcut: "D" },
-  { label: "Go to Chat",      icon: MessageSquare,   path: "/",         shortcut: "C" },
-  { label: "Go to Trackers",  icon: BarChart2,       path: "/trackers", shortcut: "T" },
-  { label: "Go to Profiles",  icon: Users,           path: "/profiles", shortcut: "P" },
+  { label: "Go to Dashboard",   icon: LayoutDashboard, path: "/dashboard",   shortcut: "D" },
+  { label: "Go to Chat",        icon: MessageSquare,   path: "/",            shortcut: "C" },
+  { label: "Go to Trackers",    icon: BarChart2,       path: "/trackers",    shortcut: "T" },
+  { label: "Go to Profiles",    icon: Users,           path: "/profiles",    shortcut: "P" },
+  { label: "Go to Tasks",       icon: ListTodo,        path: "/tasks",       shortcut: "K" },
+  { label: "Go to Expenses",    icon: DollarSign,      path: "/finance",     shortcut: "E" },
+  { label: "Go to Habits",      icon: Flame,           path: "/habits",      shortcut: "H" },
+  { label: "Go to Calendar",    icon: Calendar,        path: "/calendar",    shortcut: "A" },
+  { label: "Go to Journal",     icon: BookHeart,       path: "/journal",     shortcut: "J" },
+  { label: "Go to Bills",       icon: CreditCard,      path: "/obligations", shortcut: "B" },
+  { label: "Go to Notes",       icon: FileText,        path: "/artifacts",   shortcut: "N" },
 ];
 
 // ─── Shared CommandSearch context (open state lives here) ─────────────────────

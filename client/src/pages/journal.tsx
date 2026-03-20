@@ -4,9 +4,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X } from "lucide-react";
+import { CardHeader, CardTitle } from "@/components/ui/card";
+import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, TrendingUp, BarChart2 } from "lucide-react";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
   amazing: { icon: Sparkles, label: "Amazing", color: "#6DAA45", bg: "bg-green-500/10" },
@@ -82,6 +83,130 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+const MOOD_SCORE: Record<MoodLevel, number> = { amazing: 5, good: 4, neutral: 3, bad: 2, awful: 1 };
+
+function MoodAnalytics({ entries }: { entries: JournalEntry[] }) {
+  const analytics = useMemo(() => {
+    if (entries.length === 0) return null;
+
+    // Mood distribution
+    const dist: Record<MoodLevel, number> = { amazing: 0, good: 0, neutral: 0, bad: 0, awful: 0 };
+    let totalScore = 0;
+    let totalEnergy = 0;
+    let energyCount = 0;
+
+    for (const e of entries) {
+      dist[e.mood] = (dist[e.mood] || 0) + 1;
+      totalScore += MOOD_SCORE[e.mood] || 3;
+      if (e.energy) { totalEnergy += e.energy; energyCount++; }
+    }
+
+    const avgMood = totalScore / entries.length;
+    const avgEnergy = energyCount > 0 ? totalEnergy / energyCount : 0;
+    const maxMood = (Object.entries(dist) as [MoodLevel, number][]).sort((a, b) => b[1] - a[1])[0];
+
+    // 30-day mood timeline
+    const timeline: { date: string; score: number; mood?: MoodLevel }[] = [];
+    for (let i = 29; i >= 0; i--) {
+      const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      const entry = entries.find(e => e.date === dateStr);
+      timeline.push({
+        date: dateStr,
+        score: entry ? MOOD_SCORE[entry.mood] : 0,
+        mood: entry?.mood,
+      });
+    }
+
+    return { dist, avgMood, avgEnergy, maxMood, timeline, total: entries.length };
+  }, [entries]);
+
+  if (!analytics || analytics.total < 2) return null;
+
+  const maxCount = Math.max(...Object.values(analytics.dist), 1);
+
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {/* Mood Distribution */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <BarChart2 className="h-4 w-4" />
+            Mood Distribution
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pb-3 space-y-2">
+          {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => {
+            const count = analytics.dist[key] || 0;
+            const pct = analytics.total > 0 ? (count / analytics.total) * 100 : 0;
+            return (
+              <div key={key} className="flex items-center gap-2">
+                <cfg.icon className="h-3.5 w-3.5 shrink-0" style={{ color: cfg.color }} />
+                <span className="text-xs w-14 shrink-0">{cfg.label}</span>
+                <div className="flex-1 h-3 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${pct}%`, backgroundColor: cfg.color }}
+                  />
+                </div>
+                <span className="text-[10px] text-muted-foreground w-6 text-right">{count}</span>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {/* Stats + 30-day timeline */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <TrendingUp className="h-4 w-4" />
+            30-Day Mood Timeline
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pb-3">
+          <div className="flex items-end gap-[2px] h-16 mb-2">
+            {analytics.timeline.map((day, i) => {
+              const height = day.score > 0 ? `${(day.score / 5) * 100}%` : "4px";
+              const cfg = day.mood ? MOOD_CONFIG[day.mood] : null;
+              return (
+                <div
+                  key={i}
+                  className="flex-1 rounded-t-sm min-h-[4px] transition-all"
+                  style={{
+                    height,
+                    backgroundColor: cfg?.color || "var(--color-muted)",
+                    opacity: day.score > 0 ? 1 : 0.2,
+                  }}
+                  title={`${day.date}: ${day.mood || "no entry"}`}
+                />
+              );
+            })}
+          </div>
+          <div className="flex justify-between text-[9px] text-muted-foreground">
+            <span>30d ago</span>
+            <span>Today</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t">
+            <div className="text-center">
+              <p className="text-lg font-bold">{analytics.avgMood.toFixed(1)}</p>
+              <p className="text-[10px] text-muted-foreground">Avg Mood</p>
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-bold">{analytics.avgEnergy.toFixed(1)}</p>
+              <p className="text-[10px] text-muted-foreground">Avg Energy</p>
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-bold">{analytics.total}</p>
+              <p className="text-[10px] text-muted-foreground">Entries</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -201,11 +326,14 @@ export default function JournalPage() {
           {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
         </div>
       ) : (
-        <div className="grid gap-3">
-          {entries.map(entry => (
-            <JournalCard key={entry.id} entry={entry} />
-          ))}
-        </div>
+        <>
+          <MoodAnalytics entries={entries} />
+          <div className="grid gap-3">
+            {entries.map(entry => (
+              <JournalCard key={entry.id} entry={entry} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

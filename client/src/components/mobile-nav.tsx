@@ -1,11 +1,11 @@
 import { Link, useLocation } from "wouter";
-import { MessageSquare, LayoutDashboard, BarChart3, Users } from "lucide-react";
+import { MessageSquare, LayoutDashboard, BarChart3, ListTodo } from "lucide-react";
 
 const TABS = [
   { label: "Chat", href: "/", icon: MessageSquare },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Tasks", href: "/tasks", icon: ListTodo },
   { label: "Trackers", href: "/trackers", icon: BarChart3 },
-  { label: "Profiles", href: "/profiles", icon: Users },
 ];
 
 export function MobileBottomNav() {
@@ -20,9 +20,7 @@ export function MobileBottomNav() {
             <Link key={tab.href} href={tab.href}>
               <button
                 className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors ${
-                  isActive
-                    ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground"
+                  isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
                 }`}
                 data-testid={`mobile-nav-${tab.label.toLowerCase()}`}
               >

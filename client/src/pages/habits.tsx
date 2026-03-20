@@ -4,9 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap } from "lucide-react";
+import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, TrendingUp, Target } from "lucide-react";
 import type { Habit } from "@shared/schema";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
 
@@ -87,6 +87,106 @@ function HabitCard({ habit }: { habit: Habit }) {
   );
 }
 
+function HeatmapGrid({ habits }: { habits: Habit[] }) {
+  const heatmap = useMemo(() => {
+    const days: { date: string; count: number; total: number }[] = [];
+    for (let i = 89; i >= 0; i--) {
+      const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      const count = habits.filter(h => h.checkins.some(c => c.date === dateStr)).length;
+      days.push({ date: dateStr, count, total: habits.length });
+    }
+    return days;
+  }, [habits]);
+
+  if (habits.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <TrendingUp className="h-4 w-4" />
+          90-Day Overview
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pb-3">
+        <div className="flex flex-wrap gap-[3px]">
+          {heatmap.map((day, i) => {
+            const ratio = day.total > 0 ? day.count / day.total : 0;
+            const opacity = ratio === 0 ? 0.08 : 0.2 + ratio * 0.8;
+            return (
+              <div
+                key={i}
+                className="w-[10px] h-[10px] rounded-[2px]"
+                style={{
+                  backgroundColor: ratio > 0 ? "#01696F" : "currentColor",
+                  opacity,
+                }}
+                title={`${day.date}: ${day.count}/${day.total} habits`}
+              />
+            );
+          })}
+        </div>
+        <div className="flex justify-between text-[9px] text-muted-foreground mt-1.5">
+          <span>90 days ago</span>
+          <span>Today</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function HabitStats({ habits }: { habits: Habit[] }) {
+  const stats = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const last30 = new Set<string>();
+    for (let i = 0; i < 30; i++) {
+      last30.add(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+    }
+
+    let totalCheckins30d = 0;
+    let possibleCheckins30d = 0;
+    let longestStreak = 0;
+    let activeStreaks = 0;
+
+    for (const habit of habits) {
+      const checkinDates = new Set(habit.checkins.map(c => c.date));
+      for (const d of last30) {
+        possibleCheckins30d++;
+        if (checkinDates.has(d)) totalCheckins30d++;
+      }
+      longestStreak = Math.max(longestStreak, habit.longestStreak || 0);
+      if ((habit.currentStreak || 0) > 0) activeStreaks++;
+    }
+
+    const consistency = possibleCheckins30d > 0
+      ? Math.round((totalCheckins30d / possibleCheckins30d) * 100)
+      : 0;
+
+    return { consistency, longestStreak, activeStreaks, totalCheckins30d };
+  }, [habits]);
+
+  if (habits.length === 0) return null;
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {[
+        { label: "30d Consistency", value: `${stats.consistency}%`, icon: Target },
+        { label: "Active Streaks", value: stats.activeStreaks, icon: Flame },
+        { label: "Best Streak", value: `${stats.longestStreak}d`, icon: Trophy },
+        { label: "Check-ins (30d)", value: stats.totalCheckins30d, icon: Check },
+      ].map(({ label, value, icon: Icon }) => (
+        <Card key={label} className="p-3">
+          <div className="flex items-center gap-2 text-muted-foreground mb-1">
+            <Icon className="h-3.5 w-3.5" />
+            <span className="text-[10px] uppercase tracking-wide">{label}</span>
+          </div>
+          <p className="text-lg font-bold">{value}</p>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export default function HabitsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -157,11 +257,15 @@ export default function HabitsPage() {
           {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
         </div>
       ) : (
-        <div className="grid gap-3">
-          {habits.map(habit => (
-            <HabitCard key={habit.id} habit={habit} />
-          ))}
-        </div>
+        <>
+          <HabitStats habits={habits} />
+          <HeatmapGrid habits={habits} />
+          <div className="grid gap-3">
+            {habits.map(habit => (
+              <HabitCard key={habit.id} habit={habit} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
