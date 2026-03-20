@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, MapPin, Repeat } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Calendar, Clock, MapPin, Repeat, RefreshCw } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import type { CalendarEvent } from "@shared/schema";
 
 function EventCard({ event }: { event: CalendarEvent }) {
@@ -53,10 +56,33 @@ function EventCard({ event }: { event: CalendarEvent }) {
 }
 
 export default function CalendarPage() {
+  const { toast } = useToast();
+  const [syncing, setSyncing] = useState(false);
   const { data: events = [], isLoading } = useQuery<CalendarEvent[]>({
     queryKey: ["/api/events"],
     queryFn: () => apiRequest("GET", "/api/events").then(r => r.json()),
   });
+
+  const handleGcalSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await apiRequest("POST", "/api/calendar/sync");
+      const data = await res.json();
+      toast({
+        title: "Calendar synced",
+        description: data.message || `Imported ${data.imported} events.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+    } catch {
+      toast({
+        title: "Sync failed",
+        description: "Could not connect to Google Calendar.",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const now = new Date();
   const todayStr = now.toISOString().slice(0, 10);
@@ -103,11 +129,24 @@ export default function CalendarPage() {
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold flex items-center gap-2">
-          <Calendar className="h-5 w-5" /> Calendar
-        </h1>
-        <p className="text-xs text-muted-foreground">{events.length} events, {events.filter(e => e.recurrence !== "none").length} recurring</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold flex items-center gap-2">
+            <Calendar className="h-5 w-5" /> Calendar
+          </h1>
+          <p className="text-xs text-muted-foreground">{events.length} events, {events.filter(e => e.recurrence !== "none").length} recurring</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs gap-1.5"
+          onClick={handleGcalSync}
+          disabled={syncing}
+          data-testid="btn-calendar-page-sync"
+        >
+          <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
+          {syncing ? "Syncing..." : "Sync Google Calendar"}
+        </Button>
       </div>
 
       {isLoading ? (

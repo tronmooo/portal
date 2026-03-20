@@ -20,6 +20,7 @@ import {
   insertEntityLinkSchema,
 } from "@shared/schema";
 import type { ParsedAction } from "@shared/schema";
+import { generateSmartInsights } from "./insights-engine";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -204,8 +205,44 @@ export async function registerRoutes(
 
   // ---- Insights ----
   app.get("/api/insights", async (_req, res) => {
-    const insights = await storage.getInsights();
-    res.json(insights);
+    try {
+      const [profiles, trackers, tasks, expenses, habits, obligations, journal, documents, goals, events] = await Promise.all([
+        storage.getProfiles(),
+        storage.getTrackers(),
+        storage.getTasks(),
+        storage.getExpenses(),
+        storage.getHabits(),
+        storage.getObligations(),
+        storage.getJournalEntries(),
+        storage.getDocuments(),
+        storage.getGoals(),
+        storage.getEvents(),
+      ]);
+      const insights = generateSmartInsights({
+        profiles, trackers, tasks, expenses, habits, obligations, journal, documents, goals, events,
+      });
+      res.json(insights);
+    } catch (err: any) {
+      console.error("Insights error:", err);
+      res.status(500).json({ error: "Failed to generate insights" });
+    }
+  });
+
+  // ---- Calendar Status ----
+  app.get("/api/calendar/status", async (_req, res) => {
+    try {
+      const lastSync = await storage.getPreference("gcal_last_sync");
+      const events = await storage.getEvents();
+      const gcalEvents = events.filter((e: any) => e.tags?.includes("google-calendar"));
+      res.json({
+        connected: true,
+        lastSync,
+        importedCount: gcalEvents.length,
+        totalEvents: events.length,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to get calendar status" });
+    }
   });
 
   // ---- Profiles ----

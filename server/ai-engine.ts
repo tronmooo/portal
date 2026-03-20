@@ -1007,6 +1007,21 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "sync_calendar",
+    description: "Sync events with Google Calendar. Imports new events from Google Calendar into LifeOS. Use when the user asks to sync, import, or pull their Google Calendar events.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        direction: {
+          type: "string",
+          enum: ["import", "both"],
+          description: "Sync direction — 'import' to pull from Google Calendar (default), 'both' for bidirectional",
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ============================================================
@@ -1547,6 +1562,107 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "undo_last": {
       return { message: "Undo is not yet available for this action. Please manually revert the change." };
+    }
+
+    case "sync_calendar": {
+      try {
+        const { execSync } = require("child_process");
+        const now = new Date();
+        const startDate = new Date(now);
+        startDate.setMonth(startDate.getMonth() - 1);
+        const endDate = new Date(now);
+        endDate.setMonth(endDate.getMonth() + 1);
+
+        const params = JSON.stringify({
+          source_id: "gcal",
+          tool_name: "search_calendar",
+          arguments: {
+            start_date: startDate.toISOString().replace("Z", "-07:00"),
+            end_date: endDate.toISOString().replace("Z", "-07:00"),
+            queries: [""],
+          },
+        });
+
+        const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+          timeout: 30000,
+          encoding: "utf-8",
+        });
+        const gcalResult = JSON.parse(stdout);
+        const gcalEvents = gcalResult?.calendar_event_list?.events || [];
+
+        if (gcalEvents.length === 0) {
+          return { synced: 0, message: "No events found in Google Calendar for this period." };
+        }
+
+        const existingEvents = await storage.getEvents();
+        const gcalMappings = new Set<string>();
+        for (const e of existingEvents) {
+          const mapped = await storage.getPreference(`gcal_map_${e.id}`);
+          if (mapped) gcalMappings.add(mapped);
+        }
+
+        let imported = 0;
+        const importedTitles: string[] = [];
+
+        for (const gcEvent of gcalEvents) {
+          const gEventId = gcEvent.event_id || "";
+          if (gcalMappings.has(gEventId)) continue;
+
+          const startParsed = new Date(gcEvent.start);
+          const eventDate = startParsed.toISOString().slice(0, 10);
+          const isDuplicate = existingEvents.some(
+            (e: any) => e.title === gcEvent.title && e.date === eventDate
+          );
+          if (isDuplicate) continue;
+
+          const startTime = gcEvent.is_all_day ? undefined : startParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
+          const endParsed = gcEvent.end ? new Date(gcEvent.end) : null;
+          const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : endParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
+
+          let category: "personal" | "work" | "health" | "social" | "travel" | "finance" | "family" | "education" | "other" = "personal";
+          const combined = ((gcEvent.title || "") + " " + (gcEvent.description || "")).toLowerCase();
+          if (/meeting|standup|sprint|retro|1:1|sync|planning|review/.test(combined)) category = "work";
+          else if (/doctor|dentist|medical|appointment|therapy|vet|checkup/.test(combined)) category = "health";
+          else if (/birthday|party|dinner|lunch|brunch|wedding|anniversary/.test(combined)) category = "social";
+          else if (/gym|workout|run|yoga|fitness|exercise/.test(combined)) category = "health";
+          else if (/flight|hotel|trip|travel|vacation/.test(combined)) category = "travel";
+
+          try {
+            const created = await storage.createEvent({
+              title: gcEvent.title || "Untitled Event",
+              date: eventDate,
+              time: startTime,
+              endTime: endTime,
+              allDay: gcEvent.is_all_day || false,
+              description: gcEvent.description || undefined,
+              location: gcEvent.location || undefined,
+              category,
+              source: "external",
+              tags: ["google-calendar"],
+              linkedProfiles: [],
+              linkedDocuments: [],
+              recurrence: "none",
+            });
+            await storage.setPreference(`gcal_map_${created.id}`, gEventId);
+            imported++;
+            importedTitles.push(gcEvent.title || "Untitled");
+          } catch (err: any) {
+            console.error("Failed to import event:", gcEvent.title, err.message);
+          }
+        }
+
+        await storage.setPreference("gcal_last_sync", new Date().toISOString());
+        return {
+          synced: imported,
+          total: gcalEvents.length,
+          importedTitles,
+          message: imported > 0
+            ? `Imported ${imported} new events from Google Calendar.`
+            : "All Google Calendar events are already synced.",
+        };
+      } catch (err: any) {
+        return { error: "Google Calendar sync failed. Make sure the external-tool CLI is configured.", details: err.message };
+      }
     }
 
     default:

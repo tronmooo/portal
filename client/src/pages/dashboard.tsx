@@ -2708,6 +2708,7 @@ function AIDigestFallback() {
   const { data: insights = [], isLoading } = useQuery<Insight[]>({
     queryKey: ["/api/insights"],
     queryFn: () => apiRequest("GET", "/api/insights").then(r => r.json()),
+    refetchInterval: 5 * 60 * 1000, // Refresh every 5 minutes
   });
 
   if (!isLoading && insights.length === 0) return null;
