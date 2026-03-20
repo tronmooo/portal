@@ -1008,6 +1008,31 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "bulk_delete",
+    description: "Delete multiple entities at once. Use when user says 'delete all expenses from last month', 'remove all completed tasks', 'clear old events'. Always confirm with the user before executing.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        entity_type: { type: "string", enum: ["tasks", "expenses", "events", "habits", "obligations", "artifacts", "journal"], description: "Type of entities to delete" },
+        filter: { type: "string", enum: ["all", "completed", "overdue", "old", "date_range"], description: "Which entities to delete" },
+        before_date: { type: "string", description: "Delete entities before this date (ISO format). Used with date_range filter." },
+        confirmed: { type: "boolean", description: "Must be true to execute. Set to false first to preview what will be deleted." },
+      },
+      required: ["entity_type", "confirmed"],
+    },
+  },
+  {
+    name: "recent_actions",
+    description: "Show recent actions performed in this chat session. Use when user asks 'what did I just create?', 'what did we do?', 'show recent actions', 'what happened?'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        count: { type: "number", description: "Number of recent actions to show (default 5)" },
+      },
+      required: [],
+    },
+  },
+  {
     name: "sync_calendar",
     description: "Sync events with Google Calendar. Imports new events from Google Calendar into LifeOS. Use when the user asks to sync, import, or pull their Google Calendar events.",
     input_schema: {
@@ -1062,6 +1087,12 @@ SMART LINKING: When actions relate to an existing profile, note the connection.
 
 GOOGLE CALENDAR: Events can be synced with Google Calendar. If the user asks to sync or import their calendar, tell them to click the "Sync Google Calendar" button on the dashboard or calendar view. You can create/update events in LifeOS which can then be exported to Google Calendar via the export button. Events imported from Google Calendar are tagged with "google-calendar".
 
+UNDO: You can undo the last delete/update action using the undo_last tool. This restores the previous state. A stack of up to 10 recent actions is maintained.
+
+BULK OPERATIONS: Use bulk_delete to delete multiple entities. Always preview first (confirmed=false), then confirm (confirmed=true) after showing what will be deleted.
+
+RECENT ACTIONS: Use recent_actions to show the user what was done in this session.${actionHistory.length > 0 ? `\n\nRECENT SESSION ACTIONS:\n${actionHistory.slice(-5).map(a => `- ${summarizeActionRecord(a)} (${a.timestamp})`).join("\n")}` : ""}
+
 Today's date: ${new Date().toISOString().split("T")[0]}`;
 }
 
@@ -1115,6 +1146,45 @@ function summarizeSingleItem(item: any): any {
 
   // For payment results, checkin results, etc. — they're already small
   return item;
+}
+
+// ============================================================
+// UNDO STACK — tracks recent actions for undo support
+// ============================================================
+
+interface UndoEntry {
+  toolName: string;
+  entityType: string;
+  entityId: string;
+  previousState: any;
+  timestamp: string;
+}
+
+const undoStack: UndoEntry[] = [];
+const MAX_UNDO_STACK = 10;
+
+function pushUndo(entry: UndoEntry) {
+  undoStack.push(entry);
+  if (undoStack.length > MAX_UNDO_STACK) undoStack.shift();
+}
+
+// ============================================================
+// ACTION HISTORY — tracks recent actions for context awareness
+// ============================================================
+
+interface ActionRecord {
+  toolName: string;
+  input: any;
+  result: any;
+  timestamp: string;
+}
+
+const actionHistory: ActionRecord[] = [];
+const MAX_ACTION_HISTORY = 20;
+
+function recordAction(toolName: string, input: any, result: any) {
+  actionHistory.push({ toolName, input, result, timestamp: new Date().toISOString() });
+  if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
 }
 
 // ============================================================
@@ -1204,6 +1274,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const profiles = await storage.getProfiles();
       const profile = profiles.find(p => p.name.toLowerCase().includes((input.name || "").toLowerCase()));
       if (!profile) return null;
+      pushUndo({ toolName: "delete_profile", entityType: "profile", entityId: profile.id, previousState: { ...profile }, timestamp: new Date().toISOString() });
       await storage.deleteProfile(profile.id);
       return { deleted: true, name: profile.name, id: profile.id };
     }
@@ -1231,6 +1302,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const tasks = await storage.getTasks();
       const task = tasks.find(t => t.title.toLowerCase().includes((input.title || "").toLowerCase()));
       if (!task) return null;
+      pushUndo({ toolName: "delete_task", entityType: "task", entityId: task.id, previousState: { ...task }, timestamp: new Date().toISOString() });
       await storage.deleteTask(task.id);
       return { deleted: true, title: task.title, id: task.id };
     }
@@ -1281,6 +1353,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const expenses = await storage.getExpenses();
       const expense = expenses.find(e => e.description.toLowerCase().includes((input.description || "").toLowerCase()));
       if (!expense) return null;
+      pushUndo({ toolName: "delete_expense", entityType: "expense", entityId: expense.id, previousState: { ...expense }, timestamp: new Date().toISOString() });
       await storage.deleteExpense(expense.id);
       return { deleted: true, description: expense.description, id: expense.id };
     }
@@ -1480,6 +1553,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const habits = await storage.getHabits();
       const match = habits.find(h => h.name.toLowerCase().includes(input.name.toLowerCase()));
       if (!match) return { error: `No habit found matching "${input.name}"` };
+      pushUndo({ toolName: "delete_habit", entityType: "habit", entityId: match.id, previousState: { ...match }, timestamp: new Date().toISOString() });
       await storage.deleteHabit(match.id);
       return { deleted: true, name: match.name, id: match.id };
     }
@@ -1488,6 +1562,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const obligations = await storage.getObligations();
       const match = obligations.find(o => o.name.toLowerCase().includes(input.name.toLowerCase()));
       if (!match) return { error: `No obligation found matching "${input.name}"` };
+      pushUndo({ toolName: "delete_obligation", entityType: "obligation", entityId: match.id, previousState: { ...match }, timestamp: new Date().toISOString() });
       await storage.deleteObligation(match.id);
       return { deleted: true, name: match.name, id: match.id };
     }
@@ -1496,6 +1571,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const events = await storage.getEvents();
       const match = events.find(e => e.title.toLowerCase().includes(input.title.toLowerCase()));
       if (!match) return { error: `No event found matching "${input.title}"` };
+      pushUndo({ toolName: "delete_event", entityType: "event", entityId: match.id, previousState: { ...match }, timestamp: new Date().toISOString() });
       await storage.deleteEvent(match.id);
       return { deleted: true, title: match.title, id: match.id };
     }
@@ -1561,7 +1637,63 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "undo_last": {
-      return { message: "Undo is not yet available for this action. Please manually revert the change." };
+      if (undoStack.length === 0) {
+        return { message: "Nothing to undo. No recent actions in the undo history." };
+      }
+      const entry = undoStack.pop()!;
+      try {
+        switch (entry.entityType) {
+          case "task":
+            if (entry.toolName.startsWith("delete_")) {
+              await storage.createTask(entry.previousState);
+              return { undone: true, action: "Restored deleted task", entity: entry.previousState.title };
+            } else {
+              await storage.updateTask(entry.entityId, entry.previousState);
+              return { undone: true, action: "Reverted task changes", entity: entry.previousState.title };
+            }
+          case "expense":
+            if (entry.toolName.startsWith("delete_")) {
+              await storage.createExpense(entry.previousState);
+              return { undone: true, action: "Restored deleted expense", entity: entry.previousState.description };
+            } else {
+              await storage.updateExpense(entry.entityId, entry.previousState);
+              return { undone: true, action: "Reverted expense changes", entity: entry.previousState.description };
+            }
+          case "event":
+            if (entry.toolName.startsWith("delete_")) {
+              await storage.createEvent(entry.previousState);
+              return { undone: true, action: "Restored deleted event", entity: entry.previousState.title };
+            } else {
+              await storage.updateEvent(entry.entityId, entry.previousState);
+              return { undone: true, action: "Reverted event changes", entity: entry.previousState.title };
+            }
+          case "habit":
+            if (entry.toolName.startsWith("delete_")) {
+              await storage.createHabit(entry.previousState);
+              return { undone: true, action: "Restored deleted habit", entity: entry.previousState.name };
+            }
+            break;
+          case "obligation":
+            if (entry.toolName.startsWith("delete_")) {
+              await storage.createObligation(entry.previousState);
+              return { undone: true, action: "Restored deleted obligation", entity: entry.previousState.name };
+            }
+            break;
+          case "profile":
+            if (entry.toolName.startsWith("delete_")) {
+              await storage.createProfile(entry.previousState);
+              return { undone: true, action: "Restored deleted profile", entity: entry.previousState.name };
+            } else {
+              await storage.updateProfile(entry.entityId, entry.previousState);
+              return { undone: true, action: "Reverted profile changes", entity: entry.previousState.name };
+            }
+          default:
+            return { message: `Undo not supported for ${entry.entityType} actions.` };
+        }
+      } catch (err: any) {
+        return { error: `Undo failed: ${err.message}` };
+      }
+      return { message: "Undo completed." };
     }
 
     case "sync_calendar": {
@@ -1665,8 +1797,129 @@ async function executeTool(name: string, input: any): Promise<any> {
       }
     }
 
+    case "bulk_delete": {
+      const entityType = input.entity_type;
+      const filter = input.filter || "all";
+      const beforeDate = input.before_date;
+      const now = new Date().toISOString().slice(0, 10);
+
+      let items: any[] = [];
+      let deleteFn: (id: string) => Promise<void>;
+      let nameField: string;
+
+      switch (entityType) {
+        case "tasks":
+          items = await storage.getTasks();
+          deleteFn = (id) => storage.deleteTask(id);
+          nameField = "title";
+          break;
+        case "expenses":
+          items = await storage.getExpenses();
+          deleteFn = (id) => storage.deleteExpense(id);
+          nameField = "description";
+          break;
+        case "events":
+          items = await storage.getEvents();
+          deleteFn = (id) => storage.deleteEvent(id);
+          nameField = "title";
+          break;
+        case "habits":
+          items = await storage.getHabits();
+          deleteFn = (id) => storage.deleteHabit(id);
+          nameField = "name";
+          break;
+        case "obligations":
+          items = await storage.getObligations();
+          deleteFn = (id) => storage.deleteObligation(id);
+          nameField = "name";
+          break;
+        case "journal":
+          items = await storage.getJournalEntries();
+          deleteFn = (id) => storage.deleteJournalEntry(id);
+          nameField = "content";
+          break;
+        default:
+          return { error: `Bulk delete not supported for ${entityType}` };
+      }
+
+      // Apply filter
+      let toDelete = items;
+      if (filter === "completed" && entityType === "tasks") {
+        toDelete = items.filter((t: any) => t.status === "done");
+      } else if (filter === "overdue" && entityType === "tasks") {
+        toDelete = items.filter((t: any) => t.status !== "done" && t.dueDate && t.dueDate < now);
+      } else if (filter === "old" || filter === "date_range") {
+        const cutoff = beforeDate || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        toDelete = items.filter((item: any) => {
+          const date = item.date || item.createdAt || item.dueDate || "";
+          return date && date < cutoff;
+        });
+      }
+
+      // Preview mode
+      if (!input.confirmed) {
+        return {
+          preview: true,
+          count: toDelete.length,
+          items: toDelete.slice(0, 10).map((item: any) => item[nameField] || item.id),
+          message: `Found ${toDelete.length} ${entityType} to delete. Set confirmed=true to proceed.`,
+        };
+      }
+
+      // Execute deletion
+      let deleted = 0;
+      for (const item of toDelete) {
+        try {
+          await deleteFn(item.id);
+          deleted++;
+        } catch (err) {
+          console.error(`Failed to delete ${entityType} ${item.id}:`, err);
+        }
+      }
+      return { deleted, entityType, message: `Deleted ${deleted} ${entityType}.` };
+    }
+
+    case "recent_actions": {
+      const count = Math.min(input.count || 5, actionHistory.length);
+      const recent = actionHistory.slice(-count).reverse();
+      if (recent.length === 0) {
+        return { message: "No actions performed in this session yet." };
+      }
+      return {
+        actions: recent.map(a => ({
+          tool: a.toolName,
+          input: a.input,
+          timestamp: a.timestamp,
+          summary: summarizeActionRecord(a),
+        })),
+        count: recent.length,
+      };
+    }
+
     default:
       return null;
+  }
+}
+
+function summarizeActionRecord(action: ActionRecord): string {
+  const { toolName, input } = action;
+  switch (toolName) {
+    case "create_task": return `Created task: "${input.title}"`;
+    case "complete_task": return `Completed task: "${input.title}"`;
+    case "delete_task": return `Deleted task: "${input.title}"`;
+    case "update_task": return `Updated task: "${input.title}"`;
+    case "create_expense": return `Logged expense: $${input.amount} — ${input.description}`;
+    case "delete_expense": return `Deleted expense: "${input.description}"`;
+    case "create_event": return `Created event: "${input.title}"`;
+    case "create_profile": return `Created profile: "${input.name}"`;
+    case "create_habit": return `Created habit: "${input.name}"`;
+    case "checkin_habit": return `Checked in habit: "${input.name}"`;
+    case "journal_entry": return `Journal entry logged`;
+    case "save_memory": return `Saved memory: "${input.key}"`;
+    case "create_goal": return `Created goal: "${input.title}"`;
+    case "bulk_complete_tasks": return `Bulk completed tasks (${input.filter})`;
+    case "bulk_delete": return `Bulk deleted ${input.entity_type}`;
+    default: return `${toolName}(${JSON.stringify(input).slice(0, 50)})`;
   }
 }
 
@@ -1792,6 +2045,9 @@ export async function processMessage(userMessage: string): Promise<{
         try {
           const result = await executeTool(toolUse.name, toolUse.input);
 
+          // Record action for context awareness
+          recordAction(toolUse.name, toolUse.input, result);
+
           // Map tool name to a ParsedAction type for backwards compat
           const actionType = mapToolToActionType(toolUse.name);
           allActions.push({ type: actionType, category: "ai", data: toolUse.input as Record<string, any> });
@@ -1871,6 +2127,9 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     navigate: "retrieve",
     link_entities: "retrieve",
     get_related: "retrieve",
+    bulk_delete: "retrieve",
+    recent_actions: "retrieve",
+    undo_last: "retrieve",
   };
   return mapping[toolName] || "unknown";
 }

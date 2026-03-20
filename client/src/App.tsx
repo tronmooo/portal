@@ -10,8 +10,9 @@ import { MobileBottomNav } from "@/components/mobile-nav";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, LogOut } from "lucide-react";
+import { Sun, Moon, LogOut, WifiOff } from "lucide-react";
 import { Loader2 } from "lucide-react";
+import { useState, useEffect } from "react";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 import {
   CommandSearch,
@@ -75,6 +76,46 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function OfflineBanner() {
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    const goOffline = () => setIsOffline(true);
+    const goOnline = () => {
+      setIsOffline(false);
+      // Tell service worker to replay mutations
+      navigator.serviceWorker?.controller?.postMessage({ type: 'REPLAY_MUTATIONS' });
+    };
+    window.addEventListener('offline', goOffline);
+    window.addEventListener('online', goOnline);
+
+    // Listen for sync complete messages from service worker
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'SYNC_COMPLETE') {
+        setPendingCount(event.data.remaining || 0);
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', handleMessage);
+
+    return () => {
+      window.removeEventListener('offline', goOffline);
+      window.removeEventListener('online', goOnline);
+      navigator.serviceWorker?.removeEventListener('message', handleMessage);
+    };
+  }, []);
+
+  if (!isOffline) return null;
+
+  return (
+    <div className="bg-yellow-500/90 text-yellow-950 text-xs font-medium px-3 py-1.5 flex items-center justify-center gap-2 shrink-0">
+      <WifiOff className="h-3.5 w-3.5" />
+      <span>You're offline. Changes will sync when you reconnect.</span>
+      {pendingCount > 0 && <span>({pendingCount} pending)</span>}
+    </div>
+  );
+}
+
 function AppRouter() {
   return (
     <Switch>
@@ -110,6 +151,7 @@ function App() {
                     <AppSidebar />
                   </div>
                   <div className="flex flex-col flex-1 min-w-0">
+                    <OfflineBanner />
                     <header className="flex items-center justify-between px-3 py-2 border-b border-border bg-background/80 backdrop-blur-sm shrink-0">
                       <div className="hidden md:block">
                         <SidebarTrigger data-testid="button-sidebar-toggle" />
