@@ -1,0 +1,177 @@
+export interface IStorage {
+  // Profiles
+  getProfiles(): Promise<Profile[]>;
+  getProfile(id: string): Promise<Profile | undefined>;
+  getProfileDetail(id: string): Promise<ProfileDetail | undefined>;
+  createProfile(data: InsertProfile): Promise<Profile>;
+  updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined>;
+  deleteProfile(id: string): Promise<boolean>;
+  linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void>;
+
+  // Trackers
+  getTrackers(): Promise<Tracker[]>;
+  getTracker(id: string): Promise<Tracker | undefined>;
+  createTracker(data: InsertTracker): Promise<Tracker>;
+  updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined>;
+  logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined>;
+  deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean>;
+  deleteTracker(id: string): Promise<boolean>;
+
+  // Tasks
+  getTasks(): Promise<Task[]>;
+  getTask(id: string): Promise<Task | undefined>;
+  createTask(data: InsertTask): Promise<Task>;
+  updateTask(id: string, data: Partial<Task>): Promise<Task | undefined>;
+  deleteTask(id: string): Promise<boolean>;
+
+  // Expenses
+  getExpenses(): Promise<Expense[]>;
+  createExpense(data: InsertExpense): Promise<Expense>;
+  updateExpense(id: string, data: Partial<Expense>): Promise<Expense | undefined>;
+  deleteExpense(id: string): Promise<boolean>;
+
+  // Events
+  getEvents(): Promise<CalendarEvent[]>;
+  getEvent(id: string): Promise<CalendarEvent | undefined>;
+  createEvent(data: InsertEvent): Promise<CalendarEvent>;
+  updateEvent(id: string, data: Partial<CalendarEvent>): Promise<CalendarEvent | undefined>;
+  deleteEvent(id: string): Promise<boolean>;
+
+  // Unified calendar timeline
+  getCalendarTimeline(startDate: string, endDate: string): Promise<CalendarTimelineItem[]>;
+
+  // Documents
+  getDocuments(): Promise<Document[]>;
+  getDocument(id: string): Promise<Document | undefined>;
+  createDocument(data: any): Promise<Document>;
+  updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
+  deleteDocument(id: string): Promise<boolean>;
+  getDocumentsForProfile(profileId: string): Promise<Document[]>;
+
+  // Habits
+  getHabits(): Promise<Habit[]>;
+  getHabit(id: string): Promise<Habit | undefined>;
+  createHabit(data: InsertHabit): Promise<Habit>;
+  checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined>;
+  deleteHabit(id: string): Promise<boolean>;
+
+  // Obligations
+  getObligations(): Promise<Obligation[]>;
+  getObligation(id: string): Promise<Obligation | undefined>;
+  createObligation(data: InsertObligation): Promise<Obligation>;
+  updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined>;
+  payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string): Promise<ObligationPayment | undefined>;
+  deleteObligation(id: string): Promise<boolean>;
+
+  // Artifacts
+  getArtifacts(): Promise<Artifact[]>;
+  getArtifact(id: string): Promise<Artifact | undefined>;
+  createArtifact(data: InsertArtifact): Promise<Artifact>;
+  updateArtifact(id: string, data: Partial<Artifact>): Promise<Artifact | undefined>;
+  toggleChecklistItem(artifactId: string, itemId: string): Promise<Artifact | undefined>;
+  deleteArtifact(id: string): Promise<boolean>;
+
+  // Journal
+  getJournalEntries(): Promise<JournalEntry[]>;
+  createJournalEntry(data: InsertJournalEntry): Promise<JournalEntry>;
+  updateJournalEntry(id: string, data: Partial<JournalEntry>): Promise<JournalEntry | undefined>;
+  deleteJournalEntry(id: string): Promise<boolean>;
+
+  // Memory
+  getMemories(): Promise<MemoryItem[]>;
+  saveMemory(data: InsertMemory): Promise<MemoryItem>;
+  recallMemory(query: string): Promise<MemoryItem[]>;
+  deleteMemory(id: string): Promise<boolean>;
+
+  // Domains
+  getDomains(): Promise<Domain[]>;
+  createDomain(data: InsertDomain): Promise<Domain>;
+  getDomainEntries(domainId: string): Promise<DomainEntry[]>;
+  addDomainEntry(domainId: string, values: Record<string, any>, tags?: string[], notes?: string): Promise<DomainEntry | undefined>;
+
+  // Dashboard
+  getStats(): Promise<DashboardStats>;
+  getDashboardEnhanced(): Promise<any>;
+
+  // Insights
+  getInsights(): Promise<Insight[]>;
+
+  // Search
+  search(query: string): Promise<any[]>;
+}
+export function computeSecondaryData(trackerName: string, category: string, values: Record<string, any>): ComputedData {
+  const computed: ComputedData = {};
+  const name = trackerName.toLowerCase();
+
+  // Running / Cardio
+  if (name.includes("run") || name.includes("jog") || (category === "fitness" && values.distance)) {
+    const distance = parseFloat(values.distance) || 0;
+    const duration = parseDuration(values.duration);
+    if (distance > 0) {
+      computed.distanceMiles = distance;
+      computed.caloriesBurned = Math.round(distance * 100);
+      computed.intensity = distance > 6 ? "extreme" : distance > 4 ? "high" : distance > 2 ? "moderate" : "low";
+    }
+    if (duration > 0 && distance > 0) {
+      computed.durationMinutes = duration;
+      const paceSecondsPerMile = (duration * 60) / distance;
+      computed.paceSeconds = Math.round(paceSecondsPerMile);
+      const paceMin = Math.floor(paceSecondsPerMile / 60);
+      const paceSec = Math.round(paceSecondsPerMile % 60);
+      computed.pace = `${paceMin}:${String(paceSec).padStart(2, "0")}/mi`;
+    }
+    if (computed.paceSeconds) {
+      if (computed.paceSeconds < 420) computed.heartRateZone = "peak";
+      else if (computed.paceSeconds < 510) computed.heartRateZone = "cardio";
+      else if (computed.paceSeconds < 600) computed.heartRateZone = "fat_burn";
+      else computed.heartRateZone = "recovery";
+    }
+  }
+
+  // Walking
+  if (name.includes("walk") || name.includes("hike")) {
+    const distance = parseFloat(values.distance) || parseFloat(values.steps) / 2000 || 0;
+    if (distance > 0) {
+      computed.distanceMiles = distance;
+      computed.caloriesBurned = Math.round(distance * 80);
+      computed.intensity = "low";
+      computed.heartRateZone = "fat_burn";
+    }
+  }
+
+  // Cycling
+  if (name.includes("cycl") || name.includes("bike") || name.includes("ride")) {
+    const distance = parseFloat(values.distance) || 0;
+    if (distance > 0) {
+      computed.distanceMiles = distance;
+      computed.caloriesBurned = Math.round(distance * 50);
+      computed.intensity = distance > 20 ? "high" : distance > 10 ? "moderate" : "low";
+    }
+  }
+
+  // Weight / Gym
+  if (name.includes("weight") && category === "fitness") {
+    const duration = parseDuration(values.duration) || 45;
+    computed.caloriesBurned = Math.round(duration * 7);
+    computed.durationMinutes = duration;
+    computed.intensity = "moderate";
+  }
+
+  // Yoga / Stretching
+  if (name.includes("yoga") || name.includes("stretch") || name.includes("pilates")) {
+    const duration = parseDuration(values.duration) || 30;
+    computed.caloriesBurned = Math.round(duration * 4);
+    computed.durationMinutes = duration;
+    computed.intensity = "low";
+    computed.heartRateZone = "recovery";
+  }
+
+  // Swimming
+  if (name.includes("swim")) {
+    const duration = parseDuration(values.duration) || 30;
+    computed.caloriesBurned = Math.round(duration * 10);
+    computed.durationMinutes = duration;
+    computed.intensity = "high";
+    computed.heartRateZone = "cardio";
+  }
+
