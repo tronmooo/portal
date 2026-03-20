@@ -140,20 +140,41 @@ export function useCommandSearch() {
 
 // ─── Provider (wraps the app, manages open state) ─────────────────────────────
 
+const NAV_SHORTCUTS: Record<string, string> = {
+  d: "/dashboard", c: "/", t: "/trackers", p: "/profiles",
+  k: "/tasks", e: "/finance", h: "/habits", a: "/calendar",
+  j: "/journal", b: "/obligations", n: "/artifacts",
+};
+
 export function CommandSearchProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [, navigate] = useLocation();
 
-  // Cmd+K / Ctrl+K global shortcut
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Cmd+K / Ctrl+K — toggle search
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setOpen((v) => !v);
+        return;
+      }
+
+      // Skip if typing in an input, textarea, or contentEditable
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      // Skip if modifier keys held
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      // Single-key navigation
+      const path = NAV_SHORTCUTS[e.key.toLowerCase()];
+      if (path) {
+        e.preventDefault();
+        navigate(path);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [navigate]);
 
   return (
     <CommandSearchContext.Provider value={{ open, setOpen }}>

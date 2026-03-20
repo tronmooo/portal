@@ -4,9 +4,9 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar, Clock, MapPin, Repeat, RefreshCw } from "lucide-react";
+import { Calendar, Clock, MapPin, Repeat, RefreshCw, ListTodo, CreditCard, Cake } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import type { CalendarEvent } from "@shared/schema";
+import type { CalendarEvent, Task, Obligation } from "@shared/schema";
 
 function EventCard({ event }: { event: CalendarEvent }) {
   const dateObj = new Date(event.date);
@@ -55,12 +55,36 @@ function EventCard({ event }: { event: CalendarEvent }) {
   );
 }
 
+interface TimelineItem {
+  id: string;
+  type: "event" | "task" | "obligation";
+  title: string;
+  displayDate: string;
+  time?: string;
+  icon: any;
+  color: string;
+  meta?: string;
+}
+
 export default function CalendarPage() {
   const { toast } = useToast();
   const [syncing, setSyncing] = useState(false);
+  const [showTasks, setShowTasks] = useState(true);
+  const [showBills, setShowBills] = useState(true);
+
   const { data: events = [], isLoading } = useQuery<CalendarEvent[]>({
     queryKey: ["/api/events"],
     queryFn: () => apiRequest("GET", "/api/events").then(r => r.json()),
+  });
+
+  const { data: tasks = [] } = useQuery<Task[]>({
+    queryKey: ["/api/tasks"],
+    queryFn: () => apiRequest("GET", "/api/tasks").then(r => r.json()),
+  });
+
+  const { data: obligations = [] } = useQuery<Obligation[]>({
+    queryKey: ["/api/obligations"],
+    queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
   });
 
   const handleGcalSync = async () => {
@@ -149,12 +173,89 @@ export default function CalendarPage() {
         </Button>
       </div>
 
+      {/* Filter toggles */}
+      <div className="flex gap-2">
+        <Button size="sm" variant={showTasks ? "default" : "outline"} onClick={() => setShowTasks(!showTasks)} className="h-7 text-xs gap-1">
+          <ListTodo className="h-3 w-3" /> Tasks
+        </Button>
+        <Button size="sm" variant={showBills ? "default" : "outline"} onClick={() => setShowBills(!showBills)} className="h-7 text-xs gap-1">
+          <CreditCard className="h-3 w-3" /> Bills
+        </Button>
+      </div>
+
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map(i => <div key={i} className="h-20 rounded-lg bg-muted animate-pulse" />)}
         </div>
       ) : (
         <>
+          {/* Task due dates */}
+          {showTasks && (() => {
+            const dueTasks = tasks.filter(t => t.dueDate && t.status !== "done");
+            const todayTasks = dueTasks.filter(t => t.dueDate === todayStr);
+            const overdueTasks = dueTasks.filter(t => t.dueDate! < todayStr);
+            if (todayTasks.length === 0 && overdueTasks.length === 0) return null;
+            return (
+              <div className="space-y-1">
+                {overdueTasks.length > 0 && (
+                  <>
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-red-500">Overdue Tasks</h2>
+                    {overdueTasks.map(t => (
+                      <Card key={`task-${t.id}`} className="border-red-500/30">
+                        <CardContent className="p-2 flex items-center gap-2">
+                          <ListTodo className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                          <span className="text-sm flex-1 truncate">{t.title}</span>
+                          <span className="text-[10px] text-red-500">{t.dueDate}</span>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </>
+                )}
+                {todayTasks.length > 0 && (
+                  <>
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-amber-500">Tasks Due Today</h2>
+                    {todayTasks.map(t => (
+                      <Card key={`task-${t.id}`} className="border-amber-500/30">
+                        <CardContent className="p-2 flex items-center gap-2">
+                          <ListTodo className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                          <span className="text-sm flex-1 truncate">{t.title}</span>
+                          <Badge variant="outline" className="text-[10px] h-4">{t.priority}</Badge>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Upcoming bill payments */}
+          {showBills && (() => {
+            const dueSoon = obligations.filter(o => {
+              const d = new Date(o.nextDueDate);
+              const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+              return diff >= 0 && diff <= 14;
+            }).sort((a, b) => a.nextDueDate.localeCompare(b.nextDueDate));
+            if (dueSoon.length === 0) return null;
+            return (
+              <div className="space-y-1">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Bills Due Soon</h2>
+                {dueSoon.map(o => (
+                  <Card key={`ob-${o.id}`}>
+                    <CardContent className="p-2 flex items-center gap-2">
+                      <CreditCard className="h-3.5 w-3.5 text-primary shrink-0" />
+                      <span className="text-sm flex-1 truncate">{o.name}</span>
+                      <span className="text-xs font-semibold">${o.amount}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {new Date(o.nextDueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      </span>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            );
+          })()}
+
           {todayEvents.length > 0 && (
             <div className="space-y-2">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-primary">Today</h2>
