@@ -30,11 +30,11 @@ export async function registerRoutes(
   // ---- Chat / AI ----
   app.post("/api/chat", async (req, res) => {
     try {
-      const { message } = req.body;
+      const { message, history } = req.body;
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Message required" });
       }
-      const result = await processMessage(message);
+      const result = await processMessage(message, Array.isArray(history) ? history : undefined);
       res.json(result);
     } catch (err: any) {
       console.error("Chat error:", err);
@@ -1128,6 +1128,121 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch (err: any) {
       console.error("Import error:", err);
       res.status(500).json({ error: "Import failed" });
+    }
+  });
+
+  // ---- CSV Bank Import ----
+  app.post("/api/import/bank-csv", async (req, res) => {
+    try {
+      // Accept JSON { csv: "..." } or raw text/csv body
+      let csv: string;
+      if (typeof req.body === "string") {
+        csv = req.body;
+      } else if (req.body?.csv && typeof req.body.csv === "string") {
+        csv = req.body.csv;
+      } else if (req.rawBody && Buffer.isBuffer(req.rawBody)) {
+        csv = (req.rawBody as Buffer).toString("utf-8");
+      } else {
+        return res.status(400).json({ error: "CSV data required — send as JSON { csv: '...' } or raw text/csv body" });
+      }
+
+      // Parse CSV lines
+      const lines = csv.split("\n").map(l => l.trim()).filter(Boolean);
+      if (lines.length < 2) {
+        return res.status(400).json({ error: "CSV must have a header row and at least one data row" });
+      }
+
+      // Parse header — auto-detect column mapping
+      const header = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/['"]/g, ""));
+      const colMap: Record<string, number> = {};
+      for (let i = 0; i < header.length; i++) {
+        const h = header[i];
+        if (!colMap.date && /date|posted|trans/.test(h)) colMap.date = i;
+        if (!colMap.amount && /amount|debit|credit|sum|total/.test(h)) colMap.amount = i;
+        if (!colMap.description && /desc|memo|narr|detail|merchant|payee|name/.test(h)) colMap.description = i;
+        if (!colMap.category && /cat|type|class/.test(h)) colMap.category = i;
+      }
+
+      if (colMap.amount === undefined) {
+        return res.status(400).json({ error: "Could not detect an amount column in the CSV header" });
+      }
+
+      // Auto-categorize based on keywords
+      const CATEGORY_KEYWORDS: Record<string, string[]> = {
+        "food": ["grocery", "restaurant", "uber eats", "doordash", "grubhub", "mcdonald", "starbucks", "coffee", "cafe", "pizza", "chipotle", "subway", "diner", "bakery", "food"],
+        "transport": ["uber", "lyft", "gas", "fuel", "parking", "toll", "transit", "metro", "bus", "train", "airline", "flight"],
+        "shopping": ["amazon", "walmart", "target", "costco", "best buy", "ebay", "shop", "store", "mall", "retail"],
+        "entertainment": ["netflix", "spotify", "hulu", "disney", "movie", "theater", "concert", "game", "steam"],
+        "health": ["pharmacy", "cvs", "walgreens", "doctor", "hospital", "medical", "dental", "gym", "fitness"],
+        "utilities": ["electric", "water", "gas", "internet", "phone", "mobile", "comcast", "verizon", "att"],
+        "housing": ["rent", "mortgage", "insurance", "hoa"],
+        "subscriptions": ["subscription", "membership", "annual", "monthly", "recurring"],
+      };
+
+      function autoCategory(desc: string): string {
+        const lower = desc.toLowerCase();
+        for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+          if (keywords.some(k => lower.includes(k))) return cat;
+        }
+        return "other";
+      }
+
+      // Parse a CSV row respecting quoted fields
+      function parseRow(line: string): string[] {
+        const fields: string[] = [];
+        let current = "";
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') { inQuotes = !inQuotes; continue; }
+          if (ch === "," && !inQuotes) { fields.push(current.trim()); current = ""; continue; }
+          current += ch;
+        }
+        fields.push(current.trim());
+        return fields;
+      }
+
+      let imported = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        try {
+          const fields = parseRow(lines[i]);
+          const rawAmount = fields[colMap.amount] || "";
+          const amount = Math.abs(parseFloat(rawAmount.replace(/[$,\s]/g, "")));
+          if (isNaN(amount) || amount === 0) { skipped++; continue; }
+
+          const description = fields[colMap.description ?? colMap.amount] || `Row ${i}`;
+          const date = colMap.date !== undefined ? fields[colMap.date] : new Date().toISOString().slice(0, 10);
+          const csvCategory = colMap.category !== undefined ? fields[colMap.category] : undefined;
+          const category = csvCategory || autoCategory(description);
+
+          // Normalize date to YYYY-MM-DD if possible
+          let normalizedDate = date;
+          const parsed = new Date(date);
+          if (!isNaN(parsed.getTime())) {
+            normalizedDate = parsed.toISOString().slice(0, 10);
+          }
+
+          await storage.createExpense({
+            amount,
+            category,
+            description: description.slice(0, 200),
+            vendor: description.split(/\s{2,}|[-–]/).shift()?.trim().slice(0, 100) || undefined,
+            date: normalizedDate,
+            tags: ["bank-import"],
+          });
+          imported++;
+        } catch (err: any) {
+          errors.push(`Row ${i}: ${err.message || "unknown error"}`);
+        }
+      }
+
+      res.json({ success: true, imported, skipped, errors: errors.slice(0, 10), totalRows: lines.length - 1 });
+    } catch (err: any) {
+      console.error("Bank CSV import error:", err);
+      res.status(500).json({ error: "CSV import failed" });
     }
   });
 

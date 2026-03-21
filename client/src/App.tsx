@@ -20,6 +20,9 @@ import {
 } from "@/components/CommandSearch";
 import { NotificationBell } from "@/components/NotificationBell";
 import { OnboardingWizard } from "@/components/OnboardingWizard";
+import { OfflineIndicator } from "@/components/OfflineIndicator";
+import { InstallPrompt } from "@/components/InstallPrompt";
+import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import NotFound from "@/pages/not-found";
 import ChatPage from "@/pages/chat";
 import DashboardPage from "@/pages/dashboard";
@@ -110,6 +113,7 @@ function App() {
           <Router hook={useHashLocation}>
             <AuthGate>
             <CommandSearchProvider>
+              <KeyboardShortcuts />
               <SidebarProvider style={sidebarStyle as React.CSSProperties}>
                 <div className="flex h-screen w-full">
                   {/* Sidebar hidden on mobile */}
@@ -149,6 +153,8 @@ function App() {
             </AuthGate>
           </Router>
           <Toaster />
+          <OfflineIndicator />
+          <InstallPrompt />
         </TooltipProvider>
         </AuthProvider>
       </QueryClientProvider>

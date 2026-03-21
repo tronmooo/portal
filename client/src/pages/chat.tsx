@@ -527,7 +527,12 @@ export default function ChatPage() {
 
   const chatMutation = useMutation({
     mutationFn: async (message: string) => {
-      const res = await apiRequest("POST", "/api/chat", { message });
+      // Build conversation history from last 10 messages (up to 5 pairs) for multi-step context
+      const history = messages
+        .filter(m => m.id !== "welcome")
+        .slice(-10)
+        .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
+      const res = await apiRequest("POST", "/api/chat", { message, history });
       return res.json();
     },
     onSuccess: (data) => {

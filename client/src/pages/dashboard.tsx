@@ -3448,6 +3448,18 @@ function QuickActionsRow() {
     },
   });
 
+  // Listen for keyboard shortcut events from KeyboardShortcuts component
+  useEffect(() => {
+    const onTask = () => setQuickTaskOpen(true);
+    const onJournal = () => setJournalOpen(true);
+    window.addEventListener("lifeos:quick-task", onTask);
+    window.addEventListener("lifeos:quick-journal", onJournal);
+    return () => {
+      window.removeEventListener("lifeos:quick-task", onTask);
+      window.removeEventListener("lifeos:quick-journal", onJournal);
+    };
+  }, []);
+
   const btnStyle = "flex-1 h-9 text-xs gap-1.5 transition-all hover:scale-[1.02] hover:shadow-sm";
 
   return (

@@ -1745,7 +1745,7 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
-export async function processMessage(userMessage: string): Promise<{
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
@@ -1790,8 +1790,15 @@ export async function processMessage(userMessage: string): Promise<{
   const systemPrompt = buildSystemPrompt(context);
 
   try {
-    // Build the tool_use conversation loop
-    let messages: Anthropic.Messages.MessageParam[] = [{ role: "user", content: userMessage }];
+    // Build the tool_use conversation loop — prepend up to 5 history pairs for multi-step context
+    let messages: Anthropic.Messages.MessageParam[] = [];
+    if (conversationHistory && conversationHistory.length > 0) {
+      const recent = conversationHistory.slice(-10); // last 10 messages (up to 5 pairs)
+      for (const msg of recent) {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+    messages.push({ role: "user", content: userMessage });
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
     let textReply = "";

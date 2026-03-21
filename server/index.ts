@@ -27,6 +27,7 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+app.use(express.text({ type: 'text/csv', limit: '10mb' }));
 
 // Register auth endpoints (before auth middleware)
 registerAuthRoutes(app);
