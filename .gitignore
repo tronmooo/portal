@@ -8,3 +8,4 @@ vite.config.ts.*
 .env.local
 *.db
 lifeos.db
+screenshots/

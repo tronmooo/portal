@@ -1,4 +1,4 @@
-import { Switch, Route, Router } from "wouter";
+import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -10,7 +10,7 @@ import { MobileBottomNav } from "@/components/mobile-nav";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, LogOut } from "lucide-react";
+import { Sun, Moon, Settings } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 import {
@@ -32,6 +32,7 @@ import ProfileDetailPage from "@/pages/profile-detail";
 import DocumentDetailPage from "@/pages/document-detail";
 import AuthPage from "@/pages/auth";
 import ResetPasswordPage from "@/pages/reset-password";
+import SettingsPage from "@/pages/settings";
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
@@ -45,12 +46,11 @@ function ThemeToggle() {
   );
 }
 
-function UserMenu() {
-  const { user, signOut, authRequired } = useAuth();
-  if (!authRequired || !user) return null;
+function SettingsButton() {
+  const [, navigate] = useLocation();
   return (
-    <Button variant="ghost" size="icon" onClick={signOut} className="h-8 w-8" title={`Sign out (${user.email})`} data-testid="button-signout">
-      <LogOut className="h-4 w-4" />
+    <Button variant="ghost" size="icon" onClick={() => navigate("/settings")} className="h-8 w-8" title="Settings" data-testid="button-settings-header">
+      <Settings className="h-4 w-4" />
     </Button>
   );
 }
@@ -93,6 +93,7 @@ function AppRouter() {
       <Route path="/profiles" component={ProfilesPage} />
       <Route path="/profiles/:id" component={ProfileDetailPage} />
       <Route path="/documents/:id" component={DocumentDetailPage} />
+      <Route path="/settings" component={SettingsPage} />
       <Route path="/reset-password" component={ResetPasswordPage} />
       <Route component={NotFound} />
     </Switch>
@@ -132,7 +133,7 @@ function App() {
                       <div className="flex items-center gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
                         <NotificationBell />
-                        <UserMenu />
+                        <SettingsButton />
                         <ThemeToggle />
                       </div>
                     </header>

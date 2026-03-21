@@ -9,7 +9,7 @@ import {
   SidebarMenuItem,
   SidebarHeader,
 } from "@/components/ui/sidebar";
-import { MessageSquare, LayoutDashboard, BarChart3, Users } from "lucide-react";
+import { MessageSquare, LayoutDashboard, BarChart3, Users, Settings } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Chat", href: "/", icon: MessageSquare },
@@ -34,7 +34,7 @@ export function AppSidebar() {
           <span className="font-semibold text-sm tracking-tight">LifeOS</span>
         </div>
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent className="flex flex-col justify-between">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -51,6 +51,20 @@ export function AppSidebar() {
                   </SidebarMenuItem>
                 );
               })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={location === "/settings"} data-testid="nav-settings">
+                  <Link href="/settings">
+                    <Settings className="h-4 w-4" />
+                    <span>Settings</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
