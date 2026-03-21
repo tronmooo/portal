@@ -1,0 +1,21 @@
+# ============================================================
+# LifeOS Supabase Configuration
+# ============================================================
+
+[project]
+id = "uvaniovwrezzzlzmizyg"
+
+[api]
+port = 54321
+
+[db]
+port = 54322
+
+[functions.daily-digest]
+verify_jwt = false
+
+[functions.notification-check]
+verify_jwt = false
+
+[functions.auto-categorize]
+verify_jwt = true
