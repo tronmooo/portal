@@ -479,6 +479,31 @@ export class SupabaseStorage implements IStorage {
     }
   }
 
+  // Get the "self" profile (type="self") for this user — used for auto-linking
+  async getSelfProfile(): Promise<Profile | undefined> {
+    const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).eq("type", "self").limit(1).single();
+    if (error || !data) return undefined;
+    return this.rowToProfile(data);
+  }
+
+  // Migrate all unlinked trackers to the "self" profile (bidirectional)
+  async migrateUnlinkedTrackersToSelf(): Promise<number> {
+    const selfProfile = await this.getSelfProfile();
+    if (!selfProfile) return 0;
+    const trackers = await this.getTrackers();
+    let count = 0;
+    for (const t of trackers) {
+      if (!t.linkedProfiles || t.linkedProfiles.length === 0) {
+        // Update tracker's linkedProfiles
+        await this.supabase.from("trackers").update({ linked_profiles: [selfProfile.id] }).eq("id", t.id).eq("user_id", this.userId);
+        // Update profile's linkedTrackers
+        await this.linkProfileTo(selfProfile.id, "tracker", t.id);
+        count++;
+      }
+    }
+    return count;
+  }
+
   // ============================================================
   // TRACKERS
   // ============================================================
@@ -503,12 +528,22 @@ export class SupabaseStorage implements IStorage {
   async createTracker(data: InsertTracker): Promise<Tracker> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    // Auto-link to self profile if no profiles are being set
+    let initialLinkedProfiles: string[] = [];
+    const selfProfile = await this.getSelfProfile();
+    if (selfProfile) {
+      initialLinkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("trackers").insert({
       id, user_id: this.userId, name: data.name, category: data.category || "custom",
       unit: data.unit || null, icon: data.icon || null, fields: data.fields || [],
-      linked_profiles: [], created_at: now,
+      linked_profiles: initialLinkedProfiles, created_at: now,
     });
     if (error) throw error;
+    // Also update the self profile's linkedTrackers
+    if (selfProfile) {
+      await this.linkProfileTo(selfProfile.id, "tracker", id);
+    }
     this.logActivity("tracker", `Created tracker: ${data.name}`);
     return (await this.getTracker(id))!;
   }

@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,7 +68,7 @@ import {
   Smile,
   Unlink,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile } from "@shared/schema";
 import {
   LineChart,
@@ -1617,8 +1617,23 @@ export default function TrackersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-  // "all" = show everything, "unlinked" = trackers with no profile, otherwise a profile ID
+  // "all" = show everything, otherwise a profile ID
   const [profileFilter, setProfileFilter] = useState<string>("all");
+
+  // On mount, migrate any unlinked trackers to the "self" profile
+  const migrationDone = useRef(false);
+  useEffect(() => {
+    if (!migrationDone.current && trackers && profiles) {
+      const hasUnlinked = trackers.some(t => !t.linkedProfiles || t.linkedProfiles.length === 0);
+      if (hasUnlinked) {
+        migrationDone.current = true;
+        apiRequest("POST", "/api/trackers/migrate-to-self").then(() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+        }).catch(() => {});
+      }
+    }
+  }, [trackers, profiles]);
 
   const deleteTarget = deleteTargetId
     ? (trackers || []).find((t) => t.id === deleteTargetId)
@@ -1642,18 +1657,21 @@ export default function TrackersPage() {
     );
   }
 
-  // Build the list of profiles that actually have linked trackers
+  // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
   const profilesWithTrackers = (profiles || []).filter(p =>
-    (trackers || []).some(t => t.linkedProfiles?.includes(p.id))
+    p.type === "self" || (trackers || []).some(t => t.linkedProfiles?.includes(p.id))
   );
 
-  // Check if there are any unlinked trackers (not linked to any profile)
-  const hasUnlinked = (trackers || []).some(t => !t.linkedProfiles || t.linkedProfiles.length === 0);
+  // Sort so "self" (Me) comes first
+  const sortedFilterProfiles = [...profilesWithTrackers].sort((a, b) => {
+    if (a.type === "self") return -1;
+    if (b.type === "self") return 1;
+    return a.name.localeCompare(b.name);
+  });
 
   // Apply profile filter
   const filteredTrackers = (trackers || []).filter(t => {
     if (profileFilter === "all") return true;
-    if (profileFilter === "unlinked") return !t.linkedProfiles || t.linkedProfiles.length === 0;
     return t.linkedProfiles?.includes(profileFilter);
   });
 
@@ -1694,8 +1712,8 @@ export default function TrackersPage() {
         </Button>
       </div>
 
-      {/* Profile Filter Bar */}
-      {profilesWithTrackers.length > 0 && (
+      {/* Profile Filter Bar — always shown when profiles exist */}
+      {sortedFilterProfiles.length > 0 && (
         <div className="space-y-1.5" data-testid="profile-filter-bar">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Users className="h-3.5 w-3.5" />
@@ -1719,8 +1737,8 @@ export default function TrackersPage() {
               </span>
             </button>
 
-            {/* One chip per profile that has trackers */}
-            {profilesWithTrackers.map(p => {
+            {/* One chip per profile that has trackers — "Me" always first */}
+            {sortedFilterProfiles.map(p => {
               const Icon = PROFILE_TYPE_ICONS[p.type] || User;
               const count = countForProfile(p.id);
               const isActive = profileFilter === p.id;
@@ -1747,25 +1765,6 @@ export default function TrackersPage() {
                 </button>
               );
             })}
-
-            {/* Unlinked chip — only show if there are unlinked trackers */}
-            {hasUnlinked && (
-              <button
-                onClick={() => setProfileFilter(profileFilter === "unlinked" ? "all" : "unlinked")}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
-                  profileFilter === "unlinked"
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
-                }`}
-                data-testid="filter-unlinked"
-              >
-                <Unlink className="h-3 w-3" />
-                Unlinked
-                <span className={`text-[10px] px-1 py-0 rounded-full ${profileFilter === "unlinked" ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
-                  {(trackers || []).filter(t => !t.linkedProfiles || t.linkedProfiles.length === 0).length}
-                </span>
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -1797,7 +1796,7 @@ export default function TrackersPage() {
         <div className="text-center py-12">
           <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">
-            No trackers linked to {profileFilter === "unlinked" ? "no profile" : (profiles || []).find(p => p.id === profileFilter)?.name || "this profile"}
+            No trackers linked to {(profiles || []).find(p => p.id === profileFilter)?.name || "this profile"}
           </p>
           <Button
             variant="outline"

@@ -489,6 +489,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(204).send();
   });
 
+  // Migrate unlinked trackers to "self" profile
+  app.post("/api/trackers/migrate-to-self", async (_req, res) => {
+    const count = await storage.migrateUnlinkedTrackersToSelf();
+    res.json({ migrated: count });
+  });
+
   // ---- Tasks ----
   app.get("/api/tasks", async (_req, res) => { res.json(await storage.getTasks()); });
   app.post("/api/tasks", async (req, res) => {

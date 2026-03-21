@@ -1761,9 +1761,13 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
   try {
     const profiles = await storage.getProfiles();
     const lower = (text || "").toLowerCase();
+    const selfProfile = profiles.find(p => p.type === "self");
+    const matchedNonSelfIds: string[] = [];
+
     for (const profile of profiles) {
       const name = profile.name.toLowerCase();
       if (name.length < 2) continue; // Skip very short names
+      if (profile.type === "self") continue; // Skip self — handled separately
 
       let matched = false;
 
@@ -1804,6 +1808,7 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
       }
 
       if (matched) {
+        matchedNonSelfIds.push(profile.id);
         // 1. Create entity_link record
         const relationship = entityType === "expense" ? "paid_for" : "related_to";
         try {
@@ -1827,6 +1832,19 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
           await updateEntityLinkedProfiles(entityType, entityId, profile.id);
         } catch (e) { console.error("updateEntityLinkedProfiles failed:", e); }
       }
+    }
+
+    // If a non-self profile was matched, remove the self profile link
+    // (createTracker auto-links to self, but if it belongs to Max, remove self)
+    if (matchedNonSelfIds.length > 0 && selfProfile && entityType === "tracker") {
+      try {
+        const tracker = await storage.getTracker(entityId);
+        if (tracker && tracker.linkedProfiles.includes(selfProfile.id)) {
+          const newLinked = tracker.linkedProfiles.filter(pid => pid !== selfProfile.id);
+          await storage.updateTracker(entityId, { linkedProfiles: newLinked } as any);
+          await storage.unlinkProfileFrom(selfProfile.id, "tracker", entityId);
+        }
+      } catch (e) { console.error("Remove self-link failed:", e); }
     }
   } catch (err) {
     console.error("Auto-link failed:", err);
