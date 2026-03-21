@@ -174,11 +174,11 @@ function CollapsibleSection({
 // ─── Mini Stat (compact inline metric) ──────────────────────────────────────
 
 function MiniStat({
-  icon: Icon, label, value, sub, color, onClick,
-}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void }) {
+  icon: Icon, label, value, sub, color, onClick, trend,
+}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat" }) {
   return (
     <div
-      className={`flex items-center gap-2 p-2.5 rounded-lg border border-border/50 ${onClick ? "cursor-pointer hover:bg-muted/50 hover:border-primary/30 active:scale-[0.98] transition-all" : ""}`}
+      className={`flex items-center gap-2 p-2.5 rounded-lg border border-border/50 transition-all duration-200 ${onClick ? "cursor-pointer hover:bg-muted/50 hover:border-primary/30 hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]" : "hover:scale-[1.01]"}`}
       onClick={onClick}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
     >
@@ -187,7 +187,12 @@ function MiniStat({
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-[10px] text-muted-foreground leading-none mb-0.5">{label}</p>
-        <p className="text-sm font-bold tabular-nums leading-none">{value}</p>
+        <div className="flex items-center gap-1">
+          <p className="text-sm font-bold tabular-nums leading-none">{value}</p>
+          {trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
+          {trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
+          {trend === "flat" && <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+        </div>
       </div>
       {sub && <span className="text-[9px] text-muted-foreground shrink-0">{sub}</span>}
       {onClick && <Eye className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" />}
@@ -2704,6 +2709,25 @@ function ScoreRing({ score, size = 56 }: { score: number; size?: number }) {
   );
 }
 
+const INSIGHT_BORDER: Record<string, string> = {
+  positive: "border-l-green-500",
+  negative: "border-l-red-500",
+  warning:  "border-l-amber-500",
+  info:     "border-l-blue-500",
+};
+
+const INSIGHT_NAV: Record<string, string> = {
+  reminder: "/",
+  spending_trend: "/dashboard",
+  habit_streak: "/dashboard",
+  obligation_due: "/dashboard",
+  health_correlation: "/trackers",
+  anomaly: "/trackers",
+  mood_trend: "/dashboard",
+  streak: "/dashboard",
+  suggestion: "/dashboard",
+};
+
 function AIDigestFallback() {
   const { data: insights = [], isLoading } = useQuery<Insight[]>({
     queryKey: ["/api/insights"],
@@ -2729,14 +2753,21 @@ function AIDigestFallback() {
           {insights.map(insight => {
             const Icon = INSIGHT_ICONS[insight.type] || Lightbulb;
             const colorClass = INSIGHT_COLORS[insight.severity] || INSIGHT_COLORS.info;
+            const borderClass = INSIGHT_BORDER[insight.severity] || INSIGHT_BORDER.info;
+            const isCritical = insight.severity === "negative" || insight.severity === "warning";
+            const navTarget = INSIGHT_NAV[insight.type];
             return (
               <div
                 key={insight.id}
-                className="flex items-start gap-2 p-2 rounded-lg bg-muted/50"
+                className={`flex items-start gap-2 p-2 rounded-lg bg-muted/50 border-l-[3px] ${borderClass} ${navTarget ? "cursor-pointer hover:bg-muted/80 transition-colors" : ""}`}
                 data-testid={`insight-${insight.id}`}
+                onClick={navTarget ? () => { window.location.hash = navTarget; } : undefined}
               >
-                <div className={`p-1 rounded-md shrink-0 ${colorClass}`}>
+                <div className={`p-1 rounded-md shrink-0 ${colorClass} relative`}>
                   <Icon className="h-3 w-3" />
+                  {isCritical && (
+                    <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[10px] font-medium">{insight.title}</p>
@@ -3339,6 +3370,302 @@ function RecentActivity({ stats }: { stats: DashboardStats }) {
   );
 }
 
+// ─── Quick Actions ─────────────────────────────────────────────────────────
+
+function QuickActionsRow() {
+  const { toast } = useToast();
+  const [logWeightOpen, setLogWeightOpen] = useState(false);
+  const [addExpenseOpen, setAddExpenseOpen] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+  const [journalOpen, setJournalOpen] = useState(false);
+
+  // Log Weight
+  const [weightVal, setWeightVal] = useState("");
+  const weightMut = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/chat", { message: `log weight ${weightVal} lbs` }).then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Weight logged", description: `${weightVal} lbs recorded.` });
+      setLogWeightOpen(false);
+      setWeightVal("");
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+    },
+  });
+
+  // Add Expense
+  const [expAmount, setExpAmount] = useState("");
+  const [expDesc, setExpDesc] = useState("");
+  const [expCategory, setExpCategory] = useState("general");
+  const expMut = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/expenses", {
+      amount: parseFloat(expAmount) || 0,
+      description: expDesc || "Expense",
+      category: expCategory,
+      tags: [],
+    }).then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Expense added", description: `$${expAmount} — ${expDesc || "Expense"}` });
+      setAddExpenseOpen(false);
+      setExpAmount(""); setExpDesc(""); setExpCategory("general");
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+    },
+  });
+
+  // Quick Task
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskPriority, setTaskPriority] = useState("medium");
+  const taskMut = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/tasks", {
+      title: taskTitle,
+      priority: taskPriority,
+      tags: [],
+    }).then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Task created", description: taskTitle });
+      setQuickTaskOpen(false);
+      setTaskTitle(""); setTaskPriority("medium");
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+    },
+  });
+
+  // Journal Entry
+  const [journalContent, setJournalContent] = useState("");
+  const [journalMood, setJournalMood] = useState<string>("neutral");
+  const journalMut = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/journal", {
+      mood: journalMood,
+      content: journalContent,
+      tags: [],
+    }).then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Journal entry saved" });
+      setJournalOpen(false);
+      setJournalContent(""); setJournalMood("neutral");
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+    },
+  });
+
+  const btnStyle = "flex-1 h-9 text-xs gap-1.5 transition-all hover:scale-[1.02] hover:shadow-sm";
+
+  return (
+    <>
+      <div className="flex gap-2" data-testid="quick-actions-row">
+        <Button variant="outline" className={btnStyle} onClick={() => setLogWeightOpen(true)} data-testid="btn-quick-weight">
+          <HeartPulse className="h-3.5 w-3.5" /> Log Weight
+        </Button>
+        <Button variant="outline" className={btnStyle} onClick={() => setAddExpenseOpen(true)} data-testid="btn-quick-expense">
+          <DollarSign className="h-3.5 w-3.5" /> Add Expense
+        </Button>
+        <Button variant="outline" className={btnStyle} onClick={() => setQuickTaskOpen(true)} data-testid="btn-quick-task">
+          <ListTodo className="h-3.5 w-3.5" /> Quick Task
+        </Button>
+        <Button variant="outline" className={btnStyle} onClick={() => setJournalOpen(true)} data-testid="btn-quick-journal">
+          <BookHeart className="h-3.5 w-3.5" /> Journal
+        </Button>
+      </div>
+
+      {/* Log Weight Dialog */}
+      <Dialog open={logWeightOpen} onOpenChange={setLogWeightOpen}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Log Weight</DialogTitle>
+            <DialogDescription className="text-xs">Enter your current weight</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(e) => { e.preventDefault(); weightMut.mutate(); }}>
+            <Input type="number" step="0.1" placeholder="e.g. 183.5" value={weightVal} onChange={e => setWeightVal(e.target.value)} className="mb-3" autoFocus data-testid="input-quick-weight" />
+            <Button type="submit" className="w-full h-8 text-xs" disabled={!weightVal || weightMut.isPending} data-testid="btn-submit-weight">
+              {weightMut.isPending ? "Logging..." : "Log Weight"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Expense Dialog */}
+      <Dialog open={addExpenseOpen} onOpenChange={setAddExpenseOpen}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Add Expense</DialogTitle>
+            <DialogDescription className="text-xs">Log a new expense</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(e) => { e.preventDefault(); expMut.mutate(); }} className="space-y-2">
+            <Input type="number" step="0.01" placeholder="Amount" value={expAmount} onChange={e => setExpAmount(e.target.value)} autoFocus data-testid="input-quick-expense-amount" />
+            <Input placeholder="Description" value={expDesc} onChange={e => setExpDesc(e.target.value)} data-testid="input-quick-expense-desc" />
+            <Select value={expCategory} onValueChange={setExpCategory}>
+              <SelectTrigger className="h-8 text-xs" data-testid="select-quick-expense-cat">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {["general", "food", "transport", "health", "entertainment", "shopping", "utilities", "other"].map(c => (
+                  <SelectItem key={c} value={c} className="text-xs">{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button type="submit" className="w-full h-8 text-xs" disabled={!expAmount || expMut.isPending} data-testid="btn-submit-expense">
+              {expMut.isPending ? "Adding..." : "Add Expense"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Task Dialog */}
+      <Dialog open={quickTaskOpen} onOpenChange={setQuickTaskOpen}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Quick Task</DialogTitle>
+            <DialogDescription className="text-xs">Create a new task</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(e) => { e.preventDefault(); taskMut.mutate(); }} className="space-y-2">
+            <Input placeholder="Task title" value={taskTitle} onChange={e => setTaskTitle(e.target.value)} autoFocus data-testid="input-quick-task-title" />
+            <Select value={taskPriority} onValueChange={setTaskPriority}>
+              <SelectTrigger className="h-8 text-xs" data-testid="select-quick-task-priority">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="low" className="text-xs">Low</SelectItem>
+                <SelectItem value="medium" className="text-xs">Medium</SelectItem>
+                <SelectItem value="high" className="text-xs">High</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button type="submit" className="w-full h-8 text-xs" disabled={!taskTitle || taskMut.isPending} data-testid="btn-submit-task">
+              {taskMut.isPending ? "Creating..." : "Create Task"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Journal Entry Dialog */}
+      <Dialog open={journalOpen} onOpenChange={setJournalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Journal Entry</DialogTitle>
+            <DialogDescription className="text-xs">How are you feeling?</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(e) => { e.preventDefault(); journalMut.mutate(); }} className="space-y-2">
+            <div className="flex gap-1.5 justify-center">
+              {(["amazing", "good", "neutral", "bad", "awful"] as const).map(mood => {
+                const cfg = MOOD_CONFIG[mood];
+                const MoodIcon = cfg.icon;
+                return (
+                  <button
+                    key={mood}
+                    type="button"
+                    className={`p-2 rounded-lg border transition-all ${journalMood === mood ? "border-primary bg-primary/10 scale-110" : "border-border hover:border-primary/30"}`}
+                    onClick={() => setJournalMood(mood)}
+                    data-testid={`btn-mood-${mood}`}
+                  >
+                    <MoodIcon className="h-5 w-5" style={{ color: cfg.color }} />
+                  </button>
+                );
+              })}
+            </div>
+            <Textarea placeholder="What's on your mind?" value={journalContent} onChange={e => setJournalContent(e.target.value)} rows={3} data-testid="input-quick-journal" />
+            <Button type="submit" className="w-full h-8 text-xs" disabled={journalMut.isPending} data-testid="btn-submit-journal">
+              {journalMut.isPending ? "Saving..." : "Save Entry"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ─── Activity Timeline (from /api/activity) ─────────────────────────────────
+
+const ACTION_LABELS: Record<string, string> = {
+  create_profile: "Created profile",
+  update_profile: "Updated profile",
+  delete_profile: "Deleted profile",
+  create_task: "Created task",
+  complete_task: "Completed task",
+  update_task: "Updated task",
+  delete_task: "Deleted task",
+  log_tracker_entry: "Logged",
+  create_tracker: "Created tracker",
+  create_expense: "Logged expense",
+  delete_expense: "Deleted expense",
+  create_event: "Created event",
+  update_event: "Updated event",
+  delete_event: "Deleted event",
+  create_habit: "Created habit",
+  checkin_habit: "Checked in",
+  update_habit: "Updated habit",
+  delete_habit: "Deleted habit",
+  create_obligation: "Created bill",
+  pay_obligation: "Paid bill",
+  update_obligation: "Updated bill",
+  delete_obligation: "Deleted bill",
+  journal_entry: "Journal entry",
+  create_artifact: "Created note",
+  delete_artifact: "Deleted note",
+  save_memory: "Saved memory",
+  delete_memory: "Deleted memory",
+  create_goal: "Created goal",
+  update_goal: "Updated goal",
+  delete_goal: "Deleted goal",
+  sync_calendar: "Synced calendar",
+  bulk_complete_tasks: "Bulk completed tasks",
+};
+
+function timeAgo(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function ActivityTimeline() {
+  const { data: activities = [] } = useQuery<Array<{ timestamp: string; action: string; type: string; entityName: string; entityId?: string }>>({
+    queryKey: ["/api/activity"],
+    queryFn: () => apiRequest("GET", "/api/activity").then(r => r.json()),
+    refetchInterval: 30 * 1000,
+  });
+
+  return (
+    <CollapsibleSection
+      icon={Activity}
+      label="Recent Activity"
+      count={activities.length}
+      defaultOpen={false}
+      testId="section-activity-timeline"
+    >
+      {activities.length === 0 ? (
+        <p className="text-xs text-muted-foreground text-center py-3">No recent activity. Use the chat to get started.</p>
+      ) : (
+        <div className="relative pl-4" data-testid="activity-timeline">
+          {/* Vertical timeline line */}
+          <div className="absolute left-[7px] top-1 bottom-1 w-px bg-border" />
+          {activities.slice().reverse().map((a, i) => {
+            const Icon = ACTIVITY_ICONS[a.type] || Activity;
+            const label = ACTION_LABELS[a.action] || a.action.replace(/_/g, " ");
+            return (
+              <div key={i} className="flex items-start gap-2.5 pb-2.5 last:pb-0 relative">
+                {/* Dot on the line */}
+                <div className="absolute left-[-12px] top-1 w-2.5 h-2.5 rounded-full bg-primary/60 border-2 border-background z-10" />
+                <div className="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                  <Icon className="h-2.5 w-2.5 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] text-foreground/80 leading-snug">
+                    {label} <span className="font-medium">{a.entityName}</span>
+                  </p>
+                  <p className="text-[9px] text-muted-foreground">{timeAgo(a.timestamp)}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </CollapsibleSection>
+  );
+}
+
 // ─── Dashboard Section Config ────────────────────────────────────────────────
 
 interface DashboardSection {
@@ -3350,6 +3677,8 @@ interface DashboardSection {
 }
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
+  { id: "insights", label: "AI Insights", icon: Sparkles, visible: true, column: "full" },
+  { id: "quick_actions", label: "Quick Actions", icon: Zap, visible: true, column: "full" },
   { id: "alerts", label: "Alerts", icon: AlertTriangle, visible: true, column: "full" },
   { id: "stats", label: "Key Stats", icon: BarChart3, visible: true, column: "full" },
   { id: "mood_habits", label: "Mood & Habits", icon: Flame, visible: true, column: "full" },
@@ -3362,7 +3691,6 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "obligations", label: "Obligations", icon: CreditCard, visible: true, column: "right" },
   { id: "health", label: "Health", icon: HeartPulse, visible: true, column: "right" },
   { id: "calendar", label: "Calendar", icon: Calendar, visible: true, column: "right" },
-  { id: "insights", label: "AI Insights", icon: Sparkles, visible: true, column: "full" },
   { id: "activity", label: "Recent Activity", icon: Activity, visible: true, column: "full" },
 ];
 
@@ -3705,8 +4033,11 @@ export default function DashboardPage() {
       case "insights":
         content = <InsightsSection />;
         break;
+      case "quick_actions":
+        content = <QuickActionsRow />;
+        break;
       case "activity":
-        content = stats ? <RecentActivity stats={stats} /> : null;
+        content = <ActivityTimeline />;
         break;
       default:
         content = null;

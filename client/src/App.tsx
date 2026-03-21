@@ -28,6 +28,7 @@ import ProfilesPage from "@/pages/profiles";
 import ProfileDetailPage from "@/pages/profile-detail";
 import DocumentDetailPage from "@/pages/document-detail";
 import AuthPage from "@/pages/auth";
+import ResetPasswordPage from "@/pages/reset-password";
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
@@ -53,6 +54,11 @@ function UserMenu() {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading, authRequired } = useAuth();
+
+  // Allow reset-password page through without auth
+  if (window.location.hash.startsWith("#/reset-password")) {
+    return <ResetPasswordPage />;
+  }
 
   if (loading) {
     return (
@@ -84,6 +90,7 @@ function AppRouter() {
       <Route path="/profiles" component={ProfilesPage} />
       <Route path="/profiles/:id" component={ProfileDetailPage} />
       <Route path="/documents/:id" component={DocumentDetailPage} />
+      <Route path="/reset-password" component={ResetPasswordPage} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { processMessage, processFileUpload } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog } from "./ai-engine";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   insertProfileSchema,
@@ -40,6 +40,12 @@ export async function registerRoutes(
       console.error("Chat error:", err);
       res.status(500).json({ error: "Failed to process message" });
     }
+  });
+
+  // ---- Activity Feed ----
+  app.get("/api/activity", async (_req, res) => {
+    const count = 10;
+    res.json(getActionLog(count));
   });
 
   // ---- File Upload + AI Extraction ----

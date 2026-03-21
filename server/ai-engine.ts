@@ -5,6 +5,29 @@ import type { ParsedAction } from "@shared/schema";
 const client = new Anthropic();
 
 // ============================================================
+// ACTION LOG — in-memory history of the last 20 CRUD operations
+// ============================================================
+
+interface ActionLogEntry {
+  timestamp: string;
+  action: string;
+  type: string;
+  entityName: string;
+  entityId?: string;
+}
+
+const actionLog: ActionLogEntry[] = [];
+
+function logAction(action: string, type: string, entityName: string, entityId?: string) {
+  actionLog.push({ timestamp: new Date().toISOString(), action, type, entityName, entityId });
+  if (actionLog.length > 20) actionLog.shift();
+}
+
+export function getActionLog(count = 10): ActionLogEntry[] {
+  return actionLog.slice(-count);
+}
+
+// ============================================================
 // FAST-PATH REGEX — instant processing for common patterns
 // ============================================================
 
@@ -1008,6 +1031,17 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "recall_actions",
+    description: "Recall recent actions — shows the last N things you did in LifeOS. Use when user asks 'what did I just do?', 'show recent actions', 'what happened?', or 'my recent activity'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        count: { type: "number", description: "How many recent actions to show (default 10, max 20)" },
+      },
+      required: [],
+    },
+  },
+  {
     name: "sync_calendar",
     description: "Sync events with Google Calendar. Imports new events from Google Calendar into LifeOS. Use when the user asks to sync, import, or pull their Google Calendar events.",
     input_schema: {
@@ -1172,6 +1206,9 @@ async function executeTool(name: string, input: any): Promise<any> {
         const docs = await storage.getDocuments();
         summary.documents = { count: docs.length, items: docs.map(d => ({ id: d.id, name: d.name, type: d.type })) };
       }
+
+      // Include last 3 actions for context
+      summary.recentActions = getActionLog(3);
 
       return summary;
     }
@@ -1560,6 +1597,11 @@ async function executeTool(name: string, input: any): Promise<any> {
       return { completed: toComplete.length, titles: toComplete.map(t => t.title) };
     }
 
+    case "recall_actions": {
+      const count = Math.min(input.count || 10, 20);
+      return { actions: getActionLog(count), total: actionLog.length };
+    }
+
     case "undo_last": {
       return { message: "Undo is not yet available for this action. Please manually revert the change." };
     }
@@ -1796,6 +1838,15 @@ export async function processMessage(userMessage: string): Promise<{
           const actionType = mapToolToActionType(toolUse.name);
           allActions.push({ type: actionType, category: "ai", data: toolUse.input as Record<string, any> });
           if (result) allResults.push(result);
+
+          // Log the action to in-memory history
+          const inp = toolUse.input as Record<string, any>;
+          const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
+          const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+          const readOnlyTools = ["search", "get_summary", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document"];
+          if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
+            logAction(toolUse.name, actionType, String(entityName), entityId);
+          }
 
           // Handle document previews
           if (toolUse.name === "open_document" && result?.fileData) {

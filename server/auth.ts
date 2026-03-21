@@ -201,6 +201,57 @@ export function registerAuthRoutes(app: any) {
     res.json({ success: true });
   });
 
+  // Forgot password — sends a reset link email via Supabase
+  app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
+    const supabase = getSupabaseAuth();
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${req.headers.origin}/#/reset-password`,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ success: true, message: "Check your email for a reset link" });
+  });
+
+  // Reset password — updates password using the access token from the reset link
+  app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
+    const supabase = getSupabaseAuth();
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+    const { access_token, password } = req.body;
+    if (!access_token || !password) {
+      return res.status(400).json({ error: "Access token and new password are required" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    // Use the access token to set the user context, then update password
+    const { data: { user }, error: userError } = await supabase.auth.getUser(access_token);
+    if (userError || !user) {
+      return res.status(401).json({ error: "Invalid or expired reset token" });
+    }
+
+    const { error } = await supabase.auth.admin.updateUserById(user.id, {
+      password,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ success: true, message: "Password has been reset successfully" });
+  });
+
   // Check if auth is required (helps frontend decide to show login)
   app.get("/api/auth/config", async (_req: Request, res: Response) => {
     res.json({

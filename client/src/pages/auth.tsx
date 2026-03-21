@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, Loader2, Shield } from "lucide-react";
+import { AlertCircle, Loader2, Shield, CheckCircle2 } from "lucide-react";
 
 export default function AuthPage() {
   const { signIn, signUp } = useAuth();
@@ -15,6 +16,9 @@ export default function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSent, setForgotSent] = useState(false);
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
@@ -39,6 +43,24 @@ export default function AuthPage() {
     setLoading(true);
     const result = await signUp(email, password);
     if (result.error) setError(result.error);
+    setLoading(false);
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await apiRequest("POST", "/api/auth/forgot-password", { email: forgotEmail });
+      const data = await res.json();
+      if (data.error) {
+        setError(data.error);
+      } else {
+        setForgotSent(true);
+      }
+    } catch {
+      setError("Failed to send reset email. Please try again.");
+    }
     setLoading(false);
   }
 
@@ -80,7 +102,7 @@ export default function AuthPage() {
               </div>
             )}
 
-            {tab === "signin" ? (
+            {tab === "signin" && !forgotMode ? (
               <form onSubmit={handleSignIn} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="signin-email">Email</Label>
@@ -110,7 +132,60 @@ export default function AuthPage() {
                   {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                   Sign In
                 </Button>
+                <button
+                  type="button"
+                  className="w-full text-xs text-muted-foreground hover:text-primary transition-colors"
+                  onClick={() => { setForgotMode(true); setError(""); setForgotEmail(email); setForgotSent(false); }}
+                  data-testid="link-forgot-password"
+                >
+                  Forgot password?
+                </button>
               </form>
+            ) : tab === "signin" && forgotMode ? (
+              forgotSent ? (
+                <div className="text-center py-4 space-y-3">
+                  <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto" />
+                  <p className="text-sm font-medium">Check your email</p>
+                  <p className="text-xs text-muted-foreground">We sent a password reset link to <span className="font-medium">{forgotEmail}</span></p>
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline"
+                    onClick={() => { setForgotMode(false); setForgotSent(false); }}
+                    data-testid="link-back-to-signin"
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotPassword} className="space-y-4">
+                  <p className="text-xs text-muted-foreground">Enter your email and we'll send you a link to reset your password.</p>
+                  <div className="space-y-2">
+                    <Label htmlFor="forgot-email">Email</Label>
+                    <Input
+                      id="forgot-email"
+                      type="email"
+                      placeholder="you@example.com"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      required
+                      autoFocus
+                      data-testid="input-forgot-email"
+                    />
+                  </div>
+                  <Button type="submit" className="w-full" disabled={loading || !forgotEmail} data-testid="button-forgot-submit">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Send Reset Link
+                  </Button>
+                  <button
+                    type="button"
+                    className="w-full text-xs text-muted-foreground hover:text-primary transition-colors"
+                    onClick={() => { setForgotMode(false); setError(""); }}
+                    data-testid="link-back-to-signin-2"
+                  >
+                    Back to sign in
+                  </button>
+                </form>
+              )
             ) : (
               <form onSubmit={handleSignUp} className="space-y-4">
                 <div className="space-y-2">
