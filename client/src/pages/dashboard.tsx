@@ -218,6 +218,18 @@ function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => v
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
     enabled: open,
   });
+  const { toast } = useToast();
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/profiles/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Profile deleted" });
+    },
+  });
 
   const PROFILE_TYPE_ICONS: Record<string, any> = {
     person: Users, pet: Heart, vehicle: Star, account: DollarSign,
@@ -247,7 +259,7 @@ function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => v
                 return (
                   <div
                     key={p.id}
-                    className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-muted/50 transition-colors"
+                    className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-muted/50 transition-colors group"
                     data-testid={`popup-profile-${p.id}`}
                   >
                     <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
@@ -267,6 +279,14 @@ function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => v
                       </div>
                     </div>
                     <span className="text-[10px] text-muted-foreground">{fmtDate(p.createdAt)}</span>
+                    <Button
+                      size="sm" variant="ghost"
+                      className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
+                      onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(p.id); }}
+                      data-testid={`button-delete-profile-${p.id}`}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
                   </div>
                 );
               })}
@@ -283,6 +303,18 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
     queryKey: ["/api/trackers"],
     queryFn: () => apiRequest("GET", "/api/trackers").then(r => r.json()),
     enabled: open,
+  });
+  const { toast } = useToast();
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/trackers/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Tracker deleted" });
+    },
   });
 
   return (
@@ -305,7 +337,7 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
               {trackers.map(t => (
                 <div
                   key={t.id}
-                  className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-muted/50 transition-colors"
+                  className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-muted/50 transition-colors group"
                   data-testid={`popup-tracker-${t.id}`}
                 >
                   <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
@@ -319,6 +351,14 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
                     </div>
                   </div>
                   <span className="text-[10px] text-muted-foreground">{t.fields.length} fields</span>
+                  <Button
+                    size="sm" variant="ghost"
+                    className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
+                    onClick={() => deleteMutation.mutate(t.id)}
+                    data-testid={`button-delete-tracker-${t.id}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
                 </div>
               ))}
             </div>
@@ -471,6 +511,18 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
     queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
     enabled: open,
   });
+  const { toast } = useToast();
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/expenses/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Expense deleted" });
+    },
+  });
 
   const sorted = [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const total = expenses.reduce((s, e) => s + e.amount, 0);
@@ -496,7 +548,7 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
               {sorted.map(e => (
                 <div
                   key={e.id}
-                  className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-muted/50 transition-colors"
+                  className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-muted/50 transition-colors group"
                   data-testid={`popup-expense-${e.id}`}
                 >
                   <div className="w-8 h-8 rounded-lg bg-orange-500/10 flex items-center justify-center shrink-0">
@@ -513,6 +565,14 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
                     <p className="text-sm font-semibold">${e.amount.toFixed(2)}</p>
                     <p className="text-[10px] text-muted-foreground">{fmtDate(e.date)}</p>
                   </div>
+                  <Button
+                    size="sm" variant="ghost"
+                    className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
+                    onClick={() => deleteMutation.mutate(e.id)}
+                    data-testid={`button-delete-expense-${e.id}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
                 </div>
               ))}
             </div>
@@ -645,7 +705,19 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
     queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
     enabled: open,
   });
+  const { toast } = useToast();
   const [payOb, setPayOb] = useState<Obligation | null>(null);
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/obligations/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Obligation deleted" });
+    },
+  });
 
   const sorted = [...obligations].sort((a, b) =>
     new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()
@@ -691,7 +763,7 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
                   return (
                     <div
                       key={ob.id}
-                      className={`flex items-center gap-2.5 p-2.5 rounded-lg transition-colors border ${isOverdue ? "border-red-500/40 bg-red-500/5" : isDueSoon ? "border-yellow-500/30 bg-yellow-500/5" : "border-transparent hover:bg-muted/50"}`}
+                      className={`flex items-center gap-2.5 p-2.5 rounded-lg transition-colors border group ${isOverdue ? "border-red-500/40 bg-red-500/5" : isDueSoon ? "border-yellow-500/30 bg-yellow-500/5" : "border-transparent hover:bg-muted/50"}`}
                       data-testid={`popup-obligation-${ob.id}`}
                     >
                       <div className={`p-1.5 rounded-md shrink-0 ${isOverdue ? "bg-red-500/10" : isDueSoon ? "bg-yellow-500/10" : "bg-primary/10"}`}>
@@ -711,6 +783,14 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
                       </div>
                       <Button size="sm" variant="outline" className="h-6 text-[10px] shrink-0" onClick={() => setPayOb(ob)}>
                         Pay
+                      </Button>
+                      <Button
+                        size="sm" variant="ghost"
+                        className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={() => deleteMutation.mutate(ob.id)}
+                        data-testid={`button-delete-obligation-${ob.id}`}
+                      >
+                        <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
                   );
@@ -811,6 +891,18 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
     queryFn: () => apiRequest("GET", "/api/artifacts").then(r => r.json()),
     enabled: open,
   });
+  const { toast } = useToast();
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/artifacts/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Artifact deleted" });
+    },
+  });
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
@@ -832,7 +924,7 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
               {artifacts.map(a => (
                 <div
                   key={a.id}
-                  className="flex items-center gap-2.5 p-2.5 rounded-lg hover:bg-muted/50 transition-colors"
+                  className="flex items-center gap-2.5 p-2.5 rounded-lg hover:bg-muted/50 transition-colors group"
                   data-testid={`popup-artifact-${a.id}`}
                 >
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${a.type === "checklist" ? "bg-blue-500/10" : "bg-primary/10"}`}>
@@ -853,6 +945,14 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
                     </div>
                   </div>
                   <span className="text-[10px] text-muted-foreground shrink-0">{fmtDate(a.createdAt)}</span>
+                  <Button
+                    size="sm" variant="ghost"
+                    className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
+                    onClick={() => deleteMutation.mutate(a.id)}
+                    data-testid={`button-delete-artifact-${a.id}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
                 </div>
               ))}
             </div>

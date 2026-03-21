@@ -72,6 +72,8 @@ import {
   RefreshCw,
   Unlink,
   Link2,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import {
   LineChart,
@@ -1446,10 +1448,28 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 // TRACKERS TAB — Upgraded with Recharts sparklines
 // ============================================================
 
-function TrackerSparkline({ tracker }: { tracker: ProfileDetail["relatedTrackers"][number] }) {
+function TrackerCard_Profile({
+  tracker,
+  profileId,
+  onChanged,
+  onLogEntry,
+  onUnlink,
+  onDeleteTracker,
+}: {
+  tracker: ProfileDetail["relatedTrackers"][number];
+  profileId: string;
+  onChanged: () => void;
+  onLogEntry: (trackerId: string) => void;
+  onUnlink: (trackerId: string) => void;
+  onDeleteTracker: (trackerId: string) => void;
+}) {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [deleteEntryId, setDeleteEntryId] = useState<string | null>(null);
+
   const last10 = tracker.entries.slice(-10);
 
-  // Find the first numeric field to use for the chart
+  // Find the first numeric field
   const numericField = tracker.fields?.find(
     (f: any) => last10.some(e => typeof e.values[f.name] === "number")
   );
@@ -1464,7 +1484,6 @@ function TrackerSparkline({ tracker }: { tracker: ProfileDetail["relatedTrackers
   const latestEntry = last10[last10.length - 1];
   const latestVal = latestEntry && fieldName != null ? latestEntry.values[fieldName] : null;
 
-  // Trend: compare last value to first in last10
   let trend: "up" | "down" | "flat" = "flat";
   if (chartData.length >= 2) {
     const first = chartData[0].val as number;
@@ -1476,9 +1495,26 @@ function TrackerSparkline({ tracker }: { tracker: ProfileDetail["relatedTrackers
   const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
   const trendColor = trend === "up" ? "text-green-500" : trend === "down" ? "text-red-500" : "text-muted-foreground";
 
+  const sortedEntries = [...tracker.entries].reverse();
+
+  const deleteEntryMutation = useMutation({
+    mutationFn: async (entryId: string) => {
+      await apiRequest("DELETE", `/api/trackers/${tracker.id}/entries/${entryId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Entry deleted" });
+      setDeleteEntryId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
   return (
     <Card data-testid={`card-tracker-${tracker.id}`}>
       <CardContent className="p-3">
+        {/* Header: name, badges, latest value, action buttons */}
         <div className="flex items-start justify-between mb-2">
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold truncate">{tracker.name}</p>
@@ -1500,7 +1536,21 @@ function TrackerSparkline({ tracker }: { tracker: ProfileDetail["relatedTrackers
           </div>
         </div>
 
-        {chartData.length >= 2 ? (
+        {/* Action buttons row - always visible */}
+        <div className="flex gap-1.5 mb-2">
+          <Button variant="secondary" size="sm" className="h-6 text-[10px] px-2 gap-1" onClick={() => onLogEntry(tracker.id)} data-testid={`button-log-entry-${tracker.id}`}>
+            <Plus className="h-3 w-3" /> Log Entry
+          </Button>
+          <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2 gap-1 text-muted-foreground" onClick={() => onUnlink(tracker.id)} data-testid={`button-unlink-tracker-${tracker.id}`}>
+            <Unlink className="h-3 w-3" /> Unlink
+          </Button>
+          <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2 gap-1 text-destructive" onClick={() => onDeleteTracker(tracker.id)} data-testid={`button-delete-tracker-${tracker.id}`}>
+            <Trash2 className="h-3 w-3" /> Delete
+          </Button>
+        </div>
+
+        {/* Chart if 2+ data points */}
+        {chartData.length >= 2 && (
           <ResponsiveContainer width="100%" height={60}>
             <LineChart data={chartData} margin={{ top: 2, right: 2, left: 0, bottom: 2 }}>
               <Line type="monotone" dataKey="val" stroke="#20808D" strokeWidth={1.5} dot={false} />
@@ -1514,23 +1564,80 @@ function TrackerSparkline({ tracker }: { tracker: ProfileDetail["relatedTrackers
               />
             </LineChart>
           </ResponsiveContainer>
-        ) : last10.length > 0 ? (
-          <div className="space-y-0 mt-1">
-            {last10.slice(-5).reverse().map(entry => (
-              <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs">
-                <span className="truncate max-w-[70%] text-muted-foreground">
-                  {Object.entries(entry.values).map(([k, v]) => `${formatKey(k)}: ${v}`).join(", ")}
-                </span>
-                <span className="text-muted-foreground shrink-0 ml-2">
-                  {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                </span>
-              </div>
-            ))}
-          </div>
+        )}
+
+        {/* Entries list: always show recent, expand for all */}
+        {tracker.entries.length > 0 ? (
+          <>
+            {/* Always show last 3 entries */}
+            <div className="space-y-0 mt-1">
+              {(expanded ? sortedEntries : sortedEntries.slice(0, 3)).map(entry => (
+                <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs group/entry" data-testid={`entry-row-${entry.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate text-foreground font-medium">
+                      {Object.entries(entry.values).map(([k, v]) => `${formatKey(k)}: ${v}`).join(", ")}
+                    </span>
+                    {tracker.unit && <span className="text-muted-foreground ml-1">{tracker.unit}</span>}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    <span className="text-muted-foreground text-[10px]">
+                      {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/entry:opacity-100 transition-opacity"
+                      onClick={() => setDeleteEntryId(entry.id)}
+                      data-testid={`button-delete-entry-${entry.id}`}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Expand/collapse button if more than 3 entries */}
+            {sortedEntries.length > 3 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1 h-6 text-[10px] w-full flex items-center gap-1 text-muted-foreground"
+                onClick={() => setExpanded(v => !v)}
+                data-testid={`button-expand-${tracker.id}`}
+              >
+                {expanded ? (
+                  <><ChevronUp className="h-3 w-3" /> Hide entries</>
+                ) : (
+                  <><ChevronDown className="h-3 w-3" /> View all {sortedEntries.length} entries</>
+                )}
+              </Button>
+            )}
+          </>
         ) : (
-          <p className="text-xs text-muted-foreground py-2 text-center">No entries yet</p>
+          <p className="text-xs text-muted-foreground py-2 text-center">No entries yet — tap "Log Entry" to add one</p>
         )}
       </CardContent>
+
+      {/* Delete Entry Confirmation */}
+      <AlertDialog open={!!deleteEntryId} onOpenChange={() => setDeleteEntryId(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-entry">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+            <AlertDialogDescription>This entry will be permanently removed from the tracker.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteEntryId && deleteEntryMutation.mutate(deleteEntryId)}
+              disabled={deleteEntryMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-entry"
+            >
+              {deleteEntryMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
@@ -1549,6 +1656,7 @@ function TrackersTab({
   const [showLinkTracker, setShowLinkTracker] = useState(false);
   const [showLogEntry, setShowLogEntry] = useState<string | null>(null);
   const [unlinkTrackerId, setUnlinkTrackerId] = useState<string | null>(null);
+  const [deleteTrackerId, setDeleteTrackerId] = useState<string | null>(null);
 
   // Create tracker form
   const [newTrackerName, setNewTrackerName] = useState("");
@@ -1619,6 +1727,20 @@ function TrackersTab({
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
   });
 
+  const deleteTrackerMutation = useMutation({
+    mutationFn: async (trackerId: string) => {
+      await apiRequest("DELETE", `/api/trackers/${trackerId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Tracker deleted" });
+      setDeleteTrackerId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to delete tracker", description: err.message, variant: "destructive" }),
+  });
+
   const logEntryMutation = useMutation({
     mutationFn: async (trackerId: string) => {
       const tracker = trackers.find(t => t.id === trackerId);
@@ -1665,17 +1787,15 @@ function TrackersTab({
         </Card>
       ) : (
         trackers.map(tracker => (
-          <div key={tracker.id} className="relative group">
-            <TrackerSparkline tracker={tracker} />
-            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <Button variant="secondary" size="sm" className="h-6 text-[10px] px-2 gap-1" onClick={() => { setEntryValue(""); setEntryNotes(""); setShowLogEntry(tracker.id); }} data-testid={`button-log-entry-${tracker.id}`}>
-                <Plus className="h-3 w-3" /> Log
-              </Button>
-              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={() => setUnlinkTrackerId(tracker.id)} data-testid={`button-unlink-tracker-${tracker.id}`}>
-                <Unlink className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
+          <TrackerCard_Profile
+            key={tracker.id}
+            tracker={tracker}
+            profileId={profileId}
+            onChanged={onChanged}
+            onLogEntry={(id) => { setEntryValue(""); setEntryNotes(""); setShowLogEntry(id); }}
+            onUnlink={(id) => setUnlinkTrackerId(id)}
+            onDeleteTracker={(id) => setDeleteTrackerId(id)}
+          />
         ))
       )}
 
@@ -1799,6 +1919,29 @@ function TrackersTab({
               data-testid="button-confirm-unlink-tracker"
             >
               {unlinkTrackerMutation.isPending ? "Unlinking..." : "Unlink"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Tracker Confirmation */}
+      <AlertDialog open={!!deleteTrackerId} onOpenChange={() => setDeleteTrackerId(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-tracker">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Tracker Permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the tracker "{trackers.find(t => t.id === deleteTrackerId)?.name}" and all its entries. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteTrackerId && deleteTrackerMutation.mutate(deleteTrackerId)}
+              disabled={deleteTrackerMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-tracker"
+            >
+              {deleteTrackerMutation.isPending ? "Deleting..." : "Delete Permanently"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
