@@ -57,9 +57,19 @@ import {
   Trophy,
   Calendar,
   BarChart2,
+  Users,
+  User,
+  PawPrint,
+  Car,
+  Building2,
+  CreditCard,
+  Stethoscope,
+  Star,
+  Smile,
+  Unlink,
 } from "lucide-react";
 import { useState } from "react";
-import type { Tracker, TrackerEntry, TrackerField, ComputedData } from "@shared/schema";
+import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile } from "@shared/schema";
 import {
   LineChart,
   Line,
@@ -810,6 +820,15 @@ function TrackerCard({
   tracker: Tracker;
   onDelete: (id: string) => void;
 }) {
+  // Read cached profiles (already fetched by TrackersPage)
+  const { data: allProfiles } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const linkedProfileNames = (tracker.linkedProfiles || []).map(pid =>
+    (allProfiles || []).find(p => p.id === pid)
+  ).filter(Boolean) as Profile[];
+
   const [addEntryOpen, setAddEntryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [detailExpanded, setDetailExpanded] = useState(false);
@@ -846,9 +865,22 @@ function TrackerCard({
               {specIcon && <span className="text-muted-foreground">{specIcon}</span>}
               {tracker.name}
             </CardTitle>
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
               <Badge variant="secondary" className="text-[10px] capitalize">{tracker.category}</Badge>
               <span className="text-[10px] text-muted-foreground">{tracker.entries.length} entries</span>
+              {linkedProfileNames.map(p => {
+                const PIcon = PROFILE_TYPE_ICONS[p.type] || User;
+                return (
+                  <span key={p.id} className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded-md" data-testid={`badge-profile-${p.id}`}>
+                    {p.avatar ? (
+                      <img src={p.avatar} alt={p.name} className="h-2.5 w-2.5 rounded-full object-cover" />
+                    ) : (
+                      <PIcon className="h-2.5 w-2.5" />
+                    )}
+                    {p.name}
+                  </span>
+                );
+              })}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -1557,13 +1589,36 @@ function TrackerSummary({ trackers }: { trackers: Tracker[] }) {
 
 // ── TrackersPage ───────────────────────────────────────────────────────────────
 
+// ── Profile filter icon map ──────────────────────────────────────────────────
+
+const PROFILE_TYPE_ICONS: Record<string, any> = {
+  person: User,
+  pet: PawPrint,
+  vehicle: Car,
+  account: CreditCard,
+  property: Building2,
+  subscription: CreditCard,
+  medical: Stethoscope,
+  self: Smile,
+  loan: CreditCard,
+  investment: TrendingUp,
+  asset: Star,
+};
+
 export default function TrackersPage() {
   const { data: trackers, isLoading } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers"],
   });
 
+  const { data: profiles } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // "all" = show everything, "unlinked" = trackers with no profile, otherwise a profile ID
+  const [profileFilter, setProfileFilter] = useState<string>("all");
 
   const deleteTarget = deleteTargetId
     ? (trackers || []).find((t) => t.id === deleteTargetId)
@@ -1587,8 +1642,23 @@ export default function TrackersPage() {
     );
   }
 
+  // Build the list of profiles that actually have linked trackers
+  const profilesWithTrackers = (profiles || []).filter(p =>
+    (trackers || []).some(t => t.linkedProfiles?.includes(p.id))
+  );
+
+  // Check if there are any unlinked trackers (not linked to any profile)
+  const hasUnlinked = (trackers || []).some(t => !t.linkedProfiles || t.linkedProfiles.length === 0);
+
+  // Apply profile filter
+  const filteredTrackers = (trackers || []).filter(t => {
+    if (profileFilter === "all") return true;
+    if (profileFilter === "unlinked") return !t.linkedProfiles || t.linkedProfiles.length === 0;
+    return t.linkedProfiles?.includes(profileFilter);
+  });
+
   // Group by category
-  const grouped = (trackers || []).reduce((acc: Record<string, Tracker[]>, t) => {
+  const grouped = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
     (acc[t.category] = acc[t.category] || []).push(t);
     return acc;
   }, {});
@@ -1599,6 +1669,10 @@ export default function TrackersPage() {
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
   });
 
+  // Count trackers per profile for badges
+  const countForProfile = (profileId: string) =>
+    (trackers || []).filter(t => t.linkedProfiles?.includes(profileId)).length;
+
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full" data-testid="page-trackers">
       <div className="flex items-center justify-between">
@@ -1607,7 +1681,7 @@ export default function TrackersPage() {
             Trackers
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {(trackers || []).length} trackers with secondary data analysis
+            {filteredTrackers.length}{profileFilter !== "all" ? ` of ${(trackers || []).length}` : ""} trackers{profileFilter !== "all" ? " shown" : ""}
           </p>
         </div>
         <Button
@@ -1620,9 +1694,85 @@ export default function TrackersPage() {
         </Button>
       </div>
 
+      {/* Profile Filter Bar */}
+      {profilesWithTrackers.length > 0 && (
+        <div className="space-y-1.5" data-testid="profile-filter-bar">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Users className="h-3.5 w-3.5" />
+            <span className="font-medium">Filter by Profile</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {/* All chip */}
+            <button
+              onClick={() => setProfileFilter("all")}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
+                profileFilter === "all"
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
+              }`}
+              data-testid="filter-all"
+            >
+              <Activity className="h-3 w-3" />
+              All
+              <span className={`text-[10px] px-1 py-0 rounded-full ${profileFilter === "all" ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
+                {(trackers || []).length}
+              </span>
+            </button>
+
+            {/* One chip per profile that has trackers */}
+            {profilesWithTrackers.map(p => {
+              const Icon = PROFILE_TYPE_ICONS[p.type] || User;
+              const count = countForProfile(p.id);
+              const isActive = profileFilter === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setProfileFilter(isActive ? "all" : p.id)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
+                    isActive
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
+                  }`}
+                  data-testid={`filter-profile-${p.id}`}
+                >
+                  {p.avatar ? (
+                    <img src={p.avatar} alt={p.name} className="h-3.5 w-3.5 rounded-full object-cover" />
+                  ) : (
+                    <Icon className="h-3 w-3" />
+                  )}
+                  {p.name}
+                  <span className={`text-[10px] px-1 py-0 rounded-full ${isActive ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+
+            {/* Unlinked chip — only show if there are unlinked trackers */}
+            {hasUnlinked && (
+              <button
+                onClick={() => setProfileFilter(profileFilter === "unlinked" ? "all" : "unlinked")}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
+                  profileFilter === "unlinked"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
+                }`}
+                data-testid="filter-unlinked"
+              >
+                <Unlink className="h-3 w-3" />
+                Unlinked
+                <span className={`text-[10px] px-1 py-0 rounded-full ${profileFilter === "unlinked" ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
+                  {(trackers || []).filter(t => !t.linkedProfiles || t.linkedProfiles.length === 0).length}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Summary cards */}
-      {trackers && trackers.length > 0 && (
-        <TrackerSummary trackers={trackers} />
+      {filteredTrackers.length > 0 && (
+        <TrackerSummary trackers={filteredTrackers} />
       )}
 
       {(!trackers || trackers.length === 0) ? (
@@ -1641,6 +1791,22 @@ export default function TrackersPage() {
           >
             <Plus className="h-4 w-4 mr-1.5" />
             Create First Tracker
+          </Button>
+        </div>
+      ) : filteredTrackers.length === 0 ? (
+        <div className="text-center py-12">
+          <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">
+            No trackers linked to {profileFilter === "unlinked" ? "no profile" : (profiles || []).find(p => p.id === profileFilter)?.name || "this profile"}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            onClick={() => setProfileFilter("all")}
+            data-testid="button-clear-filter"
+          >
+            Show All Trackers
           </Button>
         </div>
       ) : (
