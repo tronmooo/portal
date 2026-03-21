@@ -1279,7 +1279,10 @@ async function executeTool(name: string, input: any): Promise<any> {
         t => t.name.toLowerCase() === trackerName || t.name.toLowerCase().includes(trackerName)
       );
       if (tracker) {
-        return storage.logEntry({ trackerId: tracker.id, values: input.values });
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: input.values });
+        // Auto-link tracker to any matching profiles by name
+        autoLinkToProfiles("tracker", tracker.id, tracker.name);
+        return entry;
       }
       // Auto-create tracker if not found
       const newTracker = await storage.createTracker({
@@ -1290,16 +1293,23 @@ async function executeTool(name: string, input: any): Promise<any> {
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       });
-      return storage.logEntry({ trackerId: newTracker.id, values: input.values });
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: input.values });
+      // Auto-link the new tracker to any matching profiles
+      autoLinkToProfiles("tracker", newTracker.id, input.trackerName || "");
+      return entry;
     }
 
-    case "create_tracker":
-      return storage.createTracker({
+    case "create_tracker": {
+      const newTracker = await storage.createTracker({
         name: input.name,
         category: input.category || "custom",
         unit: input.unit,
         fields: input.fields || [{ name: "value", type: "number" }],
       });
+      // Auto-link: scan tracker name for profile names
+      autoLinkToProfiles("tracker", newTracker.id, input.name || "");
+      return newTracker;
+    }
 
     case "create_expense": {
       const newExpense = await storage.createExpense({
@@ -1468,8 +1478,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       return storage.updateGoal(goal.id, changes);
     }
 
-    case "link_entities":
-      return storage.createEntityLink({
+    case "link_entities": {
+      const linkResult = await storage.createEntityLink({
         sourceType: input.source_type,
         sourceId: input.source_id,
         targetType: input.target_type,
@@ -1477,6 +1487,21 @@ async function executeTool(name: string, input: any): Promise<any> {
         relationship: input.relationship,
         confidence: 1,
       });
+      // Also update the profile arrays for proper display
+      if (input.target_type === "profile") {
+        try {
+          await storage.linkProfileTo(input.target_id, input.source_type, input.source_id);
+          await updateEntityLinkedProfiles(input.source_type, input.source_id, input.target_id);
+        } catch (e) { console.error("link_entities profile update failed:", e); }
+      }
+      if (input.source_type === "profile") {
+        try {
+          await storage.linkProfileTo(input.source_id, input.target_type, input.target_id);
+          await updateEntityLinkedProfiles(input.target_type, input.target_id, input.source_id);
+        } catch (e) { console.error("link_entities profile update failed:", e); }
+      }
+      return linkResult;
+    }
 
     case "get_related":
       return storage.getRelatedEntities(input.entity_type, input.entity_id);
@@ -1725,19 +1750,73 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
       const name = profile.name.toLowerCase();
       if (name.length < 2) continue; // Skip very short names
       if (lower.includes(name)) {
+        // 1. Create entity_link record
         const relationship = entityType === "expense" ? "paid_for" : "related_to";
-        await storage.createEntityLink({
-          sourceType: entityType,
-          sourceId: entityId,
-          targetType: "profile",
-          targetId: profile.id,
-          relationship,
-          confidence: 0.7,
-        });
+        try {
+          await storage.createEntityLink({
+            sourceType: entityType,
+            sourceId: entityId,
+            targetType: "profile",
+            targetId: profile.id,
+            relationship,
+            confidence: 0.7,
+          });
+        } catch (e) { /* ignore duplicate link errors */ }
+
+        // 2. Update profile's linked arrays (linkedTrackers, linkedExpenses, etc.)
+        try {
+          await storage.linkProfileTo(profile.id, entityType, entityId);
+        } catch (e) { console.error("linkProfileTo failed:", e); }
+
+        // 3. Update the entity's own linkedProfiles array
+        try {
+          await updateEntityLinkedProfiles(entityType, entityId, profile.id);
+        } catch (e) { console.error("updateEntityLinkedProfiles failed:", e); }
       }
     }
   } catch (err) {
     console.error("Auto-link failed:", err);
+  }
+}
+
+// Helper: update an entity's linkedProfiles array to include a profile ID
+async function updateEntityLinkedProfiles(entityType: string, entityId: string, profileId: string): Promise<void> {
+  switch (entityType) {
+    case "tracker": {
+      const tracker = await storage.getTracker(entityId);
+      if (tracker && !tracker.linkedProfiles.includes(profileId)) {
+        tracker.linkedProfiles.push(profileId);
+        await storage.updateTracker(entityId, { linkedProfiles: tracker.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "task": {
+      const tasks = await storage.getTasks();
+      const task = tasks.find(t => t.id === entityId);
+      if (task && !task.linkedProfiles.includes(profileId)) {
+        task.linkedProfiles.push(profileId);
+        await storage.updateTask(entityId, { linkedProfiles: task.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "expense": {
+      const expenses = await storage.getExpenses();
+      const expense = expenses.find(e => e.id === entityId);
+      if (expense && !expense.linkedProfiles.includes(profileId)) {
+        expense.linkedProfiles.push(profileId);
+        await storage.updateExpense(entityId, { linkedProfiles: expense.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "event": {
+      const events = await storage.getEvents();
+      const evt = events.find(e => e.id === entityId);
+      if (evt && !evt.linkedProfiles.includes(profileId)) {
+        evt.linkedProfiles.push(profileId);
+        await storage.updateEvent(entityId, { linkedProfiles: evt.linkedProfiles } as any);
+      }
+      break;
+    }
   }
 }
 

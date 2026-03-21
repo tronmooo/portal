@@ -278,6 +278,19 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
+  // ---- Profile Link / Unlink ----
+  app.post("/api/profiles/:id/link", async (req, res) => {
+    const { entityType, entityId } = req.body;
+    await storage.linkProfileTo(req.params.id, entityType, entityId);
+    res.json({ ok: true });
+  });
+
+  app.post("/api/profiles/:id/unlink", async (req, res) => {
+    const { entityType, entityId } = req.body;
+    await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
+    res.json({ ok: true });
+  });
+
   // ---- Profile AI Summary ----
   app.get("/api/profiles/:id/ai-summary", async (req, res) => {
     try {

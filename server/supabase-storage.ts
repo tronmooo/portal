@@ -440,6 +440,45 @@ export class SupabaseStorage implements IStorage {
     }
   }
 
+  async unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void> {
+    const profile = await this.getProfile(profileId);
+    if (!profile) return;
+    let field: string | undefined;
+    let snakeField: string | undefined;
+    switch (entityType) {
+      case "tracker":
+        profile.linkedTrackers = profile.linkedTrackers.filter(id => id !== entityId);
+        field = "linkedTrackers"; snakeField = "linked_trackers";
+        break;
+      case "expense":
+        profile.linkedExpenses = profile.linkedExpenses.filter(id => id !== entityId);
+        field = "linkedExpenses"; snakeField = "linked_expenses";
+        break;
+      case "task":
+        profile.linkedTasks = profile.linkedTasks.filter(id => id !== entityId);
+        field = "linkedTasks"; snakeField = "linked_tasks";
+        break;
+      case "event":
+        profile.linkedEvents = profile.linkedEvents.filter(id => id !== entityId);
+        field = "linkedEvents"; snakeField = "linked_events";
+        break;
+      case "document":
+        profile.documents = profile.documents.filter(id => id !== entityId);
+        field = "documents"; snakeField = "documents";
+        break;
+    }
+    if (field && snakeField) {
+      await this.supabase.from("profiles").update({ [snakeField]: (profile as any)[field] }).eq("id", profileId).eq("user_id", this.userId);
+      // Also remove from entity_links table
+      await this.supabase.from("entity_links").delete()
+        .eq("user_id", this.userId)
+        .eq("source_type", "profile")
+        .eq("source_id", profileId)
+        .eq("target_type", entityType)
+        .eq("target_id", entityId);
+    }
+  }
+
   // ============================================================
   // TRACKERS
   // ============================================================

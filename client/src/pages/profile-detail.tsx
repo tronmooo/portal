@@ -25,6 +25,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   ArrowLeft,
   User,
   PawPrint,
@@ -63,6 +70,8 @@ import {
   CheckCheck,
   Sparkles,
   RefreshCw,
+  Unlink,
+  Link2,
 } from "lucide-react";
 import {
   LineChart,
@@ -75,7 +84,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import type { ProfileDetail, Document, TimelineEntry } from "@shared/schema";
+import type { ProfileDetail, Document, TimelineEntry, Tracker } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
@@ -987,13 +996,21 @@ function DocumentsTab({
 // FINANCES TAB — Universal with type-specific enrichments
 // ============================================================
 
-function FinancesTab({ profile }: { profile: ProfileDetail }) {
+function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
   const expenses = profile.relatedExpenses;
   const obligations = profile.relatedObligations;
+  const { toast } = useToast();
+  const [showAddExpense, setShowAddExpense] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<ProfileDetail["relatedExpenses"][number] | null>(null);
+  const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
+  const [expDesc, setExpDesc] = useState("");
+  const [expAmount, setExpAmount] = useState("");
+  const [expCategory, setExpCategory] = useState("general");
+  const [expVendor, setExpVendor] = useState("");
+  const [expDate, setExpDate] = useState(new Date().toISOString().slice(0, 10));
 
   const totalSpent = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
-  // Group expenses by month for bar chart
   const expensesByMonth: Record<string, number> = {};
   for (const exp of expenses) {
     const d = new Date(exp.date);
@@ -1005,40 +1022,89 @@ function FinancesTab({ profile }: { profile: ProfileDetail }) {
     month: new Date(m + "-01").toLocaleDateString(undefined, { month: "short", year: "2-digit" }),
     amount: expensesByMonth[m],
   }));
-
   const avgPerMonth = sortedMonths.length > 0 ? totalSpent / sortedMonths.length : 0;
 
   const isLoan = profile.type === "loan";
   const isInvestment = profile.type === "investment";
   const isSubscription = profile.type === "subscription";
 
-  // Investment performance history
-  const performanceHistory: any[] = Array.isArray(profile.fields.performanceHistory)
-    ? profile.fields.performanceHistory
-    : [];
+  const performanceHistory: any[] = Array.isArray(profile.fields.performanceHistory) ? profile.fields.performanceHistory : [];
   const perfChartData = performanceHistory
     .filter(p => p.date && p.value != null)
-    .map(p => ({
-      date: new Date(p.date).toLocaleDateString(undefined, { month: "short", year: "2-digit" }),
-      value: Number(p.value),
-    }));
+    .map(p => ({ date: new Date(p.date).toLocaleDateString(undefined, { month: "short", year: "2-digit" }), value: Number(p.value) }));
 
-  const hasAnyData = expenses.length > 0 || obligations.length > 0 || performanceHistory.length > 0;
+  const createExpenseMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/expenses", {
+        description: expDesc, amount: Number(expAmount), category: expCategory, vendor: expVendor || undefined, date: expDate,
+      });
+      const expense = await res.json();
+      // Link to this profile
+      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "expense", entityId: expense.id });
+      return expense;
+    },
+    onSuccess: () => {
+      toast({ title: "Expense added" });
+      setShowAddExpense(false);
+      setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10));
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
 
-  if (!hasAnyData) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <DollarSign className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-sm font-medium text-muted-foreground">No financial data yet</p>
-          <p className="text-xs text-muted-foreground mt-1">Link expenses, obligations, or track spending via chat</p>
-        </CardContent>
-      </Card>
-    );
+  const updateExpenseMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingExpense) return;
+      await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
+        description: expDesc, amount: Number(expAmount), category: expCategory, vendor: expVendor || undefined, date: expDate,
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Expense updated" });
+      setEditingExpense(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteExpenseMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/expenses/${id}`);
+      await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "expense", entityId: id });
+    },
+    onSuccess: () => {
+      toast({ title: "Expense deleted" });
+      setDeleteExpenseId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  function openEdit(expense: ProfileDetail["relatedExpenses"][number]) {
+    setExpDesc(expense.description); setExpAmount(String(expense.amount)); setExpCategory(expense.category || "general");
+    setExpVendor(expense.vendor || ""); setExpDate(expense.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+    setEditingExpense(expense);
   }
+
+  function openAdd() {
+    setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10));
+    setShowAddExpense(true);
+  }
+
+  const expenseCategories = ["general", "food", "transport", "housing", "utilities", "entertainment", "health", "education", "shopping", "insurance", "pet", "vehicle", "travel", "other"];
 
   return (
     <div className="space-y-4">
+      {/* Add Expense Button */}
+      <div className="flex justify-end">
+        <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={openAdd} data-testid="button-add-expense">
+          <Plus className="h-3.5 w-3.5" /> Add Expense
+        </Button>
+      </div>
+
       {/* Loan: Prominent Balance Card */}
       {isLoan && (profile.fields.remainingBalance || profile.fields.balance || profile.fields.originalAmount) && (
         <Card className="border-orange-500/30">
@@ -1222,7 +1288,7 @@ function FinancesTab({ profile }: { profile: ProfileDetail }) {
         </Card>
       )}
 
-      {/* Expense History */}
+      {/* Expense History with edit/delete */}
       {expenses.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
@@ -1232,20 +1298,146 @@ function FinancesTab({ profile }: { profile: ProfileDetail }) {
           </CardHeader>
           <CardContent>
             {expenses.slice(0, 20).map(expense => (
-              <div key={expense.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                <div>
+              <div key={expense.id} className="flex items-center justify-between py-2 border-b border-border last:border-0 group" data-testid={`row-expense-${expense.id}`}>
+                <div className="flex-1 min-w-0">
                   <p className="text-sm">{expense.description}</p>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className="text-xs text-muted-foreground">{new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
                     {expense.category && <Badge variant="secondary" className="text-[10px]">{expense.category}</Badge>}
                   </div>
                 </div>
-                <span className="text-sm font-semibold tabular-nums shrink-0 ml-2">{formatCurrency(expense.amount)}</span>
+                <div className="flex items-center gap-2 shrink-0 ml-2">
+                  <span className="text-sm font-semibold tabular-nums">{formatCurrency(expense.amount)}</span>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => openEdit(expense)} data-testid={`button-edit-expense-${expense.id}`}>
+                    <Edit className="h-3 w-3" />
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteExpenseId(expense.id)} data-testid={`button-delete-expense-${expense.id}`}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
               </div>
             ))}
           </CardContent>
         </Card>
       )}
+
+      {/* Empty state */}
+      {expenses.length === 0 && obligations.length === 0 && performanceHistory.length === 0 && (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <DollarSign className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No financial data yet</p>
+            <p className="text-xs text-muted-foreground mt-1">Add an expense above or use chat</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Add Expense Dialog */}
+      <Dialog open={showAddExpense} onOpenChange={setShowAddExpense}>
+        <DialogContent className="max-w-md" data-testid="dialog-add-expense">
+          <DialogHeader>
+            <DialogTitle>Add Expense</DialogTitle>
+            <DialogDescription>Add a new expense linked to this profile.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Description</label>
+              <Input className="mt-1" value={expDesc} onChange={e => setExpDesc(e.target.value)} placeholder="e.g. Vet visit" data-testid="input-expense-desc" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Amount ($)</label>
+              <Input className="mt-1" type="number" step="0.01" value={expAmount} onChange={e => setExpAmount(e.target.value)} placeholder="0.00" data-testid="input-expense-amount" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Category</label>
+              <Select value={expCategory} onValueChange={setExpCategory}>
+                <SelectTrigger className="mt-1" data-testid="select-expense-category"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {expenseCategories.map(c => <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Vendor</label>
+              <Input className="mt-1" value={expVendor} onChange={e => setExpVendor(e.target.value)} placeholder="Optional" data-testid="input-expense-vendor" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Date</label>
+              <Input className="mt-1" type="date" value={expDate} onChange={e => setExpDate(e.target.value)} data-testid="input-expense-date" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddExpense(false)}>Cancel</Button>
+            <Button onClick={() => createExpenseMutation.mutate()} disabled={createExpenseMutation.isPending || !expDesc || !expAmount} data-testid="button-save-expense">
+              {createExpenseMutation.isPending ? "Saving..." : "Add Expense"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Expense Dialog */}
+      <Dialog open={!!editingExpense} onOpenChange={() => setEditingExpense(null)}>
+        <DialogContent className="max-w-md" data-testid="dialog-edit-expense">
+          <DialogHeader>
+            <DialogTitle>Edit Expense</DialogTitle>
+            <DialogDescription>Update this expense.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Description</label>
+              <Input className="mt-1" value={expDesc} onChange={e => setExpDesc(e.target.value)} data-testid="input-edit-expense-desc" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Amount ($)</label>
+              <Input className="mt-1" type="number" step="0.01" value={expAmount} onChange={e => setExpAmount(e.target.value)} data-testid="input-edit-expense-amount" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Category</label>
+              <Select value={expCategory} onValueChange={setExpCategory}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {expenseCategories.map(c => <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Vendor</label>
+              <Input className="mt-1" value={expVendor} onChange={e => setExpVendor(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Date</label>
+              <Input className="mt-1" type="date" value={expDate} onChange={e => setExpDate(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingExpense(null)}>Cancel</Button>
+            <Button onClick={() => updateExpenseMutation.mutate()} disabled={updateExpenseMutation.isPending || !expDesc || !expAmount} data-testid="button-update-expense">
+              {updateExpenseMutation.isPending ? "Saving..." : "Update"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Expense Confirmation */}
+      <AlertDialog open={!!deleteExpenseId} onOpenChange={() => setDeleteExpenseId(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-expense">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Expense?</AlertDialogTitle>
+            <AlertDialogDescription>This expense will be permanently deleted.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteExpenseId && deleteExpenseMutation.mutate(deleteExpenseId)}
+              disabled={deleteExpenseMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-expense"
+            >
+              {deleteExpenseMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1343,24 +1535,274 @@ function TrackerSparkline({ tracker }: { tracker: ProfileDetail["relatedTrackers
   );
 }
 
-function TrackersTab({ trackers }: { trackers: ProfileDetail["relatedTrackers"] }) {
-  if (trackers.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <Activity className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-sm font-medium text-muted-foreground">No linked trackers</p>
-          <p className="text-xs text-muted-foreground mt-1">Link a tracker to this profile via chat</p>
-        </CardContent>
-      </Card>
-    );
-  }
+function TrackersTab({
+  trackers,
+  profileId,
+  onChanged,
+}: {
+  trackers: ProfileDetail["relatedTrackers"];
+  profileId: string;
+  onChanged: () => void;
+}) {
+  const { toast } = useToast();
+  const [showCreateTracker, setShowCreateTracker] = useState(false);
+  const [showLinkTracker, setShowLinkTracker] = useState(false);
+  const [showLogEntry, setShowLogEntry] = useState<string | null>(null);
+  const [unlinkTrackerId, setUnlinkTrackerId] = useState<string | null>(null);
+
+  // Create tracker form
+  const [newTrackerName, setNewTrackerName] = useState("");
+  const [newTrackerUnit, setNewTrackerUnit] = useState("");
+  const [newTrackerCategory, setNewTrackerCategory] = useState("custom");
+  const [newFieldName, setNewFieldName] = useState("value");
+  const [newFieldType, setNewFieldType] = useState<"number" | "text">("number");
+
+  // Log entry form
+  const [entryValue, setEntryValue] = useState("");
+  const [entryNotes, setEntryNotes] = useState("");
+
+  // All trackers for linking
+  const { data: allTrackers } = useQuery<Tracker[]>({
+    queryKey: ["/api/trackers"],
+    queryFn: async () => { const res = await apiRequest("GET", "/api/trackers"); return res.json(); },
+  });
+
+  const linkedIds = new Set(trackers.map(t => t.id));
+  const unlinkableTrackers = (allTrackers || []).filter(t => !linkedIds.has(t.id));
+
+  const createTrackerMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/trackers", {
+        name: newTrackerName,
+        unit: newTrackerUnit || undefined,
+        category: newTrackerCategory,
+        fields: [{ name: newFieldName || "value", type: newFieldType, isPrimary: true }],
+      });
+      const tracker = await res.json();
+      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "tracker", entityId: tracker.id });
+      return tracker;
+    },
+    onSuccess: () => {
+      toast({ title: "Tracker created and linked" });
+      setShowCreateTracker(false);
+      setNewTrackerName(""); setNewTrackerUnit(""); setNewTrackerCategory("custom"); setNewFieldName("value"); setNewFieldType("number");
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const linkTrackerMutation = useMutation({
+    mutationFn: async (trackerId: string) => {
+      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "tracker", entityId: trackerId });
+    },
+    onSuccess: () => {
+      toast({ title: "Tracker linked" });
+      setShowLinkTracker(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const unlinkTrackerMutation = useMutation({
+    mutationFn: async (trackerId: string) => {
+      await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "tracker", entityId: trackerId });
+    },
+    onSuccess: () => {
+      toast({ title: "Tracker unlinked" });
+      setUnlinkTrackerId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const logEntryMutation = useMutation({
+    mutationFn: async (trackerId: string) => {
+      const tracker = trackers.find(t => t.id === trackerId);
+      const primaryField = tracker?.fields?.find((f: any) => f.isPrimary)?.name || tracker?.fields?.[0]?.name || "value";
+      const numVal = Number(entryValue);
+      const values: Record<string, any> = { [primaryField]: isNaN(numVal) ? entryValue : numVal };
+      await apiRequest("POST", `/api/trackers/${trackerId}/entries`, {
+        trackerId, values, notes: entryNotes || undefined,
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Entry logged" });
+      setShowLogEntry(null);
+      setEntryValue(""); setEntryNotes("");
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const trackerCategories = ["custom", "health", "fitness", "finance", "productivity", "nutrition", "sleep", "mood", "weight", "other"];
 
   return (
     <div className="space-y-3">
-      {trackers.map(tracker => (
-        <TrackerSparkline key={tracker.id} tracker={tracker} />
-      ))}
+      {/* Action buttons */}
+      <div className="flex gap-2 justify-end">
+        {unlinkableTrackers.length > 0 && (
+          <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setShowLinkTracker(true)} data-testid="button-link-tracker">
+            <Link2 className="h-3.5 w-3.5" /> Link Existing
+          </Button>
+        )}
+        <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setShowCreateTracker(true)} data-testid="button-create-tracker">
+          <Plus className="h-3.5 w-3.5" /> New Tracker
+        </Button>
+      </div>
+
+      {trackers.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <Activity className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No linked trackers</p>
+            <p className="text-xs text-muted-foreground mt-1">Create or link a tracker above</p>
+          </CardContent>
+        </Card>
+      ) : (
+        trackers.map(tracker => (
+          <div key={tracker.id} className="relative group">
+            <TrackerSparkline tracker={tracker} />
+            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <Button variant="secondary" size="sm" className="h-6 text-[10px] px-2 gap-1" onClick={() => { setEntryValue(""); setEntryNotes(""); setShowLogEntry(tracker.id); }} data-testid={`button-log-entry-${tracker.id}`}>
+                <Plus className="h-3 w-3" /> Log
+              </Button>
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={() => setUnlinkTrackerId(tracker.id)} data-testid={`button-unlink-tracker-${tracker.id}`}>
+                <Unlink className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        ))
+      )}
+
+      {/* Create Tracker Dialog */}
+      <Dialog open={showCreateTracker} onOpenChange={setShowCreateTracker}>
+        <DialogContent className="max-w-md" data-testid="dialog-create-tracker">
+          <DialogHeader>
+            <DialogTitle>New Tracker</DialogTitle>
+            <DialogDescription>Create a new tracker linked to this profile.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Name</label>
+              <Input className="mt-1" value={newTrackerName} onChange={e => setNewTrackerName(e.target.value)} placeholder="e.g. Weight" data-testid="input-tracker-name" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Unit</label>
+              <Input className="mt-1" value={newTrackerUnit} onChange={e => setNewTrackerUnit(e.target.value)} placeholder="e.g. lbs, kg, hours" data-testid="input-tracker-unit" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Category</label>
+              <Select value={newTrackerCategory} onValueChange={setNewTrackerCategory}>
+                <SelectTrigger className="mt-1" data-testid="select-tracker-category"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {trackerCategories.map(c => <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Primary Field Name</label>
+              <Input className="mt-1" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="value" data-testid="input-tracker-field-name" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Field Type</label>
+              <Select value={newFieldType} onValueChange={v => setNewFieldType(v as "number" | "text")}>
+                <SelectTrigger className="mt-1" data-testid="select-tracker-field-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="number">Number</SelectItem>
+                  <SelectItem value="text">Text</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreateTracker(false)}>Cancel</Button>
+            <Button onClick={() => createTrackerMutation.mutate()} disabled={createTrackerMutation.isPending || !newTrackerName} data-testid="button-save-tracker">
+              {createTrackerMutation.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Link Existing Tracker Dialog */}
+      <Dialog open={showLinkTracker} onOpenChange={setShowLinkTracker}>
+        <DialogContent className="max-w-md" data-testid="dialog-link-tracker">
+          <DialogHeader>
+            <DialogTitle>Link Tracker</DialogTitle>
+            <DialogDescription>Link an existing tracker to this profile.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2 max-h-[300px] overflow-y-auto">
+            {unlinkableTrackers.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">All trackers are already linked</p>
+            ) : (
+              unlinkableTrackers.map(tracker => (
+                <div key={tracker.id} className="flex items-center justify-between p-2 rounded-lg border border-border hover:bg-muted/50 transition-colors">
+                  <div>
+                    <p className="text-sm font-medium">{tracker.name}</p>
+                    <p className="text-xs text-muted-foreground">{tracker.category} {tracker.unit ? `(${tracker.unit})` : ""}</p>
+                  </div>
+                  <Button size="sm" className="h-7 text-xs" onClick={() => linkTrackerMutation.mutate(tracker.id)} disabled={linkTrackerMutation.isPending} data-testid={`button-link-${tracker.id}`}>
+                    Link
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Log Entry Dialog */}
+      <Dialog open={!!showLogEntry} onOpenChange={() => setShowLogEntry(null)}>
+        <DialogContent className="max-w-md" data-testid="dialog-log-entry">
+          <DialogHeader>
+            <DialogTitle>Log Entry</DialogTitle>
+            <DialogDescription>Add a new entry to {trackers.find(t => t.id === showLogEntry)?.name || "this tracker"}.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">
+                Value {trackers.find(t => t.id === showLogEntry)?.unit ? `(${trackers.find(t => t.id === showLogEntry)?.unit})` : ""}
+              </label>
+              <Input className="mt-1" value={entryValue} onChange={e => setEntryValue(e.target.value)} placeholder="Enter value" data-testid="input-entry-value" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Notes (optional)</label>
+              <Input className="mt-1" value={entryNotes} onChange={e => setEntryNotes(e.target.value)} placeholder="Any notes" data-testid="input-entry-notes" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowLogEntry(null)}>Cancel</Button>
+            <Button onClick={() => showLogEntry && logEntryMutation.mutate(showLogEntry)} disabled={logEntryMutation.isPending || !entryValue} data-testid="button-save-entry">
+              {logEntryMutation.isPending ? "Logging..." : "Log Entry"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Unlink Confirmation */}
+      <AlertDialog open={!!unlinkTrackerId} onOpenChange={() => setUnlinkTrackerId(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-unlink-tracker">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlink Tracker?</AlertDialogTitle>
+            <AlertDialogDescription>This will remove the tracker from this profile. The tracker itself will not be deleted.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => unlinkTrackerId && unlinkTrackerMutation.mutate(unlinkTrackerId)}
+              disabled={unlinkTrackerMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-unlink-tracker"
+            >
+              {unlinkTrackerMutation.isPending ? "Unlinking..." : "Unlink"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1404,12 +1846,16 @@ function TasksTab({
   onChanged: () => void;
 }) {
   const { toast } = useToast();
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDesc, setTaskDesc] = useState("");
+  const [taskPriority, setTaskPriority] = useState<"low" | "medium" | "high">("medium");
+  const [taskDueDate, setTaskDueDate] = useState("");
 
   const toggleMutation = useMutation({
     mutationFn: async ({ taskId, status }: { taskId: string; status: "todo" | "done" }) => {
-      const res = await apiRequest("PATCH", `/api/tasks/${taskId}`, {
-        status,
-      });
+      const res = await apiRequest("PATCH", `/api/tasks/${taskId}`, { status });
       return res.json();
     },
     onSuccess: () => {
@@ -1421,17 +1867,41 @@ function TasksTab({
     },
   });
 
-  if (tasks.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <ListTodo className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-sm font-medium text-muted-foreground">No linked tasks</p>
-          <p className="text-xs text-muted-foreground mt-1">Create tasks for this profile via chat</p>
-        </CardContent>
-      </Card>
-    );
-  }
+  const createTaskMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/tasks", {
+        title: taskTitle,
+        description: taskDesc || undefined,
+        priority: taskPriority,
+        dueDate: taskDueDate || undefined,
+      });
+      const task = await res.json();
+      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "task", entityId: task.id });
+      return task;
+    },
+    onSuccess: () => {
+      toast({ title: "Task created" });
+      setShowAddTask(false);
+      setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate("");
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/tasks/${id}`);
+      await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "task", entityId: id });
+    },
+    onSuccess: () => {
+      toast({ title: "Task deleted" });
+      setDeleteTaskId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
 
   const open = tasks.filter(t => t.status !== "done");
   const done = tasks.filter(t => t.status === "done");
@@ -1458,6 +1928,23 @@ function TasksTab({
 
   return (
     <div className="space-y-4">
+      {/* Add Task Button */}
+      <div className="flex justify-end">
+        <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => { setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate(""); setShowAddTask(true); }} data-testid="button-add-task">
+          <Plus className="h-3.5 w-3.5" /> Add Task
+        </Button>
+      </div>
+
+      {tasks.length === 0 && (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <ListTodo className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No linked tasks</p>
+            <p className="text-xs text-muted-foreground mt-1">Add a task above or use chat</p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Open tasks */}
       {open.length > 0 && (
         <Card>
@@ -1470,7 +1957,7 @@ function TasksTab({
             {open.map(task => (
               <div
                 key={task.id}
-                className="flex items-start gap-3 py-2.5 border-b border-border last:border-0"
+                className="flex items-start gap-3 py-2.5 border-b border-border last:border-0 group"
                 data-testid={`row-task-${task.id}`}
               >
                 <button
@@ -1501,6 +1988,9 @@ function TasksTab({
                     )}
                   </div>
                 </div>
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-task-${task.id}`}>
+                  <Trash2 className="h-3 w-3" />
+                </Button>
               </div>
             ))}
           </CardContent>
@@ -1519,7 +2009,7 @@ function TasksTab({
             {done.map(task => (
               <div
                 key={task.id}
-                className="flex items-start gap-3 py-2.5 border-b border-border last:border-0 opacity-60"
+                className="flex items-start gap-3 py-2.5 border-b border-border last:border-0 opacity-60 group"
                 data-testid={`row-task-done-${task.id}`}
               >
                 <button
@@ -1539,11 +2029,76 @@ function TasksTab({
                     </p>
                   )}
                 </div>
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-done-task-${task.id}`}>
+                  <Trash2 className="h-3 w-3" />
+                </Button>
               </div>
             ))}
           </CardContent>
         </Card>
       )}
+
+      {/* Add Task Dialog */}
+      <Dialog open={showAddTask} onOpenChange={setShowAddTask}>
+        <DialogContent className="max-w-md" data-testid="dialog-add-task">
+          <DialogHeader>
+            <DialogTitle>Add Task</DialogTitle>
+            <DialogDescription>Create a new task linked to this profile.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Title</label>
+              <Input className="mt-1" value={taskTitle} onChange={e => setTaskTitle(e.target.value)} placeholder="e.g. Schedule vet appointment" data-testid="input-task-title" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Description (optional)</label>
+              <Input className="mt-1" value={taskDesc} onChange={e => setTaskDesc(e.target.value)} placeholder="Additional details" data-testid="input-task-desc" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Priority</label>
+              <Select value={taskPriority} onValueChange={v => setTaskPriority(v as "low" | "medium" | "high")}>
+                <SelectTrigger className="mt-1" data-testid="select-task-priority"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Due Date (optional)</label>
+              <Input className="mt-1" type="date" value={taskDueDate} onChange={e => setTaskDueDate(e.target.value)} data-testid="input-task-due-date" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddTask(false)}>Cancel</Button>
+            <Button onClick={() => createTaskMutation.mutate()} disabled={createTaskMutation.isPending || !taskTitle} data-testid="button-save-task">
+              {createTaskMutation.isPending ? "Creating..." : "Add Task"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Task Confirmation */}
+      <AlertDialog open={!!deleteTaskId} onOpenChange={() => setDeleteTaskId(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-task">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Task?</AlertDialogTitle>
+            <AlertDialogDescription>This task will be permanently deleted.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteTaskId && deleteTaskMutation.mutate(deleteTaskId)}
+              disabled={deleteTaskMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-task"
+            >
+              {deleteTaskMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1818,11 +2373,11 @@ export default function ProfileDetailPage() {
           </TabsContent>
 
           <TabsContent value="finances" className="mt-4">
-            <FinancesTab profile={profile} />
+            <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
           </TabsContent>
 
           <TabsContent value="trackers" className="mt-4">
-            <TrackersTab trackers={profile.relatedTrackers} />
+            <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
           </TabsContent>
 
           <TabsContent value="timeline" className="mt-4">
