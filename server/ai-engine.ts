@@ -529,6 +529,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         priority: { type: "string", enum: ["low", "medium", "high"], description: "Priority level" },
         dueDate: { type: "string", description: "Due date (YYYY-MM-DD)" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
+        forProfile: { type: "string", description: "Name of the profile this task belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
       },
       required: ["title"],
     },
@@ -565,6 +566,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       properties: {
         trackerName: { type: "string", description: "Name of the tracker (partial match)" },
         values: { type: "object", description: "Key-value pairs to log (e.g., { weight: 183 } or { systolic: 120, diastolic: 80 })" },
+        forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
       },
       required: ["trackerName", "values"],
     },
@@ -589,6 +591,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
           },
           description: "Field definitions",
         },
+        forProfile: { type: "string", description: "Name of the profile this tracker belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
       },
       required: ["name"],
     },
@@ -606,6 +609,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         category: { type: "string", description: "Category (food, transport, entertainment, utilities, general, etc.)" },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
+        forProfile: { type: "string", description: "Name of the profile this expense belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
       },
       required: ["amount", "description"],
     },
@@ -636,6 +640,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         location: { type: "string", description: "Location" },
         description: { type: "string", description: "Description" },
         recurrence: { type: "string", enum: ["none", "daily", "weekly", "biweekly", "monthly", "yearly"], description: "Recurrence pattern" },
+        forProfile: { type: "string", description: "Name of the profile this event belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
       },
       required: ["title", "date"],
     },
@@ -1092,7 +1097,17 @@ For SLEEP: Calculate sleep quality (≥8h: excellent, ≥7h: good, ≥6h: fair, 
 For BLOOD PRESSURE: Classify per AHA guidelines (normal, elevated, high_stage1, high_stage2, crisis)
 For WEIGHT: Note trend direction if previous entries exist
 
-SMART LINKING: When actions relate to an existing profile, note the connection.
+PROFILE LINKING — CRITICAL:
+When the user mentions a specific person, pet, vehicle, account, or any named entity that matches an existing profile, you MUST set the "forProfile" parameter in your tool call to that profile's name. This ensures the created item gets linked to the correct profile.
+
+Examples:
+- "Create a task for Max to get groomed" → create_task with forProfile: "Max"
+- "Log $50 expense for Tesla oil change" → create_expense with forProfile: "Tesla"
+- "Create a blood pressure tracker for Mom" → create_tracker with forProfile: "Mom"
+- "Log Max's weight at 32 lbs" → log_tracker_entry with forProfile: "Max"
+- "Schedule a vet appointment for Max" → create_event with forProfile: "Max"
+
+For multi-action messages like "Create a task for Max and log an expense for my car", set the correct forProfile on EACH tool call separately ("Max" for the task, "Tesla" for the expense).
 
 GOOGLE CALENDAR: Events can be synced with Google Calendar. If the user asks to sync or import their calendar, tell them to click the "Sync Google Calendar" button on the dashboard or calendar view. You can create/update events in LifeOS which can then be exported to Google Calendar via the export button. Events imported from Google Calendar are tagged with "google-calendar".
 
@@ -1252,8 +1267,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         dueDate: input.dueDate,
         tags: input.tags || [],
       });
-      // Auto-link: scan title for profile names
-      autoLinkToProfiles("task", newTask.id, input.title || "");
+      // Auto-link: scan title for profile names + explicit forProfile
+      await autoLinkToProfiles("task", newTask.id, input.title || "", input.forProfile);
       return newTask;
     }
 
@@ -1280,8 +1295,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       );
       if (tracker) {
         const entry = await storage.logEntry({ trackerId: tracker.id, values: input.values });
-        // Auto-link tracker to any matching profiles by name
-        autoLinkToProfiles("tracker", tracker.id, tracker.name);
+        // Auto-link tracker to any matching profiles by name + explicit forProfile
+        await autoLinkToProfiles("tracker", tracker.id, tracker.name, input.forProfile);
         return entry;
       }
       // Auto-create tracker if not found
@@ -1294,8 +1309,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         })),
       });
       const entry = await storage.logEntry({ trackerId: newTracker.id, values: input.values });
-      // Auto-link the new tracker to any matching profiles
-      autoLinkToProfiles("tracker", newTracker.id, input.trackerName || "");
+      // Auto-link the new tracker to any matching profiles + explicit forProfile
+      await autoLinkToProfiles("tracker", newTracker.id, input.trackerName || "", input.forProfile);
       return entry;
     }
 
@@ -1306,8 +1321,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         unit: input.unit,
         fields: input.fields || [{ name: "value", type: "number" }],
       });
-      // Auto-link: scan tracker name for profile names
-      autoLinkToProfiles("tracker", newTracker.id, input.name || "");
+      // Auto-link: scan tracker name for profile names + explicit forProfile
+      await autoLinkToProfiles("tracker", newTracker.id, input.name || "", input.forProfile);
       return newTracker;
     }
 
@@ -1319,8 +1334,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         vendor: input.vendor,
         tags: input.tags || [],
       });
-      // Auto-link: scan description and vendor for profile names
-      autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`);
+      // Auto-link: scan description and vendor for profile names + explicit forProfile
+      await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
       return newExpense;
     }
 
@@ -1343,8 +1358,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         recurrence: input.recurrence || "none",
         tags: [],
       });
-      // Auto-link: scan title and description for profile names
-      autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`);
+      // Auto-link: scan title and description for profile names + explicit forProfile
+      await autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`, input.forProfile);
       return newEvent;
     }
 
@@ -1741,15 +1756,54 @@ async function executeTool(name: string, input: any): Promise<any> {
 // AUTO-LINKING — scan created entities for profile name matches
 // ============================================================
 
-async function autoLinkToProfiles(entityType: string, entityId: string, text: string): Promise<void> {
-  if (!text) return;
+async function autoLinkToProfiles(entityType: string, entityId: string, text: string, explicitProfileName?: string): Promise<void> {
+  if (!text && !explicitProfileName) return;
   try {
     const profiles = await storage.getProfiles();
-    const lower = text.toLowerCase();
+    const lower = (text || "").toLowerCase();
     for (const profile of profiles) {
       const name = profile.name.toLowerCase();
       if (name.length < 2) continue; // Skip very short names
-      if (lower.includes(name)) {
+
+      let matched = false;
+
+      // 1. Explicit profile name match (from forProfile parameter)
+      if (explicitProfileName) {
+        const explicit = explicitProfileName.toLowerCase();
+        if (name === explicit || name.includes(explicit) || explicit.includes(name)) {
+          matched = true;
+        }
+        // Also match first significant word (e.g. "Tesla" matches "Tesla Model 3")
+        const explicitWords = explicit.split(/\s+/).filter(w => w.length > 2);
+        const nameWords = name.split(/\s+/).filter(w => w.length > 2);
+        if (explicitWords.some(w => nameWords.includes(w))) {
+          matched = true;
+        }
+      }
+
+      // 2. Text-based matching: full name match OR significant word match
+      if (!matched && lower) {
+        // Full name in text
+        if (lower.includes(name)) {
+          matched = true;
+        }
+        // Word-level match: any significant word (3+ chars) from profile name appears in text
+        if (!matched) {
+          const nameWords = name.split(/\s+/).filter(w => w.length > 2);
+          // Skip common words that would cause false matches
+          const skipWords = new Set(["the", "and", "for", "new", "old", "my", "our", "dr.", "auto", "self"]);
+          const significantWords = nameWords.filter(w => !skipWords.has(w));
+          if (significantWords.length > 0 && significantWords.some(w => {
+            // Word boundary match to avoid partial matches like "max" in "maximum"
+            const regex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
+            return regex.test(lower);
+          })) {
+            matched = true;
+          }
+        }
+      }
+
+      if (matched) {
         // 1. Create entity_link record
         const relationship = entityType === "expense" ? "paid_for" : "related_to";
         try {
@@ -1884,14 +1938,14 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     let documentPreview: { id: string; name: string; mimeType: string; data: string } | undefined;
     const documentPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
     let iterations = 0;
-    const MAX_ITERATIONS = 5;
+    const MAX_ITERATIONS = 8;
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
 
       const response = await client.messages.create({
         model: "claude_sonnet_4_6",
-        max_tokens: 1024,
+        max_tokens: 2048,
         system: systemPrompt,
         tools: TOOL_DEFINITIONS,
         messages,
