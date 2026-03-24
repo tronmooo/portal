@@ -97,7 +97,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       <div className="flex items-center justify-center h-screen bg-background">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Loading LifeOS...</p>
+          <p className="text-sm text-muted-foreground">Loading Portol...</p>
         </div>
       </div>
     );
@@ -165,7 +165,7 @@ function App() {
                         <SidebarTrigger data-testid="button-sidebar-toggle" />
                       </div>
                       <div className="md:hidden">
-                        <span className="text-sm font-semibold tracking-tight text-foreground">LifeOS</span>
+                        <span className="text-sm font-semibold tracking-tight text-foreground">Portol</span>
                       </div>
                       {/* Search trigger — centre-right in header */}
                       <div className="flex items-center gap-2 flex-1 justify-end mr-1">

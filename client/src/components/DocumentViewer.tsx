@@ -143,14 +143,14 @@ function useDocumentShare() {
   const shareViaEmail = (name: string, id: string) => {
     const subject = encodeURIComponent(`Document: ${name}`);
     const body = encodeURIComponent(
-      `Here is the document "${name}" from LifeOS.\n\nView it in the app or download the attached file.`
+      `Here is the document "${name}" from Portol.\n\nView it in the app or download the attached file.`
     );
     window.open(`mailto:?subject=${subject}&body=${body}`, "_blank");
     toast({ title: "Email client opened", description: `Sharing "${name}" via email` });
   };
 
   const shareViaSMS = (name: string, id: string) => {
-    const body = encodeURIComponent(`Check out this document from LifeOS: "${name}"`);
+    const body = encodeURIComponent(`Check out this document from Portol: "${name}"`);
     window.open(`sms:?body=${body}`, "_blank");
     toast({ title: "Messaging opened", description: `Sharing "${name}" via text` });
   };

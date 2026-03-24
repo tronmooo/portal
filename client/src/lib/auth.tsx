@@ -1,5 +1,9 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+// NOTE: We do NOT import @supabase/supabase-js on the client to avoid localStorage
+// references that break sandboxed iframe deployment. Instead we call the Supabase OAuth
+// endpoint directly via URL redirect.
 import { apiRequest } from "./queryClient";
+import { queryClient } from "./queryClient";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -21,6 +25,7 @@ interface AuthContextType {
   authRequired: boolean;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string) => Promise<{ error?: string }>;
+  signInWithGoogle: () => Promise<{ error?: string }>;
   signOut: () => void;
   getAuthHeader: () => Record<string, string>;
 }
@@ -29,6 +34,9 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 // In-memory token storage (can't use localStorage in sandboxed iframe)
 let memoryTokens: { access_token: string; refresh_token: string; expires_at: number } | null = null;
+
+// Supabase config (loaded lazily from /api/auth/config)
+let supabaseConfig: { url: string; anonKey: string } | null = null;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -51,6 +59,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // No auth needed (SQLite mode) — just proceed
         setLoading(false);
         return;
+      }
+
+      // Cache Supabase config for OAuth flows
+      if (data.supabaseUrl && data.supabaseAnonKey) {
+        supabaseConfig = { url: data.supabaseUrl, anonKey: data.supabaseAnonKey };
+      }
+
+      // Handle OAuth redirect — Supabase puts tokens in the URL hash after Google sign-in
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+      if (accessToken) {
+        // Clean up the URL (remove tokens from hash)
+        window.history.replaceState(null, "", window.location.pathname);
+
+        try {
+          // Verify and store the session via our backend
+          const callbackRes = await apiRequest("POST", "/api/auth/callback", {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          const callbackData = await callbackRes.json();
+          if (!callbackData.error) {
+            memoryTokens = {
+              access_token: accessToken,
+              refresh_token: refreshToken || "",
+              expires_at: callbackData.session?.expires_at || (Math.floor(Date.now() / 1000) + 3600),
+            };
+            setUser(callbackData.user);
+            setSession(memoryTokens);
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // Fall through to normal flow
+        }
       }
 
       // Try to restore session from memory
@@ -133,10 +177,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const signInWithGoogle = useCallback(async () => {
+    try {
+      // Load Supabase config if not cached
+      if (!supabaseConfig) {
+        const res = await fetch(`${API_BASE}/api/auth/config`);
+        const config = await res.json();
+        if (config.supabaseUrl && config.supabaseAnonKey) {
+          supabaseConfig = { url: config.supabaseUrl, anonKey: config.supabaseAnonKey };
+        }
+      }
+      if (!supabaseConfig) {
+        return { error: "Supabase not configured" };
+      }
+
+      // Build the Supabase OAuth URL directly (avoids importing @supabase/supabase-js)
+      const redirectTo = encodeURIComponent(window.location.origin);
+      const oauthUrl = `${supabaseConfig.url}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}&access_type=offline&prompt=consent`;
+      
+      // Redirect the browser to Google's OAuth consent screen via Supabase
+      window.location.href = oauthUrl;
+      return {};
+    } catch (err: any) {
+      return { error: err.message || "Google sign-in failed" };
+    }
+  }, []);
+
   const signOut = useCallback(() => {
+    // 1. Clear the in-memory auth tokens
     memoryTokens = null;
+
+    // 2. Clear ALL React Query cache — prevents data leaking between users
+    queryClient.clear();
+
+    // 3. Clear React state
     setUser(null);
     setSession(null);
+
+    // 4. Notify the server (best-effort)
+    fetch(`${API_BASE}/api/auth/signout`, { method: "POST" }).catch(() => {});
   }, []);
 
   const getAuthHeader = useCallback((): Record<string, string> => {
@@ -147,7 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, authRequired, signIn, signUp, signOut, getAuthHeader }}>
+    <AuthContext.Provider value={{ user, session, loading, authRequired, signIn, signUp, signInWithGoogle, signOut, getAuthHeader }}>
       {children}
     </AuthContext.Provider>
   );

@@ -75,6 +75,23 @@ export interface ChatMessage {
     mimeType: string;
     data: string;
   }>;
+  pendingExtraction?: {
+    extractionId: string;
+    fileName: string;
+    documentType: string;
+    label: string;
+    extractedFields: Array<{
+      key: string;
+      label: string;
+      value: any;
+      selected: boolean;
+      isDate: boolean;
+      suggestedEvent?: string;
+    }>;
+    targetProfile?: { name: string; id?: string; type?: string; isNew?: boolean };
+    trackerEntries?: Array<{ trackerName: string; values: Record<string, any> }>;
+    documentPreview?: { id: string; name: string; mimeType: string; data: string };
+  };
 }
 
 // ============================================================

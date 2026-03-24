@@ -25,7 +25,10 @@ import {
   X,
   Plus,
   Loader2,
+  Check,
+  Calendar,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
 import DocumentViewer, { ShareButton } from "@/components/DocumentViewer";
 
@@ -123,6 +126,147 @@ function ChatDocumentPreviews({
           inline
         />
       ))}
+    </div>
+  );
+}
+
+// ── Extraction Confirmation UI (two-phase extraction) ───────────────────────
+function ExtractionConfirmation({
+  extraction,
+  onConfirm,
+  onSkip,
+}: {
+  extraction: NonNullable<ChatMessage["pendingExtraction"]>;
+  onConfirm: (data: {
+    extractionId: string;
+    confirmedFields: Array<{ key: string; value: any }>;
+    targetProfileId?: string;
+    createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
+    trackerEntries: any[];
+  }) => void;
+  onSkip: () => void;
+}) {
+  const [fields, setFields] = useState(
+    () => extraction.extractedFields.map((f) => ({ ...f }))
+  );
+  const [confirming, setConfirming] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const toggleField = (idx: number) => {
+    setFields((prev) => prev.map((f, i) => i === idx ? { ...f, selected: !f.selected } : f));
+  };
+
+  const handleConfirm = () => {
+    setConfirming(true);
+    const confirmedFields = fields.filter((f) => f.selected && !f.isDate).map((f) => ({ key: f.key, value: f.value }));
+    const createCalendarEvents = fields
+      .filter((f) => f.selected && f.isDate && f.suggestedEvent)
+      .map((f) => ({
+        field: f.key,
+        date: String(f.value),
+        title: f.suggestedEvent!,
+        category: /expir|renew/i.test(f.key) ? "finance" : /appoint|visit/i.test(f.key) ? "health" : "other",
+      }));
+    onConfirm({
+      extractionId: extraction.extractionId,
+      confirmedFields,
+      targetProfileId: extraction.targetProfile?.id,
+      createCalendarEvents,
+      trackerEntries: extraction.trackerEntries || [],
+    });
+  };
+
+  if (confirmed) {
+    return (
+      <div className="mt-2 p-3 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
+        <div className="flex items-center gap-2 text-green-700 dark:text-green-400 text-xs font-medium">
+          <Check className="h-3.5 w-3.5" />
+          Extraction confirmed and saved
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-foreground">
+          Review extracted data
+        </span>
+        {extraction.targetProfile && (
+          <Badge variant="secondary" className="text-[10px]">
+            {extraction.targetProfile.isNew ? "New: " : ""}{extraction.targetProfile.name}
+          </Badge>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        {fields.map((field, idx) => (
+          <label
+            key={field.key}
+            className="flex items-start gap-2 cursor-pointer group"
+          >
+            <Checkbox
+              checked={field.selected}
+              onCheckedChange={() => toggleField(idx)}
+              className="mt-0.5"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-medium text-foreground capitalize">
+                  {field.label}
+                </span>
+                {field.isDate && field.suggestedEvent && (
+                  <Calendar className="h-3 w-3 text-blue-500" />
+                )}
+              </div>
+              <span className="text-[11px] text-muted-foreground truncate block">
+                {String(field.value)}
+              </span>
+              {field.isDate && field.suggestedEvent && field.selected && (
+                <span className="text-[10px] text-blue-600 dark:text-blue-400">
+                  Will create: {field.suggestedEvent}
+                </span>
+              )}
+            </div>
+          </label>
+        ))}
+      </div>
+
+      {extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
+        <div className="pt-1.5 border-t border-border/50">
+          <span className="text-[10px] text-muted-foreground font-medium">Tracker entries:</span>
+          {extraction.trackerEntries.map((entry: any, idx: number) => (
+            <div key={idx} className="text-[11px] text-foreground ml-2">
+              {entry.trackerName}: {JSON.stringify(entry.values)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2 pt-1">
+        <Button
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => {
+            handleConfirm();
+            setConfirmed(true);
+          }}
+          disabled={confirming || fields.every((f) => !f.selected)}
+        >
+          {confirming ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
+          Confirm
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={onSkip}
+          disabled={confirming}
+        >
+          Skip
+        </Button>
+      </div>
     </div>
   );
 }
@@ -497,7 +641,7 @@ export default function ChatPage() {
       id: "welcome",
       role: "assistant",
       content:
-        "Welcome to LifeOS. I'm your AI assistant — tell me what to log, track, create, or find. I can handle multiple things at once.\n\nTry something like: \"I ate a chicken sandwich, ran 2 miles, and spent $12 on lunch\"\n\nYou can also upload photos or documents — I'll extract data and route it to the right profile.",
+        "Welcome to Portol. I'm your AI assistant — tell me what to log, track, create, or find. I can handle multiple things at once.\n\nTry something like: \"I ate a chicken sandwich, ran 2 miles, and spent $12 on lunch\"\n\nYou can also upload photos or documents — I'll extract data and route it to the right profile.",
       timestamp: new Date().toISOString(),
     },
   ]);
@@ -581,6 +725,7 @@ export default function ChatPage() {
         actions: data.actions,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
+        pendingExtraction: data.pendingExtraction,
       };
       setMessages((prev) => [...prev, assistantMsg]);
       invalidateAll();
@@ -617,6 +762,7 @@ export default function ChatPage() {
         documentPreview?: { id: string; name: string; mimeType: string; data: string };
         suggestedProfile?: { id: string; name: string } | null;
         documentType?: string;
+        pendingExtraction?: any;
       }>;
       summary: string;
     }) => {
@@ -639,6 +785,21 @@ export default function ChatPage() {
         documentPreviews: allPreviews,
       };
       setMessages((prev) => [...prev, assistantMsg]);
+
+      // Create separate extraction messages for each file with pending extraction
+      const extractionMsgs: ChatMessage[] = data.results
+        .filter((r) => r.pendingExtraction?.extractedFields?.length > 0)
+        .map((r, idx) => ({
+          id: `${Date.now()}-extraction-${idx}`,
+          role: "assistant" as const,
+          content: `Review extracted data for "${r.fileName}":`,
+          timestamp: new Date().toISOString(),
+          pendingExtraction: r.pendingExtraction,
+        }));
+      if (extractionMsgs.length > 0) {
+        setMessages((prev) => [...prev, ...extractionMsgs]);
+      }
+
       setBatchProcessedCount(0);
       invalidateAll();
     },
@@ -669,6 +830,42 @@ export default function ChatPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
     queryClient.invalidateQueries({ queryKey: ["/api/insights"] });
   }
+
+  const handleConfirmExtraction = async (data: {
+    extractionId: string;
+    confirmedFields: Array<{ key: string; value: any }>;
+    targetProfileId?: string;
+    createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
+    trackerEntries: any[];
+  }) => {
+    try {
+      const res = await apiRequest("POST", "/api/chat/confirm-extraction", data);
+      const result = await res.json();
+      if (result.success) {
+        invalidateAll();
+        // Remove pendingExtraction from the message
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.pendingExtraction?.extractionId === data.extractionId
+              ? { ...m, pendingExtraction: undefined }
+              : m
+          )
+        );
+      }
+    } catch (err) {
+      console.error("Confirm extraction failed:", err);
+    }
+  };
+
+  const handleSkipExtraction = (extractionId: string) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.pendingExtraction?.extractionId === extractionId
+          ? { ...m, pendingExtraction: undefined }
+          : m
+      )
+    );
+  };
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -883,7 +1080,7 @@ export default function ChatPage() {
                   <div className="flex items-center gap-1.5 mb-1.5">
                     <Bot className="h-3.5 w-3.5 text-primary" />
                     <span className="text-xs font-medium text-primary">
-                      LifeOS
+                      Portol
                     </span>
                   </div>
                 )}
@@ -922,6 +1119,15 @@ export default function ChatPage() {
                   documentPreviews={msg.documentPreviews}
                 />
 
+                {/* Extraction confirmation UI */}
+                {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
+                  <ExtractionConfirmation
+                    extraction={msg.pendingExtraction}
+                    onConfirm={handleConfirmExtraction}
+                    onSkip={() => handleSkipExtraction(msg.pendingExtraction!.extractionId)}
+                  />
+                )}
+
                 {/* Action badges */}
                 {msg.actions && msg.actions.length > 0 && (
                   <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -949,7 +1155,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <Bot className="h-3.5 w-3.5 text-primary" />
                   <span className="text-xs font-medium text-primary">
-                    LifeOS
+                    Portol
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">

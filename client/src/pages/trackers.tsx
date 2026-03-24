@@ -1793,7 +1793,7 @@ export default function TrackersPage() {
           <Activity className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">No trackers yet.</p>
           <p className="text-xs text-muted-foreground mt-1">
-            Click "New Tracker" or ask LifeOS to create one.
+            Click "New Tracker" or ask Portol to create one.
           </p>
           <Button
             variant="outline"

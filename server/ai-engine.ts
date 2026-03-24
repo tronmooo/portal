@@ -242,12 +242,13 @@ export async function processFileUpload(
   results: any[];
   documentId?: string;
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
+  pendingExtraction?: any;
 }> {
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
   // Use Claude vision to analyze the image/document
-  const extractionPrompt = `You are LifeOS AI — analyzing an uploaded file. Extract ALL useful data from this image/document.
+  const extractionPrompt = `You are Portol AI — analyzing an uploaded file. Extract ALL useful data from this image/document.
 
 Determine:
 1. DOCUMENT TYPE: What kind of document is this? (drivers_license, medical_report, receipt, insurance_card, passport, vehicle_registration, prescription, lab_results, utility_bill, bank_statement, warranty, pet_record, school_record, tax_document, other)
@@ -270,7 +271,7 @@ Respond with JSON:
 
   try {
     const mediaType = mimeType.startsWith("image/") ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
-    
+
     const response = await client.messages.create({
       model: "claude_sonnet_4_6",
       max_tokens: 2048,
@@ -293,54 +294,30 @@ Respond with JSON:
       parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
     } catch { parsed = {}; }
 
-    // Determine linked profiles: explicit profileId takes priority over AI-detected profile
+    // Resolve target profile (for linking the document), but do NOT update profile fields yet
     let linkedProfiles: string[] = [];
+    let existingProfileId: string | undefined;
 
     if (profileId) {
-      // Explicit profile selection from user
       const explicitProfile = await storage.getProfile(profileId);
       if (explicitProfile) {
         linkedProfiles = [profileId];
-        // Merge extracted fields into this profile
-        if (parsed.extractedData && Object.keys(parsed.extractedData).length > 0) {
-          await storage.updateProfile(profileId, {
-            fields: { ...explicitProfile.fields, ...parsed.extractedData },
-          });
-          actions.push({ type: "update_profile", category: "profile", data: { name: explicitProfile.name, fields: parsed.extractedData } });
-        }
+        existingProfileId = profileId;
       }
     } else if (parsed.targetProfile?.name) {
-      // AI-detected profile — try to match existing
       const profiles = await storage.getProfiles();
-      const existing = profiles.find(p =>
+      const existing = profiles.find((p: any) =>
         p.name.toLowerCase().includes(parsed.targetProfile.name.toLowerCase()) ||
         parsed.targetProfile.name.toLowerCase().includes(p.name.toLowerCase())
       );
       if (existing) {
         linkedProfiles = [existing.id];
-        // Update profile with extracted fields if relevant
-        if (parsed.extractedData && Object.keys(parsed.extractedData).length > 0) {
-          await storage.updateProfile(existing.id, {
-            fields: { ...existing.fields, ...parsed.extractedData },
-          });
-          actions.push({ type: "update_profile", category: "profile", data: { name: existing.name, fields: parsed.extractedData } });
-        }
-      } else {
-        // Create new profile
-        const newProfile = await storage.createProfile({
-          type: parsed.targetProfile.type || "person",
-          name: parsed.targetProfile.name,
-          fields: parsed.extractedData || {},
-          tags: [parsed.documentType || "uploaded"],
-          notes: "",
-        });
-        linkedProfiles = [newProfile.id];
-        actions.push({ type: "create_profile", category: "profile", data: { name: newProfile.name, type: newProfile.type } });
-        results.push(newProfile);
+        existingProfileId = existing.id;
       }
+      // Do NOT create new profiles automatically — defer to confirmation
     }
 
-    // Store the document
+    // Store the document (always save the file)
     const document = await storage.createDocument({
       name: parsed.label || fileName,
       type: parsed.documentType || "other",
@@ -352,33 +329,49 @@ Respond with JSON:
     });
     results.push(document);
 
-    // Log tracker entries if any numeric data was extracted
-    if (parsed.trackerEntries && Array.isArray(parsed.trackerEntries)) {
-      for (const entry of parsed.trackerEntries) {
-        const trackers = await storage.getTrackers();
-        const trackerName = (entry.trackerName || "").toLowerCase().replace(/_/g, " ");
-        const tracker = trackers.find(t => t.name.toLowerCase().includes(trackerName));
-        if (tracker) {
-          const logged = await storage.logEntry({ trackerId: tracker.id, values: entry.values });
-          if (logged) {
-            actions.push({ type: "log_entry", category: "health", data: { trackerName: tracker.name, ...entry.values } });
-            results.push(logged);
-          }
+    // Build pending extraction for user confirmation (two-phase: extract now, save on confirm)
+    const DATE_PATTERNS = /\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{4}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2},?\s+\d{4}/gi;
+
+    const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; suggestedEvent?: string}> = [];
+
+    if (parsed.extractedData) {
+      for (const [key, value] of Object.entries(parsed.extractedData)) {
+        const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
+        const strVal = String(value);
+        const isDate = DATE_PATTERNS.test(strVal) || /expir|renew|due|valid|issued|birth|appoint/i.test(key);
+        let suggestedEvent: string | undefined;
+        if (isDate) {
+          if (/expir/i.test(key)) suggestedEvent = `⚠️ ${parsed.label || fileName} — Expiration`;
+          else if (/renew/i.test(key)) suggestedEvent = `🔄 ${parsed.label || fileName} — Renewal`;
+          else if (/due/i.test(key)) suggestedEvent = `📅 ${parsed.label || fileName} — Due Date`;
+          else if (/appoint/i.test(key)) suggestedEvent = `🗓️ ${parsed.label || fileName} — Appointment`;
+          else if (/valid|issued/i.test(key)) suggestedEvent = undefined;
+          else suggestedEvent = `📅 ${label}: ${strVal}`;
         }
+        DATE_PATTERNS.lastIndex = 0; // reset regex state
+        extractedFields.push({ key, label, value, selected: true, isDate, suggestedEvent });
       }
     }
 
+    const pendingExtraction = {
+      extractionId: document.id,
+      fileName,
+      documentType: parsed.documentType || "other",
+      label: parsed.label || fileName,
+      extractedFields,
+      targetProfile: parsed.targetProfile ? {
+        name: parsed.targetProfile.name,
+        id: existingProfileId || undefined,
+        type: parsed.targetProfile.type,
+        isNew: !existingProfileId,
+      } : undefined,
+      trackerEntries: parsed.trackerEntries || [],
+      documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType, data: document.fileData },
+    };
+
     let reply = parsed.summary || `Processed "${fileName}"`;
-    if (linkedProfiles.length > 0) {
-      const profiles = await storage.getProfiles();
-      const profileName = profiles.find(p => p.id === linkedProfiles[0])?.name;
-      if (profileName) reply += `\n\nLinked to profile: ${profileName}`;
-    }
-    if (parsed.extractedData && Object.keys(parsed.extractedData).length > 0) {
-      const fields = Object.entries(parsed.extractedData)
-        .map(([k, v]) => `• ${k.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim()}: ${Array.isArray(v) ? v.join(', ') : v}`)
-        .join('\n');
-      reply += `\n\nExtracted:\n${fields}`;
+    if (extractedFields.length > 0) {
+      reply += `\n\nI extracted ${extractedFields.length} fields from this document. Please review and confirm which data to save.`;
     }
     reply += `\n\nDocument saved. Say "open ${parsed.label || fileName}" anytime to view it.`;
 
@@ -389,7 +382,7 @@ Respond with JSON:
       data: document.fileData,
     };
 
-    return { reply, actions, results, documentId: document.id, documentPreview };
+    return { reply, actions, results, documentId: document.id, documentPreview, pendingExtraction };
   } catch (err: any) {
     console.error("File extraction error:", err.message);
     // Still store the document even if AI fails
@@ -402,13 +395,6 @@ Respond with JSON:
       linkedProfiles: profileId ? [profileId] : [],
       tags: ["uploaded"],
     });
-    // Link to explicit profile if provided
-    if (profileId) {
-      const profile = await storage.getProfile(profileId);
-      if (profile) {
-        await storage.updateProfile(profileId, { documents: [...(profile.documents || []), document.id] });
-      }
-    }
     const documentPreview = {
       id: document.id,
       name: document.name,
@@ -1086,7 +1072,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "recall_actions",
-    description: "Recall recent actions — shows the last N things you did in LifeOS. Use when user asks 'what did I just do?', 'show recent actions', 'what happened?', or 'my recent activity'.",
+    description: "Recall recent actions — shows the last N things you did in Portol. Use when user asks 'what did I just do?', 'show recent actions', 'what happened?', or 'my recent activity'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1097,7 +1083,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "sync_calendar",
-    description: "Sync events with Google Calendar. Imports new events from Google Calendar into LifeOS. Use when the user asks to sync, import, or pull their Google Calendar events.",
+    description: "Sync events with Google Calendar. Imports new events from Google Calendar into Portol. Use when the user asks to sync, import, or pull their Google Calendar events.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1146,6 +1132,19 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["name"],
     },
   },
+  {
+    name: "retrieve_document",
+    description: "Retrieve and display a document. Use when user asks to see, open, show, or view a document. Understands ownership — e.g., 'show my mom\\'s birth certificate' resolves Mom profile then finds linked documents. Also works by document name or type.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Natural language description of the document to find" },
+        profileName: { type: "string", description: "Name of the person/entity who owns the document (e.g., 'Mom', 'Max', 'Tesla')" },
+        documentType: { type: "string", description: "Document type filter (drivers_license, medical_report, insurance_card, passport, etc.)" },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 // ============================================================
@@ -1153,7 +1152,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
 // ============================================================
 
 function buildSystemPrompt(context: string): string {
-  return `You are LifeOS AI — the brain of a centralized personal life operating system. You help users manage their entire life: profiles (people, pets, vehicles, accounts), health tracking, tasks, expenses, calendar events, habits, obligations, journal entries, memories, and documents.
+  return `You are Portol AI — the brain of a centralized personal life operating system. You help users manage their entire life: profiles (people, pets, vehicles, accounts), health tracking, tasks, expenses, calendar events, habits, obligations, journal entries, memories, and documents.
 
 EXISTING DATA (reference these when the user mentions them):
 ${context}
@@ -1194,7 +1193,26 @@ Examples:
 
 For multi-action messages like "Create a task for Max and log an expense for my car", set the correct forProfile on EACH tool call separately ("Max" for the task, "Tesla" for the expense).
 
-GOOGLE CALENDAR: Events can be synced with Google Calendar. If the user asks to sync or import their calendar, tell them to click the "Sync Google Calendar" button on the dashboard or calendar view. You can create/update events in LifeOS which can then be exported to Google Calendar via the export button. Events imported from Google Calendar are tagged with "google-calendar".
+GOOGLE CALENDAR: Events can be synced with Google Calendar. If the user asks to sync or import their calendar, tell them to click the "Sync Google Calendar" button on the dashboard or calendar view. You can create/update events in Portol which can then be exported to Google Calendar via the export button. Events imported from Google Calendar are tagged with "google-calendar".
+
+DOCUMENT RETRIEVAL — intelligent & relationship-aware:
+When a user asks to see, open, show, or view a document, use the retrieve_document tool. You understand ownership and relationships:
+- "Show my mom's birth certificate" → retrieve_document with profileName: "Mom", documentType: "birth_certificate"
+- "Open Max's vaccination records" → retrieve_document with profileName: "Max", documentType: "pet_record"
+- "Pull up my driver's license" → retrieve_document with query: "driver's license"
+- "Show all medical records for Mom" → retrieve_document with profileName: "Mom", documentType: "medical_report"
+Always resolve the owner (person, pet, vehicle) from context before searching documents.
+
+DATE AWARENESS — route dates to the calendar:
+Whenever you encounter dates in ANY context (document extraction, user messages, data entry), identify and call out actionable dates:
+- Expiration dates → suggest creating a reminder event
+- Due dates → suggest creating a task or event
+- Appointment dates → create an event
+- Renewal dates → create a recurring event
+For document extractions, dates are automatically detected and presented to the user for calendar routing.
+
+CHAT-FIRST PHILOSOPHY:
+You are the universal interface to ALL data in Portol. Every piece of data — documents, events, finances, health, profiles — is accessible through you. When users ask questions about their data, search proactively. When they mention documents, retrieve them. When they mention dates, route them to the calendar. You are the single point of intelligence for the user's entire life data.
 
 Today's date: ${new Date().toISOString().split("T")[0]}`;
 }
@@ -1906,6 +1924,73 @@ async function executeTool(name: string, input: any): Promise<any> {
       return { deleted: true, name: domain.name, id: domain.id };
     }
 
+    case "retrieve_document": {
+      const allDocs = await storage.getDocuments();
+      const profiles = await storage.getProfiles();
+      let candidates = [...allDocs];
+
+      // Filter by profile if specified
+      if (input.profileName) {
+        const profile = profiles.find((p: any) =>
+          p.name.toLowerCase().includes(input.profileName.toLowerCase())
+        );
+        if (profile) {
+          candidates = candidates.filter((d: any) =>
+            d.linkedProfiles?.includes(profile.id)
+          );
+        }
+      }
+
+      // Filter by document type if specified
+      if (input.documentType) {
+        const typeQuery = input.documentType.toLowerCase().replace(/[_\s-]/g, "");
+        candidates = candidates.filter((d: any) => {
+          const docType = (d.type || "").toLowerCase().replace(/[_\s-]/g, "");
+          return docType.includes(typeQuery) || typeQuery.includes(docType);
+        });
+      }
+
+      // Text search across name, type, tags, extracted data
+      if (input.query) {
+        const q = input.query.toLowerCase();
+        candidates = candidates.filter((d: any) => {
+          const searchable = [
+            d.name, d.type, ...(d.tags || []),
+            ...Object.keys(d.extractedData || {}),
+            ...Object.values(d.extractedData || {}).map((v: any) => String(v)),
+          ].join(" ").toLowerCase();
+          return q.split(/\s+/).some((word: string) => searchable.includes(word));
+        });
+      }
+
+      if (candidates.length === 0) return { found: false, message: "No matching documents found." };
+
+      // Return top match with full data for preview
+      const doc = candidates[0];
+      const fullDoc = await storage.getDocument(doc.id);
+      if (!fullDoc) return { found: false, message: "Document not found." };
+      return {
+        found: true,
+        document: {
+          id: fullDoc.id,
+          name: fullDoc.name,
+          type: fullDoc.type,
+          mimeType: fullDoc.mimeType,
+          extractedData: fullDoc.extractedData,
+          linkedProfiles: fullDoc.linkedProfiles,
+          tags: fullDoc.tags,
+          hasFileData: true,
+        },
+        documentPreview: {
+          id: fullDoc.id,
+          name: fullDoc.name,
+          mimeType: fullDoc.mimeType,
+          data: fullDoc.fileData,
+        },
+        totalMatches: candidates.length,
+      };
+    }
+
     default:
       return null;
   }
@@ -2204,7 +2289,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const inp = toolUse.input as Record<string, any>;
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
-          const readOnlyTools = ["search", "get_summary", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document"];
+          const readOnlyTools = ["search", "get_summary", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId);
           }
@@ -2214,6 +2299,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             const preview = { id: result.id, name: result.name, mimeType: result.mimeType, data: result.fileData };
             if (!documentPreview) documentPreview = preview;
             documentPreviews.push(preview);
+          }
+
+          // Handle retrieve_document — attach document preview
+          if (toolUse.name === "retrieve_document" && result?.documentPreview) {
+            const preview = { id: result.documentPreview.id, name: result.documentPreview.name, mimeType: result.documentPreview.mimeType, data: result.documentPreview.data };
+            documentPreviews.push(preview);
+            if (!documentPreview) documentPreview = preview;
           }
 
           toolResults.push({

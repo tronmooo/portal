@@ -124,6 +124,7 @@ export async function registerRoutes(
         documentPreview?: { id: string; name: string; mimeType: string; data: string };
         suggestedProfile?: { id: string; name: string } | null;
         documentType?: string;
+        pendingExtraction?: any;
       }> = [];
 
       const linkedCounts: Record<string, number> = {};
@@ -208,6 +209,7 @@ export async function registerRoutes(
             documentPreview: result.documentPreview,
             suggestedProfile,
             documentType: undefined, // populated from reply context
+            pendingExtraction: result.pendingExtraction,
           });
         } catch (fileErr: any) {
           console.error(`Batch upload error for ${fileName}:`, fileErr.message);
@@ -233,6 +235,121 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("Batch upload error:", err);
       res.status(500).json({ error: "Failed to process batch upload" });
+    }
+  });
+
+  // ---- Confirm Extraction (two-phase: user approves fields before saving) ----
+  app.post("/api/chat/confirm-extraction", async (req, res) => {
+    try {
+      const { extractionId, confirmedFields, targetProfileId, createCalendarEvents, trackerEntries } = req.body;
+      if (!extractionId) {
+        return res.status(400).json({ error: "extractionId required" });
+      }
+
+      const saved: string[] = [];
+
+      // 1. Update profile with confirmed fields
+      if (targetProfileId && confirmedFields && confirmedFields.length > 0) {
+        const profile = await storage.getProfile(targetProfileId);
+        if (profile) {
+          const fieldUpdates: Record<string, any> = {};
+          for (const field of confirmedFields) {
+            fieldUpdates[field.key] = field.value;
+          }
+          await storage.updateProfile(targetProfileId, {
+            fields: { ...(profile.fields || {}), ...fieldUpdates },
+          });
+          saved.push(`Updated ${confirmedFields.length} fields on ${profile.name}`);
+        }
+      }
+
+      // 2. Create calendar events for confirmed date fields
+      if (createCalendarEvents && createCalendarEvents.length > 0) {
+        for (const event of createCalendarEvents) {
+          try {
+            // Parse date from the field value
+            let dateStr = event.date;
+            if (!dateStr) continue;
+            // Normalize date to YYYY-MM-DD
+            const dateMatch = dateStr.match(/(\d{4})[-/](\d{2})[-/](\d{2})/);
+            if (!dateMatch) {
+              // Try MM/DD/YYYY format
+              const altMatch = dateStr.match(/(\d{2})[-/](\d{2})[-/](\d{4})/);
+              if (altMatch) dateStr = `${altMatch[3]}-${altMatch[1]}-${altMatch[2]}`;
+              else continue;
+            } else {
+              dateStr = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+            }
+            await storage.createEvent({
+              title: event.title || `📅 ${event.field}`,
+              date: dateStr,
+              time: null,
+              endTime: null,
+              description: `Auto-created from document extraction (${event.field})`,
+              location: null,
+              allDay: true,
+              category: event.category || "other",
+              recurrence: "none",
+              recurrenceEnd: null,
+              color: null,
+              linkedProfiles: targetProfileId ? [targetProfileId] : [],
+              linkedDocuments: [extractionId],
+              tags: ["document-extraction"],
+              source: "extraction",
+            });
+            saved.push(`Created event: ${event.title || event.field}`);
+          } catch (evErr: any) {
+            console.error("Failed to create calendar event from extraction:", evErr.message);
+          }
+        }
+      }
+
+      // 3. Log tracker entries
+      if (trackerEntries && trackerEntries.length > 0) {
+        for (const entry of trackerEntries) {
+          try {
+            // Find or create the tracker
+            const trackers = await storage.getTrackers();
+            let tracker = trackers.find(
+              (t: any) => t.name.toLowerCase() === entry.trackerName.toLowerCase()
+            );
+            if (!tracker) {
+              tracker = await storage.createTracker({
+                name: entry.trackerName,
+                type: "numeric",
+                unit: entry.unit || "",
+                fields: Object.keys(entry.values || {}).map((k: string) => ({
+                  name: k,
+                  type: "number" as const,
+                  unit: "",
+                  options: [],
+                })),
+                linkedProfiles: targetProfileId ? [targetProfileId] : [],
+              });
+            }
+            await storage.logEntry({
+              trackerId: tracker.id,
+              value: entry.values ? JSON.stringify(entry.values) : "0",
+              date: new Date().toISOString().slice(0, 10),
+              notes: `From document extraction`,
+            });
+            saved.push(`Logged ${entry.trackerName} entry`);
+          } catch (tErr: any) {
+            console.error("Failed to log tracker entry from extraction:", tErr.message);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        message: saved.length > 0
+          ? `Confirmed: ${saved.join("; ")}`
+          : "No fields to save",
+        saved,
+      });
+    } catch (err: any) {
+      console.error("Confirm extraction error:", err);
+      res.status(500).json({ error: "Failed to confirm extraction" });
     }
   });
 

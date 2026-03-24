@@ -1037,6 +1037,37 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
+    // ── Document-extracted dates (expiry, renewal, due, appointment) ──────
+    const documents = await this.getDocuments();
+    const DATE_KEY_RE = /expir|renew|due|valid.until|appoint|next.visit|warranty/i;
+    const DATE_VAL_RE = /^\d{4}[-/]\d{2}[-/]\d{2}/;
+    for (const doc of documents) {
+      const ed = doc.extractedData as Record<string, any> | null;
+      if (!ed) continue;
+      for (const [key, val] of Object.entries(ed)) {
+        if (!DATE_KEY_RE.test(key)) continue;
+        const strVal = String(val || "");
+        const dateMatch = strVal.match(/(\d{4})[-/](\d{2})[-/](\d{2})/);
+        if (!dateMatch) continue;
+        const d = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+        if (d < startDate || d > endDate) continue;
+        const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
+        const emoji = /expir/i.test(key) ? "⚠️" : /renew/i.test(key) ? "🔄" : /due/i.test(key) ? "📅" : "📄";
+        items.push({
+          id: `doc-date-${doc.id}-${key}`,
+          type: "event",
+          title: `${emoji} ${doc.name} — ${label}`,
+          date: d,
+          allDay: true,
+          color: /expir/i.test(key) ? "#A13544" : "#BB653B",
+          category: "other" as any,
+          linkedProfiles: doc.linkedProfiles || [],
+          sourceId: doc.id,
+          meta: { source: "document", documentType: doc.type, field: key },
+        });
+      }
+    }
+
     items.sort((a, b) => {
       const cmp = a.date.localeCompare(b.date);
       if (cmp !== 0) return cmp;

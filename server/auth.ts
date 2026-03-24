@@ -252,11 +252,51 @@ export function registerAuthRoutes(app: any) {
     res.json({ success: true, message: "Password has been reset successfully" });
   });
 
+  // Exchange OAuth tokens (handles redirect from Supabase after Google sign-in)
+  app.post("/api/auth/callback", async (req: Request, res: Response) => {
+    const supabase = getSupabaseAuth();
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+    const { access_token, refresh_token } = req.body;
+    if (!access_token) {
+      return res.status(400).json({ error: "Access token required" });
+    }
+
+    try {
+      // Verify the token and get the user
+      const { data: { user }, error } = await supabase.auth.getUser(access_token);
+      if (error || !user) {
+        return res.status(401).json({ error: "Invalid token from OAuth callback" });
+      }
+
+      // Seed data for brand-new users (first-time Google sign-in creates a new account)
+      if ((storage as any).setUserId) {
+        (storage as any).setUserId(user.id);
+      }
+      if ((storage as any).seedIfEmpty) {
+        await (storage as any).seedIfEmpty();
+      }
+
+      res.json({
+        user: { id: user.id, email: user.email },
+        session: {
+          access_token,
+          refresh_token,
+          expires_at: null, // Will be refreshed as needed
+        },
+      });
+    } catch (err: any) {
+      console.error("OAuth callback error:", err);
+      return res.status(500).json({ error: "OAuth callback failed" });
+    }
+  });
+
   // Check if auth is required (helps frontend decide to show login)
   app.get("/api/auth/config", async (_req: Request, res: Response) => {
     res.json({
       authRequired: isSupabaseStorage(),
       supabaseUrl: process.env.VITE_SUPABASE_URL || null,
+      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || null,
     });
   });
 }

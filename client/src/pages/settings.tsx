@@ -178,7 +178,7 @@ export default function SettingsPage() {
               <Palette className="h-4 w-4 text-muted-foreground" />
               <CardTitle className="text-base">Appearance</CardTitle>
             </div>
-            <CardDescription>Customize how LifeOS looks.</CardDescription>
+            <CardDescription>Customize how Portol looks.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-between">
@@ -211,7 +211,7 @@ export default function SettingsPage() {
               <Database className="h-4 w-4 text-muted-foreground" />
               <CardTitle className="text-base">Data Management</CardTitle>
             </div>
-            <CardDescription>Export, import, and manage your LifeOS data.</CardDescription>
+            <CardDescription>Export, import, and manage your Portol data.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Export */}
@@ -335,7 +335,7 @@ export default function SettingsPage() {
               </div>
               <Separator className="my-2" />
               <p className="text-xs">
-                LifeOS — Your personal AI-powered life operating system. Chat to log, track, and manage everything in one place.
+                Portol — Your personal AI-powered life operating system. Chat to log, track, and manage everything in one place.
               </p>
             </div>
           </CardContent>

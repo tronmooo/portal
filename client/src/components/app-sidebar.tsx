@@ -31,7 +31,7 @@ export function AppSidebar() {
               <path d="M12 6v6l4 2" />
             </svg>
           </div>
-          <span className="font-semibold text-sm tracking-tight">LifeOS</span>
+          <span className="font-semibold text-sm tracking-tight">Portol</span>
         </div>
       </SidebarHeader>
       <SidebarContent className="flex flex-col justify-between">
