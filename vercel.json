@@ -1,13 +1,10 @@
 {
+  "functions": {
+    "api/**/*.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api" }
-  ],
-  "headers": [
-    {
-      "source": "/assets/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
-      ]
-    }
   ]
 }
