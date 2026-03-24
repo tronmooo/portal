@@ -44,7 +44,7 @@ import type {
   DashboardStats, Insight, Task, Habit, Obligation, CalendarEvent, JournalEntry, MoodLevel,
   Profile, Tracker, Expense, Artifact, Document, Goal,
 } from "@shared/schema";
-import CalendarView from "@/components/CalendarView";
+
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip,
@@ -3802,7 +3802,7 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "finance", label: "Finance", icon: Wallet, visible: true, column: "right" },
   { id: "obligations", label: "Obligations", icon: CreditCard, visible: true, column: "right" },
   { id: "health", label: "Health", icon: HeartPulse, visible: true, column: "right" },
-  { id: "calendar", label: "Calendar", icon: Calendar, visible: true, column: "right" },
+
   { id: "activity", label: "Recent Activity", icon: Activity, visible: true, column: "full" },
 ];
 
@@ -4139,9 +4139,6 @@ export default function DashboardPage() {
       case "health":
         content = enhanced ? <HealthSnapshot data={enhanced.healthSnapshot} /> : null;
         break;
-      case "calendar":
-        content = <CalendarView />;
-        break;
       case "insights":
         content = <InsightsSection />;
         break;
@@ -4162,7 +4159,7 @@ export default function DashboardPage() {
   const rightSections = sections.filter(s => s.visible && s.column === "right");
 
   return (
-    <div className="h-full overflow-y-auto p-3 md:p-4 space-y-3" data-testid="page-dashboard">
+    <div className="h-full overflow-y-auto overflow-x-hidden p-3 md:p-4 space-y-3 max-w-full" data-testid="page-dashboard">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -4172,14 +4169,14 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
-            <Settings className="h-3 w-3" /> Customize
+          <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1" onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
+            <Settings className="h-3 w-3" /><span className="hidden sm:inline text-xs">Customize</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={handleExport} data-testid="btn-export">
-            <Download className="h-3 w-3" /> Export
+          <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1" onClick={handleExport} data-testid="btn-export">
+            <Download className="h-3 w-3" /><span className="hidden sm:inline text-xs">Export</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => setImportOpen(true)} data-testid="btn-import">
-            <UploadCloud className="h-3 w-3" /> Import
+          <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1" onClick={() => setImportOpen(true)} data-testid="btn-import">
+            <UploadCloud className="h-3 w-3" /><span className="hidden sm:inline text-xs">Import</span>
           </Button>
         </div>
       </div>

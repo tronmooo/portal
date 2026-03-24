@@ -10,7 +10,7 @@ import { MobileBottomNav } from "@/components/mobile-nav";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Settings } from "lucide-react";
+import { Sun, Moon, Settings, Calendar } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 import {
@@ -33,6 +33,7 @@ import DocumentDetailPage from "@/pages/document-detail";
 import AuthPage from "@/pages/auth";
 import ResetPasswordPage from "@/pages/reset-password";
 import SettingsPage from "@/pages/settings";
+import CalendarPage from "@/pages/calendar-page";
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
@@ -42,6 +43,15 @@ function ThemeToggle() {
   return (
     <Button variant="ghost" size="icon" onClick={toggle} className="h-8 w-8" data-testid="button-theme-toggle">
       {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    </Button>
+  );
+}
+
+function CalendarButton() {
+  const [, navigate] = useLocation();
+  return (
+    <Button variant="ghost" size="icon" onClick={() => navigate("/calendar")} className="h-8 w-8" title="Calendar" data-testid="button-calendar-header">
+      <Calendar className="h-4 w-4" />
     </Button>
   );
 }
@@ -93,6 +103,7 @@ function AppRouter() {
       <Route path="/profiles" component={ProfilesPage} />
       <Route path="/profiles/:id" component={ProfileDetailPage} />
       <Route path="/documents/:id" component={DocumentDetailPage} />
+      <Route path="/calendar" component={CalendarPage} />
       <Route path="/settings" component={SettingsPage} />
       <Route path="/reset-password" component={ResetPasswordPage} />
       <Route component={NotFound} />
@@ -133,6 +144,7 @@ function App() {
                       <div className="flex items-center gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
                         <NotificationBell />
+                        <CalendarButton />
                         <SettingsButton />
                         <ThemeToggle />
                       </div>

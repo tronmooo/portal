@@ -380,7 +380,73 @@ export class SupabaseStorage implements IStorage {
     });
     if (error) throw error;
     this.logActivity("profile", `Created profile: ${data.name}`);
+
+    // Auto-generate calendar events from profile date fields
+    await this.autoGenerateProfileEvents(id, data.type, data.name, data.fields || {});
+
     return (await this.getProfile(id))!;
+  }
+
+  /** Auto-create calendar events for profile date fields */
+  private async autoGenerateProfileEvents(profileId: string, type: string, name: string, fields: Record<string, any>): Promise<void> {
+    const eventDefs: { fieldKey: string; titleFn: (n: string) => string; category: string; recurrence: string; color: string }[] = [];
+
+    switch (type) {
+      case "person":
+      case "self":
+        eventDefs.push({ fieldKey: "birthday", titleFn: (n) => `\u{1F382} ${n}'s Birthday`, category: "family", recurrence: "yearly", color: "#A86FDF" });
+        break;
+      case "medical":
+        eventDefs.push({ fieldKey: "nextVisit", titleFn: (n) => `\u{1F3E5} ${n} — Visit`, category: "health", recurrence: "none", color: "#6DAA45" });
+        break;
+      case "vehicle":
+        eventDefs.push({ fieldKey: "nextService", titleFn: (n) => `\u{1F697} ${n} — Service`, category: "other", recurrence: "none", color: "#BB653B" });
+        break;
+      case "subscription":
+        eventDefs.push({ fieldKey: "renewalDate", titleFn: (n) => `\u{1F504} ${n} — Renewal`, category: "finance", recurrence: "monthly", color: "#D19900" });
+        break;
+      case "loan":
+        eventDefs.push({ fieldKey: "nextPayment", titleFn: (n) => `\u{1F4B0} ${n} — Payment Due`, category: "finance", recurrence: "monthly", color: "#BB653B" });
+        eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F4B0} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#BB653B" });
+        break;
+      case "pet":
+        eventDefs.push({ fieldKey: "nextVetVisit", titleFn: (n) => `\u{1F43E} ${n} — Vet Visit`, category: "health", recurrence: "none", color: "#6DAA45" });
+        break;
+      case "property":
+        eventDefs.push({ fieldKey: "insuranceExpiry", titleFn: (n) => `\u{1F3E0} ${n} — Insurance Expiry`, category: "finance", recurrence: "none", color: "#BB653B" });
+        eventDefs.push({ fieldKey: "leaseEnd", titleFn: (n) => `\u{1F3E0} ${n} — Lease End`, category: "finance", recurrence: "none", color: "#A13544" });
+        break;
+      case "investment":
+        eventDefs.push({ fieldKey: "maturityDate", titleFn: (n) => `\u{1F4C8} ${n} — Maturity`, category: "finance", recurrence: "none", color: "#D19900" });
+        break;
+      case "account":
+        eventDefs.push({ fieldKey: "expirationDate", titleFn: (n) => `\u26A0\uFE0F ${n} — Expires`, category: "other", recurrence: "none", color: "#A13544" });
+        break;
+      case "asset":
+        eventDefs.push({ fieldKey: "warrantyExpiry", titleFn: (n) => `\u{1F6E1}\uFE0F ${n} — Warranty Expiry`, category: "other", recurrence: "none", color: "#BB653B" });
+        break;
+    }
+
+    for (const def of eventDefs) {
+      const dateVal = fields[def.fieldKey];
+      if (dateVal && typeof dateVal === "string" && dateVal.length >= 10) {
+        try {
+          await this.createEvent({
+            title: def.titleFn(name),
+            date: dateVal.slice(0, 10),
+            allDay: true,
+            category: def.category as any,
+            color: def.color,
+            recurrence: def.recurrence as any,
+            linkedProfiles: [profileId],
+            tags: ["auto-generated"],
+            source: "ai",
+          });
+        } catch (e) {
+          console.error(`Auto-event generation failed for ${name} / ${def.fieldKey}:`, e);
+        }
+      }
+    }
   }
 
   async updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined> {
@@ -614,6 +680,27 @@ export class SupabaseStorage implements IStorage {
     });
     if (error) throw error;
     this.logActivity("task", `Created task: ${data.title}`);
+
+    // Auto-generate calendar event for tasks with due dates
+    if (data.dueDate) {
+      try {
+        const priorityColor = data.priority === "high" ? "#A13544" : data.priority === "medium" ? "#BB653B" : "#797876";
+        await this.createEvent({
+          title: `\u{2705} Task: ${data.title}`,
+          date: data.dueDate.slice(0, 10),
+          allDay: true,
+          category: "personal",
+          color: priorityColor,
+          recurrence: "none",
+          tags: ["auto-generated", "task"],
+          source: "ai",
+          description: data.description || undefined,
+        });
+      } catch (e) {
+        console.error(`Auto-event generation failed for task: ${data.title}`, e);
+      }
+    }
+
     return (await this.getTask(id))!;
   }
 
@@ -798,6 +885,107 @@ export class SupabaseStorage implements IStorage {
         const d = checkin.date;
         if (d >= startDate && d <= endDate) {
           items.push({ id: `habit-${habit.id}-${d}`, type: "habit", title: habit.name, date: d, allDay: true, color: habit.color || "#4F98A3", completed: true, linkedProfiles: [], sourceId: habit.id, meta: { streak: habit.currentStreak, icon: habit.icon } });
+        }
+      }
+    }
+
+    // ── Profile-derived virtual events ──────────────────────────
+    const profiles = await this.getProfiles();
+    for (const profile of profiles) {
+      const f = profile.fields || {};
+
+      // Person / Self → birthday (yearly)
+      if ((profile.type === "person" || profile.type === "self") && f.birthday) {
+        const bday = f.birthday.slice(0, 10); // YYYY-MM-DD
+        // Generate for current year of the view range
+        const startY = parseInt(startDate.slice(0, 4), 10);
+        const endY = parseInt(endDate.slice(0, 4), 10);
+        for (let y = startY; y <= endY; y++) {
+          const d = `${y}-${bday.slice(5, 10)}`;
+          if (d >= startDate && d <= endDate) {
+            items.push({ id: `profile-birthday-${profile.id}-${d}`, type: "event", title: `🎂 ${profile.name}'s Birthday`, date: d, allDay: true, color: "#A86FDF", category: "family", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: profile.type } });
+          }
+        }
+      }
+
+      // Medical → nextVisit
+      if (profile.type === "medical" && f.nextVisit) {
+        const d = f.nextVisit.slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `profile-medical-${profile.id}-${d}`, type: "event", title: `🏥 ${profile.name} — Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "medical" } });
+        }
+      }
+
+      // Vehicle → nextService
+      if (profile.type === "vehicle" && f.nextService) {
+        const d = f.nextService.slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `profile-vehicle-${profile.id}-${d}`, type: "event", title: `🚗 ${profile.name} — Service`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "vehicle" } });
+        }
+      }
+
+      // Subscription → renewalDate
+      if (profile.type === "subscription" && f.renewalDate) {
+        const d = f.renewalDate.slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `profile-subscription-${profile.id}-${d}`, type: "event", title: `🔄 ${profile.name} — Renewal`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "subscription" } });
+        }
+      }
+
+      // Loan → startDate or nextPayment
+      if (profile.type === "loan" && (f.nextPayment || f.startDate)) {
+        const d = (f.nextPayment || f.startDate).slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          const label = f.nextPayment ? "Payment Due" : "Start Date";
+          items.push({ id: `profile-loan-${profile.id}-${d}`, type: "event", title: `💰 ${profile.name} — ${label}`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "loan" } });
+        }
+      }
+
+      // Pet → nextVetVisit
+      if (profile.type === "pet" && f.nextVetVisit) {
+        const d = f.nextVetVisit.slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `profile-pet-${profile.id}-${d}`, type: "event", title: `🐾 ${profile.name} — Vet Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "pet" } });
+        }
+      }
+
+      // Property → insurance expiry, lease end, etc.
+      if (profile.type === "property") {
+        if (f.insuranceExpiry) {
+          const d = f.insuranceExpiry.slice(0, 10);
+          if (d >= startDate && d <= endDate) {
+            items.push({ id: `profile-property-ins-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Insurance Expiry`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
+          }
+        }
+        if (f.leaseEnd) {
+          const d = f.leaseEnd.slice(0, 10);
+          if (d >= startDate && d <= endDate) {
+            items.push({ id: `profile-property-lease-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Lease End`, date: d, allDay: true, color: "#A13544", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
+          }
+        }
+      }
+
+      // Investment → maturityDate
+      if (profile.type === "investment" && f.maturityDate) {
+        const d = f.maturityDate.slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `profile-investment-${profile.id}-${d}`, type: "event", title: `📈 ${profile.name} — Maturity`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "investment" } });
+        }
+      }
+
+      // Account → expirationDate
+      if (profile.type === "account" && f.expirationDate) {
+        const d = f.expirationDate.slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `profile-account-${profile.id}-${d}`, type: "event", title: `⚠️ ${profile.name} — Expires`, date: d, allDay: true, color: "#A13544", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "account" } });
+        }
+      }
+
+      // Asset → warrantyExpiry
+      if (profile.type === "asset" && f.warrantyExpiry) {
+        const d = f.warrantyExpiry.slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `profile-asset-${profile.id}-${d}`, type: "event", title: `🛡️ ${profile.name} — Warranty Expiry`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "asset" } });
         }
       }
     }
@@ -1000,6 +1188,28 @@ export class SupabaseStorage implements IStorage {
     });
     if (error) throw error;
     this.logActivity("obligation", `Created obligation: ${data.name}`);
+
+    // Auto-generate calendar event for obligation due date
+    if (data.nextDueDate) {
+      try {
+        const freqMap: Record<string, string> = { weekly: "weekly", biweekly: "biweekly", monthly: "monthly", quarterly: "monthly", yearly: "yearly" };
+        const recurrence = freqMap[data.frequency || "monthly"] || "monthly";
+        await this.createEvent({
+          title: `\u{1F4B3} ${data.name} \u2014 $${data.amount}`,
+          date: data.nextDueDate.slice(0, 10),
+          allDay: true,
+          category: "finance",
+          color: "#BB653B",
+          recurrence: recurrence as any,
+          tags: ["auto-generated", "obligation"],
+          source: "ai",
+          description: data.autopay ? "Autopay enabled" : `$${data.amount} due`,
+        });
+      } catch (e) {
+        console.error(`Auto-event generation failed for obligation: ${data.name}`, e);
+      }
+    }
+
     return (await this.getObligation(id))!;
   }
 
