@@ -252,7 +252,7 @@ function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-profiles-list">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-profiles-list">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Users className="h-4 w-4 text-primary" />
@@ -420,7 +420,7 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-trackers-list">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-trackers-list">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <BarChart3 className="h-4 w-4 text-primary" />
@@ -511,7 +511,7 @@ function TasksListDialog({ open, onClose }: { open: boolean; onClose: () => void
   return (
     <>
       <Dialog open={open && !editTask} onOpenChange={o => { if (!o) onClose(); }}>
-        <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-tasks-list">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-tasks-list">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <ListTodo className="h-4 w-4 text-primary" />
@@ -636,7 +636,7 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-spending-list">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-spending-list">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <DollarSign className="h-4 w-4 text-primary" />
@@ -789,7 +789,7 @@ function HabitsListDialog({ open, onClose }: { open: boolean; onClose: () => voi
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-habits-list">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-habits-list">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Flame className="h-4 w-4 text-orange-500" />
@@ -1003,7 +1003,7 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
   return (
     <>
       <Dialog open={open && !payOb} onOpenChange={o => { if (!o) onClose(); }}>
-        <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-obligations-list">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-obligations-list">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <CreditCard className="h-4 w-4 text-primary" />
@@ -1171,7 +1171,7 @@ function JournalListDialog({ open, onClose }: { open: boolean; onClose: () => vo
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-journal-list">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-journal-list">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <BookHeart className="h-4 w-4 text-primary" />
@@ -1315,7 +1315,7 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg max-h-[80vh]" data-testid="dialog-artifacts-list">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-artifacts-list">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <CheckSquare className="h-4 w-4 text-primary" />

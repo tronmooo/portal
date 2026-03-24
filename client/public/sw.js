@@ -1,7 +1,7 @@
-const CACHE_NAME = 'lifeos-v2';
-const STATIC_CACHE = 'lifeos-static-v2';
+const CACHE_NAME = 'lifeos-v3';
+const STATIC_CACHE = 'lifeos-static-v3';
 const PRECACHE_URLS = [
-  '/',
+  '/#/',
   '/index.html',
   '/offline.html',
 ];

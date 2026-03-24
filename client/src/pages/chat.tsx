@@ -840,7 +840,7 @@ export default function ChatPage() {
   const isBatch = attachments.length > 1;
 
   return (
-    <div className="flex flex-col h-full" data-testid="page-chat">
+    <div className="flex flex-col h-full overflow-x-hidden" data-testid="page-chat">
       {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
@@ -973,7 +973,7 @@ export default function ChatPage() {
                 <button
                   key={s}
                   onClick={() => handleSuggestion(s)}
-                  className="text-xs px-3 py-1.5 rounded-full border border-border bg-card hover:bg-accent transition-colors"
+                  className="text-xs px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full border border-border bg-card hover:bg-accent transition-colors"
                   data-testid={`button-suggestion-${s.slice(0, 20)}`}
                 >
                   {s}
@@ -1032,7 +1032,7 @@ export default function ChatPage() {
 
       {/* Text input area (only shown when no attachment pending) */}
       {!hasAttachments && (
-        <div className="border-t border-border px-4 py-3 bg-background/80 backdrop-blur-sm">
+        <div className="border-t border-border px-4 py-3 pb-[env(safe-area-inset-bottom,12px)] bg-background/80 backdrop-blur-sm">
           <div className="max-w-2xl mx-auto flex items-end gap-2">
             <Button
               variant="ghost"

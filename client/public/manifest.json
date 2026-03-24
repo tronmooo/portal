@@ -2,11 +2,13 @@
   "name": "LifeOS",
   "short_name": "LifeOS",
   "description": "AI-powered personal life management system",
-  "start_url": "/",
+  "start_url": "/#/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#F7F6F2",
+  "background_color": "#0a0a0a",
   "theme_color": "#01696F",
   "orientation": "portrait-primary",
+  "categories": ["lifestyle", "productivity", "health"],
   "icons": [
     {
       "src": "/icons/icon-192.png",

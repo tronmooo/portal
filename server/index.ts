@@ -29,6 +29,15 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: 'text/csv', limit: '10mb' }));
 
+// Security headers
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 // Register auth endpoints (before auth middleware)
 registerAuthRoutes(app);
 

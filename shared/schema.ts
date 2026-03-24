@@ -444,9 +444,9 @@ export interface Expense {
 }
 
 export const insertExpenseSchema = z.object({
-  amount: z.number(),
+  amount: z.number().positive("Amount must be a positive number"),
   category: z.string().default("general"),
-  description: z.string(),
+  description: z.string().min(1, "Description must be non-empty"),
   vendor: z.string().optional(),
   isRecurring: z.boolean().optional(),
   date: z.string().optional(),

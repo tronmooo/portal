@@ -1400,6 +1400,11 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_tracker": {
+      // Dedup: check for existing tracker with same name
+      const existingTrackers = await storage.getTrackers();
+      const dupTracker = existingTrackers.find(t => t.name.toLowerCase() === (input.name || "").toLowerCase());
+      if (dupTracker) return dupTracker;
+
       const newTracker = await storage.createTracker({
         name: input.name,
         category: input.category || "custom",
@@ -1988,21 +1993,65 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
       }
     }
 
-    // If a non-self profile was matched, remove the self profile link
-    // (createTracker auto-links to self, but if it belongs to Max, remove self)
-    if (matchedNonSelfIds.length > 0 && selfProfile && entityType === "tracker") {
+    // If a non-self profile was explicitly matched via forProfile, remove the auto self-link
+    // (createTracker auto-links to self, but if it belongs to Max's pet, remove self)
+    const hasExplicitNonSelf = explicitProfileName && matchedNonSelfIds.length > 0;
+    if (hasExplicitNonSelf && selfProfile) {
       try {
-        const tracker = await storage.getTracker(entityId);
-        if (tracker && tracker.linkedProfiles.includes(selfProfile.id)) {
-          const newLinked = tracker.linkedProfiles.filter(pid => pid !== selfProfile.id);
-          await storage.updateTracker(entityId, { linkedProfiles: newLinked } as any);
-          await storage.unlinkProfileFrom(selfProfile.id, "tracker", entityId);
+        if (entityType === "tracker") {
+          const tracker = await storage.getTracker(entityId);
+          if (tracker && tracker.linkedProfiles.includes(selfProfile.id)) {
+            const newLinked = tracker.linkedProfiles.filter(pid => pid !== selfProfile.id);
+            await storage.updateTracker(entityId, { linkedProfiles: newLinked } as any);
+            await storage.unlinkProfileFrom(selfProfile.id, "tracker", entityId);
+          }
+        } else {
+          // For non-tracker entities, just remove the self entity link if it exists
+          await storage.unlinkProfileFrom(selfProfile.id, entityType, entityId);
         }
       } catch (e) { console.error("Remove self-link failed:", e); }
     }
   } catch (err) {
     console.error("Auto-link failed:", err);
   }
+}
+
+// Audit and fix cross-linked trackers: if a tracker is explicitly linked to a non-self
+// profile, remove the self-profile link unless the tracker name suggests it's personal
+async function cleanupCrossLinks(): Promise<{ fixed: number; audited: number }> {
+  let fixed = 0;
+  let audited = 0;
+  try {
+    const profiles = await storage.getProfiles();
+    const selfProfile = profiles.find(p => p.type === "self");
+    if (!selfProfile) return { fixed: 0, audited: 0 };
+
+    const trackers = await storage.getTrackers();
+    const personalKeywords = ["my", "weight", "sleep", "mood", "blood pressure", "bp", "run", "walk", "step", "calorie", "water", "meditation"];
+
+    for (const tracker of trackers) {
+      audited++;
+      const linked = tracker.linkedProfiles || [];
+      const hasSelf = linked.includes(selfProfile.id);
+      const hasNonSelf = linked.some(pid => pid !== selfProfile.id);
+
+      if (hasSelf && hasNonSelf) {
+        // Check if tracker name suggests personal use
+        const lowerName = tracker.name.toLowerCase();
+        const isPersonal = personalKeywords.some(kw => lowerName.includes(kw));
+        if (!isPersonal) {
+          // Remove self-link — this tracker belongs to another entity
+          const newLinked = linked.filter(pid => pid !== selfProfile.id);
+          await storage.updateTracker(tracker.id, { linkedProfiles: newLinked } as any);
+          await storage.unlinkProfileFrom(selfProfile.id, "tracker", tracker.id);
+          fixed++;
+        }
+      }
+    }
+  } catch (err) {
+    console.error("cleanupCrossLinks failed:", err);
+  }
+  return { fixed, audited };
 }
 
 // Helper: update an entity's linkedProfiles array to include a profile ID
@@ -2247,10 +2296,15 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
 
   if (lower.startsWith("track ") || lower.startsWith("create tracker ")) {
     const name = message.replace(/^(track|create tracker)\s+/i, "").replace(/^my\s+/i, "");
-    const tracker = await storage.createTracker({ name, category: "custom", fields: [{ name: "value", type: "number" }] });
+    // Dedup: check for existing tracker with same name
+    const allTrackers = await storage.getTrackers();
+    const dupTracker = allTrackers.find(t => t.name.toLowerCase() === name.toLowerCase());
+    const tracker = dupTracker || await storage.createTracker({ name, category: "custom", fields: [{ name: "value", type: "number" }] });
     actions.push({ type: "create_tracker", category: "custom", data: { name } });
     results.push(tracker);
-    reply = `Created a new tracker for "${name}". You can now log entries to it.`;
+    reply = dupTracker
+      ? `Found existing tracker "${tracker.name}". You can log entries to it.`
+      : `Created a new tracker for "${name}". You can now log entries to it.`;
   } else if (lower.includes("spent") || lower.includes("bought") || lower.match(/\$\d+/)) {
     const amountMatch = message.match(/\$?([\d.]+)/);
     const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;

@@ -22,6 +22,32 @@ import {
 import type { ParsedAction } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
 
+// Simple rate limiter
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function rateLimit(key: string, maxRequests: number = 60, windowMs: number = 60000): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(key);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(key, { count: 1, resetAt: now + windowMs });
+    return false; // not rate limited
+  }
+  entry.count++;
+  if (entry.count > maxRequests) return true; // rate limited
+  return false;
+}
+// Cleanup old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of rateLimitMap.entries()) {
+    if (now > val.resetAt) rateLimitMap.delete(key);
+  }
+}, 300000);
+
+// Simple HTML sanitizer — strips < and > to prevent XSS
+function sanitize(input: string): string {
+  return input.replace(/[<>]/g, '').trim();
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -29,12 +55,16 @@ export async function registerRoutes(
 
   // ---- Chat / AI ----
   app.post("/api/chat", async (req, res) => {
+    const userId = (req as any).userId || req.ip || 'anonymous';
+    if (rateLimit(`chat:${userId}`, 20)) {
+      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
+    }
     try {
       const { message, history } = req.body;
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Message required" });
       }
-      const result = await processMessage(message, Array.isArray(history) ? history : undefined);
+      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined);
       res.json(result);
     } catch (err: any) {
       console.error("Chat error:", err);
@@ -50,6 +80,10 @@ export async function registerRoutes(
 
   // ---- File Upload + AI Extraction ----
   app.post("/api/upload", async (req, res) => {
+    const uploadUserId = (req as any).userId || req.ip || 'anonymous';
+    if (rateLimit(`upload:${uploadUserId}`, 10)) {
+      return res.status(429).json({ error: "Too many uploads. Please wait." });
+    }
     try {
       const { fileName, mimeType, fileData, message, profileId } = req.body;
       if (!fileData || !fileName) {
@@ -65,6 +99,10 @@ export async function registerRoutes(
 
   // ---- Batch File Upload + AI Extraction ----
   app.post("/api/upload/batch", async (req, res) => {
+    const batchUserId = (req as any).userId || req.ip || 'anonymous';
+    if (rateLimit(`upload:${batchUserId}`, 10)) {
+      return res.status(429).json({ error: "Too many uploads. Please wait." });
+    }
     try {
       const { files, message } = req.body;
       if (!files || !Array.isArray(files) || files.length === 0) {
@@ -264,11 +302,18 @@ export async function registerRoutes(
     res.json(detail);
   });
   app.post("/api/profiles", async (req, res) => {
+    if (req.body.name) req.body.name = sanitize(req.body.name);
     const parsed = insertProfileSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createProfile(parsed.data));
   });
   app.patch("/api/profiles/:id", async (req, res) => {
+    if (req.body.name !== undefined) {
+      if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
+        return res.status(400).json({ error: "Profile name must be a non-empty string" });
+      }
+      req.body.name = sanitize(req.body.name);
+    }
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
@@ -463,11 +508,18 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(tracker);
   });
   app.post("/api/trackers", async (req, res) => {
+    if (req.body.name) req.body.name = sanitize(req.body.name);
     const parsed = insertTrackerSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createTracker(parsed.data));
   });
   app.patch("/api/trackers/:id", async (req, res) => {
+    if (req.body.name !== undefined) {
+      if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
+        return res.status(400).json({ error: "Tracker name must be a non-empty string" });
+      }
+      req.body.name = sanitize(req.body.name);
+    }
     const updated = await storage.updateTracker(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
@@ -498,11 +550,20 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Tasks ----
   app.get("/api/tasks", async (_req, res) => { res.json(await storage.getTasks()); });
   app.post("/api/tasks", async (req, res) => {
+    if (req.body.title) req.body.title = sanitize(req.body.title);
+    if (req.body.description) req.body.description = sanitize(req.body.description);
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createTask(parsed.data));
   });
   app.patch("/api/tasks/:id", async (req, res) => {
+    if (req.body.title !== undefined) {
+      if (typeof req.body.title !== "string" || req.body.title.trim() === "") {
+        return res.status(400).json({ error: "Task title must be a non-empty string" });
+      }
+      req.body.title = sanitize(req.body.title);
+    }
+    if (req.body.description) req.body.description = sanitize(req.body.description);
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
@@ -515,11 +576,18 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Expenses ----
   app.get("/api/expenses", async (_req, res) => { res.json(await storage.getExpenses()); });
   app.post("/api/expenses", async (req, res) => {
+    if (req.body.description) req.body.description = sanitize(req.body.description);
+    if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createExpense(parsed.data));
   });
   app.patch("/api/expenses/:id", async (req, res) => {
+    if (req.body.amount !== undefined && (typeof req.body.amount !== "number" || req.body.amount <= 0)) {
+      return res.status(400).json({ error: "Expense amount must be a positive number" });
+    }
+    if (req.body.description) req.body.description = sanitize(req.body.description);
+    if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
@@ -667,6 +735,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(artifact);
   });
   app.post("/api/artifacts", async (req, res) => {
+    if (req.body.title) req.body.title = sanitize(req.body.title);
     const parsed = insertArtifactSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createArtifact(parsed.data));
@@ -689,6 +758,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Journal ----
   app.get("/api/journal", async (_req, res) => { res.json(await storage.getJournalEntries()); });
   app.post("/api/journal", async (req, res) => {
+    if (req.body.content) req.body.content = sanitize(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createJournalEntry(parsed.data));

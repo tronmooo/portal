@@ -593,6 +593,11 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createTracker(data: InsertTracker): Promise<Tracker> {
+    // Dedup: check for existing tracker with same name (case-insensitive)
+    const existing = await this.getTrackers();
+    const dup = existing.find(t => t.name.toLowerCase() === data.name.toLowerCase());
+    if (dup) return dup;
+
     const id = randomUUID();
     const now = new Date().toISOString();
     // Auto-link to self profile if no profiles are being set
@@ -630,17 +635,56 @@ export class SupabaseStorage implements IStorage {
   async logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined> {
     const tracker = await this.getTracker(data.trackerId);
     if (!tracker) return undefined;
-    const computed = computeSecondaryData(tracker.name, tracker.category, data.values);
+
+    // Validate and normalize entry values against tracker field definitions
+    let values = { ...data.values };
+    let validated = true;
+    const fieldNames = new Set(tracker.fields.map(f => f.name.toLowerCase()));
+    const COMMON_ALIASES: Record<string, string[]> = {
+      value: ["steps", "count", "amount", "total", "score", "reading", "number"],
+      duration: ["time", "minutes", "hours", "length"],
+      distance: ["miles", "km", "meters"],
+      weight: ["lbs", "kg", "mass"],
+    };
+
+    if (fieldNames.size > 0) {
+      const normalizedValues: Record<string, any> = {};
+      for (const [key, val] of Object.entries(values)) {
+        if (fieldNames.has(key.toLowerCase())) {
+          normalizedValues[key] = val;
+        } else {
+          // Try to map common aliases
+          let mapped = false;
+          for (const [canonical, aliases] of Object.entries(COMMON_ALIASES)) {
+            if (aliases.includes(key.toLowerCase()) && fieldNames.has(canonical)) {
+              normalizedValues[canonical] = val;
+              mapped = true;
+              console.warn(`logEntry: mapped alias "${key}" → "${canonical}" for tracker "${tracker.name}"`);
+              break;
+            }
+          }
+          if (!mapped) {
+            // Accept the value but flag as not validated
+            normalizedValues[key] = val;
+            validated = false;
+            console.warn(`logEntry: unknown field "${key}" for tracker "${tracker.name}" (expected: ${[...fieldNames].join(", ")})`);
+          }
+        }
+      }
+      values = normalizedValues;
+    }
+
+    const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), validated };
     const id = randomUUID();
     const ts = new Date().toISOString();
     const { error } = await this.supabase.from("tracker_entries").insert({
       id, user_id: this.userId, tracker_id: data.trackerId,
-      entry_values: data.values, computed, notes: data.notes || null,
+      entry_values: values, computed, notes: data.notes || null,
       mood: data.mood || null, tags: data.tags || null, timestamp: ts,
     });
     if (error) throw error;
     this.logActivity("tracker", `Logged ${tracker.name}`);
-    return { id, values: data.values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: ts };
+    return { id, values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: ts };
   }
 
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {

@@ -2490,24 +2490,26 @@ export default function ProfileDetailPage() {
       {/* Universal Tabs */}
       <div className="px-4 md:px-6 pb-6">
         <Tabs defaultValue="info" className="mt-4">
-          <TabsList className="w-full grid grid-cols-6 h-9">
-            {UNIVERSAL_TABS.map(tab => (
-              <TabsTrigger
-                key={tab.value}
-                value={tab.value}
-                className="text-xs"
-                data-testid={tab.testId}
-              >
-                {tab.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          <div className="overflow-x-auto -mx-1 px-1">
+            <TabsList className="w-full grid grid-cols-6 h-9">
+              {UNIVERSAL_TABS.map(tab => (
+                <TabsTrigger
+                  key={tab.value}
+                  value={tab.value}
+                  className="text-xs"
+                  data-testid={tab.testId}
+                >
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
 
-          <TabsContent value="info" className="mt-4">
+          <TabsContent value="info" className="mt-4 px-1 sm:px-0">
             <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
           </TabsContent>
 
-          <TabsContent value="documents" className="mt-4">
+          <TabsContent value="documents" className="mt-4 px-1 sm:px-0">
             <DocumentsTab
               documents={profile.relatedDocuments}
               profileId={profile.id}
@@ -2515,19 +2517,19 @@ export default function ProfileDetailPage() {
             />
           </TabsContent>
 
-          <TabsContent value="finances" className="mt-4">
+          <TabsContent value="finances" className="mt-4 px-1 sm:px-0">
             <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
           </TabsContent>
 
-          <TabsContent value="trackers" className="mt-4">
+          <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
             <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
           </TabsContent>
 
-          <TabsContent value="timeline" className="mt-4">
+          <TabsContent value="timeline" className="mt-4 px-1 sm:px-0">
             <TimelineTab timeline={profile.timeline} />
           </TabsContent>
 
-          <TabsContent value="tasks" className="mt-4">
+          <TabsContent value="tasks" className="mt-4 px-1 sm:px-0">
             <TasksTab
               tasks={profile.relatedTasks}
               profileId={profile.id}

@@ -23,26 +23,39 @@ import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
+import { lazy, Suspense } from "react";
+
+// Keep lightweight pages as direct imports
 import NotFound from "@/pages/not-found";
 import ChatPage from "@/pages/chat";
-import DashboardPage from "@/pages/dashboard";
-import TrackersPage from "@/pages/trackers";
-import ProfilesPage from "@/pages/profiles";
-import ProfileDetailPage from "@/pages/profile-detail";
-import DocumentDetailPage from "@/pages/document-detail";
-import AuthPage from "@/pages/auth";
-import ResetPasswordPage from "@/pages/reset-password";
-import SettingsPage from "@/pages/settings";
-import CalendarPage from "@/pages/calendar-page";
-import ArtifactsPage from "@/pages/artifacts";
-import FinancePage from "@/pages/finance";
-import HabitsPage from "@/pages/habits";
-import JournalPage from "@/pages/journal";
-import ObligationsPage from "@/pages/obligations";
-import TasksPage from "@/pages/tasks";
+
+// Lazy load heavy pages
+const DashboardPage = lazy(() => import("@/pages/dashboard"));
+const TrackersPage = lazy(() => import("@/pages/trackers"));
+const ProfilesPage = lazy(() => import("@/pages/profiles"));
+const ProfileDetailPage = lazy(() => import("@/pages/profile-detail"));
+const DocumentDetailPage = lazy(() => import("@/pages/document-detail"));
+const AuthPage = lazy(() => import("@/pages/auth"));
+const ResetPasswordPage = lazy(() => import("@/pages/reset-password"));
+const SettingsPage = lazy(() => import("@/pages/settings"));
+const CalendarPage = lazy(() => import("@/pages/calendar-page"));
+const ArtifactsPage = lazy(() => import("@/pages/artifacts"));
+const FinancePage = lazy(() => import("@/pages/finance"));
+const HabitsPage = lazy(() => import("@/pages/habits"));
+const JournalPage = lazy(() => import("@/pages/journal"));
+const ObligationsPage = lazy(() => import("@/pages/obligations"));
+const TasksPage = lazy(() => import("@/pages/tasks"));
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
+
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <Loader2 className="w-6 h-6 animate-spin text-primary" />
+    </div>
+  );
+}
 
 function ThemeToggle() {
   const { theme, toggle } = useTheme();
@@ -76,7 +89,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   // Allow reset-password page through without auth
   if (window.location.hash.startsWith("#/reset-password")) {
-    return <ResetPasswordPage />;
+    return <Suspense fallback={<PageLoader />}><ResetPasswordPage /></Suspense>;
   }
 
   if (loading) {
@@ -94,7 +107,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (!authRequired) return <>{children}</>;
 
   // Auth required but not signed in — show login
-  if (!user) return <AuthPage />;
+  if (!user) return <Suspense fallback={<PageLoader />}><AuthPage /></Suspense>;
 
   // Authenticated — show app
   return <>{children}</>;
@@ -102,24 +115,26 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
 function AppRouter() {
   return (
-    <Switch>
-      <Route path="/" component={ChatPage} />
-      <Route path="/dashboard" component={DashboardPage} />
-      <Route path="/trackers" component={TrackersPage} />
-      <Route path="/profiles" component={ProfilesPage} />
-      <Route path="/profiles/:id" component={ProfileDetailPage} />
-      <Route path="/documents/:id" component={DocumentDetailPage} />
-      <Route path="/calendar" component={CalendarPage} />
-      <Route path="/settings" component={SettingsPage} />
-      <Route path="/reset-password" component={ResetPasswordPage} />
-      <Route path="/dashboard/artifacts" component={ArtifactsPage} />
-      <Route path="/dashboard/finance" component={FinancePage} />
-      <Route path="/dashboard/habits" component={HabitsPage} />
-      <Route path="/dashboard/journal" component={JournalPage} />
-      <Route path="/dashboard/obligations" component={ObligationsPage} />
-      <Route path="/dashboard/tasks" component={TasksPage} />
-      <Route component={NotFound} />
-    </Switch>
+    <Suspense fallback={<PageLoader />}>
+      <Switch>
+        <Route path="/" component={ChatPage} />
+        <Route path="/dashboard" component={DashboardPage} />
+        <Route path="/trackers" component={TrackersPage} />
+        <Route path="/profiles" component={ProfilesPage} />
+        <Route path="/profiles/:id" component={ProfileDetailPage} />
+        <Route path="/documents/:id" component={DocumentDetailPage} />
+        <Route path="/calendar" component={CalendarPage} />
+        <Route path="/settings" component={SettingsPage} />
+        <Route path="/reset-password" component={ResetPasswordPage} />
+        <Route path="/dashboard/artifacts" component={ArtifactsPage} />
+        <Route path="/dashboard/finance" component={FinancePage} />
+        <Route path="/dashboard/habits" component={HabitsPage} />
+        <Route path="/dashboard/journal" component={JournalPage} />
+        <Route path="/dashboard/obligations" component={ObligationsPage} />
+        <Route path="/dashboard/tasks" component={TasksPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </Suspense>
   );
 }
 
