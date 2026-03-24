@@ -1617,8 +1617,12 @@ export default function TrackersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-  // "all" = show everything, otherwise a profile ID
-  const [profileFilter, setProfileFilter] = useState<string>("all");
+  // Default to "me" (self profile) — not "all" — so pet/other profile trackers don't show by default
+  const [profileFilter, setProfileFilter] = useState<string>("me");
+
+  // Auto-resolve "me" to the actual self profile ID once profiles load
+  const selfProfile = (profiles || []).find(p => p.type === "self");
+  const resolvedFilter = profileFilter === "me" ? (selfProfile?.id || "me") : profileFilter;
 
   // On mount, migrate any unlinked trackers to the "self" profile
   const migrationDone = useRef(false);
@@ -1671,8 +1675,8 @@ export default function TrackersPage() {
 
   // Apply profile filter
   const filteredTrackers = (trackers || []).filter(t => {
-    if (profileFilter === "all") return true;
-    return t.linkedProfiles?.includes(profileFilter);
+    if (resolvedFilter === "all") return true;
+    return t.linkedProfiles?.includes(resolvedFilter);
   });
 
   // Group by category
@@ -1699,7 +1703,7 @@ export default function TrackersPage() {
             Trackers
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {filteredTrackers.length}{profileFilter !== "all" ? ` of ${(trackers || []).length}` : ""} trackers{profileFilter !== "all" ? " shown" : ""}
+            {filteredTrackers.length}{resolvedFilter !== "all" ? ` of ${(trackers || []).length}` : ""} trackers{resolvedFilter !== "all" ? " shown" : ""}
           </p>
         </div>
         <Button
@@ -1724,7 +1728,7 @@ export default function TrackersPage() {
             <button
               onClick={() => setProfileFilter("all")}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
-                profileFilter === "all"
+                resolvedFilter === "all"
                   ? "bg-primary text-primary-foreground border-primary"
                   : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
               }`}
@@ -1732,7 +1736,7 @@ export default function TrackersPage() {
             >
               <Activity className="h-3 w-3" />
               All
-              <span className={`text-[10px] px-1 py-0 rounded-full ${profileFilter === "all" ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
+              <span className={`text-[10px] px-1 py-0 rounded-full ${resolvedFilter === "all" ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
                 {(trackers || []).length}
               </span>
             </button>
@@ -1741,11 +1745,21 @@ export default function TrackersPage() {
             {sortedFilterProfiles.map(p => {
               const Icon = PROFILE_TYPE_ICONS[p.type] || User;
               const count = countForProfile(p.id);
-              const isActive = profileFilter === p.id;
+              const isActive = resolvedFilter === p.id;
+              // For self profile, clicking when active goes to "all"; for others, toggle
+              const handleClick = () => {
+                if (isActive) {
+                  setProfileFilter("all");
+                } else if (p.type === "self") {
+                  setProfileFilter("me");
+                } else {
+                  setProfileFilter(p.id);
+                }
+              };
               return (
                 <button
                   key={p.id}
-                  onClick={() => setProfileFilter(isActive ? "all" : p.id)}
+                  onClick={handleClick}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
                     isActive
                       ? "bg-primary text-primary-foreground border-primary"
@@ -1796,7 +1810,7 @@ export default function TrackersPage() {
         <div className="text-center py-12">
           <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">
-            No trackers linked to {(profiles || []).find(p => p.id === profileFilter)?.name || "this profile"}
+            No trackers linked to {(profiles || []).find(p => p.id === resolvedFilter)?.name || "this profile"}
           </p>
           <Button
             variant="outline"
