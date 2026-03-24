@@ -34,6 +34,12 @@ import AuthPage from "@/pages/auth";
 import ResetPasswordPage from "@/pages/reset-password";
 import SettingsPage from "@/pages/settings";
 import CalendarPage from "@/pages/calendar-page";
+import ArtifactsPage from "@/pages/artifacts";
+import FinancePage from "@/pages/finance";
+import HabitsPage from "@/pages/habits";
+import JournalPage from "@/pages/journal";
+import ObligationsPage from "@/pages/obligations";
+import TasksPage from "@/pages/tasks";
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
@@ -106,6 +112,12 @@ function AppRouter() {
       <Route path="/calendar" component={CalendarPage} />
       <Route path="/settings" component={SettingsPage} />
       <Route path="/reset-password" component={ResetPasswordPage} />
+      <Route path="/dashboard/artifacts" component={ArtifactsPage} />
+      <Route path="/dashboard/finance" component={FinancePage} />
+      <Route path="/dashboard/habits" component={HabitsPage} />
+      <Route path="/dashboard/journal" component={JournalPage} />
+      <Route path="/dashboard/obligations" component={ObligationsPage} />
+      <Route path="/dashboard/tasks" component={TasksPage} />
       <Route component={NotFound} />
     </Switch>
   );

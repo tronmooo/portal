@@ -619,6 +619,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!checkin) return res.status(404).json({ error: "Habit not found" });
     res.status(201).json(checkin);
   });
+  app.patch("/api/habits/:id", async (req, res) => {
+    try {
+      const result = await storage.updateHabit(req.params.id, req.body);
+      if (!result) return res.status(404).json({ error: "Habit not found" });
+      res.json(result);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
   app.delete("/api/habits/:id", async (req, res) => {
     await storage.deleteHabit(req.params.id);
     res.status(204).send();
@@ -707,6 +714,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const q = (req.query.q as string) || "";
     res.json(await storage.recallMemory(q));
   });
+  app.patch("/api/memories/:id", async (req, res) => {
+    try {
+      const result = await storage.updateMemory(req.params.id, req.body);
+      if (!result) return res.status(404).json({ error: "Memory not found" });
+      res.json(result);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
   app.delete("/api/memories/:id", async (req, res) => {
     await storage.deleteMemory(req.params.id);
     res.status(204).send();
@@ -718,6 +732,20 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const parsed = insertDomainSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createDomain(parsed.data));
+  });
+  app.patch("/api/domains/:id", async (req, res) => {
+    try {
+      const result = await storage.updateDomain(req.params.id, req.body);
+      if (!result) return res.status(404).json({ error: "Domain not found" });
+      res.json(result);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+  app.delete("/api/domains/:id", async (req, res) => {
+    try {
+      const result = await storage.deleteDomain(req.params.id);
+      if (!result) return res.status(404).json({ error: "Domain not found" });
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
   app.get("/api/domains/:id/entries", async (req, res) => {
     res.json(await storage.getDomainEntries(req.params.id));
@@ -1087,7 +1115,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // Import events
       if (data.events && Array.isArray(data.events)) {
         for (const e of data.events) {
-          try { await storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category, recurrence: e.recurrence, tags: e.tags, source: e.source }); imported.events++; } catch {}
+          try { await storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: e.linkedProfiles || [], linkedDocuments: e.linkedDocuments || [] }); imported.events++; } catch {}
         }
       }
       // Import documents
@@ -1198,16 +1226,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         "subscriptions": ["subscription", "membership", "annual", "monthly", "recurring"],
       };
 
-      function autoCategory(desc: string): string {
+      const autoCategory = (desc: string): string => {
         const lower = desc.toLowerCase();
         for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
           if (keywords.some(k => lower.includes(k))) return cat;
         }
         return "other";
-      }
+      };
 
       // Parse a CSV row respecting quoted fields
-      function parseRow(line: string): string[] {
+      const parseRow = (line: string): string[] => {
         const fields: string[] = [];
         let current = "";
         let inQuotes = false;
@@ -1219,7 +1247,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         }
         fields.push(current.trim());
         return fields;
-      }
+      };
 
       let imported = 0;
       let skipped = 0;
@@ -1955,7 +1983,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
             description: gcEvent.description || undefined,
             location: gcEvent.location || undefined,
             category,
+            recurrence: "none",
             source: "external",
+            linkedProfiles: [],
+            linkedDocuments: [],
             tags: ["google-calendar"],
           });
 

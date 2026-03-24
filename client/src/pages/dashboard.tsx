@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -210,6 +211,17 @@ function SkeletonGrid({ cols = 4, rows = 1, h = "h-14" }: { cols?: number; rows?
   );
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function ViewFullPageLink({ onClose, href }: { onClose: () => void; href: string }) {
+  const [, navigate] = useLocation();
+  return (
+    <Button variant="ghost" size="sm" className="ml-auto h-6 text-[10px] px-2 text-muted-foreground hover:text-foreground" onClick={() => { onClose(); navigate(href); }}>
+      View Full Page <ExternalLink className="h-3 w-3 ml-1" />
+    </Button>
+  );
+}
+
 // ─── Stat Popup Dialogs ──────────────────────────────────────────────────────
 
 function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -219,6 +231,7 @@ function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => v
     enabled: open,
   });
   const { toast } = useToast();
+  const [addProfileOpen, setAddProfileOpen] = useState(false);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -245,6 +258,9 @@ function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => v
             <Users className="h-4 w-4 text-primary" />
             All Profiles
             <Badge variant="secondary" className="ml-1">{profiles.length}</Badge>
+            <Button size="sm" variant="ghost" className="ml-auto h-6 w-6 p-0" onClick={() => setAddProfileOpen(true)} data-testid="button-add-profile">
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
           </DialogTitle>
         </DialogHeader>
         <ScrollArea className="max-h-[60vh] pr-2">
@@ -293,6 +309,90 @@ function ProfilesListDialog({ open, onClose }: { open: boolean; onClose: () => v
             </div>
           )}
         </ScrollArea>
+        <ProfileAddDialog open={addProfileOpen} onClose={() => setAddProfileOpen(false)} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ProfileAddDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ name: "", type: "person" });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/profiles", { name: form.name, type: form.type, fields: {}, tags: [], notes: "" });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Profile created" });
+      onClose();
+      setForm({ name: "", type: "person" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to create profile", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-add-profile">
+        <DialogHeader><DialogTitle>Add Profile</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Name</Label><Input value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} placeholder="e.g. Mom, Max, Netflix" required data-testid="input-add-profile-name" /></div>
+          <div className="space-y-1"><Label>Type</Label>
+            <Select value={form.type} onValueChange={v => setForm(f => ({...f, type: v}))}>
+              <SelectTrigger data-testid="select-add-profile-type"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["person","pet","vehicle","account","property","subscription","medical","loan","investment","asset"].map(v => <SelectItem key={v} value={v}>{v.charAt(0).toUpperCase()+v.slice(1)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TrackerAddDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ name: "", category: "health", unit: "" });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/trackers", { name: form.name, category: form.category, fields: [{ name: form.unit || "value", type: "number" }], tags: [], entries: [] });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Tracker created" });
+      onClose();
+      setForm({ name: "", category: "health", unit: "" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to create tracker", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-add-tracker">
+        <DialogHeader><DialogTitle>Add Tracker</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Name</Label><Input value={form.name} onChange={e => setForm((f: any) => ({...f, name: e.target.value}))} placeholder="e.g. Weight, Blood Pressure" required data-testid="input-add-tracker-name" /></div>
+          <div className="space-y-1"><Label>Category</Label>
+            <Select value={form.category} onValueChange={v => setForm((f: any) => ({...f, category: v}))}>
+              <SelectTrigger data-testid="select-add-tracker-category"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["health","fitness","nutrition","sleep","finance","custom"].map(v => <SelectItem key={v} value={v}>{v.charAt(0).toUpperCase()+v.slice(1)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1"><Label>Unit</Label><Input value={form.unit} onChange={e => setForm((f: any) => ({...f, unit: e.target.value}))} placeholder="e.g. kg, bpm, hours" data-testid="input-add-tracker-unit" /></div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -305,6 +405,7 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
     enabled: open,
   });
   const { toast } = useToast();
+  const [addTrackerOpen, setAddTrackerOpen] = useState(false);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -325,6 +426,9 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
             <BarChart3 className="h-4 w-4 text-primary" />
             All Trackers
             <Badge variant="secondary" className="ml-1">{trackers.length}</Badge>
+            <Button size="sm" variant="ghost" className="ml-auto h-6 w-6 p-0" onClick={() => setAddTrackerOpen(true)} data-testid="button-add-tracker">
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
           </DialogTitle>
         </DialogHeader>
         <ScrollArea className="max-h-[60vh] pr-2">
@@ -364,6 +468,7 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
             </div>
           )}
         </ScrollArea>
+        <TrackerAddDialog open={addTrackerOpen} onClose={() => setAddTrackerOpen(false)} />
       </DialogContent>
     </Dialog>
   );
@@ -413,6 +518,7 @@ function TasksListDialog({ open, onClose }: { open: boolean; onClose: () => void
               All Tasks
               <Badge variant="secondary" className="ml-1">{tasks.length}</Badge>
               <span className="text-xs text-muted-foreground font-normal ml-1">{active.length} active</span>
+              <ViewFullPageLink onClose={onClose} href="/dashboard/tasks" />
             </DialogTitle>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh] pr-2">
@@ -512,6 +618,7 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
     enabled: open,
   });
   const { toast } = useToast();
+  const [editExpense, setEditExpense] = useState<any>(null);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -536,6 +643,7 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
             All Expenses
             <Badge variant="secondary" className="ml-1">{expenses.length}</Badge>
             <span className="text-xs text-muted-foreground font-normal ml-1">${total.toFixed(2)} total</span>
+            <ViewFullPageLink onClose={onClose} href="/dashboard/finance" />
           </DialogTitle>
         </DialogHeader>
         <ScrollArea className="max-h-[60vh] pr-2">
@@ -567,6 +675,14 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
                   </div>
                   <Button
                     size="sm" variant="ghost"
+                    className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground shrink-0"
+                    onClick={() => setEditExpense(e)}
+                    data-testid={`button-edit-expense-${e.id}`}
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    size="sm" variant="ghost"
                     className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
                     onClick={() => deleteMutation.mutate(e.id)}
                     data-testid={`button-delete-expense-${e.id}`}
@@ -579,6 +695,60 @@ function SpendingListDialog({ open, onClose }: { open: boolean; onClose: () => v
           )}
         </ScrollArea>
       </DialogContent>
+      {editExpense && <ExpenseEditDialog open={!!editExpense} onClose={() => setEditExpense(null)} expense={editExpense} />}
+    </Dialog>
+  );
+}
+
+type ExpenseFormData = { amount: string; description: string; category: string; vendor: string };
+
+function ExpenseEditDialog({ open, onClose, expense }: { open: boolean; onClose: () => void; expense: any }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState<ExpenseFormData>({
+    amount: expense?.amount?.toString() ?? "",
+    description: expense?.description ?? "",
+    category: expense?.category ?? "general",
+    vendor: expense?.vendor ?? "",
+  });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/expenses/${expense.id}`, {
+        amount: parseFloat(form.amount), description: form.description, category: form.category, vendor: form.vendor,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Expense updated" });
+      onClose();
+    },
+    onError: () => toast({ title: "Error", description: "Failed to update", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-edit-expense">
+        <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><Label>Amount</Label><Input type="number" step="0.01" value={form.amount} onChange={e => setForm((f: any) => ({...f, amount: e.target.value}))} data-testid="input-edit-expense-amount" /></div>
+            <div className="space-y-1"><Label>Category</Label>
+              <Select value={form.category} onValueChange={v => setForm((f: any) => ({...f, category: v}))}>
+                <SelectTrigger data-testid="select-edit-expense-cat"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["food","transport","entertainment","utilities","housing","health","shopping","general"].map(c => <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase()+c.slice(1)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-1"><Label>Description</Label><Input value={form.description} onChange={e => setForm((f: any) => ({...f, description: e.target.value}))} data-testid="input-edit-expense-desc" /></div>
+          <div className="space-y-1"><Label>Vendor</Label><Input value={form.vendor} onChange={e => setForm((f: any) => ({...f, vendor: e.target.value}))} data-testid="input-edit-expense-vendor" /></div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
     </Dialog>
   );
 }
@@ -590,6 +760,8 @@ function HabitsListDialog({ open, onClose }: { open: boolean; onClose: () => voi
     enabled: open,
   });
   const { toast } = useToast();
+  const [editHabit, setEditHabit] = useState<any>(null);
+  const [addHabitOpen, setAddHabitOpen] = useState(false);
 
   const checkinMutation = useMutation({
     mutationFn: async (habit: Habit) => {
@@ -623,6 +795,8 @@ function HabitsListDialog({ open, onClose }: { open: boolean; onClose: () => voi
             <Flame className="h-4 w-4 text-orange-500" />
             All Habits
             <Badge variant="secondary" className="ml-1">{habits.length}</Badge>
+            <ViewFullPageLink onClose={onClose} href="/dashboard/habits" />
+            <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => setAddHabitOpen(true)} data-testid="button-add-habit"><Plus className="h-3 w-3 mr-0.5" />Add</Button>
           </DialogTitle>
         </DialogHeader>
         <ScrollArea className="max-h-[60vh] pr-2">
@@ -683,8 +857,17 @@ function HabitsListDialog({ open, onClose }: { open: boolean; onClose: () => voi
                     </Button>
                     <Button
                       size="sm" variant="ghost"
+                      className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground shrink-0"
+                      onClick={() => setEditHabit(h)}
+                      data-testid={`button-edit-habit-${h.id}`}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="sm" variant="ghost"
                       className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
                       onClick={() => deleteMutation.mutate(h.id)}
+                      data-testid={`button-delete-habit-${h.id}`}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
@@ -694,6 +877,89 @@ function HabitsListDialog({ open, onClose }: { open: boolean; onClose: () => voi
             </div>
           )}
         </ScrollArea>
+      </DialogContent>
+      {editHabit && <HabitEditDialog open={!!editHabit} onClose={() => setEditHabit(null)} habit={editHabit} />}
+      {addHabitOpen && <HabitAddDialog open={addHabitOpen} onClose={() => setAddHabitOpen(false)} />}
+    </Dialog>
+  );
+}
+
+function HabitAddDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ name: "", frequency: "daily" });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/habits", { name: form.name, frequency: form.frequency });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Habit created" });
+      onClose();
+      setForm({ name: "", frequency: "daily" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to create habit", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-add-habit">
+        <DialogHeader><DialogTitle>Add Habit</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Name</Label><Input value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} placeholder="e.g. Morning Run, Read 30min" required data-testid="input-add-habit-name" /></div>
+          <div className="space-y-1"><Label>Frequency</Label>
+            <Select value={form.frequency} onValueChange={v => setForm(f => ({...f, frequency: v}))}>
+              <SelectTrigger data-testid="select-add-habit-freq"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["daily","weekly","custom"].map(v => <SelectItem key={v} value={v}>{v.charAt(0).toUpperCase()+v.slice(1)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function HabitEditDialog({ open, onClose, habit }: { open: boolean; onClose: () => void; habit: any }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ name: habit?.name ?? "", frequency: habit?.frequency ?? "daily" });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/habits/${habit.id}`, { name: form.name, frequency: form.frequency });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Habit updated" });
+      onClose();
+    },
+    onError: () => toast({ title: "Error", description: "Failed to update", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-edit-habit">
+        <DialogHeader><DialogTitle>Edit Habit</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Name</Label><Input value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} required data-testid="input-edit-habit-name" /></div>
+          <div className="space-y-1"><Label>Frequency</Label>
+            <Select value={form.frequency} onValueChange={v => setForm(f => ({...f, frequency: v}))}>
+              <SelectTrigger data-testid="select-edit-habit-freq"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["daily","weekly","custom"].map(v => <SelectItem key={v} value={v}>{v.charAt(0).toUpperCase()+v.slice(1)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -707,6 +973,7 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
   });
   const { toast } = useToast();
   const [payOb, setPayOb] = useState<Obligation | null>(null);
+  const [editOb, setEditOb] = useState<any>(null);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -743,6 +1010,7 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
               Bills & Obligations
               <Badge variant="secondary" className="ml-1">{obligations.length}</Badge>
               <span className="text-xs text-muted-foreground font-normal ml-1">${monthlyTotal.toFixed(0)}/mo</span>
+              <ViewFullPageLink onClose={onClose} href="/dashboard/obligations" />
             </DialogTitle>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh] pr-2">
@@ -786,6 +1054,14 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
                       </Button>
                       <Button
                         size="sm" variant="ghost"
+                        className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground shrink-0"
+                        onClick={() => setEditOb(ob)}
+                        data-testid={`button-edit-obligation-${ob.id}`}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        size="sm" variant="ghost"
                         className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
                         onClick={() => deleteMutation.mutate(ob.id)}
                         data-testid={`button-delete-obligation-${ob.id}`}
@@ -801,7 +1077,75 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
         </DialogContent>
       </Dialog>
       {payOb && <PayObligationDialog open={!!payOb} onClose={() => setPayOb(null)} obligation={payOb} />}
+      {editOb && <ObligationEditDialog open={!!editOb} onClose={() => setEditOb(null)} obligation={editOb} />}
     </>
+  );
+}
+
+function ObligationEditDialog({ open, onClose, obligation }: { open: boolean; onClose: () => void; obligation: any }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    name: obligation?.name ?? "", amount: obligation?.amount?.toString() ?? "",
+    frequency: obligation?.frequency ?? "monthly", category: obligation?.category ?? "general",
+    nextDueDate: obligation?.nextDueDate?.slice(0, 10) ?? "", autopay: obligation?.autopay ?? false,
+    notes: obligation?.notes ?? "",
+  });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/obligations/${obligation.id}`, {
+        name: form.name, amount: parseFloat(form.amount), frequency: form.frequency,
+        category: form.category, nextDueDate: form.nextDueDate, autopay: form.autopay, notes: form.notes,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Obligation updated" });
+      onClose();
+    },
+    onError: () => toast({ title: "Error", description: "Failed to update", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-edit-obligation">
+        <DialogHeader><DialogTitle>Edit Obligation</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Name</Label><Input value={form.name} onChange={e => setForm((f: any) => ({...f, name: e.target.value}))} required data-testid="input-edit-ob-name" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><Label>Amount ($)</Label><Input type="number" step="0.01" value={form.amount} onChange={e => setForm((f: any) => ({...f, amount: e.target.value}))} required data-testid="input-edit-ob-amount" /></div>
+            <div className="space-y-1"><Label>Frequency</Label>
+              <Select value={form.frequency} onValueChange={v => setForm((f: any) => ({...f, frequency: v}))}>
+                <SelectTrigger data-testid="select-edit-ob-freq"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["weekly","biweekly","monthly","quarterly","yearly"].map(v => <SelectItem key={v} value={v}>{v.charAt(0).toUpperCase()+v.slice(1)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><Label>Category</Label>
+              <Select value={form.category} onValueChange={v => setForm((f: any) => ({...f, category: v}))}>
+                <SelectTrigger data-testid="select-edit-ob-cat"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["housing","loan","insurance","health","investment","subscription","utilities","general"].map(v => <SelectItem key={v} value={v}>{v.charAt(0).toUpperCase()+v.slice(1)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1"><Label>Due Date</Label><Input type="date" value={form.nextDueDate} onChange={e => setForm((f: any) => ({...f, nextDueDate: e.target.value}))} data-testid="input-edit-ob-due" /></div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch checked={form.autopay} onCheckedChange={v => setForm((f: any) => ({...f, autopay: v}))} data-testid="switch-edit-ob-autopay" />
+            <Label>Autopay</Label>
+          </div>
+          <div className="space-y-1"><Label>Notes</Label><Textarea value={form.notes} onChange={e => setForm((f: any) => ({...f, notes: e.target.value}))} rows={2} data-testid="input-edit-ob-notes" /></div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -812,6 +1156,7 @@ function JournalListDialog({ open, onClose }: { open: boolean; onClose: () => vo
     enabled: open,
   });
   const { toast } = useToast();
+  const [editEntry, setEditEntry] = useState<any>(null);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -832,6 +1177,7 @@ function JournalListDialog({ open, onClose }: { open: boolean; onClose: () => vo
             <BookHeart className="h-4 w-4 text-primary" />
             Journal Entries
             <Badge variant="secondary" className="ml-1">{entries.length}</Badge>
+            <ViewFullPageLink onClose={onClose} href="/dashboard/journal" />
           </DialogTitle>
         </DialogHeader>
         <ScrollArea className="max-h-[60vh] pr-2">
@@ -869,8 +1215,17 @@ function JournalListDialog({ open, onClose }: { open: boolean; onClose: () => vo
                     </div>
                     <Button
                       size="sm" variant="ghost"
+                      className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground shrink-0"
+                      onClick={() => setEditEntry(entry)}
+                      data-testid={`button-edit-journal-${entry.id}`}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="sm" variant="ghost"
                       className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
                       onClick={() => deleteMutation.mutate(entry.id)}
+                      data-testid={`button-delete-journal-${entry.id}`}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
@@ -880,6 +1235,58 @@ function JournalListDialog({ open, onClose }: { open: boolean; onClose: () => vo
             </div>
           )}
         </ScrollArea>
+      </DialogContent>
+      {editEntry && <JournalEditDialog open={!!editEntry} onClose={() => setEditEntry(null)} entry={editEntry} />}
+    </Dialog>
+  );
+}
+
+function JournalEditDialog({ open, onClose, entry }: { open: boolean; onClose: () => void; entry: any }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    content: entry?.content ?? "", mood: entry?.mood ?? "neutral",
+    tags: (entry?.tags || []).join(", "), energy: entry?.energy?.toString() ?? "",
+  });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/journal/${entry.id}`, {
+        content: form.content, mood: form.mood,
+        tags: form.tags.split(",").map((t: string) => t.trim()).filter(Boolean),
+        energy: form.energy ? parseInt(form.energy) : undefined,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Journal entry updated" });
+      onClose();
+    },
+    onError: () => toast({ title: "Error", description: "Failed to update", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-edit-journal">
+        <DialogHeader><DialogTitle>Edit Journal Entry</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Mood</Label>
+            <Select value={form.mood} onValueChange={v => setForm(f => ({...f, mood: v}))}>
+              <SelectTrigger data-testid="select-edit-journal-mood"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["great","good","neutral","bad","terrible"].map(v => <SelectItem key={v} value={v}>{v.charAt(0).toUpperCase()+v.slice(1)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1"><Label>Content</Label><Textarea value={form.content} onChange={e => setForm(f => ({...f, content: e.target.value}))} rows={4} data-testid="input-edit-journal-content" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><Label>Energy (1-5)</Label><Input type="number" min="1" max="5" value={form.energy} onChange={e => setForm(f => ({...f, energy: e.target.value}))} data-testid="input-edit-journal-energy" /></div>
+            <div className="space-y-1"><Label>Tags (comma-separated)</Label><Input value={form.tags} onChange={e => setForm(f => ({...f, tags: e.target.value}))} data-testid="input-edit-journal-tags" /></div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -892,6 +1299,8 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
     enabled: open,
   });
   const { toast } = useToast();
+  const [editArtifact, setEditArtifact] = useState<any>(null);
+  const [addArtifactOpen, setAddArtifactOpen] = useState(false);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -912,6 +1321,8 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
             <CheckSquare className="h-4 w-4 text-primary" />
             Artifacts & Notes
             <Badge variant="secondary" className="ml-1">{artifacts.length}</Badge>
+            <ViewFullPageLink onClose={onClose} href="/dashboard/artifacts" />
+            <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => setAddArtifactOpen(true)} data-testid="button-add-artifact"><Plus className="h-3 w-3 mr-0.5" />Add</Button>
           </DialogTitle>
         </DialogHeader>
         <ScrollArea className="max-h-[60vh] pr-2">
@@ -947,6 +1358,14 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
                   <span className="text-[10px] text-muted-foreground shrink-0">{fmtDate(a.createdAt)}</span>
                   <Button
                     size="sm" variant="ghost"
+                    className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground shrink-0"
+                    onClick={() => setEditArtifact(a)}
+                    data-testid={`button-edit-artifact-${a.id}`}
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    size="sm" variant="ghost"
                     className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
                     onClick={() => deleteMutation.mutate(a.id)}
                     data-testid={`button-delete-artifact-${a.id}`}
@@ -958,6 +1377,101 @@ function ArtifactsListDialog({ open, onClose }: { open: boolean; onClose: () => 
             </div>
           )}
         </ScrollArea>
+      </DialogContent>
+      {editArtifact && <ArtifactEditDialog open={!!editArtifact} onClose={() => setEditArtifact(null)} artifact={editArtifact} />}
+      {addArtifactOpen && <ArtifactAddDialog open={addArtifactOpen} onClose={() => setAddArtifactOpen(false)} />}
+    </Dialog>
+  );
+}
+
+function ArtifactAddDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ title: "", type: "note" as "note" | "checklist", content: "" });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/artifacts", {
+        title: form.title, type: form.type,
+        content: form.type === "note" ? form.content : "",
+        items: form.type === "checklist" ? form.content.split("\n").filter(Boolean).map(t => ({ text: t.trim(), checked: false })) : [],
+        tags: [], pinned: false,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      toast({ title: "Artifact created" });
+      onClose();
+      setForm({ title: "", type: "note", content: "" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to create", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-add-artifact">
+        <DialogHeader><DialogTitle>Add Artifact</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Title</Label><Input value={form.title} onChange={e => setForm(f => ({...f, title: e.target.value}))} required data-testid="input-add-artifact-title" /></div>
+          <div className="space-y-1"><Label>Type</Label>
+            <Select value={form.type} onValueChange={v => setForm(f => ({...f, type: v as any}))}>
+              <SelectTrigger data-testid="select-add-artifact-type"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="note">Note</SelectItem>
+                <SelectItem value="checklist">Checklist</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1"><Label>{form.type === "checklist" ? "Items (one per line)" : "Content"}</Label><Textarea value={form.content} onChange={e => setForm(f => ({...f, content: e.target.value}))} rows={4} data-testid="input-add-artifact-content" /></div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ArtifactEditDialog({ open, onClose, artifact }: { open: boolean; onClose: () => void; artifact: any }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    title: artifact?.title ?? "",
+    content: artifact?.type === "checklist"
+      ? (artifact?.items || []).map((i: any) => i.text).join("\n")
+      : artifact?.content ?? "",
+  });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const payload: any = { title: form.title };
+      if (artifact.type === "checklist") {
+        payload.items = form.content.split("\n").filter(Boolean).map((t: string, i: number) => ({
+          text: t.trim(),
+          checked: artifact.items[i]?.checked ?? false,
+        }));
+      } else {
+        payload.content = form.content;
+      }
+      const res = await apiRequest("PATCH", `/api/artifacts/${artifact.id}`, payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      toast({ title: "Artifact updated" });
+      onClose();
+    },
+    onError: () => toast({ title: "Error", description: "Failed to update", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-edit-artifact">
+        <DialogHeader><DialogTitle>Edit Artifact</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Title</Label><Input value={form.title} onChange={e => setForm(f => ({...f, title: e.target.value}))} required data-testid="input-edit-artifact-title" /></div>
+          <div className="space-y-1"><Label>{artifact.type === "checklist" ? "Items (one per line)" : "Content"}</Label><Textarea value={form.content} onChange={e => setForm(f => ({...f, content: e.target.value}))} rows={4} data-testid="input-edit-artifact-content" /></div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -1637,7 +2151,7 @@ function TaskDialog({
             <Input
               id="task-title"
               value={form.title}
-              onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+              onChange={e => setForm((f: any) => ({ ...f, title: e.target.value }))}
               placeholder="Task title"
               required
               data-testid="input-task-title"
@@ -1648,7 +2162,7 @@ function TaskDialog({
             <Textarea
               id="task-description"
               value={form.description}
-              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+              onChange={e => setForm((f: any) => ({ ...f, description: e.target.value }))}
               placeholder="Optional description"
               rows={2}
               data-testid="input-task-description"
@@ -1659,7 +2173,7 @@ function TaskDialog({
               <Label htmlFor="task-priority">Priority</Label>
               <Select
                 value={form.priority}
-                onValueChange={v => setForm(f => ({ ...f, priority: v as "low" | "medium" | "high" }))}
+                onValueChange={v => setForm((f: any) => ({ ...f, priority: v as "low" | "medium" | "high" }))}
               >
                 <SelectTrigger id="task-priority" data-testid="select-task-priority">
                   <SelectValue />
@@ -1677,7 +2191,7 @@ function TaskDialog({
                 id="task-duedate"
                 type="date"
                 value={form.dueDate}
-                onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
+                onChange={e => setForm((f: any) => ({ ...f, dueDate: e.target.value }))}
                 data-testid="input-task-duedate"
               />
             </div>
@@ -2049,6 +2563,15 @@ function ProfilesSnapshot() {
   );
 }
 
+type ObligationFormData = {
+  name: string;
+  amount: string;
+  frequency: string;
+  category: string;
+  nextDueDate: string;
+  autopay: boolean;
+};
+
 function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const [form, setForm] = useState<ObligationFormData>({
@@ -2101,7 +2624,7 @@ function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => voi
             <Input
               id="ob-name"
               value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              onChange={e => setForm((f: any) => ({ ...f, name: e.target.value }))}
               placeholder="e.g. Rent, Netflix, Car Insurance"
               required
               data-testid="input-obligation-name"
@@ -2116,7 +2639,7 @@ function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => voi
                 step="0.01"
                 min="0"
                 value={form.amount}
-                onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+                onChange={e => setForm((f: any) => ({ ...f, amount: e.target.value }))}
                 placeholder="0.00"
                 required
                 data-testid="input-obligation-amount"
@@ -2126,7 +2649,7 @@ function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => voi
               <Label htmlFor="ob-frequency">Frequency</Label>
               <Select
                 value={form.frequency}
-                onValueChange={v => setForm(f => ({ ...f, frequency: v }))}
+                onValueChange={v => setForm((f: any) => ({ ...f, frequency: v }))}
               >
                 <SelectTrigger id="ob-frequency" data-testid="select-obligation-frequency">
                   <SelectValue />
@@ -2147,7 +2670,7 @@ function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => voi
               <Label htmlFor="ob-category">Category</Label>
               <Select
                 value={form.category}
-                onValueChange={v => setForm(f => ({ ...f, category: v }))}
+                onValueChange={v => setForm((f: any) => ({ ...f, category: v }))}
               >
                 <SelectTrigger id="ob-category" data-testid="select-obligation-category">
                   <SelectValue />
@@ -2170,7 +2693,7 @@ function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => voi
                 id="ob-duedate"
                 type="date"
                 value={form.nextDueDate}
-                onChange={e => setForm(f => ({ ...f, nextDueDate: e.target.value }))}
+                onChange={e => setForm((f: any) => ({ ...f, nextDueDate: e.target.value }))}
                 required
                 data-testid="input-obligation-duedate"
               />
@@ -2180,7 +2703,7 @@ function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => voi
             <Switch
               id="ob-autopay"
               checked={form.autopay}
-              onCheckedChange={v => setForm(f => ({ ...f, autopay: v }))}
+              onCheckedChange={v => setForm((f: any) => ({ ...f, autopay: v }))}
               data-testid="switch-obligation-autopay"
             />
             <Label htmlFor="ob-autopay">Autopay enabled</Label>
@@ -2260,7 +2783,7 @@ function PayObligationDialog({
               step="0.01"
               min="0"
               value={form.amount}
-              onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+              onChange={e => setForm((f: any) => ({ ...f, amount: e.target.value }))}
               required
               data-testid="input-pay-amount"
             />
@@ -2270,7 +2793,7 @@ function PayObligationDialog({
             <Input
               id="pay-method"
               value={form.method}
-              onChange={e => setForm(f => ({ ...f, method: e.target.value }))}
+              onChange={e => setForm((f: any) => ({ ...f, method: e.target.value }))}
               placeholder="e.g. Chase Checking, Venmo"
               data-testid="input-pay-method"
             />
@@ -2280,7 +2803,7 @@ function PayObligationDialog({
             <Input
               id="pay-confirmation"
               value={form.confirmationNumber}
-              onChange={e => setForm(f => ({ ...f, confirmationNumber: e.target.value }))}
+              onChange={e => setForm((f: any) => ({ ...f, confirmationNumber: e.target.value }))}
               placeholder="Optional confirmation number"
               data-testid="input-pay-confirmation"
             />
@@ -2521,7 +3044,7 @@ function JournalDialog({ open, onClose }: { open: boolean; onClose: () => void }
                     key={m}
                     type="button"
                     className={`flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition-all flex-1 ${selected ? "border-primary" : "border-transparent hover:border-border"}`}
-                    onClick={() => setForm(f => ({ ...f, mood: m }))}
+                    onClick={() => setForm((f: any) => ({ ...f, mood: m }))}
                     data-testid={`mood-btn-${m}`}
                     style={selected ? { borderColor: cfg.color } : {}}
                   >
@@ -2540,7 +3063,7 @@ function JournalDialog({ open, onClose }: { open: boolean; onClose: () => void }
             <Textarea
               id="journal-content"
               value={form.content}
-              onChange={e => setForm(f => ({ ...f, content: e.target.value }))}
+              onChange={e => setForm((f: any) => ({ ...f, content: e.target.value }))}
               placeholder="Write about your day\u2026"
               rows={3}
               data-testid="input-journal-content"
@@ -2553,7 +3076,7 @@ function JournalDialog({ open, onClose }: { open: boolean; onClose: () => void }
               <Input
                 id="journal-tags"
                 value={form.tags}
-                onChange={e => setForm(f => ({ ...f, tags: e.target.value }))}
+                onChange={e => setForm((f: any) => ({ ...f, tags: e.target.value }))}
                 placeholder="work, health"
                 data-testid="input-journal-tags"
               />
@@ -2562,7 +3085,7 @@ function JournalDialog({ open, onClose }: { open: boolean; onClose: () => void }
               <Label htmlFor="journal-energy">Energy (1-5)</Label>
               <Select
                 value={form.energy}
-                onValueChange={v => setForm(f => ({ ...f, energy: v }))}
+                onValueChange={v => setForm((f: any) => ({ ...f, energy: v }))}
               >
                 <SelectTrigger id="journal-energy" data-testid="select-journal-energy">
                   <SelectValue />
@@ -2908,9 +3431,52 @@ const GOAL_TYPE_COLORS: Record<string, string> = {
   custom: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
 };
 
+function GoalEditDialog({ open, onClose, goal }: { open: boolean; onClose: () => void; goal: any }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    title: goal?.title ?? "", target: goal?.target?.toString() ?? "",
+    deadline: goal?.deadline?.slice(0, 10) ?? "", current: goal?.current?.toString() ?? "0",
+  });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/goals/${goal.id}`, {
+        title: form.title, target: parseFloat(form.target),
+        deadline: form.deadline || undefined, current: parseFloat(form.current) || 0,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      toast({ title: "Goal updated" });
+      onClose();
+    },
+    onError: () => toast({ title: "Error", description: "Failed to update", variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent data-testid="dialog-edit-goal">
+        <DialogHeader><DialogTitle>Edit Goal</DialogTitle></DialogHeader>
+        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+          <div className="space-y-1"><Label>Title</Label><Input value={form.title} onChange={e => setForm(f => ({...f, title: e.target.value}))} required data-testid="input-edit-goal-title" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><Label>Target</Label><Input type="number" step="0.1" value={form.target} onChange={e => setForm(f => ({...f, target: e.target.value}))} required data-testid="input-edit-goal-target" /></div>
+            <div className="space-y-1"><Label>Current</Label><Input type="number" step="0.1" value={form.current} onChange={e => setForm(f => ({...f, current: e.target.value}))} data-testid="input-edit-goal-current" /></div>
+          </div>
+          <div className="space-y-1"><Label>Deadline</Label><Input type="date" value={form.deadline} onChange={e => setForm(f => ({...f, deadline: e.target.value}))} data-testid="input-edit-goal-deadline" /></div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function GoalsSection() {
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
+  const [editGoal, setEditGoal] = useState<any>(null);
   const [form, setForm] = useState({
     title: "",
     type: "custom" as Goal["type"],
@@ -3069,6 +3635,9 @@ function GoalsSection() {
                         <Check className="h-3 w-3 text-green-500" />
                       </Button>
                     )}
+                    <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => setEditGoal(goal)} data-testid={`goal-edit-${goal.id}`}>
+                      <Pencil className="h-3 w-3 text-muted-foreground" />
+                    </Button>
                     <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => deleteMutation.mutate(goal.id)} data-testid={`goal-delete-${goal.id}`}>
                       <Trash2 className="h-3 w-3 text-muted-foreground" />
                     </Button>
@@ -3148,7 +3717,7 @@ function GoalsSection() {
               <Label className="text-xs">Title</Label>
               <Input
                 value={form.title}
-                onChange={(e) => setForm(f => ({ ...f, title: e.target.value }))}
+                onChange={(e) => setForm((f: any) => ({ ...f, title: e.target.value }))}
                 placeholder="e.g., Lose 10 lbs"
                 className="text-xs h-8 mt-1"
                 data-testid="input-goal-title"
@@ -3156,7 +3725,7 @@ function GoalsSection() {
             </div>
             <div>
               <Label className="text-xs">Type</Label>
-              <Select value={form.type} onValueChange={(v) => setForm(f => ({ ...f, type: v as Goal["type"] }))}>
+              <Select value={form.type} onValueChange={(v) => setForm((f: any) => ({ ...f, type: v as Goal["type"] }))}>
                 <SelectTrigger className="text-xs h-8 mt-1" data-testid="select-goal-type">
                   <SelectValue />
                 </SelectTrigger>
@@ -3173,7 +3742,7 @@ function GoalsSection() {
                 <Input
                   type="number"
                   value={form.target}
-                  onChange={(e) => setForm(f => ({ ...f, target: e.target.value }))}
+                  onChange={(e) => setForm((f: any) => ({ ...f, target: e.target.value }))}
                   placeholder="e.g., 175"
                   className="text-xs h-8 mt-1"
                   data-testid="input-goal-target"
@@ -3183,7 +3752,7 @@ function GoalsSection() {
                 <Label className="text-xs">Unit</Label>
                 <Input
                   value={form.unit}
-                  onChange={(e) => setForm(f => ({ ...f, unit: e.target.value }))}
+                  onChange={(e) => setForm((f: any) => ({ ...f, unit: e.target.value }))}
                   placeholder="lbs, $, miles"
                   className="text-xs h-8 mt-1"
                   data-testid="input-goal-unit"
@@ -3196,7 +3765,7 @@ function GoalsSection() {
                 <Input
                   type="number"
                   value={form.startValue}
-                  onChange={(e) => setForm(f => ({ ...f, startValue: e.target.value }))}
+                  onChange={(e) => setForm((f: any) => ({ ...f, startValue: e.target.value }))}
                   placeholder="e.g., 185"
                   className="text-xs h-8 mt-1"
                   data-testid="input-goal-start-value"
@@ -3208,7 +3777,7 @@ function GoalsSection() {
               <Input
                 type="date"
                 value={form.deadline}
-                onChange={(e) => setForm(f => ({ ...f, deadline: e.target.value }))}
+                onChange={(e) => setForm((f: any) => ({ ...f, deadline: e.target.value }))}
                 className="text-xs h-8 mt-1"
                 data-testid="input-goal-deadline"
               />
@@ -3216,7 +3785,7 @@ function GoalsSection() {
             {showTrackerLink && (
               <div>
                 <Label className="text-xs">Link Tracker</Label>
-                <Select value={form.trackerId} onValueChange={(v) => setForm(f => ({ ...f, trackerId: v }))}>
+                <Select value={form.trackerId} onValueChange={(v) => setForm((f: any) => ({ ...f, trackerId: v }))}>
                   <SelectTrigger className="text-xs h-8 mt-1" data-testid="select-goal-tracker">
                     <SelectValue placeholder="Select tracker..." />
                   </SelectTrigger>
@@ -3231,7 +3800,7 @@ function GoalsSection() {
             {showHabitLink && (
               <div>
                 <Label className="text-xs">Link Habit</Label>
-                <Select value={form.habitId} onValueChange={(v) => setForm(f => ({ ...f, habitId: v }))}>
+                <Select value={form.habitId} onValueChange={(v) => setForm((f: any) => ({ ...f, habitId: v }))}>
                   <SelectTrigger className="text-xs h-8 mt-1" data-testid="select-goal-habit">
                     <SelectValue placeholder="Select habit..." />
                   </SelectTrigger>
@@ -3248,7 +3817,7 @@ function GoalsSection() {
                 <Label className="text-xs">Expense Category</Label>
                 <Input
                   value={form.category}
-                  onChange={(e) => setForm(f => ({ ...f, category: e.target.value }))}
+                  onChange={(e) => setForm((f: any) => ({ ...f, category: e.target.value }))}
                   placeholder="e.g., food, entertainment"
                   className="text-xs h-8 mt-1"
                   data-testid="input-goal-category"
@@ -3263,6 +3832,7 @@ function GoalsSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {editGoal && <GoalEditDialog open={!!editGoal} onClose={() => setEditGoal(null)} goal={editGoal} />}
     </CollapsibleSection>
   );
 }

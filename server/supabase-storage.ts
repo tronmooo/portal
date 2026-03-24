@@ -439,6 +439,7 @@ export class SupabaseStorage implements IStorage {
             color: def.color,
             recurrence: def.recurrence as any,
             linkedProfiles: [profileId],
+            linkedDocuments: [],
             tags: ["auto-generated"],
             source: "ai",
           });
@@ -692,6 +693,8 @@ export class SupabaseStorage implements IStorage {
           category: "personal",
           color: priorityColor,
           recurrence: "none",
+          linkedProfiles: [],
+          linkedDocuments: [],
           tags: ["auto-generated", "task"],
           source: "ai",
           description: data.description || undefined,
@@ -1201,6 +1204,8 @@ export class SupabaseStorage implements IStorage {
           category: "finance",
           color: "#BB653B",
           recurrence: recurrence as any,
+          linkedProfiles: [],
+          linkedDocuments: [],
           tags: ["auto-generated", "obligation"],
           source: "ai",
           description: data.autopay ? "Autopay enabled" : `$${data.amount} due`,
@@ -1406,6 +1411,21 @@ export class SupabaseStorage implements IStorage {
     return !error;
   }
 
+  async updateMemory(id: string, data: Partial<any>): Promise<any | undefined> {
+    const updates: Record<string, any> = {};
+    if (data.value !== undefined) updates.value = data.value;
+    if (data.category !== undefined) updates.category = data.category;
+    const { data: result, error } = await this.supabase
+      .from("memories")
+      .update(updates)
+      .eq("id", id)
+      .eq("user_id", this.userId)
+      .select()
+      .single();
+    if (error || !result) return undefined;
+    return { id: result.id, key: result.key, value: result.value, category: result.category || "general", createdAt: result.created_at };
+  }
+
   // ============================================================
   // GOALS
   // ============================================================
@@ -1565,6 +1585,28 @@ export class SupabaseStorage implements IStorage {
     if (error) throw error;
     this.logActivity("domain", `Created domain: ${data.name}`);
     return (await this.getDomain(id))!;
+  }
+
+  async updateDomain(id: string, data: Partial<any>): Promise<any | undefined> {
+    const updates: Record<string, any> = {};
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.description !== undefined) updates.description = data.description;
+    if (data.icon !== undefined) updates.icon = data.icon;
+    if (data.color !== undefined) updates.color = data.color;
+    if (data.fields !== undefined) updates.fields = data.fields;
+    const { error } = await this.supabase
+      .from("domains")
+      .update(updates)
+      .eq("id", id)
+      .eq("user_id", this.userId);
+    if (error) return undefined;
+    return await this.getDomain(id);
+  }
+
+  async deleteDomain(id: string): Promise<boolean> {
+    await this.supabase.from("domain_entries").delete().eq("domain_id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("domains").delete().eq("id", id).eq("user_id", this.userId);
+    return !error;
   }
 
   async getDomainEntries(domainId: string): Promise<DomainEntry[]> {

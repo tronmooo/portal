@@ -787,6 +787,19 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["query"],
     },
   },
+  {
+    name: "create_document",
+    description: "Create a new text document.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Document name" },
+        content: { type: "string", description: "Document content (text)" },
+        forProfile: { type: "string", description: "Name of profile to link this document to" },
+      },
+      required: ["name"],
+    },
+  },
 
   // --- Navigation ---
   {
@@ -972,6 +985,18 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "update_tracker",
+    description: "Update an existing tracker's name, category, or unit.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        trackerName: { type: "string", description: "Current name of the tracker (partial match)" },
+        changes: { type: "object", description: "Fields to update: name, category, unit" },
+      },
+      required: ["trackerName", "changes"],
+    },
+  },
+  {
     name: "delete_journal",
     description: "Delete a journal entry by date.",
     input_schema: {
@@ -983,6 +1008,18 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "update_journal",
+    description: "Update an existing journal entry's content, mood, or tags.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        date: { type: "string", description: "Date of the journal entry to update (YYYY-MM-DD)" },
+        changes: { type: "object", description: "Fields to update: content, mood, tags" },
+      },
+      required: ["date", "changes"],
+    },
+  },
+  {
     name: "delete_artifact",
     description: "Delete an artifact (note, checklist, etc.) by title.",
     input_schema: {
@@ -991,6 +1028,18 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         title: { type: "string", description: "Artifact title (partial match)" },
       },
       required: ["title"],
+    },
+  },
+  {
+    name: "update_artifact",
+    description: "Update an existing artifact's title or content.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Current title of the artifact (partial match)" },
+        changes: { type: "object", description: "Fields to update: title, content, items (for checklists)" },
+      },
+      required: ["title", "changes"],
     },
   },
   {
@@ -1059,6 +1108,42 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         },
       },
       required: [],
+    },
+  },
+  {
+    name: "create_domain",
+    description: "Create a new custom domain/category for tracking custom data.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Domain name" },
+        description: { type: "string", description: "Domain description" },
+        fields: { type: "array", items: { type: "object" }, description: "Field definitions: [{name, type}]" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "update_domain",
+    description: "Update an existing domain's name or description.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Current name of the domain (partial match)" },
+        changes: { type: "object", description: "Fields to update: name, description" },
+      },
+      required: ["name", "changes"],
+    },
+  },
+  {
+    name: "delete_domain",
+    description: "Delete a domain by name.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Name of the domain to delete (partial match)" },
+      },
+      required: ["name"],
     },
   },
 ];
@@ -1353,9 +1438,14 @@ async function executeTool(name: string, input: any): Promise<any> {
         date: input.date,
         time: input.time,
         endTime: input.endTime,
+        allDay: input.allDay || false,
         location: input.location,
         description: input.description,
         recurrence: input.recurrence || "none",
+        category: input.category || "personal",
+        source: "chat",
+        linkedProfiles: [],
+        linkedDocuments: [],
         tags: [],
       });
       // Auto-link: scan title and description for profile names + explicit forProfile
@@ -1439,6 +1529,21 @@ async function executeTool(name: string, input: any): Promise<any> {
       });
       if (!found) return null;
       return storage.getDocument(found.id);
+    }
+
+    case "create_document": {
+      const doc = await storage.createDocument({
+        name: input.name,
+        mimeType: "text/plain",
+        fileData: Buffer.from(input.content || "").toString("base64"),
+        size: input.content?.length || 0,
+      });
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const profile = profiles.find((p: any) => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+        if (profile) await storage.linkProfileTo(profile.id, "document", doc.id);
+      }
+      return doc;
     }
 
     case "navigate":
@@ -1585,6 +1690,14 @@ async function executeTool(name: string, input: any): Promise<any> {
       return { deleted: true, name: match.name, id: match.id };
     }
 
+    case "update_tracker": {
+      const trackers = await storage.getTrackers();
+      const tracker = trackers.find(t => t.name.toLowerCase().includes(input.trackerName.toLowerCase()));
+      if (!tracker) return { error: `No tracker found matching "${input.trackerName}"` };
+      const updated = await storage.updateTracker(tracker.id, input.changes);
+      return { updated: true, tracker: updated };
+    }
+
     case "delete_journal": {
       const entries = await storage.getJournalEntries();
       const match = entries.find(e => e.date === input.date);
@@ -1593,12 +1706,28 @@ async function executeTool(name: string, input: any): Promise<any> {
       return { deleted: true, date: match.date, id: match.id };
     }
 
+    case "update_journal": {
+      const entries = await storage.getJournalEntries();
+      const entry = entries.find(e => e.date === input.date);
+      if (!entry) return { error: `No journal entry found for date "${input.date}"` };
+      const updated = await storage.updateJournalEntry(entry.id, input.changes);
+      return { updated: true, journal: updated };
+    }
+
     case "delete_artifact": {
       const artifacts = await storage.getArtifacts();
       const match = artifacts.find(a => a.title.toLowerCase().includes(input.title.toLowerCase()));
       if (!match) return { error: `No artifact found matching "${input.title}"` };
       await storage.deleteArtifact(match.id);
       return { deleted: true, title: match.title, id: match.id };
+    }
+
+    case "update_artifact": {
+      const artifacts = await storage.getArtifacts();
+      const artifact = artifacts.find(a => a.title.toLowerCase().includes(input.title.toLowerCase()));
+      if (!artifact) return { error: `No artifact found matching "${input.title}"` };
+      const updated = await storage.updateArtifact(artifact.id, input.changes);
+      return { updated: true, artifact: updated };
     }
 
     case "delete_goal": {
@@ -1745,6 +1874,31 @@ async function executeTool(name: string, input: any): Promise<any> {
       } catch (err: any) {
         return { error: "Google Calendar sync failed. Make sure the external-tool CLI is configured.", details: err.message };
       }
+    }
+
+    case "create_domain": {
+      const domain = await storage.createDomain({
+        name: input.name,
+        description: input.description || "",
+        fields: input.fields || [],
+      });
+      return domain;
+    }
+
+    case "update_domain": {
+      const domains = await storage.getDomains();
+      const domain = domains.find((d: any) => d.name.toLowerCase().includes(input.name.toLowerCase()));
+      if (!domain) return { error: `No domain found matching "${input.name}"` };
+      const updated = await storage.updateDomain(domain.id, input.changes);
+      return { updated: true, domain: updated };
+    }
+
+    case "delete_domain": {
+      const domains = await storage.getDomains();
+      const domain = domains.find((d: any) => d.name.toLowerCase().includes(input.name.toLowerCase()));
+      if (!domain) return { error: `No domain found matching "${input.name}"` };
+      await storage.deleteDomain(domain.id);
+      return { deleted: true, name: domain.name, id: domain.id };
     }
 
     default:

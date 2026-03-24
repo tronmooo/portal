@@ -468,6 +468,27 @@ export class SqliteStorage implements IStorage {
     }
   }
 
+  async unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void> {
+    const profile = await this.getProfile(profileId);
+    if (!profile) return;
+    let field: string | undefined;
+    switch (entityType) {
+      case "tracker": profile.linkedTrackers = profile.linkedTrackers.filter(id => id !== entityId); field = "linkedTrackers"; break;
+      case "expense": profile.linkedExpenses = profile.linkedExpenses.filter(id => id !== entityId); field = "linkedExpenses"; break;
+      case "task": profile.linkedTasks = profile.linkedTasks.filter(id => id !== entityId); field = "linkedTasks"; break;
+      case "event": profile.linkedEvents = profile.linkedEvents.filter(id => id !== entityId); field = "linkedEvents"; break;
+      case "document": profile.documents = profile.documents.filter(id => id !== entityId); field = "documents"; break;
+    }
+    if (field) {
+      this.db.prepare(`UPDATE profiles SET ${field}=? WHERE id=?`).run(toJSON((profile as any)[field]), profileId);
+    }
+  }
+
+  async getSelfProfile(): Promise<Profile | undefined> {
+    const r = this.db.prepare("SELECT * FROM profiles WHERE type='self' LIMIT 1").get() as any;
+    return r ? this.rowToProfile(r) : undefined;
+  }
+
   // ============================================================
   // TRACKERS
   // ============================================================
@@ -518,6 +539,22 @@ export class SqliteStorage implements IStorage {
   async deleteTracker(id: string): Promise<boolean> {
     const result = this.db.prepare("DELETE FROM trackers WHERE id=?").run(id);
     return result.changes > 0;
+  }
+
+  async migrateUnlinkedTrackersToSelf(): Promise<number> {
+    const self = await this.getSelfProfile();
+    if (!self) return 0;
+    const trackers = await this.getTrackers();
+    let count = 0;
+    for (const tracker of trackers) {
+      if (tracker.linkedProfiles.length === 0) {
+        tracker.linkedProfiles.push(self.id);
+        this.db.prepare("UPDATE trackers SET linkedProfiles=? WHERE id=?").run(toJSON(tracker.linkedProfiles), tracker.id);
+        await this.linkProfileTo(self.id, "tracker", tracker.id);
+        count++;
+      }
+    }
+    return count;
   }
 
   // ============================================================
@@ -931,6 +968,16 @@ export class SqliteStorage implements IStorage {
     return this.db.prepare("DELETE FROM memories WHERE id=?").run(id).changes > 0;
   }
 
+  async updateMemory(id: string, data: Partial<any>): Promise<any | undefined> {
+    const existing = this.db.prepare("SELECT * FROM memories WHERE id=?").get(id) as any;
+    if (!existing) return undefined;
+    const value = data.value !== undefined ? data.value : existing.value;
+    const category = data.category !== undefined ? data.category : existing.category;
+    this.db.prepare("UPDATE memories SET value=?, category=? WHERE id=?").run(value, category, id);
+    const r = this.db.prepare("SELECT * FROM memories WHERE id=?").get(id) as any;
+    return r ? this.rowToMemory(r) : undefined;
+  }
+
   // ============================================================
   // GOALS
   // ============================================================
@@ -1110,6 +1157,19 @@ export class SqliteStorage implements IStorage {
     this.db.prepare("INSERT INTO domains (id, name, slug, icon, color, description, fields, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, data.name, slug, data.icon || null, data.color || null, data.description || null, toJSON(data.fields || []), new Date().toISOString());
     this.logActivity("domain", `Created domain: ${data.name}`);
     return (await this.getDomain(id))!;
+  }
+  async updateDomain(id: string, data: Partial<any>): Promise<any | undefined> {
+    const existing = await this.getDomain(id);
+    if (!existing) return undefined;
+    const name = data.name !== undefined ? data.name : existing.name;
+    const description = data.description !== undefined ? data.description : existing.description;
+    const fields = data.fields !== undefined ? data.fields : existing.fields;
+    this.db.prepare("UPDATE domains SET name=?, description=?, fields=? WHERE id=?").run(name, description || null, toJSON(fields || []), id);
+    return await this.getDomain(id);
+  }
+  async deleteDomain(id: string): Promise<boolean> {
+    this.db.prepare("DELETE FROM domain_entries WHERE domainId=?").run(id);
+    return this.db.prepare("DELETE FROM domains WHERE id=?").run(id).changes > 0;
   }
   private async getDomain(id: string): Promise<Domain | undefined> {
     const r = this.db.prepare("SELECT * FROM domains WHERE id=?").get(id) as any;

@@ -29,6 +29,8 @@ export interface IStorage {
   updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined>;
   deleteProfile(id: string): Promise<boolean>;
   linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void>;
+  unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void>;
+  getSelfProfile(): Promise<Profile | undefined>;
 
   // Trackers
   getTrackers(): Promise<Tracker[]>;
@@ -38,6 +40,7 @@ export interface IStorage {
   logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined>;
   deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean>;
   deleteTracker(id: string): Promise<boolean>;
+  migrateUnlinkedTrackersToSelf(): Promise<number>;
 
   // Tasks
   getTasks(): Promise<Task[]>;
@@ -105,6 +108,7 @@ export interface IStorage {
   saveMemory(data: InsertMemory): Promise<MemoryItem>;
   recallMemory(query: string): Promise<MemoryItem[]>;
   deleteMemory(id: string): Promise<boolean>;
+  updateMemory(id: string, data: Partial<MemoryItem>): Promise<MemoryItem | undefined>;
 
   // Goals
   getGoals(): Promise<Goal[]>;
@@ -116,6 +120,8 @@ export interface IStorage {
   // Domains
   getDomains(): Promise<Domain[]>;
   createDomain(data: InsertDomain): Promise<Domain>;
+  updateDomain(id: string, data: Partial<Domain>): Promise<Domain | undefined>;
+  deleteDomain(id: string): Promise<boolean>;
   getDomainEntries(domainId: string): Promise<DomainEntry[]>;
   addDomainEntry(domainId: string, values: Record<string, any>, tags?: string[], notes?: string): Promise<DomainEntry | undefined>;
 
@@ -997,6 +1003,22 @@ export class MemStorage implements IStorage {
     }
   }
 
+  async unlinkProfileFrom(profileId: string, entityType: string, entityId: string) {
+    const p = this.profiles.get(profileId);
+    if (!p) return;
+    switch (entityType) {
+      case "tracker": p.linkedTrackers = p.linkedTrackers.filter(id => id !== entityId); break;
+      case "expense": p.linkedExpenses = p.linkedExpenses.filter(id => id !== entityId); break;
+      case "task": p.linkedTasks = p.linkedTasks.filter(id => id !== entityId); break;
+      case "event": p.linkedEvents = p.linkedEvents.filter(id => id !== entityId); break;
+      case "document": p.documents = p.documents.filter(id => id !== entityId); break;
+    }
+  }
+
+  async getSelfProfile(): Promise<Profile | undefined> {
+    return Array.from(this.profiles.values()).find(p => p.type === "self");
+  }
+
   // ---- Trackers ----
   async getTrackers() { return Array.from(this.trackers.values()); }
   async getTracker(id: string) { return this.trackers.get(id); }
@@ -1039,6 +1061,19 @@ export class MemStorage implements IStorage {
     return true;
   }
   async deleteTracker(id: string) { return this.trackers.delete(id); }
+  async migrateUnlinkedTrackersToSelf(): Promise<number> {
+    const self = await this.getSelfProfile();
+    if (!self) return 0;
+    let count = 0;
+    for (const tracker of this.trackers.values()) {
+      if (tracker.linkedProfiles.length === 0) {
+        tracker.linkedProfiles.push(self.id);
+        if (!self.linkedTrackers.includes(tracker.id)) self.linkedTrackers.push(tracker.id);
+        count++;
+      }
+    }
+    return count;
+  }
 
   // ---- Tasks ----
   async getTasks() { return Array.from(this.tasks.values()); }
@@ -1350,6 +1385,13 @@ export class MemStorage implements IStorage {
     this.logActivity("habit", `Checked in: ${habit.name}${value ? ` (${value})` : ""}`);
     return checkin;
   }
+  async updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined> {
+    const habit = this.habits.get(id);
+    if (!habit) return undefined;
+    const updated = { ...habit, ...data };
+    this.habits.set(id, updated);
+    return updated;
+  }
   async deleteHabit(id: string) { return this.habits.delete(id); }
 
   // ---- Obligations ----
@@ -1464,6 +1506,13 @@ export class MemStorage implements IStorage {
     );
   }
   async deleteMemory(id: string) { return this.memories.delete(id); }
+  async updateMemory(id: string, data: Partial<MemoryItem>): Promise<MemoryItem | undefined> {
+    const memory = this.memories.get(id);
+    if (!memory) return undefined;
+    const updated = { ...memory, ...data, updatedAt: new Date().toISOString() };
+    this.memories.set(id, updated);
+    return updated;
+  }
 
   // ---- Goals ----
   async getGoals(): Promise<Goal[]> { return Array.from(this.goals.values()); }
@@ -1494,6 +1543,20 @@ export class MemStorage implements IStorage {
     this.domains.set(domain.id, domain);
     this.logActivity("domain", `Created domain: ${domain.name}`);
     return domain;
+  }
+  async updateDomain(id: string, data: Partial<Domain>): Promise<Domain | undefined> {
+    const domain = this.domains.get(id);
+    if (!domain) return undefined;
+    const updated = { ...domain, ...data };
+    this.domains.set(id, updated);
+    return updated;
+  }
+  async deleteDomain(id: string): Promise<boolean> {
+    // Delete domain entries first
+    for (const [entryId, entry] of this.domainEntries) {
+      if (entry.domainId === id) this.domainEntries.delete(entryId);
+    }
+    return this.domains.delete(id);
   }
   async getDomainEntries(domainId: string): Promise<DomainEntry[]> {
     return Array.from(this.domainEntries.values()).filter(e => e.domainId === domainId);
@@ -1877,7 +1940,7 @@ function getStorage(): IStorage {
       _storageInstance = new SqliteStorage();
     }
   }
-  return _storageInstance;
+  return _storageInstance!;
 }
 
 // Proxy that lazily initializes storage on first property access
