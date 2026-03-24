@@ -273,7 +273,7 @@ Respond with JSON:
     const mediaType = mimeType.startsWith("image/") ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
 
     const response = await client.messages.create({
-      model: "claude_sonnet_4_6",
+      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
       max_tokens: 2048,
       messages: [{
         role: "user",
@@ -2250,7 +2250,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       iterations++;
 
       const response = await client.messages.create({
-        model: "claude_sonnet_4_6",
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
         max_tokens: 2048,
         system: systemPrompt,
         tools: TOOL_DEFINITIONS,
