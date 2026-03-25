@@ -283,19 +283,19 @@ export async function registerRoutes(
             await storage.createEvent({
               title: event.title || `📅 ${event.field}`,
               date: dateStr,
-              time: null,
-              endTime: null,
+              time: undefined,
+              endTime: undefined,
               description: `Auto-created from document extraction (${event.field})`,
-              location: null,
+              location: undefined,
               allDay: true,
               category: event.category || "other",
               recurrence: "none",
-              recurrenceEnd: null,
-              color: null,
+              recurrenceEnd: undefined,
+              color: undefined,
               linkedProfiles: targetProfileId ? [targetProfileId] : [],
               linkedDocuments: [extractionId],
               tags: ["document-extraction"],
-              source: "extraction",
+              source: "chat",
             });
             saved.push(`Created event: ${event.title || event.field}`);
           } catch (evErr: any) {
@@ -318,7 +318,6 @@ export async function registerRoutes(
               const fieldKeys = Object.keys(entry.values || {});
               tracker = await storage.createTracker({
                 name: humanName,
-                type: "numeric",
                 unit: entry.unit || "",
                 category: entry.category || "health",
                 fields: fieldKeys.length > 0
@@ -339,7 +338,6 @@ export async function registerRoutes(
             await storage.logEntry({
               trackerId: tracker.id,
               values: entryValues,
-              date: entry.date || new Date().toISOString().slice(0, 10),
               notes: `From document extraction`,
             });
             saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);

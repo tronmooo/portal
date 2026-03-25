@@ -94,7 +94,7 @@ export function registerAuthRoutes(app: any) {
     });
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: "Authentication failed" });
     }
 
     // Sign in immediately to get a session
@@ -104,7 +104,7 @@ export function registerAuthRoutes(app: any) {
     });
 
     if (signInError) {
-      return res.status(400).json({ error: signInError.message });
+      return res.status(400).json({ error: "Invalid email or password" });
     }
 
     // Seed data for the new user
@@ -141,7 +141,7 @@ export function registerAuthRoutes(app: any) {
     });
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: "Authentication failed" });
     }
 
     res.json({
@@ -211,12 +211,17 @@ export function registerAuthRoutes(app: any) {
       return res.status(400).json({ error: "Email is required" });
     }
 
+    // Sanitize redirect URL — only allow our known domain
+    const allowedOrigins = ['https://portol.me', 'http://localhost:5000'];
+    const origin = String(req.headers.origin || '');
+    const safeOrigin = allowedOrigins.includes(origin) ? origin : 'https://portol.me';
+
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${req.headers.origin}/#/reset-password`,
+      redirectTo: `${safeOrigin}/#/reset-password`,
     });
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: "Failed to send reset email" });
     }
 
     res.json({ success: true, message: "Check your email for a reset link" });
@@ -246,7 +251,7 @@ export function registerAuthRoutes(app: any) {
     });
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: "Authentication failed" });
     }
 
     res.json({ success: true, message: "Password has been reset successfully" });

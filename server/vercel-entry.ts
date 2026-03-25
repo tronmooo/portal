@@ -20,7 +20,7 @@ declare module "http" {
 
 app.use(
   express.json({
-    limit: '50mb',
+    limit: '10mb',
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
@@ -34,8 +34,8 @@ app.use(express.text({ type: 'text/csv', limit: '10mb' }));
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.anthropic.com; font-src 'self' https://api.fontshare.com; frame-ancestors 'self'");
   next();
 });
 

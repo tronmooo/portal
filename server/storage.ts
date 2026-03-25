@@ -1577,11 +1577,15 @@ function getStorage(): IStorage {
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (supabaseUrl && supabaseKey) {
-      const { SupabaseStorage } = require('./supabase-storage');
+      // Dynamic require to avoid esbuild bundling issues with CJS/ESM interop
+      const supabaseModule = require('./supabase-storage');
+      const { SupabaseStorage } = supabaseModule;
       console.log('[storage] Using Supabase PostgreSQL storage');
       _storageInstance = new SupabaseStorage(supabaseUrl, supabaseKey, 'anonymous');
     } else {
-      // Dynamic import — use eval to prevent esbuild from resolving at bundle time
+      // INTENTIONAL: eval('require') prevents esbuild from resolving better-sqlite3
+      // native dependency at bundle time (it's excluded from the Vercel serverless bundle).
+      // This code path is only used for local development with SQLite.
       const mod = eval('require')("./sqlite-storage");
       const { SqliteStorage } = mod;
       console.log('[storage] Using SQLite local storage (env vars not found)');
