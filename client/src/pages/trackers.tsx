@@ -622,6 +622,9 @@ function AddEntryDialog({
           coerced[f.name] = raw ?? "";
         }
       }
+      // Prevent empty entries
+      const hasValue = Object.values(coerced).some(v => v !== undefined && v !== "" && v !== null);
+      if (!hasValue) throw new Error("Please fill in at least one field");
       const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, {
         values: coerced,
         notes: notes.trim() || undefined,
@@ -1747,9 +1750,12 @@ function TrackerDetailDialog({
             ) : (
               sortedEntries.map((entry, idx) => {
                 const val = entry.values[primaryField];
+                const allVals = Object.entries(entry.values).filter(([, v]) => v != null && v !== "");
                 const displayVal = val != null
                   ? `${val} ${tracker.unit || ""}`
-                  : Object.entries(entry.values).map(([k, v]) => `${k}: ${v}`).join(", ");
+                  : allVals.length > 0
+                    ? allVals.map(([k, v]) => `${k}: ${v}`).join(", ")
+                    : "(empty entry)";
                 // Show delta vs previous entry
                 const nextEntry = sortedEntries[idx + 1]; // next = older
                 const nextVal = nextEntry?.values[primaryField];

@@ -45356,26 +45356,6 @@ var init_supabase_storage = __esm({
         });
         if (error) throw error;
         this.logActivity("task", `Created task: ${data.title}`);
-        if (data.dueDate) {
-          try {
-            const priorityColor = data.priority === "high" ? "#A13544" : data.priority === "medium" ? "#BB653B" : "#797876";
-            await this.createEvent({
-              title: `\u2705 Task: ${data.title}`,
-              date: data.dueDate.slice(0, 10),
-              allDay: true,
-              category: "personal",
-              color: priorityColor,
-              recurrence: "none",
-              linkedProfiles: [],
-              linkedDocuments: [],
-              tags: ["auto-generated", "task"],
-              source: "ai",
-              description: data.description || void 0
-            });
-          } catch (e) {
-            console.error(`Auto-event generation failed for task: ${data.title}`, e);
-          }
-        }
         return await this.getTask(id);
       }
       async updateTask(id, data) {

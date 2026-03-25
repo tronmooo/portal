@@ -727,26 +727,7 @@ export class SupabaseStorage implements IStorage {
     this.logActivity("task", `Created task: ${data.title}`);
 
     // Auto-generate calendar event for tasks with due dates
-    if (data.dueDate) {
-      try {
-        const priorityColor = data.priority === "high" ? "#A13544" : data.priority === "medium" ? "#BB653B" : "#797876";
-        await this.createEvent({
-          title: `\u{2705} Task: ${data.title}`,
-          date: data.dueDate.slice(0, 10),
-          allDay: true,
-          category: "personal",
-          color: priorityColor,
-          recurrence: "none",
-          linkedProfiles: [],
-          linkedDocuments: [],
-          tags: ["auto-generated", "task"],
-          source: "ai",
-          description: data.description || undefined,
-        });
-      } catch (e) {
-        console.error(`Auto-event generation failed for task: ${data.title}`, e);
-      }
-    }
+    // Tasks with due dates are shown in the calendar view automatically — no separate event needed.
 
     return (await this.getTask(id))!;
   }
