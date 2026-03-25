@@ -1403,6 +1403,7 @@ function ArtifactAddDialog({ open, onClose }: { open: boolean; onClose: () => vo
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Artifact created" });
       onClose();
       setForm({ title: "", type: "note", content: "" });
@@ -1459,6 +1460,7 @@ function ArtifactEditDialog({ open, onClose, artifact }: { open: boolean; onClos
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Artifact updated" });
       onClose();
     },
@@ -3451,6 +3453,7 @@ function GoalEditDialog({ open, onClose, goal }: { open: boolean; onClose: () =>
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Goal updated" });
       onClose();
     },
@@ -3514,6 +3517,7 @@ function GoalsSection() {
     mutationFn: (data: any) => apiRequest("POST", "/api/goals", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Goal created" });
       setAddOpen(false);
       setForm({ title: "", type: "custom", target: "", unit: "", startValue: "", deadline: "", trackerId: "", habitId: "", category: "" });
@@ -3525,6 +3529,7 @@ function GoalsSection() {
     mutationFn: ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/goals/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
 
@@ -3532,6 +3537,7 @@ function GoalsSection() {
     mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Goal deleted" });
     },
   });

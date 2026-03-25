@@ -191,13 +191,16 @@ function PersonFields({
         />
       </FieldRow>
       <FieldRow label="Blood Type" id="bloodType">
-        <Input
-          id="bloodType"
-          data-testid="input-field-bloodType"
-          value={fields.bloodType || ""}
-          onChange={(e) => onChange("bloodType", e.target.value)}
-          placeholder="e.g. O+"
-        />
+        <Select value={fields.bloodType || ""} onValueChange={(v) => onChange("bloodType", v)}>
+          <SelectTrigger id="bloodType" data-testid="input-field-bloodType">
+            <SelectValue placeholder="Select blood type" />
+          </SelectTrigger>
+          <SelectContent>
+            {["A+","A-","B+","B-","AB+","AB-","O+","O-"].map(bt => (
+              <SelectItem key={bt} value={bt}>{bt}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </FieldRow>
       <FieldRow label="Height" id="height">
         <Input
@@ -786,6 +789,19 @@ function CreateProfileDialog({
     for (const key of phoneFields) {
       if (fields[key] && !/^\+?[\d\s()-]{7,15}$/.test(fields[key])) {
         toast({ title: "Invalid phone", description: `Enter a valid phone number for ${key}`, variant: "destructive" });
+        return;
+      }
+    }
+    // Blood type validation
+    if (fields.bloodType && !["A+","A-","B+","B-","AB+","AB-","O+","O-"].includes(fields.bloodType)) {
+      toast({ title: "Invalid blood type", description: "Use A+, A-, B+, B-, AB+, AB-, O+, or O-", variant: "destructive" });
+      return;
+    }
+    // Birthday validation
+    if (fields.birthday) {
+      const d = new Date(fields.birthday);
+      if (isNaN(d.getTime()) || d > new Date()) {
+        toast({ title: "Invalid date", description: "Enter a valid date that is not in the future", variant: "destructive" });
         return;
       }
     }

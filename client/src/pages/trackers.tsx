@@ -628,6 +628,9 @@ function AddEntryDialog({
       // Reject negative numeric values
       const hasNegative = Object.values(coerced).some(v => typeof v === "number" && v < 0);
       if (hasNegative) throw new Error("Values must be positive numbers");
+      // Reject NaN values
+      const hasNaN = Object.values(coerced).some(v => typeof v === "number" && isNaN(v));
+      if (hasNaN) throw new Error("All fields must be valid numbers");
       const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, {
         values: coerced,
         notes: notes.trim() || undefined,
@@ -673,6 +676,7 @@ function AddEntryDialog({
                   step="any"
                   value={values[f.name] ?? ""}
                   onChange={(e) => setValues((p) => ({ ...p, [f.name]: e.target.value }))}
+                  onKeyDown={(e) => { if (['e','E','+','-'].includes(e.key)) e.preventDefault(); }}
                   placeholder={`Enter ${f.name}`}
                   className="mt-1"
                   data-testid={`input-entry-${f.name}`}
@@ -1814,6 +1818,7 @@ function TrackerDetailDialog({
           setAddEntryOpen(v);
           if (!v) {
             queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
           }
         }}
       />

@@ -1050,6 +1050,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       setShowAddExpense(false);
       setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10));
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -1066,6 +1068,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       toast({ title: "Expense updated" });
       setEditingExpense(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -1080,6 +1084,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       toast({ title: "Expense deleted" });
       setDeleteExpenseId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -1718,6 +1724,7 @@ function TrackersTab({
       toast({ title: "Tracker linked" });
       setShowLinkTracker(false);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -1731,6 +1738,7 @@ function TrackersTab({
       toast({ title: "Tracker unlinked" });
       setUnlinkTrackerId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -1765,6 +1773,8 @@ function TrackersTab({
       setShowLogEntry(null);
       setEntryValue(""); setEntryNotes("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -2012,6 +2022,8 @@ function TasksTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => {
@@ -2036,6 +2048,8 @@ function TasksTab({
       setShowAddTask(false);
       setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -2050,6 +2064,8 @@ function TasksTab({
       toast({ title: "Task deleted" });
       setDeleteTaskId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),

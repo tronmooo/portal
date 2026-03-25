@@ -438,7 +438,13 @@ export async function registerRoutes(
     res.json(detail);
   });
   app.post("/api/profiles", async (req, res) => {
-    if (req.body.name) req.body.name = sanitize(req.body.name);
+    if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
+      return res.status(400).json({ error: "Profile name is required" });
+    }
+    if (!req.body.type || typeof req.body.type !== "string" || !req.body.type.trim()) {
+      return res.status(400).json({ error: "Profile type is required" });
+    }
+    req.body.name = sanitize(req.body.name);
     const parsed = insertProfileSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createProfile(parsed.data));
@@ -644,7 +650,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(tracker);
   });
   app.post("/api/trackers", async (req, res) => {
-    if (req.body.name) req.body.name = sanitize(req.body.name);
+    if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
+      return res.status(400).json({ error: "Tracker name is required" });
+    }
+    req.body.name = sanitize(req.body.name);
     const parsed = insertTrackerSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createTracker(parsed.data));
@@ -667,6 +676,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     if (Object.values(values).some((v: any) => typeof v === "number" && v < 0)) {
       return res.status(400).json({ error: "Values must not be negative" });
+    }
+    if (Object.values(values).some((v: any) => typeof v === "number" && isNaN(v))) {
+      return res.status(400).json({ error: "All values must be valid numbers" });
     }
     const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
@@ -830,6 +842,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(habit);
   });
   app.post("/api/habits", async (req, res) => {
+    if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
+      return res.status(400).json({ error: "Habit name is required" });
+    }
     const parsed = insertHabitSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createHabit(parsed.data));
@@ -911,7 +926,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Journal ----
   app.get("/api/journal", async (_req, res) => { res.json(await storage.getJournalEntries()); });
   app.post("/api/journal", async (req, res) => {
-    if (req.body.content) req.body.content = sanitize(req.body.content);
+    if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
+      return res.status(400).json({ error: "Journal content is required" });
+    }
+    req.body.content = sanitize(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createJournalEntry(parsed.data));
