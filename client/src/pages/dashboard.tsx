@@ -4753,7 +4753,7 @@ export default function DashboardPage() {
   const rightSections = sections.filter(s => s.visible && s.column === "right");
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden p-3 md:p-4 space-y-3 max-w-full" data-testid="page-dashboard">
+    <div className="h-full overflow-y-auto overflow-x-hidden p-3 md:p-4 space-y-2.5 max-w-full" data-testid="page-dashboard">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

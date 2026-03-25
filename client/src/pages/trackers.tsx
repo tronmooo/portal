@@ -12,6 +12,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -1592,6 +1593,82 @@ function TrackerSummary({ trackers }: { trackers: Tracker[] }) {
   );
 }
 
+// ── TrackerDetailDialog ──────────────────────────────────────────────────────
+
+function TrackerDetailDialog({
+  tracker,
+  open,
+  onClose,
+}: {
+  tracker: Tracker | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [addEntryOpen, setAddEntryOpen] = useState(false);
+
+  if (!tracker) return null;
+
+  const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
+  const sortedEntries = [...tracker.entries].reverse();
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+        <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              <span>{tracker.name}</span>
+              <Badge variant="secondary" className="text-xs capitalize">{tracker.category}</Badge>
+            </DialogTitle>
+            <DialogDescription>
+              {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
+              {tracker.unit ? ` · ${tracker.unit}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex gap-2 mb-3">
+            <Button size="sm" onClick={() => setAddEntryOpen(true)} data-testid="button-add-entry-detail">
+              <Plus className="w-3 h-3 mr-1" /> Add Entry
+            </Button>
+          </div>
+
+          <div className="overflow-y-auto flex-1 space-y-2">
+            {sortedEntries.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No entries yet. Click "Add Entry" to log data.</p>
+            ) : (
+              sortedEntries.map((entry) => (
+                <div key={entry.id} className="flex items-center justify-between p-2.5 rounded-lg border bg-card text-sm">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono font-medium tabular-nums">
+                      {entry.values[primaryField] != null
+                        ? `${entry.values[primaryField]} ${tracker.unit || ""}`
+                        : Object.entries(entry.values).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                    </span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(entry.timestamp).toLocaleDateString()} {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AddEntryDialog
+        tracker={tracker}
+        open={addEntryOpen}
+        onOpenChange={(v) => {
+          setAddEntryOpen(v);
+          if (!v) {
+            queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+          }
+        }}
+      />
+    </>
+  );
+}
+
 // ── TrackersPage ───────────────────────────────────────────────────────────────
 
 // ── Profile filter icon map ──────────────────────────────────────────────────
@@ -1622,6 +1699,7 @@ export default function TrackersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [selectedTracker, setSelectedTracker] = useState<Tracker | null>(null);
   // Default to "all" so all trackers are visible
   const [profileFilter, setProfileFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
@@ -1702,7 +1780,7 @@ export default function TrackersPage() {
     (trackers || []).filter(t => t.linkedProfiles?.includes(profileId)).length;
 
   return (
-    <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full" data-testid="page-trackers">
+    <div className="p-4 md:p-6 space-y-4 overflow-y-auto h-full" data-testid="page-trackers">
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3 mb-4">
@@ -1872,7 +1950,9 @@ export default function TrackersPage() {
               {filteredTrackers.map((tracker) => {
                 const lastEntry = tracker.entries[tracker.entries.length - 1];
                 const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
-                const latestValue = lastEntry?.values?.[primaryField] ?? (lastEntry?.values ? Object.values(lastEntry.values)[0] : null);
+                const latestValue = lastEntry?.values?.[primaryField]
+                  ?? (lastEntry?.values ? Object.values(lastEntry.values).find(v => typeof v === 'number') : null)
+                  ?? (lastEntry?.values ? Object.values(lastEntry.values)[0] : null);
                 const unit = tracker.unit || "";
                 const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
                 return (
@@ -1880,16 +1960,17 @@ export default function TrackersPage() {
                     key={tracker.id}
                     className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
                     data-testid={`tracker-row-${tracker.id}`}
+                    onClick={() => setSelectedTracker(tracker)}
                   >
                     <td className="p-3 font-medium">{tracker.name}</td>
                     <td className="p-3">
                       <span className="text-xs px-2 py-0.5 rounded-full bg-muted">{tracker.category}</span>
                     </td>
                     <td className="p-3 font-mono tabular-nums">
-                      {latestValue != null ? `${latestValue} ${unit}` : "\u2014"}
+                      {latestValue != null ? `${latestValue} ${unit}` : "—"}
                     </td>
                     <td className="p-3 text-muted-foreground">
-                      {lastEntry ? new Date(lastEntry.timestamp).toLocaleDateString() : "\u2014"}
+                      {lastEntry ? new Date(lastEntry.timestamp).toLocaleDateString() : "—"}
                     </td>
                     <td className="p-3 text-muted-foreground">{tracker.entries.length}</td>
                     <td className="p-3">
@@ -1897,7 +1978,7 @@ export default function TrackersPage() {
                         <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
                           {linkedProfile.name}
                         </span>
-                      ) : "\u2014"}
+                      ) : "—"}
                     </td>
                   </tr>
                 );
@@ -1936,6 +2017,13 @@ export default function TrackersPage() {
           onOpenChange={(v) => { if (!v) setDeleteTargetId(null); }}
         />
       )}
+
+      {/* Tracker detail dialog */}
+      <TrackerDetailDialog
+        tracker={selectedTracker}
+        open={!!selectedTracker}
+        onClose={() => setSelectedTracker(null)}
+      />
     </div>
   );
 }
