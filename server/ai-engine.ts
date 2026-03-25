@@ -1376,10 +1376,19 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_task": {
+      // Dedup: skip if a very similar active task already exists
+      const existingTasks = await storage.getTasks();
+      const dupTask = existingTasks.find(t =>
+        t.status !== "done" &&
+        t.title.toLowerCase().trim() === (input.title || "").toLowerCase().trim()
+      );
+      if (dupTask) return dupTask; // Return existing instead of creating duplicate
+
       const newTask = await storage.createTask({
         title: input.title,
         priority: input.priority || "medium",
         dueDate: input.dueDate,
+        description: input.description,
         tags: input.tags || [],
       });
       // Auto-link: scan title for profile names + explicit forProfile
