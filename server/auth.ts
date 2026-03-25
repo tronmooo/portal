@@ -2,16 +2,47 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { Request, Response, NextFunction } from "express";
 import { storage, isSupabaseStorage } from "./storage";
 
-// Create a Supabase client with the anon key (for verifying user tokens)
+// Rate limiter for auth endpoints (prevents brute force)
+const authRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function authRateLimit(key: string, maxRequests: number = 5, windowMs: number = 900000): boolean {
+  const now = Date.now();
+  const entry = authRateLimitMap.get(key);
+  if (!entry || now > entry.resetAt) {
+    authRateLimitMap.set(key, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  entry.count++;
+  return entry.count > maxRequests;
+}
+// Cleanup every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of authRateLimitMap.entries()) {
+    if (now > val.resetAt) authRateLimitMap.delete(key);
+  }
+}, 300000);
+
+// Create Supabase clients — anon key for user auth, service role only for admin operations
 let supabaseAuth: SupabaseClient | null = null;
+let supabaseAdmin: SupabaseClient | null = null;
 
 function getSupabaseAuth(): SupabaseClient | null {
   if (supabaseAuth) return supabaseAuth;
   const url = process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  // Prefer anon key for token verification (least privilege); fall back to service role
+  const key = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
   supabaseAuth = createClient(url, key);
   return supabaseAuth;
+}
+
+function getSupabaseAdmin(): SupabaseClient | null {
+  if (supabaseAdmin) return supabaseAdmin;
+  const url = process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  supabaseAdmin = createClient(url, key);
+  return supabaseAdmin;
 }
 
 // Extend Express Request with user info
@@ -87,7 +118,15 @@ export function registerAuthRoutes(app: any) {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    const { data, error } = await supabase.auth.admin.createUser({
+    if (authRateLimit(`signup:${email}`, 3, 900000)) {
+      return res.status(429).json({ error: "Too many signup attempts. Please wait 15 minutes." });
+    }
+
+    // Admin operations (createUser) require service role key
+    const admin = getSupabaseAdmin();
+    if (!admin) return res.status(500).json({ error: "Admin auth not configured" });
+
+    const { data, error } = await admin.auth.admin.createUser({
       email,
       password,
       email_confirm: true, // Auto-confirm for now (no email verification)
@@ -133,6 +172,10 @@ export function registerAuthRoutes(app: any) {
     const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password required" });
+    }
+
+    if (authRateLimit(`signin:${email}`, 5, 900000)) {
+      return res.status(429).json({ error: "Too many login attempts. Please wait 15 minutes." });
     }
 
     const { data, error } = await supabase.auth.signInWithPassword({
@@ -241,7 +284,10 @@ export function registerAuthRoutes(app: any) {
       return res.status(401).json({ error: "Invalid or expired reset token" });
     }
 
-    const { error } = await supabase.auth.admin.updateUserById(user.id, {
+    const admin = getSupabaseAdmin();
+    if (!admin) return res.status(500).json({ error: "Admin auth not configured" });
+
+    const { error } = await admin.auth.admin.updateUserById(user.id, {
       password,
     });
 

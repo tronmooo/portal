@@ -463,7 +463,18 @@ export class SqliteStorage implements IStorage {
       case "document": if (!profile.documents.includes(entityId)) { profile.documents.push(entityId); field = "documents"; } break;
     }
     if (field) {
-      this.db.prepare(`UPDATE profiles SET ${field}=? WHERE id=?`).run(toJSON((profile as any)[field]), profileId);
+      // Use allowlisted column map to prevent SQL injection via field names
+      const columnMap: Record<string, string> = {
+        linkedTrackers: "linkedTrackers",
+        linkedExpenses: "linkedExpenses",
+        linkedTasks: "linkedTasks",
+        linkedEvents: "linkedEvents",
+        documents: "documents",
+      };
+      const column = columnMap[field];
+      if (column) {
+        this.db.prepare(`UPDATE profiles SET "${column}"=? WHERE id=?`).run(toJSON((profile as any)[field]), profileId);
+      }
     }
   }
 
@@ -479,7 +490,17 @@ export class SqliteStorage implements IStorage {
       case "document": profile.documents = profile.documents.filter(id => id !== entityId); field = "documents"; break;
     }
     if (field) {
-      this.db.prepare(`UPDATE profiles SET ${field}=? WHERE id=?`).run(toJSON((profile as any)[field]), profileId);
+      const columnMap: Record<string, string> = {
+        linkedTrackers: "linkedTrackers",
+        linkedExpenses: "linkedExpenses",
+        linkedTasks: "linkedTasks",
+        linkedEvents: "linkedEvents",
+        documents: "documents",
+      };
+      const column = columnMap[field];
+      if (column) {
+        this.db.prepare(`UPDATE profiles SET "${column}"=? WHERE id=?`).run(toJSON((profile as any)[field]), profileId);
+      }
     }
   }
 

@@ -95,7 +95,18 @@ export async function registerRoutes(
       if (!fileData || !fileName) {
         return res.status(400).json({ error: "fileName and fileData (base64) required" });
       }
-      const result = await processFileUpload(fileName, mimeType || "image/jpeg", fileData, message, profileId);
+      // Validate base64 format
+      if (typeof fileData !== "string" || !/^[A-Za-z0-9+/\n\r]+=*$/.test(fileData.slice(0, 1000))) {
+        return res.status(400).json({ error: "fileData must be valid base64" });
+      }
+      // Enforce max file size (10MB decoded)
+      const estimatedSize = Math.ceil(fileData.length * 0.75);
+      if (estimatedSize > 10 * 1024 * 1024) {
+        return res.status(400).json({ error: "File size exceeds 10MB limit" });
+      }
+      // Validate MIME type format
+      const safeMime = /^[a-z]+\/[a-z0-9.+-]+$/.test(mimeType || "") ? mimeType : "image/jpeg";
+      const result = await processFileUpload(fileName, safeMime || "image/jpeg", fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
       console.error("Upload error:", err);
@@ -786,9 +797,18 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const doc = await storage.getDocument(req.params.id);
     if (!doc || !doc.fileData) return res.status(404).json({ error: "Not found" });
     const buffer = Buffer.from(doc.fileData, "base64");
-    res.setHeader("Content-Type", doc.mimeType);
-    res.setHeader("Content-Disposition", `inline; filename="${doc.name}"`);
+    // Allowlist safe MIME types; default to octet-stream for unknown types
+    const safeMimeTypes = new Set([
+      "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
+      "application/pdf", "text/plain", "text/csv",
+    ]);
+    const contentType = safeMimeTypes.has(doc.mimeType) ? doc.mimeType : "application/octet-stream";
+    // Sanitize filename to prevent header injection
+    const safeFilename = (doc.name || "document").replace(/[^a-zA-Z0-9._-]/g, "_");
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
     res.setHeader("Content-Length", buffer.length.toString());
+    res.setHeader("X-Content-Type-Options", "nosniff");
     res.send(buffer);
   });
 
