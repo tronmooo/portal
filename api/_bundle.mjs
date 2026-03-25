@@ -54180,21 +54180,33 @@ async function processFileUpload(fileName, mimeType, base64Data, userMessage, pr
 
 Determine:
 1. DOCUMENT TYPE: What kind of document is this? (drivers_license, medical_report, receipt, insurance_card, passport, vehicle_registration, prescription, lab_results, utility_bill, bank_statement, warranty, pet_record, school_record, tax_document, other)
-2. EXTRACTED DATA: Pull out every field you can see \u2014 names, dates, numbers, addresses, IDs, amounts, readings, etc.
-3. TARGET PROFILE: Who does this belong to? Look for names. If it's a medical report, whose is it? If it's for a vehicle, which one?
-4. TRACKER DATA: Any numeric health readings (blood pressure, cholesterol, glucose, weight, etc.) that should be logged as tracker entries?
+2. EXTRACTED DATA: Pull out every IDENTITY/STATIC field \u2014 names, dates, addresses, IDs, policy numbers, etc. Do NOT put numeric readings here.
+3. TARGET PROFILE: Who does this belong to? Look for names. If it's a medical report, whose is it? If it's for a pet, use the pet's name. If it's for a vehicle, which one?
+4. TRACKER ENTRIES (CRITICAL): ANY numeric measurement, reading, or metric MUST go into trackerEntries, NOT extractedData. This includes:
+   - Medical: blood pressure, cholesterol (LDL, HDL, total), glucose, A1C, triglycerides, hemoglobin, platelets, white blood cells, red blood cells, BMI, heart rate, temperature, oxygen saturation, creatinine, TSH, etc.
+   - Pet health: weight, temperature, heart rate, blood work values, vaccination dates
+   - Vehicle: mileage, tire pressure, oil level, fuel economy
+   - Financial: balances, amounts, totals
+   Each tracker entry should have a human-readable trackerName (use spaces, not underscores) and a values object with named numeric fields.
 5. DOCUMENT LABEL: A short human-readable label for this document.
 
 ${userMessage ? `User context: "${userMessage}"` : ""}
 
+IMPORTANT: Every numeric reading or measurement MUST appear in trackerEntries. The system will create trackers and log the data. Static identity info (names, IDs, dates) goes in extractedData. Numeric health/measurement data goes in trackerEntries.
+
 Respond with JSON:
 {
-  "documentType": "drivers_license",
-  "label": "John's Driver's License",
-  "extractedData": { "field1": "value1", "field2": "value2" },
-  "targetProfile": { "name": "John", "type": "person", "matchExisting": true },
-  "trackerEntries": [ { "trackerName": "blood_pressure", "values": { "systolic": 120, "diastolic": 80 } } ],
-  "summary": "Brief human-readable summary of what was extracted"
+  "documentType": "lab_results",
+  "label": "Luna's Blood Work Results",
+  "extractedData": { "patientName": "Luna", "veterinarian": "Dr. Smith", "visitDate": "2026-03-15" },
+  "targetProfile": { "name": "Luna", "type": "pet", "matchExisting": true },
+  "trackerEntries": [
+    { "trackerName": "White Blood Cells", "values": { "value": 12.5 }, "unit": "K/uL", "category": "health" },
+    { "trackerName": "Hemoglobin", "values": { "value": 14.2 }, "unit": "g/dL", "category": "health" },
+    { "trackerName": "Platelets", "values": { "value": 250 }, "unit": "K/uL", "category": "health" },
+    { "trackerName": "Total Cholesterol", "values": { "value": 180 }, "unit": "mg/dL", "category": "health" }
+  ],
+  "summary": "Luna's blood work from March 15 \u2014 extracted 4 health metrics as trackable data."
 }`;
   try {
     const mediaType = mimeType.startsWith("image/") ? mimeType : "image/jpeg";
@@ -56806,30 +56818,36 @@ async function registerRoutes(httpServer2, app2) {
         for (const entry of trackerEntries) {
           try {
             const trackers = await storage.getTrackers();
+            const humanName = (entry.trackerName || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
             let tracker = trackers.find(
-              (t) => t.name.toLowerCase() === entry.trackerName.toLowerCase()
+              (t) => t.name.toLowerCase().replace(/[_\s]/g, "") === (entry.trackerName || "").toLowerCase().replace(/[_\s]/g, "")
             );
             if (!tracker) {
+              const fieldKeys = Object.keys(entry.values || {});
               tracker = await storage.createTracker({
-                name: entry.trackerName,
+                name: humanName,
                 type: "numeric",
                 unit: entry.unit || "",
-                fields: Object.keys(entry.values || {}).map((k) => ({
+                category: entry.category || "health",
+                fields: fieldKeys.length > 0 ? fieldKeys.map((k, i) => ({
                   name: k,
                   type: "number",
-                  unit: "",
+                  unit: entry.unit || "",
+                  isPrimary: i === 0,
                   options: []
-                })),
+                })) : [{ name: "value", type: "number", unit: entry.unit || "", isPrimary: true, options: [] }],
                 linkedProfiles: targetProfileId ? [targetProfileId] : []
               });
+              saved.push(`Created tracker: ${humanName}`);
             }
+            const entryValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
             await storage.logEntry({
               trackerId: tracker.id,
-              value: entry.values ? JSON.stringify(entry.values) : "0",
-              date: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+              values: entryValues,
+              date: entry.date || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
               notes: `From document extraction`
             });
-            saved.push(`Logged ${entry.trackerName} entry`);
+            saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
           } catch (tErr) {
             console.error("Failed to log tracker entry from extraction:", tErr.message);
           }

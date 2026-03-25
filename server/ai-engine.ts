@@ -252,21 +252,33 @@ export async function processFileUpload(
 
 Determine:
 1. DOCUMENT TYPE: What kind of document is this? (drivers_license, medical_report, receipt, insurance_card, passport, vehicle_registration, prescription, lab_results, utility_bill, bank_statement, warranty, pet_record, school_record, tax_document, other)
-2. EXTRACTED DATA: Pull out every field you can see — names, dates, numbers, addresses, IDs, amounts, readings, etc.
-3. TARGET PROFILE: Who does this belong to? Look for names. If it's a medical report, whose is it? If it's for a vehicle, which one?
-4. TRACKER DATA: Any numeric health readings (blood pressure, cholesterol, glucose, weight, etc.) that should be logged as tracker entries?
+2. EXTRACTED DATA: Pull out every IDENTITY/STATIC field — names, dates, addresses, IDs, policy numbers, etc. Do NOT put numeric readings here.
+3. TARGET PROFILE: Who does this belong to? Look for names. If it's a medical report, whose is it? If it's for a pet, use the pet's name. If it's for a vehicle, which one?
+4. TRACKER ENTRIES (CRITICAL): ANY numeric measurement, reading, or metric MUST go into trackerEntries, NOT extractedData. This includes:
+   - Medical: blood pressure, cholesterol (LDL, HDL, total), glucose, A1C, triglycerides, hemoglobin, platelets, white blood cells, red blood cells, BMI, heart rate, temperature, oxygen saturation, creatinine, TSH, etc.
+   - Pet health: weight, temperature, heart rate, blood work values, vaccination dates
+   - Vehicle: mileage, tire pressure, oil level, fuel economy
+   - Financial: balances, amounts, totals
+   Each tracker entry should have a human-readable trackerName (use spaces, not underscores) and a values object with named numeric fields.
 5. DOCUMENT LABEL: A short human-readable label for this document.
 
 ${userMessage ? `User context: "${userMessage}"` : ""}
 
+IMPORTANT: Every numeric reading or measurement MUST appear in trackerEntries. The system will create trackers and log the data. Static identity info (names, IDs, dates) goes in extractedData. Numeric health/measurement data goes in trackerEntries.
+
 Respond with JSON:
 {
-  "documentType": "drivers_license",
-  "label": "John's Driver's License",
-  "extractedData": { "field1": "value1", "field2": "value2" },
-  "targetProfile": { "name": "John", "type": "person", "matchExisting": true },
-  "trackerEntries": [ { "trackerName": "blood_pressure", "values": { "systolic": 120, "diastolic": 80 } } ],
-  "summary": "Brief human-readable summary of what was extracted"
+  "documentType": "lab_results",
+  "label": "Luna's Blood Work Results",
+  "extractedData": { "patientName": "Luna", "veterinarian": "Dr. Smith", "visitDate": "2026-03-15" },
+  "targetProfile": { "name": "Luna", "type": "pet", "matchExisting": true },
+  "trackerEntries": [
+    { "trackerName": "White Blood Cells", "values": { "value": 12.5 }, "unit": "K/uL", "category": "health" },
+    { "trackerName": "Hemoglobin", "values": { "value": 14.2 }, "unit": "g/dL", "category": "health" },
+    { "trackerName": "Platelets", "values": { "value": 250 }, "unit": "K/uL", "category": "health" },
+    { "trackerName": "Total Cholesterol", "values": { "value": 180 }, "unit": "mg/dL", "category": "health" }
+  ],
+  "summary": "Luna's blood work from March 15 — extracted 4 health metrics as trackable data."
 }`;
 
   try {

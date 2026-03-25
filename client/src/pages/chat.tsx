@@ -27,6 +27,7 @@ import {
   Loader2,
   Check,
   Calendar,
+  Camera,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
@@ -1057,6 +1058,16 @@ export default function ChatPage() {
         onChange={handleFileSelect}
         data-testid="input-file-add-more"
       />
+      {/* Camera capture input (mobile) */}
+      <input
+        id="camera-capture"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handleFileSelect}
+        data-testid="input-camera"
+      />
 
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
@@ -1249,6 +1260,16 @@ export default function ChatPage() {
               data-testid="button-attach"
             >
               <Paperclip className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-[44px] w-[44px] shrink-0 rounded-xl md:hidden"
+              onClick={() => document.getElementById('camera-capture')?.click()}
+              disabled={isPending}
+              data-testid="button-camera"
+            >
+              <Camera className="h-4 w-4" />
             </Button>
             <Textarea
               ref={inputRef}

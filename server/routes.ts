@@ -310,30 +310,39 @@ export async function registerRoutes(
           try {
             // Find or create the tracker
             const trackers = await storage.getTrackers();
+            const humanName = (entry.trackerName || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
             let tracker = trackers.find(
-              (t: any) => t.name.toLowerCase() === entry.trackerName.toLowerCase()
+              (t: any) => t.name.toLowerCase().replace(/[_\s]/g, "") === (entry.trackerName || "").toLowerCase().replace(/[_\s]/g, "")
             );
             if (!tracker) {
+              const fieldKeys = Object.keys(entry.values || {});
               tracker = await storage.createTracker({
-                name: entry.trackerName,
+                name: humanName,
                 type: "numeric",
                 unit: entry.unit || "",
-                fields: Object.keys(entry.values || {}).map((k: string) => ({
-                  name: k,
-                  type: "number" as const,
-                  unit: "",
-                  options: [],
-                })),
+                category: entry.category || "health",
+                fields: fieldKeys.length > 0
+                  ? fieldKeys.map((k: string, i: number) => ({
+                      name: k,
+                      type: "number" as const,
+                      unit: entry.unit || "",
+                      isPrimary: i === 0,
+                      options: [],
+                    }))
+                  : [{ name: "value", type: "number" as const, unit: entry.unit || "", isPrimary: true, options: [] }],
                 linkedProfiles: targetProfileId ? [targetProfileId] : [],
               });
+              saved.push(`Created tracker: ${humanName}`);
             }
+            // Log the entry with proper values object
+            const entryValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
             await storage.logEntry({
               trackerId: tracker.id,
-              value: entry.values ? JSON.stringify(entry.values) : "0",
-              date: new Date().toISOString().slice(0, 10),
+              values: entryValues,
+              date: entry.date || new Date().toISOString().slice(0, 10),
               notes: `From document extraction`,
             });
-            saved.push(`Logged ${entry.trackerName} entry`);
+            saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
           } catch (tErr: any) {
             console.error("Failed to log tracker entry from extraction:", tErr.message);
           }
