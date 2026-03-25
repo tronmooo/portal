@@ -4,10 +4,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft } from "lucide-react";
+import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
 import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
   amazing: { icon: Sparkles, label: "Amazing", color: "#6DAA45", bg: "bg-green-500/10" },
@@ -20,9 +21,19 @@ const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; 
 const ENERGY_LABELS = ["", "Exhausted", "Low", "Normal", "High", "Energized"];
 
 function JournalCard({ entry }: { entry: JournalEntry }) {
+  const { toast } = useToast();
   const mood = MOOD_CONFIG[entry.mood] || MOOD_CONFIG.neutral;
   const MoodIcon = mood.icon;
   const dateObj = new Date(entry.createdAt);
+
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/journal/${entry.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      toast({ title: "Entry deleted" });
+    },
+    onError: () => toast({ title: "Failed to delete entry", variant: "destructive" }),
+  });
 
   return (
     <Card data-testid={`card-journal-${entry.id}`}>
@@ -45,6 +56,15 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
                 <Zap className="h-2.5 w-2.5 mr-0.5" />{ENERGY_LABELS[entry.energy]}
               </Badge>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+              onClick={() => { if (window.confirm("Delete this journal entry? This cannot be undone.")) deleteMutation.mutate(); }}
+              data-testid={`button-delete-journal-${entry.id}`}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
           </div>
         </div>
 
@@ -87,6 +107,7 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
 }
 
 export default function JournalPage() {
+  const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [mood, setMood] = useState<MoodLevel | null>(null);
   const [content, setContent] = useState("");
@@ -96,6 +117,12 @@ export default function JournalPage() {
     queryKey: ["/api/journal"],
     queryFn: () => apiRequest("GET", "/api/journal").then(r => r.json()),
   });
+
+  const handleSaveJournal = () => {
+    if (!mood) { toast({ title: "Select a mood", description: "Choose how you're feeling", variant: "destructive" }); return; }
+    if (!content.trim()) { toast({ title: "Write something", description: "Journal entry cannot be empty", variant: "destructive" }); return; }
+    createMutation.mutate({ mood, content, energy });
+  };
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/journal", data),
@@ -194,8 +221,8 @@ export default function JournalPage() {
 
           <Button
             size="sm"
-            disabled={!mood || createMutation.isPending}
-            onClick={() => mood && createMutation.mutate({ mood, content, energy })}
+            disabled={createMutation.isPending}
+            onClick={handleSaveJournal}
             className="w-full"
             data-testid="button-save-journal"
           >

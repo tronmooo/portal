@@ -57,6 +57,8 @@ export default function SettingsPage() {
 
   async function handleExport() {
     setExporting(true);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
       const res = await apiRequest("GET", "/api/export");
       const data = await res.json();
@@ -64,7 +66,7 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `lifeos-backup-${new Date().toISOString().split("T")[0]}.json`;
+      a.download = `portol-backup-${new Date().toISOString().split("T")[0]}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -80,8 +82,10 @@ export default function SettingsPage() {
         .join(", ");
       toast({ title: "Export complete", description: counts ? `Exported ${counts}.` : "Your data has been downloaded." });
     } catch (err: any) {
-      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+      const msg = err.name === "AbortError" ? "Export timed out. Try again." : err.message;
+      toast({ title: "Export failed", description: msg, variant: "destructive" });
     } finally {
+      clearTimeout(timeout);
       setExporting(false);
     }
   }

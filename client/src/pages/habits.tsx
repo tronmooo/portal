@@ -4,14 +4,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft } from "lucide-react";
+import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Habit } from "@shared/schema";
 import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
 
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
 
 function HabitCard({ habit }: { habit: Habit }) {
+  const { toast } = useToast();
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const checkedToday = habit.checkins.some(c => c.date === today);
@@ -20,6 +22,12 @@ function HabitCard({ habit }: { habit: Habit }) {
   const checkinMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: "Habit deleted" }); },
+    onError: () => toast({ title: "Failed to delete habit", variant: "destructive" }),
   });
 
   // Build last 14 days grid
@@ -39,16 +47,27 @@ function HabitCard({ habit }: { habit: Habit }) {
             <Icon className="h-4 w-4" style={{ color: habit.color || "#4F98A3" }} />
             <CardTitle className="text-sm font-medium">{habit.name}</CardTitle>
           </div>
-          <Button
-            size="sm"
-            variant={checkedToday ? "secondary" : "default"}
-            disabled={checkedToday || checkinMutation.isPending}
-            onClick={() => checkinMutation.mutate()}
-            className="h-7 text-xs"
-            data-testid={`button-checkin-${habit.id}`}
-          >
-            {checkedToday ? <><Check className="h-3 w-3 mr-1" /> Done</> : "Check In"}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant={checkedToday ? "secondary" : "default"}
+              disabled={checkedToday || checkinMutation.isPending}
+              onClick={() => checkinMutation.mutate()}
+              className="h-7 text-xs"
+              data-testid={`button-checkin-${habit.id}`}
+            >
+              {checkedToday ? <><Check className="h-3 w-3 mr-1" /> Done</> : "Check In"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+              onClick={() => { if (window.confirm(`Delete "${habit.name}"? This cannot be undone.`)) deleteMutation.mutate(); }}
+              data-testid={`button-delete-habit-${habit.id}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="pl-5 pb-3">
@@ -91,6 +110,7 @@ function HabitCard({ habit }: { habit: Habit }) {
 }
 
 export default function HabitsPage() {
+  const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
 
@@ -98,6 +118,11 @@ export default function HabitsPage() {
     queryKey: ["/api/habits"],
     queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
   });
+
+  const handleCreate = () => {
+    if (!newName.trim()) { toast({ title: "Name required", description: "Enter a habit name", variant: "destructive" }); return; }
+    createMutation.mutate(newName.trim());
+  };
 
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
@@ -148,13 +173,13 @@ export default function HabitsPage() {
               placeholder="New habit name..."
               value={newName}
               onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && newName.trim() && createMutation.mutate(newName.trim())}
+              onKeyDown={e => e.key === "Enter" && handleCreate()}
               data-testid="input-habit-name"
             />
             <Button
               size="sm"
               disabled={!newName.trim() || createMutation.isPending}
-              onClick={() => newName.trim() && createMutation.mutate(newName.trim())}
+              onClick={handleCreate}
               data-testid="button-save-habit"
             >
               Add

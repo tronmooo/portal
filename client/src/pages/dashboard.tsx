@@ -3460,7 +3460,7 @@ function GoalEditDialog({ open, onClose, goal }: { open: boolean; onClose: () =>
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <DialogContent data-testid="dialog-edit-goal">
         <DialogHeader><DialogTitle>Edit Goal</DialogTitle></DialogHeader>
-        <form onSubmit={e => { e.preventDefault(); mutation.mutate(); }} className="space-y-3">
+        <form onSubmit={e => { e.preventDefault(); if (!form.title.trim()) { toast({ title: "Title required", description: "Enter a goal title", variant: "destructive" }); return; } if (!form.target || parseFloat(form.target) <= 0) { toast({ title: "Invalid target", description: "Target must be greater than 0", variant: "destructive" }); return; } mutation.mutate(); }} className="space-y-3">
           <div className="space-y-1"><Label>Title</Label><Input value={form.title} onChange={e => setForm(f => ({...f, title: e.target.value}))} required data-testid="input-edit-goal-title" /></div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1"><Label>Target</Label><Input type="number" step="0.1" value={form.target} onChange={e => setForm(f => ({...f, target: e.target.value}))} required data-testid="input-edit-goal-target" /></div>
@@ -3537,7 +3537,8 @@ function GoalsSection() {
   });
 
   const handleSubmit = () => {
-    if (!form.title || !form.target) return;
+    if (!form.title.trim()) { toast({ title: "Title required", description: "Enter a goal title", variant: "destructive" }); return; }
+    if (!form.target || parseFloat(form.target) <= 0) { toast({ title: "Invalid target", description: "Target must be greater than 0", variant: "destructive" }); return; }
     createMutation.mutate({
       title: form.title,
       type: form.type,
@@ -3857,7 +3858,8 @@ function GoalsSection() {
           <form onSubmit={(e) => {
             e.preventDefault();
             const amount = parseFloat(logAmount);
-            if (isNaN(amount) || amount === 0) return;
+            if (isNaN(amount) || amount === 0) { toast({ title: "Invalid amount", description: "Enter a non-zero value", variant: "destructive" }); return; }
+            if (amount < 0) { toast({ title: "Negative value", description: "Progress amount must be positive", variant: "destructive" }); return; }
             const newCurrent = (logProgressGoal?.current || 0) + amount;
             updateMutation.mutate({ id: logProgressGoal.id, data: { current: newCurrent } });
             toast({ title: "Progress logged", description: `Added ${amount} ${logProgressGoal?.unit || ""} to ${logProgressGoal?.title}` });
@@ -4213,7 +4215,7 @@ function QuickActionsRow() {
             <DialogTitle className="text-sm">Log Weight</DialogTitle>
             <DialogDescription className="text-xs">Enter your current weight</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); const w = parseFloat(weightVal); if (!w || w <= 0 || w > 2000) return; weightMut.mutate(); }}>
+          <form onSubmit={(e) => { e.preventDefault(); const w = parseFloat(weightVal); if (!w || w <= 0 || w > 1500) { toast({ title: "Invalid weight", description: "Enter a value between 0.1 and 1500 lbs", variant: "destructive" }); return; } weightMut.mutate(); }}>
             <Input type="number" step="0.1" min="0" max="2000" placeholder="e.g. 183.5" value={weightVal} onChange={e => setWeightVal(e.target.value)} className="mb-3" autoFocus data-testid="input-quick-weight" />
             <Button type="submit" className="w-full h-8 text-xs" disabled={!weightVal || weightMut.isPending} data-testid="btn-submit-weight">
               {weightMut.isPending ? "Logging..." : "Log Weight"}
@@ -4229,7 +4231,7 @@ function QuickActionsRow() {
             <DialogTitle className="text-sm">Add Expense</DialogTitle>
             <DialogDescription className="text-xs">Log a new expense</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); if (!expAmount || parseFloat(expAmount) <= 0 || !expDesc.trim()) return; expMut.mutate(); }} className="space-y-2">
+          <form onSubmit={(e) => { e.preventDefault(); if (!expAmount || parseFloat(expAmount) <= 0) { toast({ title: "Invalid amount", description: "Enter a positive dollar amount", variant: "destructive" }); return; } if (!expDesc.trim()) { toast({ title: "Description required", description: "Enter a short description", variant: "destructive" }); return; } expMut.mutate(); }} className="space-y-2">
             <Input type="number" step="0.01" placeholder="Amount" value={expAmount} onChange={e => setExpAmount(e.target.value)} autoFocus data-testid="input-quick-expense-amount" />
             <Input placeholder="Description" value={expDesc} onChange={e => setExpDesc(e.target.value)} data-testid="input-quick-expense-desc" />
             <Select value={expCategory} onValueChange={setExpCategory}>
@@ -4256,7 +4258,7 @@ function QuickActionsRow() {
             <DialogTitle className="text-sm">Quick Task</DialogTitle>
             <DialogDescription className="text-xs">Create a new task</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); if (!taskTitle.trim()) return; taskMut.mutate(); }} className="space-y-2">
+          <form onSubmit={(e) => { e.preventDefault(); if (!taskTitle.trim()) { toast({ title: "Title required", description: "Enter a task title", variant: "destructive" }); return; } taskMut.mutate(); }} className="space-y-2">
             <Input placeholder="Task title" value={taskTitle} onChange={e => setTaskTitle(e.target.value)} autoFocus data-testid="input-quick-task-title" />
             <Select value={taskPriority} onValueChange={setTaskPriority}>
               <SelectTrigger className="h-8 text-xs" data-testid="select-quick-task-priority">
@@ -4282,7 +4284,7 @@ function QuickActionsRow() {
             <DialogTitle className="text-sm">Journal Entry</DialogTitle>
             <DialogDescription className="text-xs">How are you feeling?</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); journalMut.mutate(); }} className="space-y-2">
+          <form onSubmit={(e) => { e.preventDefault(); if (!journalContent.trim()) { toast({ title: "Write something", description: "Journal entry cannot be empty", variant: "destructive" }); return; } journalMut.mutate(); }} className="space-y-2">
             <div className="flex gap-1.5 justify-center">
               {(["amazing", "good", "neutral", "bad", "awful"] as const).map(mood => {
                 const cfg = MOOD_CONFIG[mood];

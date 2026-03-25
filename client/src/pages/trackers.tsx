@@ -625,6 +625,9 @@ function AddEntryDialog({
       // Prevent empty entries
       const hasValue = Object.values(coerced).some(v => v !== undefined && v !== "" && v !== null);
       if (!hasValue) throw new Error("Please fill in at least one field");
+      // Reject negative numeric values
+      const hasNegative = Object.values(coerced).some(v => typeof v === "number" && v < 0);
+      if (hasNegative) throw new Error("Values must be positive numbers");
       const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, {
         values: coerced,
         notes: notes.trim() || undefined,
@@ -666,6 +669,8 @@ function AddEntryDialog({
               {f.type === "number" && (
                 <Input
                   type="number"
+                  min="0"
+                  step="any"
                   value={values[f.name] ?? ""}
                   onChange={(e) => setValues((p) => ({ ...p, [f.name]: e.target.value }))}
                   placeholder={`Enter ${f.name}`}
@@ -1139,6 +1144,7 @@ function CreateTrackerDialog({
 
   const mutation = useMutation({
     mutationFn: async () => {
+      if (!name.trim()) { toast({ title: "Name required", description: "Enter a tracker name", variant: "destructive" }); throw new Error("Name required"); }
       let builtFields = fields
         .filter((f) => f.name.trim())
         .map((f, i) => ({

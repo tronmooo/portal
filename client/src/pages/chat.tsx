@@ -693,13 +693,13 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, assistantMsg]);
       invalidateAll();
     },
-    onError: () => {
+    onError: (err: Error) => {
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           role: "assistant",
-          content: "Something went wrong. Please try again.",
+          content: `Something went wrong: ${err.message || "Network error"}. Please try again.`,
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -731,13 +731,13 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, assistantMsg]);
       invalidateAll();
     },
-    onError: () => {
+    onError: (err: Error) => {
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           role: "assistant",
-          content: "Failed to process the uploaded file. Please try again.",
+          content: `Failed to process the uploaded file: ${err.message || "Network error"}. Please try again.`,
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -804,13 +804,13 @@ export default function ChatPage() {
       setBatchProcessedCount(0);
       invalidateAll();
     },
-    onError: () => {
+    onError: (err: Error) => {
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           role: "assistant",
-          content: "Failed to process the batch upload. Please try again.",
+          content: `Failed to process the batch upload: ${err.message || "Network error"}. Please try again.`,
           timestamp: new Date().toISOString(),
         },
       ]);

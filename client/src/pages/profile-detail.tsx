@@ -2281,8 +2281,31 @@ function EditProfileDialog({
     return result;
   });
 
+  const validateFields = (): boolean => {
+    const emailKeys = Object.keys(fields).filter(k => k.toLowerCase().includes("email"));
+    for (const key of emailKeys) {
+      if (fields[key] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields[key])) {
+        toast({ title: "Invalid email", description: `Enter a valid email address for ${key}`, variant: "destructive" });
+        return false;
+      }
+    }
+    const phoneKeys = Object.keys(fields).filter(k => k.toLowerCase().includes("phone"));
+    for (const key of phoneKeys) {
+      if (fields[key] && !/^\+?[\d\s()-]{7,15}$/.test(fields[key])) {
+        toast({ title: "Invalid phone", description: `Enter a valid phone number for ${key}`, variant: "destructive" });
+        return false;
+      }
+    }
+    if (!name.trim()) {
+      toast({ title: "Name required", variant: "destructive" });
+      return false;
+    }
+    return true;
+  };
+
   const mutation = useMutation({
     mutationFn: async () => {
+      if (!validateFields()) throw new Error("Validation failed");
       const parsedFields: Record<string, any> = {};
       for (const [k, v] of Object.entries(fields)) {
         const num = Number(v);

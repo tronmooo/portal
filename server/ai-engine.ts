@@ -2,7 +2,15 @@ import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
 
-const client = new Anthropic();
+// Lazy-init: dotenv.config() runs after ESM imports resolve,
+// so we defer client creation until first use.
+let _client: Anthropic | null = null;
+function getClient(): Anthropic {
+  if (!_client) {
+    _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return _client;
+}
 
 // ============================================================
 // ACTION LOG — in-memory history of the last 20 CRUD operations
@@ -283,7 +291,7 @@ Respond with JSON:
   try {
     const mediaType = mimeType.startsWith("image/") ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
 
-    const response = await client.messages.create({
+    const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
       max_tokens: 2048,
       messages: [{
@@ -2260,7 +2268,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
 
-      const response = await client.messages.create({
+      const response = await getClient().messages.create({
         model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
         max_tokens: 2048,
         system: systemPrompt,

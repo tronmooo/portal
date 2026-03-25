@@ -661,6 +661,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   });
   app.post("/api/trackers/:id/entries", async (req, res) => {
+    const { values } = req.body;
+    if (!values || typeof values !== "object") {
+      return res.status(400).json({ error: "Values required" });
+    }
+    if (Object.values(values).some((v: any) => typeof v === "number" && v < 0)) {
+      return res.status(400).json({ error: "Values must not be negative" });
+    }
     const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     const entry = await storage.logEntry(parsed.data);
@@ -686,7 +693,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Tasks ----
   app.get("/api/tasks", async (_req, res) => { res.json(await storage.getTasks()); });
   app.post("/api/tasks", async (req, res) => {
-    if (req.body.title) req.body.title = sanitize(req.body.title);
+    if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
+      return res.status(400).json({ error: "Task title required" });
+    }
+    req.body.title = sanitize(req.body.title);
     if (req.body.description) req.body.description = sanitize(req.body.description);
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
@@ -712,7 +722,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Expenses ----
   app.get("/api/expenses", async (_req, res) => { res.json(await storage.getExpenses()); });
   app.post("/api/expenses", async (req, res) => {
-    if (req.body.description) req.body.description = sanitize(req.body.description);
+    if (!req.body.amount || typeof req.body.amount !== "number" || req.body.amount <= 0) {
+      return res.status(400).json({ error: "Positive amount required" });
+    }
+    if (!req.body.description || typeof req.body.description !== "string" || !req.body.description.trim()) {
+      return res.status(400).json({ error: "Description required" });
+    }
+    req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
@@ -1271,7 +1287,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         domains: await storage.getDomains(),
       };
       res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="lifeos-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+      res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${new Date().toISOString().slice(0, 10)}.json"`);
       res.json(data);
     } catch (err: any) {
       console.error("Export error:", err);
@@ -1967,6 +1983,12 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   app.post("/api/goals", async (req, res) => {
     try {
+      if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
+        return res.status(400).json({ error: "Goal title required" });
+      }
+      if (!req.body.target || typeof req.body.target !== "number" || req.body.target <= 0) {
+        return res.status(400).json({ error: "Target must be greater than 0" });
+      }
       const parsed = insertGoalSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
       const goal = await storage.createGoal(parsed.data);

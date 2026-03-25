@@ -1567,7 +1567,9 @@ export class MemStorage implements IStorage {
 // IMPORTANT: Lazy initialization — dotenv.config() must run before first access.
 // ES module static imports hoist, so we can't eagerly call createStorage() at
 // module load time. Instead, we defer creation until the first property access.
-// SqliteStorage is loaded dynamically to avoid importing better-sqlite3 in serverless environments
+// SupabaseStorage imported statically — it's always bundled by esbuild.
+// SqliteStorage loaded dynamically to avoid importing better-sqlite3 in serverless environments.
+import { SupabaseStorage } from './supabase-storage';
 
 let _storageInstance: IStorage | null = null;
 
@@ -1577,9 +1579,6 @@ function getStorage(): IStorage {
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (supabaseUrl && supabaseKey) {
-      // Dynamic require to avoid esbuild bundling issues with CJS/ESM interop
-      const supabaseModule = require('./supabase-storage');
-      const { SupabaseStorage } = supabaseModule;
       console.log('[storage] Using Supabase PostgreSQL storage');
       _storageInstance = new SupabaseStorage(supabaseUrl, supabaseKey, 'anonymous');
     } else {

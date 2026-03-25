@@ -773,6 +773,22 @@ function CreateProfileDialog({
       toast({ title: "Name is required", variant: "destructive" });
       return;
     }
+    // Email validation
+    const emailFields = ["email", "loginEmail"];
+    for (const key of emailFields) {
+      if (fields[key] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields[key])) {
+        toast({ title: "Invalid email", description: `Enter a valid email address for ${key}`, variant: "destructive" });
+        return;
+      }
+    }
+    // Phone validation
+    const phoneFields = ["phone", "vetPhone"];
+    for (const key of phoneFields) {
+      if (fields[key] && !/^\+?[\d\s()-]{7,15}$/.test(fields[key])) {
+        toast({ title: "Invalid phone", description: `Enter a valid phone number for ${key}`, variant: "destructive" });
+        return;
+      }
+    }
     const tags = tagsInput
       .split(",")
       .map((t) => t.trim())
