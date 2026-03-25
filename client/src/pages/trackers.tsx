@@ -67,8 +67,12 @@ import {
   Star,
   Smile,
   Unlink,
+  ArrowLeft,
+  Table2,
+  LayoutGrid,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { Link } from "wouter";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile } from "@shared/schema";
 import {
   LineChart,
@@ -1619,6 +1623,7 @@ export default function TrackersPage() {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   // Default to "me" (self profile) — not "all" — so pet/other profile trackers don't show by default
   const [profileFilter, setProfileFilter] = useState<string>("me");
+  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
 
   // Auto-resolve "me" to the actual self profile ID once profiles load
   const selfProfile = (profiles || []).find(p => p.type === "self");
@@ -1699,21 +1704,44 @@ export default function TrackersPage() {
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full" data-testid="page-trackers">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold" data-testid="text-trackers-title">
-            Trackers
-          </h1>
+          <div className="flex items-center gap-3 mb-4">
+            <Link href="/">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            </Link>
+            <h1 className="text-xl font-semibold" data-testid="text-trackers-title">Trackers</h1>
+          </div>
           <p className="text-sm text-muted-foreground mt-0.5">
             {filteredTrackers.length}{resolvedFilter !== "all" ? ` of ${(trackers || []).length}` : ""} trackers{resolvedFilter !== "all" ? " shown" : ""}
           </p>
         </div>
-        <Button
-          onClick={() => setCreateOpen(true)}
-          size="sm"
-          data-testid="button-create-tracker"
-        >
-          <Plus className="h-4 w-4 mr-1.5" />
-          New Tracker
-        </Button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 border rounded-md p-0.5">
+            <button
+              onClick={() => setViewMode("table")}
+              className={`p-1.5 rounded ${viewMode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+              data-testid="view-table"
+            >
+              <Table2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode("cards")}
+              className={`p-1.5 rounded ${viewMode === "cards" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+              data-testid="view-cards"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+          </div>
+          <Button
+            onClick={() => setCreateOpen(true)}
+            size="sm"
+            data-testid="button-create-tracker"
+          >
+            <Plus className="h-4 w-4 mr-1.5" />
+            New Tracker
+          </Button>
+        </div>
       </div>
 
       {/* Profile Filter Bar — always shown when profiles exist */}
@@ -1821,6 +1849,56 @@ export default function TrackersPage() {
           >
             Show All Trackers
           </Button>
+        </div>
+      ) : viewMode === "table" ? (
+        <div className="border rounded-lg overflow-hidden" data-testid="tracker-table">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-muted/50 border-b">
+                <th className="text-left p-3 font-medium">Tracker</th>
+                <th className="text-left p-3 font-medium">Category</th>
+                <th className="text-left p-3 font-medium">Latest Value</th>
+                <th className="text-left p-3 font-medium">Last Updated</th>
+                <th className="text-left p-3 font-medium">Entries</th>
+                <th className="text-left p-3 font-medium">Linked To</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredTrackers.map((tracker) => {
+                const lastEntry = tracker.entries[tracker.entries.length - 1];
+                const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
+                const latestValue = lastEntry?.values?.[primaryField];
+                const unit = tracker.unit || "";
+                const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
+                return (
+                  <tr
+                    key={tracker.id}
+                    className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
+                    data-testid={`tracker-row-${tracker.id}`}
+                  >
+                    <td className="p-3 font-medium">{tracker.name}</td>
+                    <td className="p-3">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-muted">{tracker.category}</span>
+                    </td>
+                    <td className="p-3 font-mono tabular-nums">
+                      {latestValue != null ? `${latestValue} ${unit}` : "\u2014"}
+                    </td>
+                    <td className="p-3 text-muted-foreground">
+                      {lastEntry ? new Date(lastEntry.timestamp).toLocaleDateString() : "\u2014"}
+                    </td>
+                    <td className="p-3 text-muted-foreground">{tracker.entries.length}</td>
+                    <td className="p-3">
+                      {linkedProfile ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                          {linkedProfile.name}
+                        </span>
+                      ) : "\u2014"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       ) : (
         sortedCats.map((cat) => (

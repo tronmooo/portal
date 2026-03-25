@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertCircle, CheckCircle2, Loader2, Shield } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, Shield, ArrowLeft } from "lucide-react";
+import { Link } from "wouter";
 
 export default function ResetPasswordPage() {
   const [, setLocation] = useLocation();
@@ -74,6 +75,14 @@ export default function ResetPasswordPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-md space-y-6">
+        <div className="flex items-center gap-3 mb-4">
+          <Link href="/">
+            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          </Link>
+          <span className="text-sm text-muted-foreground">Back to sign in</span>
+        </div>
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 mb-2">
             <Shield className="w-7 h-7 text-primary" />

@@ -49,6 +49,7 @@ import {
   TrendingUp,
   Landmark,
   Package,
+  ArrowLeft,
 } from "lucide-react";
 import type { Profile, ProfileType, InsertProfile } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1065,9 +1066,14 @@ export default function ProfilesPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-semibold" data-testid="text-profiles-title">
-            Profiles
-          </h1>
+          <div className="flex items-center gap-3 mb-4">
+            <Link href="/">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            </Link>
+            <h1 className="text-xl font-semibold" data-testid="text-profiles-title">Profiles</h1>
+          </div>
           <p className="text-sm text-muted-foreground mt-0.5">
             {(profiles || []).length} total — people, pets, vehicles, subscriptions, and more
           </p>

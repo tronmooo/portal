@@ -32,7 +32,9 @@ import {
   AlertCircle,
   Loader2,
   Trash2,
+  ArrowLeft,
 } from "lucide-react";
+import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/components/theme-provider";
 import { apiRequest } from "@/lib/queryClient";
@@ -126,7 +128,14 @@ export default function SettingsPage() {
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto p-4 md:p-6 space-y-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight" data-testid="text-settings-title">Settings</h1>
+          <div className="flex items-center gap-3 mb-4">
+            <Link href="/">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            </Link>
+            <h1 className="text-xl font-semibold tracking-tight" data-testid="text-settings-title">Settings</h1>
+          </div>
           <p className="text-sm text-muted-foreground mt-1">Manage your account, appearance, and data.</p>
         </div>
 

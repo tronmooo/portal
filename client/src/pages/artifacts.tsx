@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { CheckSquare, FileText, Pin, Plus, X } from "lucide-react";
+import { CheckSquare, FileText, Pin, Plus, X, ArrowLeft } from "lucide-react";
+import { Link } from "wouter";
 import type { Artifact } from "@shared/schema";
 import { useState } from "react";
 
@@ -133,7 +134,14 @@ export default function ArtifactsPage() {
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold">Artifacts</h1>
+          <div className="flex items-center gap-3 mb-4">
+            <Link href="/dashboard">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            </Link>
+            <h1 className="text-lg font-semibold">Artifacts</h1>
+          </div>
           <p className="text-xs text-muted-foreground">{artifacts.length} checklists & notes</p>
         </div>
         <Button size="sm" onClick={() => setShowCreate(!showCreate)} data-testid="button-create-artifact">
