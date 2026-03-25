@@ -871,7 +871,7 @@ function TrackerCard({
             </CardTitle>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <Badge variant="secondary" className="text-[10px] capitalize">{tracker.category}</Badge>
-              <span className="text-[10px] text-muted-foreground">{tracker.entries.length} entries</span>
+              <span className="text-[10px] text-muted-foreground">{tracker.entries.length} {tracker.entries.length === 1 ? 'entry' : 'entries'}</span>
               {linkedProfileNames.map(p => {
                 const PIcon = PROFILE_TYPE_ICONS[p.type] || User;
                 return (
@@ -1540,7 +1540,7 @@ function TrackerSummary({ trackers }: { trackers: Tracker[] }) {
         <div className="text-xl font-semibold tabular-nums" style={{ color: CHART_COLORS.primary }}>
           {weeklyEntries}
         </div>
-        <div className="text-[10px] text-muted-foreground mt-0.5">entries logged</div>
+        <div className="text-[10px] text-muted-foreground mt-0.5">{weeklyEntries === 1 ? 'entry' : 'entries'} logged</div>
       </Card>
 
       {/* Most active */}
@@ -1553,7 +1553,7 @@ function TrackerSummary({ trackers }: { trackers: Tracker[] }) {
           {mostActive.count > 0 ? mostActive.name : "—"}
         </div>
         <div className="text-[10px] text-muted-foreground mt-0.5">
-          {mostActive.count > 0 ? `${mostActive.count} entries this week` : "No entries yet"}
+          {mostActive.count > 0 ? `${mostActive.count} ${mostActive.count === 1 ? 'entry' : 'entries'} this week` : "No entries yet"}
         </div>
       </Card>
 
@@ -1622,8 +1622,8 @@ export default function TrackersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-  // Default to "me" (self profile) — not "all" — so pet/other profile trackers don't show by default
-  const [profileFilter, setProfileFilter] = useState<string>("me");
+  // Default to "all" so all trackers are visible
+  const [profileFilter, setProfileFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
 
   // Auto-resolve "me" to the actual self profile ID once profiles load
@@ -1860,7 +1860,7 @@ export default function TrackersPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-muted/50 border-b">
-                <th className="text-left p-3 font-medium">Tracker</th>
+                <th className="text-left p-3 font-medium min-w-[150px]">Tracker</th>
                 <th className="text-left p-3 font-medium">Category</th>
                 <th className="text-left p-3 font-medium">Latest Value</th>
                 <th className="text-left p-3 font-medium">Last Updated</th>

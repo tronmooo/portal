@@ -52,6 +52,10 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+function formatMoney(n: number): string {
+  return n % 1 === 0 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
+}
+
 // ─── Mood config ────────────────────────────────────────────────────────────
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
@@ -348,7 +352,7 @@ function ProfileAddDialog({ open, onClose }: { open: boolean; onClose: () => voi
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating…" : "Create"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -390,7 +394,7 @@ function TrackerAddDialog({ open, onClose }: { open: boolean; onClose: () => voi
           <div className="space-y-1"><Label>Unit</Label><Input value={form.unit} onChange={e => setForm((f: any) => ({...f, unit: e.target.value}))} placeholder="e.g. kg, bpm, hours" data-testid="input-add-tracker-unit" /></div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating…" : "Create"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -454,7 +458,7 @@ function TrackersListDialog({ open, onClose }: { open: boolean; onClose: () => v
                       <span className="text-[10px] text-muted-foreground">{t.entries.length} entries</span>
                     </div>
                   </div>
-                  <span className="text-[10px] text-muted-foreground">{t.fields.length} fields</span>
+                  <span className="text-[10px] text-muted-foreground">{t.fields.length} {t.fields.length === 1 ? 'field' : 'fields'}</span>
                   <Button
                     size="sm" variant="ghost"
                     className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
@@ -745,7 +749,7 @@ function ExpenseEditDialog({ open, onClose, expense }: { open: boolean; onClose:
           <div className="space-y-1"><Label>Vendor</Label><Input value={form.vendor} onChange={e => setForm((f: any) => ({...f, vendor: e.target.value}))} data-testid="input-edit-expense-vendor" /></div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -917,7 +921,7 @@ function HabitAddDialog({ open, onClose }: { open: boolean; onClose: () => void 
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating…" : "Create"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -957,7 +961,7 @@ function HabitEditDialog({ open, onClose, habit }: { open: boolean; onClose: () 
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1009,7 +1013,7 @@ function ObligationsListDialog({ open, onClose }: { open: boolean; onClose: () =
               <CreditCard className="h-4 w-4 text-primary" />
               Bills & Obligations
               <Badge variant="secondary" className="ml-1">{obligations.length}</Badge>
-              <span className="text-xs text-muted-foreground font-normal ml-1">${monthlyTotal.toFixed(0)}/mo</span>
+              <span className="text-xs text-muted-foreground font-normal ml-1">{formatMoney(monthlyTotal)}/mo</span>
               <ViewFullPageLink onClose={onClose} href="/dashboard/obligations" />
             </DialogTitle>
           </DialogHeader>
@@ -1141,7 +1145,7 @@ function ObligationEditDialog({ open, onClose, obligation }: { open: boolean; on
           <div className="space-y-1"><Label>Notes</Label><Textarea value={form.notes} onChange={e => setForm((f: any) => ({...f, notes: e.target.value}))} rows={2} data-testid="input-edit-ob-notes" /></div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1284,7 +1288,7 @@ function JournalEditDialog({ open, onClose, entry }: { open: boolean; onClose: (
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1423,7 +1427,7 @@ function ArtifactAddDialog({ open, onClose }: { open: boolean; onClose: () => vo
           <div className="space-y-1"><Label>{form.type === "checklist" ? "Items (one per line)" : "Content"}</Label><Textarea value={form.content} onChange={e => setForm(f => ({...f, content: e.target.value}))} rows={4} data-testid="input-add-artifact-content" /></div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating\u2026" : "Create"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Creating…" : "Create"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1469,7 +1473,7 @@ function ArtifactEditDialog({ open, onClose, artifact }: { open: boolean; onClos
           <div className="space-y-1"><Label>{artifact.type === "checklist" ? "Items (one per line)" : "Content"}</Label><Textarea value={form.content} onChange={e => setForm(f => ({...f, content: e.target.value}))} rows={4} data-testid="input-edit-artifact-content" /></div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1490,9 +1494,9 @@ function KeyStatsRow({ stats }: { stats: DashboardStats }) {
       {/* Row 1: 4 primary metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <MiniStat icon={ListTodo} label="Active Tasks" value={stats.activeTasks} sub={`${stats.totalTasks} total`} onClick={() => setOpenDialog("tasks")} />
-        <MiniStat icon={DollarSign} label="Spent This Mo" value={`$${stats.monthlySpend.toFixed(0)}`} onClick={() => setOpenDialog("spending")} />
+        <MiniStat icon={DollarSign} label="Spent This Mo" value={`${formatMoney(stats.monthlySpend)}`} onClick={() => setOpenDialog("spending")} />
         <MiniStat icon={Flame} label="Habits" value={`${stats.habitCompletionRate}%`} sub={`${stats.totalHabits} active`} color="#FF6B2B" onClick={() => setOpenDialog("habits")} />
-        <MiniStat icon={CreditCard} label="Bills Due" value={stats.upcomingObligations} sub={`$${stats.monthlyObligationTotal.toFixed(0)}/mo`} color="#BB653B" onClick={() => setOpenDialog("obligations")} />
+        <MiniStat icon={CreditCard} label="Bills Due" value={stats.upcomingObligations} sub={`${formatMoney(stats.monthlyObligationTotal)}/mo`} color="#BB653B" onClick={() => setOpenDialog("obligations")} />
       </div>
       {/* Row 2: 4 secondary metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -2199,7 +2203,7 @@ function TaskDialog({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={mutation.isPending} data-testid="btn-save-task">
-              {mutation.isPending ? "Saving\u2026" : isEdit ? "Save Changes" : "Add Task"}
+              {mutation.isPending ? "Saving…" : isEdit ? "Save Changes" : "Add Task"}
             </Button>
           </DialogFooter>
         </form>
@@ -2306,7 +2310,7 @@ function TaskRow({
               onClick={() => deleteMutation.mutate()}
               data-testid={`btn-confirm-delete-task-${task.id}`}
             >
-              {deleteMutation.isPending ? "Deleting\u2026" : "Delete"}
+              {deleteMutation.isPending ? "Deleting…" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2711,7 +2715,7 @@ function ObligationDialog({ open, onClose }: { open: boolean; onClose: () => voi
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={mutation.isPending} data-testid="btn-save-obligation">
-              {mutation.isPending ? "Saving\u2026" : "Add Obligation"}
+              {mutation.isPending ? "Saving…" : "Add Obligation"}
             </Button>
           </DialogFooter>
         </form>
@@ -2811,7 +2815,7 @@ function PayObligationDialog({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={mutation.isPending} data-testid="btn-confirm-payment">
-              {mutation.isPending ? "Recording\u2026" : "Mark Paid"}
+              {mutation.isPending ? "Recording…" : "Mark Paid"}
             </Button>
           </DialogFooter>
         </form>
@@ -2966,7 +2970,7 @@ function ObligationsSection() {
               onClick={() => deleteOb && deleteMutation.mutate(deleteOb.id)}
               data-testid="btn-confirm-delete-obligation"
             >
-              {deleteMutation.isPending ? "Deleting\u2026" : "Delete"}
+              {deleteMutation.isPending ? "Deleting…" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3064,7 +3068,7 @@ function JournalDialog({ open, onClose }: { open: boolean; onClose: () => void }
               id="journal-content"
               value={form.content}
               onChange={e => setForm((f: any) => ({ ...f, content: e.target.value }))}
-              placeholder="Write about your day\u2026"
+              placeholder="Write about your day…"
               rows={3}
               data-testid="input-journal-content"
             />
@@ -3091,11 +3095,11 @@ function JournalDialog({ open, onClose }: { open: boolean; onClose: () => void }
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1">1 \u2014 Very Low</SelectItem>
-                  <SelectItem value="2">2 \u2014 Low</SelectItem>
-                  <SelectItem value="3">3 \u2014 Moderate</SelectItem>
-                  <SelectItem value="4">4 \u2014 High</SelectItem>
-                  <SelectItem value="5">5 \u2014 Very High</SelectItem>
+                  <SelectItem value="1">1 — Very Low</SelectItem>
+                  <SelectItem value="2">2 — Low</SelectItem>
+                  <SelectItem value="3">3 — Moderate</SelectItem>
+                  <SelectItem value="4">4 — High</SelectItem>
+                  <SelectItem value="5">5 — Very High</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -3104,7 +3108,7 @@ function JournalDialog({ open, onClose }: { open: boolean; onClose: () => void }
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={mutation.isPending} data-testid="btn-save-journal">
-              {mutation.isPending ? "Saving\u2026" : "Save Entry"}
+              {mutation.isPending ? "Saving…" : "Save Entry"}
             </Button>
           </DialogFooter>
         </form>
@@ -3164,7 +3168,7 @@ function JournalSection() {
               <div key={i} className="flex flex-col items-center gap-0.5">
                 <div
                   className={`w-7 h-7 rounded-full flex items-center justify-center ${cfg ? cfg.bg : "bg-muted"}`}
-                  title={day.date + (day.mood ? ` \u2014 ${day.mood}` : " \u2014 no entry")}
+                  title={day.date + (day.mood ? ` — ${day.mood}` : " — no entry")}
                 >
                   <MIcon className="h-3 w-3" style={{ color: cfg?.color || "#797876" }} />
                 </div>
@@ -3237,7 +3241,7 @@ function JournalSection() {
               onClick={() => deleteEntry && deleteMutation.mutate(deleteEntry.id)}
               data-testid="btn-confirm-delete-journal"
             >
-              {deleteMutation.isPending ? "Deleting\u2026" : "Delete"}
+              {deleteMutation.isPending ? "Deleting…" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3465,7 +3469,7 @@ function GoalEditDialog({ open, onClose, goal }: { open: boolean; onClose: () =>
           <div className="space-y-1"><Label>Deadline</Label><Input type="date" value={form.deadline} onChange={e => setForm(f => ({...f, deadline: e.target.value}))} data-testid="input-edit-goal-deadline" /></div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving\u2026" : "Save"}</Button>
+            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving…" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -3861,7 +3865,7 @@ function InsightsSection() {
   // Loading / shimmer state
   if (isLoading) {
     return (
-      <CollapsibleSection icon={Sparkles} label="AI Weekly Digest" testId="section-insights">
+      <CollapsibleSection icon={Sparkles} label="AI Insights" testId="section-insights">
         <div className="space-y-2" data-testid="digest-loading">
           <div className="flex items-center gap-3">
             <Skeleton className="h-14 w-14 rounded-full shrink-0" />
@@ -3887,7 +3891,7 @@ function InsightsSection() {
   const moodEmoji: Record<string, string> = { amazing: "🤩", good: "😊", neutral: "😐", bad: "😞", awful: "😢", none: "—" };
 
   return (
-    <CollapsibleSection icon={Sparkles} label="AI Weekly Digest" testId="section-insights">
+    <CollapsibleSection icon={Sparkles} label="AI Insights" testId="section-insights">
       <div className="space-y-2.5" data-testid="digest-content">
 
         {/* Header: Headline + Score */}
@@ -3962,7 +3966,7 @@ function InsightsSection() {
             <p className="text-[8px] text-muted-foreground">Habits 🔥</p>
           </div>
           <div className="text-center">
-            <p className="text-[10px] font-bold">${ws.expensesTotal.toFixed(0)}</p>
+            <p className="text-[10px] font-bold">{formatMoney(ws.expensesTotal)}</p>
             <p className="text-[8px] text-muted-foreground">Spent 💰</p>
           </div>
           <div className="text-center">
@@ -4156,8 +4160,8 @@ function QuickActionsRow() {
             <DialogTitle className="text-sm">Log Weight</DialogTitle>
             <DialogDescription className="text-xs">Enter your current weight</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); weightMut.mutate(); }}>
-            <Input type="number" step="0.1" placeholder="e.g. 183.5" value={weightVal} onChange={e => setWeightVal(e.target.value)} className="mb-3" autoFocus data-testid="input-quick-weight" />
+          <form onSubmit={(e) => { e.preventDefault(); const w = parseFloat(weightVal); if (!w || w <= 0 || w > 2000) return; weightMut.mutate(); }}>
+            <Input type="number" step="0.1" min="0" max="2000" placeholder="e.g. 183.5" value={weightVal} onChange={e => setWeightVal(e.target.value)} className="mb-3" autoFocus data-testid="input-quick-weight" />
             <Button type="submit" className="w-full h-8 text-xs" disabled={!weightVal || weightMut.isPending} data-testid="btn-submit-weight">
               {weightMut.isPending ? "Logging..." : "Log Weight"}
             </Button>
@@ -4172,7 +4176,7 @@ function QuickActionsRow() {
             <DialogTitle className="text-sm">Add Expense</DialogTitle>
             <DialogDescription className="text-xs">Log a new expense</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); expMut.mutate(); }} className="space-y-2">
+          <form onSubmit={(e) => { e.preventDefault(); if (!expAmount || parseFloat(expAmount) <= 0 || !expDesc.trim()) return; expMut.mutate(); }} className="space-y-2">
             <Input type="number" step="0.01" placeholder="Amount" value={expAmount} onChange={e => setExpAmount(e.target.value)} autoFocus data-testid="input-quick-expense-amount" />
             <Input placeholder="Description" value={expDesc} onChange={e => setExpDesc(e.target.value)} data-testid="input-quick-expense-desc" />
             <Select value={expCategory} onValueChange={setExpCategory}>
@@ -4199,7 +4203,7 @@ function QuickActionsRow() {
             <DialogTitle className="text-sm">Quick Task</DialogTitle>
             <DialogDescription className="text-xs">Create a new task</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); taskMut.mutate(); }} className="space-y-2">
+          <form onSubmit={(e) => { e.preventDefault(); if (!taskTitle.trim()) return; taskMut.mutate(); }} className="space-y-2">
             <Input placeholder="Task title" value={taskTitle} onChange={e => setTaskTitle(e.target.value)} autoFocus data-testid="input-quick-task-title" />
             <Select value={taskPriority} onValueChange={setTaskPriority}>
               <SelectTrigger className="h-8 text-xs" data-testid="select-quick-task-priority">

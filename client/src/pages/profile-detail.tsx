@@ -2419,10 +2419,8 @@ export default function ProfileDetailPage() {
       {/* Hero Header */}
       <div className={`bg-gradient-to-b ${profileGradient(profile.type)} px-4 md:px-6 pt-4 pb-6`}>
         <div className="flex items-center justify-between mb-3">
-          <Link href="/profiles">
-            <Button variant="ghost" size="sm" className="-ml-2 text-xs" data-testid="button-back-profiles">
-              <ArrowLeft className="h-3.5 w-3.5 mr-1" /> Profiles
-            </Button>
+          <Link href="/profiles" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-back-profiles">
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to Profiles
           </Link>
           <div className="flex gap-1.5">
             <Button

@@ -38,6 +38,10 @@ import { EVENT_CATEGORY_COLORS } from "@shared/schema";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function toLocalDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function getMonthDays(year: number, month: number) {
   const firstDay = new Date(year, month, 1);
   const lastDay = new Date(year, month + 1, 0);
@@ -52,28 +56,28 @@ function getMonthDays(year: number, month: number) {
     const d = prevMonth.getDate() - i;
     const dt = new Date(year, month - 1, d);
     days.push({
-      date: dt.toISOString().slice(0, 10),
+      date: toLocalDateStr(dt),
       dayNum: d,
       isCurrentMonth: false,
     });
   }
-  
+
   // Current month days
   for (let d = 1; d <= totalDays; d++) {
     const dt = new Date(year, month, d);
     days.push({
-      date: dt.toISOString().slice(0, 10),
+      date: toLocalDateStr(dt),
       dayNum: d,
       isCurrentMonth: true,
     });
   }
-  
+
   // Pad from next month
   const remaining = 42 - days.length; // 6 weeks
   for (let d = 1; d <= remaining; d++) {
     const dt = new Date(year, month + 1, d);
     days.push({
-      date: dt.toISOString().slice(0, 10),
+      date: toLocalDateStr(dt),
       dayNum: d,
       isCurrentMonth: false,
     });
@@ -156,7 +160,7 @@ function EventFormDialog({
 }) {
   const { toast } = useToast();
   const isEdit = !!eventId;
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = toLocalDateStr(new Date());
 
   const [form, setForm] = useState<EventFormData>({
     title: initial?.title ?? "",
@@ -695,7 +699,7 @@ function DayAgenda({
 
 export default function CalendarView() {
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = toLocalDateStr(today);
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [selectedDate, setSelectedDate] = useState(todayStr);
@@ -725,13 +729,13 @@ export default function CalendarView() {
   const startDate = useMemo(() => {
     const d = new Date(viewYear, viewMonth, 1);
     d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
+    return toLocalDateStr(d);
   }, [viewYear, viewMonth]);
 
   const endDate = useMemo(() => {
     const d = new Date(viewYear, viewMonth + 1, 0);
     d.setDate(d.getDate() + 14);
-    return d.toISOString().slice(0, 10);
+    return toLocalDateStr(d);
   }, [viewYear, viewMonth]);
 
   const { data: timelineItems = [] } = useQuery<CalendarTimelineItem[]>({

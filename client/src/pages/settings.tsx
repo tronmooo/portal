@@ -70,7 +70,15 @@ export default function SettingsPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       setLastExport(new Date().toLocaleString());
-      toast({ title: "Export complete", description: "Your data has been downloaded." });
+      const counts = Object.entries(data)
+        .filter(([, v]) => Array.isArray(v) && (v as any[]).length > 0)
+        .map(([k, v]) => {
+          const n = (v as any[]).length;
+          const label = n === 1 ? k.replace(/s$/, "") : k;
+          return `${n} ${label}`;
+        })
+        .join(", ");
+      toast({ title: "Export complete", description: counts ? `Exported ${counts}.` : "Your data has been downloaded." });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
     } finally {

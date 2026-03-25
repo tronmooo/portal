@@ -12,7 +12,8 @@ import { useState } from "react";
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
 
 function HabitCard({ habit }: { habit: Habit }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const checkedToday = habit.checkins.some(c => c.date === today);
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
 
@@ -24,7 +25,8 @@ function HabitCard({ habit }: { habit: Habit }) {
   // Build last 14 days grid
   const last14: { date: string; done: boolean }[] = [];
   for (let i = 13; i >= 0; i--) {
-    const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    const dd = new Date(Date.now() - i * 86400000);
+    const dateStr = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
     last14.push({ date: dateStr, done: habit.checkins.some(c => c.date === dateStr) });
   }
 
@@ -103,7 +105,8 @@ export default function HabitsPage() {
   });
 
   // Summary stats
-  const today = new Date().toISOString().slice(0, 10);
+  const todayD = new Date();
+  const today = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, '0')}-${String(todayD.getDate()).padStart(2, '0')}`;
   const completedToday = habits.filter(h => h.checkins.some(c => c.date === today)).length;
   const totalActive = habits.length;
 

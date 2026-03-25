@@ -3,7 +3,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft } from "lucide-react";
+import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus } from "lucide-react";
 import { Link } from "wouter";
 import type { Obligation } from "@shared/schema";
 
@@ -112,16 +112,23 @@ export default function ObligationsPage() {
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4">
-      <div>
-        <div className="flex items-center gap-3 mb-4">
-          <Link href="/dashboard">
-            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-          </Link>
-          <h1 className="text-lg font-semibold">Obligations</h1>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-3 mb-4">
+            <Link href="/dashboard">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            </Link>
+            <h1 className="text-lg font-semibold">Obligations</h1>
+          </div>
+          <p className="text-xs text-muted-foreground">Recurring bills and payments</p>
         </div>
-        <p className="text-xs text-muted-foreground">Recurring bills and payments</p>
+        <Link href="/">
+          <Button size="sm" data-testid="button-add-obligation">
+            <Plus className="w-4 h-4 mr-1" /> New
+          </Button>
+        </Link>
       </div>
 
       {/* Summary cards */}
