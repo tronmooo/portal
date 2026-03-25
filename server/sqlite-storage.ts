@@ -295,6 +295,16 @@ export class SqliteStorage implements IStorage {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+
+      -- Unique constraints for data integrity
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_slug ON domains(slug);
+
+      -- Foreign key indexes for query performance
+      CREATE INDEX IF NOT EXISTS idx_tracker_entries_trackerId ON tracker_entries(trackerId);
+      CREATE INDEX IF NOT EXISTS idx_habit_checkins_habitId ON habit_checkins(habitId);
+      CREATE INDEX IF NOT EXISTS idx_obligation_payments_obligationId ON obligation_payments(obligationId);
+      CREATE INDEX IF NOT EXISTS idx_domain_entries_domainId ON domain_entries(domainId);
     `);
   }
 
