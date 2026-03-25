@@ -4154,11 +4154,11 @@ function QuickActionsRow() {
     };
   }, []);
 
-  const btnStyle = "flex-1 h-9 text-xs gap-1.5 transition-all hover:scale-[1.02] hover:shadow-sm";
+  const btnStyle = "h-9 text-xs gap-1.5 transition-all hover:scale-[1.02] hover:shadow-sm";
 
   return (
     <>
-      <div className="flex gap-2" data-testid="quick-actions-row">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="quick-actions-row">
         <Button variant="outline" className={btnStyle} onClick={() => setLogWeightOpen(true)} data-testid="btn-quick-weight">
           <HeartPulse className="h-3.5 w-3.5" /> Log Weight
         </Button>

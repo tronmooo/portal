@@ -1637,17 +1637,18 @@ function TrackerDetailDialog({
               <p className="text-sm text-muted-foreground text-center py-8">No entries yet. Click "Add Entry" to log data.</p>
             ) : (
               sortedEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center justify-between p-2.5 rounded-lg border bg-card text-sm">
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono font-medium tabular-nums">
-                      {entry.values[primaryField] != null
-                        ? `${entry.values[primaryField]} ${tracker.unit || ""}`
-                        : Object.entries(entry.values).map(([k, v]) => `${k}: ${v}`).join(", ")}
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(entry.timestamp).toLocaleDateString()} {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                <div key={entry.id} className="flex items-center justify-between p-2.5 rounded-lg border bg-card text-sm gap-2">
+                  <span className="font-mono font-medium tabular-nums shrink-0">
+                    {entry.values[primaryField] != null
+                      ? `${entry.values[primaryField]} ${tracker.unit || ""}`
+                      : Object.entries(entry.values).map(([k, v]) => `${k}: ${v}`).join(", ")}
                   </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(entry.timestamp).toLocaleDateString()} {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                    <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+                  </div>
                 </div>
               ))
             )}
@@ -1699,7 +1700,9 @@ export default function TrackersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-  const [selectedTracker, setSelectedTracker] = useState<Tracker | null>(null);
+  const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
+  // Resolve selectedTracker from the live query cache so it refreshes after mutations
+  const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
   // Default to "all" so all trackers are visible
   const [profileFilter, setProfileFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
@@ -1960,7 +1963,7 @@ export default function TrackersPage() {
                     key={tracker.id}
                     className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
                     data-testid={`tracker-row-${tracker.id}`}
-                    onClick={() => setSelectedTracker(tracker)}
+                    onClick={() => setSelectedTrackerId(tracker.id)}
                   >
                     <td className="p-3 font-medium">{tracker.name}</td>
                     <td className="p-3">
@@ -2022,7 +2025,7 @@ export default function TrackersPage() {
       <TrackerDetailDialog
         tracker={selectedTracker}
         open={!!selectedTracker}
-        onClose={() => setSelectedTracker(null)}
+        onClose={() => setSelectedTrackerId(null)}
       />
     </div>
   );
