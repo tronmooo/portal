@@ -114,30 +114,10 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     }
   }
 
-  // ---- Quick expense: "$45 groceries", "spent $120 on gas" ----
-  const quickExpenseMatch = lower.match(/(?:spent\s+)?\$(\d+(?:\.\d{1,2})?)\s*(?:on\s+)?(.+)/);
-  if (quickExpenseMatch && !lower.includes("track") && !lower.includes("log")) {
-    const amount = parseFloat(quickExpenseMatch[1]);
-    const desc = quickExpenseMatch[2].replace(/^(?:at|for|on)\s+/i, "").trim();
-    if (amount > 0 && desc) {
-      const expense = await storage.createExpense({ amount, category: "general", description: desc, tags: [] });
-      // Auto-link to profiles
-      autoLinkToProfiles("expense", expense.id, desc);
-      actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc } });
-      results.push(expense);
-      return { matched: true, reply: `Logged: $${amount} — ${desc}`, actions, results };
-    }
-  }
-
-  // ---- Quick task: "remind me to X", "todo X" ----
-  const taskMatch = lower.match(/^(?:remind\s+me\s+to|todo|task:?)\s+(.+)/);
-  if (taskMatch) {
-    const title = taskMatch[1].replace(/^\s+/, "");
-    const task = await storage.createTask({ title, priority: "medium", tags: [] });
-    actions.push({ type: "create_task", category: "task", data: { title } });
-    results.push(task);
-    return { matched: true, reply: `Created task: "${title}"`, actions, results };
-  }
+  // ---- Expense and task commands go through AI for proper handling ----
+  // Previously had fast-path regex here that was stripping context, losing profile links,
+  // dropping dates, and preventing multi-action handling. Removed intentionally.
+  // The AI handles expenses, tasks, reminders, and complex commands with full intelligence.
 
   // ---- Quick weight log: "weight 183", "183 lbs" ----
   const weightMatch = lower.match(/^(?:weight\s+)?(\d{2,3}(?:\.\d{1,2})?)\s*(?:lbs?|pounds?)?$/);
@@ -612,7 +592,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       properties: {
         amount: { type: "number", description: "Amount in dollars" },
         description: { type: "string", description: "What was purchased" },
-        category: { type: "string", description: "Category (food, transport, entertainment, utilities, general, etc.)" },
+        category: { type: "string", description: "Category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general. Auto-detect from context (e.g., vet visit → pet, oil change → vehicle, groceries → food)." },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
         forProfile: { type: "string", description: "Name of the profile this expense belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
@@ -1184,6 +1164,9 @@ BEHAVIOR:
 - CRITICAL: When a user mentions eating food ("ate a sandwich", "had lunch", "ate chicken"), ALWAYS log it as a NUTRITION tracker entry with estimated calories, protein, carbs, fat — NOT as an expense. Only create an expense if the user explicitly mentions a dollar amount ("$12 lunch").
   Example: "I ate a chicken sandwich and ran 2 miles" → log_tracker_entry for Nutrition (calories, protein, carbs, fat) + log_tracker_entry for Running (distance, estimated calories burned). TWO separate tracker entries.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
+- RECURRING EXPENSES: When a user mentions a recurring payment ("I pay $X per month for Y", "subscription costs $X"), use create_obligation (NOT create_expense). Obligations track recurring bills with frequency, next due date, and optional autopay status.
+- EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
+- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - When searching, use the search tool to find relevant data before answering.
@@ -1203,6 +1186,12 @@ For FOOD/NUTRITION entries:
 For SLEEP: Calculate sleep quality (≥8h: excellent, ≥7h: good, ≥6h: fair, <6h: poor)
 For BLOOD PRESSURE: Classify per AHA guidelines (normal, elevated, high_stage1, high_stage2, crisis)
 For WEIGHT: Note trend direction if previous entries exist
+
+TRACKER FIELD MATCHING — CRITICAL:
+When logging to an existing tracker, check its field names in the EXISTING DATA context. Only send values with keys that match the tracker's defined fields. For example:
+- Sleep tracker has fields [hours] → send {"hours": 6.5}, NOT {"duration": 6.5}
+- Weight tracker has fields [weight] → send {"weight": 183}, NOT {"value": 183}
+- If you need to store extra data that doesn't match a field, use the "notes" parameter instead
 
 PROFILE LINKING — CRITICAL:
 When the user mentions a specific person, pet, vehicle, account, or any named entity that matches an existing profile, you MUST set the "forProfile" parameter in your tool call to that profile's name. This ensures the created item gets linked to the correct profile.
@@ -2243,7 +2232,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     `Trackers: ${trackers.map(t => {
       const lastEntry = t.entries[t.entries.length - 1];
       const lastVal = lastEntry ? JSON.stringify(lastEntry.values) : "no entries";
-      return `${t.name} (${t.category}, ${t.entries.length} entries, last: ${lastVal})`;
+      const fields = t.fields.map((f: any) => `${f.name}:${f.type}${f.unit ? `(${f.unit})` : ''}`).join(', ');
+      return `${t.name} (${t.category}, fields:[${fields}], ${t.entries.length} entries, last: ${lastVal})`;
     }).join("; ") || "none"}`,
     `Active Tasks: ${tasks.filter(t => t.status !== "done").map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
     `Recent Expenses: ${expenses.slice(-5).map(e => `$${e.amount} - ${e.description}${e.vendor ? ` at ${e.vendor}` : ""}`).join("; ") || "none"}`,
