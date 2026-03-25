@@ -4053,16 +4053,36 @@ function QuickActionsRow() {
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [journalOpen, setJournalOpen] = useState(false);
 
-  // Log Weight
+  // Log Weight — uses direct tracker API (not chat, which requires AI)
   const [weightVal, setWeightVal] = useState("");
   const weightMut = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/chat", { message: `log weight ${weightVal} lbs` }).then(r => r.json()),
+    mutationFn: async () => {
+      // Find or create the Weight tracker
+      const trackersRes = await apiRequest("GET", "/api/trackers");
+      const trackers = await trackersRes.json();
+      let weightTracker = trackers.find((t: any) => t.name.toLowerCase() === "weight");
+      if (!weightTracker) {
+        const createRes = await apiRequest("POST", "/api/trackers", {
+          name: "Weight", category: "health", unit: "lbs",
+          fields: [{ name: "weight", type: "number", isPrimary: true }],
+        });
+        weightTracker = await createRes.json();
+      }
+      const primaryField = weightTracker.fields?.[0]?.name || "weight";
+      const entryRes = await apiRequest("POST", `/api/trackers/${weightTracker.id}/entries`, {
+        values: { [primaryField]: parseFloat(weightVal) },
+      });
+      return entryRes.json();
+    },
     onSuccess: () => {
       toast({ title: "Weight logged", description: `${weightVal} lbs recorded.` });
       setLogWeightOpen(false);
       setWeightVal("");
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to log weight", description: err.message, variant: "destructive" });
     },
   });
 
