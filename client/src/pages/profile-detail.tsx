@@ -1572,12 +1572,21 @@ function TrackerCard_Profile({
             {/* Always show last 3 entries */}
             <div className="space-y-0 mt-1">
               {(expanded ? sortedEntries : sortedEntries.slice(0, 3)).map(entry => (
-                <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs group/entry" data-testid={`entry-row-${entry.id}`}>
-                  <div className="flex-1 min-w-0">
-                    <span className="truncate text-foreground font-medium">
-                      {Object.entries(entry.values).map(([k, v]) => `${formatKey(k)}: ${v}`).join(", ")}
-                    </span>
-                    {tracker.unit && <span className="text-muted-foreground ml-1">{tracker.unit}</span>}
+                <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs" data-testid={`entry-row-${entry.id}`}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    {(() => {
+                      const pf = tracker.fields?.find((f: any) => f.isPrimary)?.name || tracker.fields?.[0]?.name;
+                      const pv = pf ? entry.values[pf] : undefined;
+                      const allVals = Object.entries(entry.values).filter(([, v]) => v != null && v !== "");
+                      if (pv != null) {
+                        return <span className="font-mono font-semibold text-sm tabular-nums">{pv}{tracker.unit ? ` ${tracker.unit}` : ""}</span>;
+                      } else if (allVals.length > 0) {
+                        return <span className="font-medium">{allVals.map(([k, v]) => `${v}${tracker.unit ? " " + tracker.unit : ""}`).join(", ")}</span>;
+                      } else {
+                        return <span className="text-muted-foreground italic">(no value)</span>;
+                      }
+                    })()}
+                    {entry.notes && <span className="text-muted-foreground truncate max-w-[100px]" title={entry.notes}>{entry.notes}</span>}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 ml-2">
                     <span className="text-muted-foreground text-[10px]">
@@ -1586,7 +1595,7 @@ function TrackerCard_Profile({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/entry:opacity-100 transition-opacity"
+                      className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
                       onClick={() => setDeleteEntryId(entry.id)}
                       data-testid={`button-delete-entry-${entry.id}`}
                     >
