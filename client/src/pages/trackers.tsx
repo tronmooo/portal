@@ -1134,12 +1134,12 @@ function CreateTrackerDialog({
   const [category, setCategory] = useState<string>("custom");
   const [unit, setUnit] = useState("");
   const [fields, setFields] = useState<FieldDraft[]>([
-    { name: "", type: "number", unit: "", options: "" },
+    { name: "value", type: "number", unit: "", options: "" },
   ]);
 
   const mutation = useMutation({
     mutationFn: async () => {
-      const builtFields = fields
+      let builtFields = fields
         .filter((f) => f.name.trim())
         .map((f, i) => ({
           name: f.name.trim(),
@@ -1151,6 +1151,10 @@ function CreateTrackerDialog({
               ? f.options.split(",").map((o) => o.trim()).filter(Boolean)
               : undefined,
         }));
+      // If no fields defined, create a default "value" field
+      if (builtFields.length === 0) {
+        builtFields = [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true }];
+      }
 
       const res = await apiRequest("POST", "/api/trackers", {
         name: name.trim(),
@@ -1166,7 +1170,7 @@ function CreateTrackerDialog({
       setName("");
       setCategory("custom");
       setUnit("");
-      setFields([{ name: "", type: "number", unit: "", options: "" }]);
+      setFields([{ name: "value", type: "number", unit: "", options: "" }]);
       onOpenChange(false);
       toast({ title: "Tracker created" });
     },
@@ -1191,7 +1195,7 @@ function CreateTrackerDialog({
     setName("");
     setCategory("custom");
     setUnit("");
-    setFields([{ name: "", type: "number", unit: "", options: "" }]);
+    setFields([{ name: "value", type: "number", unit: "", options: "" }]);
     onOpenChange(false);
   };
 

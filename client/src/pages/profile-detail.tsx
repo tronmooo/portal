@@ -2365,6 +2365,7 @@ function EditProfileDialog({
 const UNIVERSAL_TABS = [
   { value: "info", label: "Info", testId: "tab-info" },
   { value: "health", label: "Health", testId: "tab-health" },
+  { value: "trackers", label: "Trackers", testId: "tab-trackers" },
   { value: "documents", label: "Documents", testId: "tab-documents" },
   { value: "finances", label: "Finances", testId: "tab-finances" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
@@ -2517,6 +2518,10 @@ export default function ProfileDetailPage() {
           </TabsContent>
 
           <TabsContent value="health" className="mt-4 px-1 sm:px-0">
+            <TrackersTab trackers={profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)))} profileId={profile.id} onChanged={handleSaved} />
+          </TabsContent>
+
+          <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
             <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
           </TabsContent>
 
