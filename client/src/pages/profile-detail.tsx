@@ -2364,9 +2364,9 @@ function EditProfileDialog({
 
 const UNIVERSAL_TABS = [
   { value: "info", label: "Info", testId: "tab-info" },
+  { value: "health", label: "Health", testId: "tab-health" },
   { value: "documents", label: "Documents", testId: "tab-documents" },
   { value: "finances", label: "Finances", testId: "tab-finances" },
-  { value: "trackers", label: "Trackers", testId: "tab-trackers" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   { value: "tasks", label: "Tasks", testId: "tab-tasks" },
 ] as const;
@@ -2476,7 +2476,7 @@ export default function ProfileDetailPage() {
         {/* Quick stats */}
         <div className="grid grid-cols-4 gap-2 mt-4">
           {[
-            { label: "Trackers", value: profile.relatedTrackers.length },
+            { label: "Health", value: profile.relatedTrackers.length },
             { label: "Expenses", value: profile.relatedExpenses.length },
             { label: "Tasks", value: profile.relatedTasks.length },
             { label: "Docs", value: profile.relatedDocuments.length },
@@ -2516,6 +2516,10 @@ export default function ProfileDetailPage() {
             <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
           </TabsContent>
 
+          <TabsContent value="health" className="mt-4 px-1 sm:px-0">
+            <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+          </TabsContent>
+
           <TabsContent value="documents" className="mt-4 px-1 sm:px-0">
             <DocumentsTab
               documents={profile.relatedDocuments}
@@ -2526,10 +2530,6 @@ export default function ProfileDetailPage() {
 
           <TabsContent value="finances" className="mt-4 px-1 sm:px-0">
             <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-          </TabsContent>
-
-          <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
-            <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
           </TabsContent>
 
           <TabsContent value="timeline" className="mt-4 px-1 sm:px-0">

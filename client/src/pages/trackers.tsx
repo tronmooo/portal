@@ -1866,8 +1866,8 @@ export default function TrackersPage() {
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
-  // Default to "all" so all trackers are visible
-  const [profileFilter, setProfileFilter] = useState<string>("all");
+  // Default to "me" — only show your personal trackers
+  const [profileFilter, setProfileFilter] = useState<string>("me");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
 
   // Auto-resolve "me" to the actual self profile ID once profiles load
@@ -1958,11 +1958,9 @@ export default function TrackersPage() {
             <h1 className="text-xl font-semibold" data-testid="text-trackers-title">Trackers</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {(trackers || []).length === 0
+            {filteredTrackers.length === 0
               ? "Create a tracker to start logging data"
-              : filteredTrackers.length === (trackers || []).length
-                ? `${(trackers || []).length} tracker${(trackers || []).length !== 1 ? 's' : ''}`
-                : `${filteredTrackers.length} of ${(trackers || []).length} trackers shown`}
+              : `${filteredTrackers.length} tracker${filteredTrackers.length !== 1 ? 's' : ''}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1993,41 +1991,15 @@ export default function TrackersPage() {
         </div>
       </div>
 
-      {/* Profile Filter Bar — always shown when profiles exist */}
+      {/* Profile tabs — no "All", just your profiles */}
       {sortedFilterProfiles.length > 0 && (
-        <div className="space-y-1.5" data-testid="profile-filter-bar">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Users className="h-3.5 w-3.5" />
-            <span className="font-medium">Filter by Profile</span>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {/* All chip */}
-            <button
-              onClick={() => setProfileFilter("all")}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
-                resolvedFilter === "all"
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
-              }`}
-              data-testid="filter-all"
-            >
-              <Activity className="h-3 w-3" />
-              All
-              <span className={`text-[10px] px-1 py-0 rounded-full ${resolvedFilter === "all" ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
-                {(trackers || []).length}
-              </span>
-            </button>
-
-            {/* One chip per profile that has trackers — "Me" always first */}
+        <div className="flex flex-wrap gap-1.5" data-testid="profile-filter-bar">
             {sortedFilterProfiles.map(p => {
               const Icon = PROFILE_TYPE_ICONS[p.type] || User;
               const count = countForProfile(p.id);
               const isActive = resolvedFilter === p.id;
-              // For self profile, clicking when active goes to "all"; for others, toggle
               const handleClick = () => {
-                if (isActive) {
-                  setProfileFilter("all");
-                } else if (p.type === "self") {
+                if (p.type === "self") {
                   setProfileFilter("me");
                 } else {
                   setProfileFilter(p.id);
@@ -2056,7 +2028,6 @@ export default function TrackersPage() {
                 </button>
               );
             })}
-          </div>
         </div>
       )}
 
