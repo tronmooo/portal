@@ -2359,18 +2359,85 @@ function EditProfileDialog({
 }
 
 // ============================================================
-// UNIVERSAL TABS DEFINITION
+// TYPE-SPECIFIC TABS DEFINITION
 // ============================================================
 
-const UNIVERSAL_TABS = [
-  { value: "info", label: "Info", testId: "tab-info" },
-  { value: "health", label: "Health", testId: "tab-health" },
-  { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+// Type-specific tab configurations — each profile type gets its own relevant tabs
+type TabDef = { value: string; label: string; testId: string };
+
+const TABS_BY_TYPE: Record<string, TabDef[]> = {
+  // Person / Self — full life hub
+  person: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "health", label: "Health", testId: "tab-health" },
+    { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+  self: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "health", label: "Health", testId: "tab-health" },
+    { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+  // Pet — care tracking focused
+  pet: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "health", label: "Health", testId: "tab-health" },
+    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "timeline", label: "Notes", testId: "tab-timeline" },
+  ],
+  // Vehicle / Asset — ownership + cost + maintenance
+  vehicle: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "trackers", label: "Maintenance", testId: "tab-trackers" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+  asset: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "trackers", label: "Tracking", testId: "tab-trackers" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+  // Subscription — recurring finance
+  subscription: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Billing", testId: "tab-finances" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "timeline", label: "Notes", testId: "tab-timeline" },
+  ],
+  // Medical
+  medical: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "health", label: "Health", testId: "tab-health" },
+    { value: "documents", label: "Records", testId: "tab-documents" },
+    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+};
+
+// Fallback for any type not explicitly defined
+const DEFAULT_TABS: TabDef[] = [
+  { value: "info", label: "Overview", testId: "tab-info" },
   { value: "documents", label: "Documents", testId: "tab-documents" },
-  { value: "finances", label: "Finances", testId: "tab-finances" },
+  { value: "trackers", label: "Trackers", testId: "tab-trackers" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
-  { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-] as const;
+];
+
+function getTabsForType(type: string): TabDef[] {
+  return TABS_BY_TYPE[type] || DEFAULT_TABS;
+}
 
 // ============================================================
 // MAIN PAGE
@@ -2474,20 +2541,28 @@ export default function ProfileDetailPage() {
           </div>
         </div>
 
-        {/* Quick stats */}
-        <div className="grid grid-cols-4 gap-2 mt-4">
-          {[
-            { label: "Health", value: profile.relatedTrackers.length },
-            { label: "Expenses", value: profile.relatedExpenses.length },
-            { label: "Tasks", value: profile.relatedTasks.length },
-            { label: "Docs", value: profile.relatedDocuments.length },
-          ].map(stat => (
-            <div key={stat.label} className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
-              <p className="text-lg font-semibold tabular-nums">{stat.value}</p>
-              <p className="text-[10px] text-muted-foreground">{stat.label}</p>
+        {/* Quick stats — type-aware */}
+        {(() => {
+          const ptype = profile.type;
+          const stats: { label: string; value: number }[] = [];
+          const tabSet = new Set(getTabsForType(ptype).map(t => t.value));
+          if (tabSet.has("health"))    stats.push({ label: "Health",  value: profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
+          if (tabSet.has("trackers"))  stats.push({ label: ptype === 'vehicle' ? "Maint." : "Trackers", value: profile.relatedTrackers.length });
+          if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: profile.relatedExpenses.length });
+          if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: profile.relatedTasks.length });
+          if (tabSet.has("documents")) stats.push({ label: "Docs",     value: profile.relatedDocuments.length });
+          const gridCls = stats.length <= 3 ? "grid-cols-3" : stats.length <= 4 ? "grid-cols-4" : "grid-cols-5";
+          return (
+            <div className={`grid ${gridCls} gap-2 mt-4`}>
+              {stats.map(stat => (
+                <div key={stat.label} className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
+                  <p className="text-lg font-semibold tabular-nums">{stat.value}</p>
+                  <p className="text-[10px] text-muted-foreground">{stat.label}</p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          );
+        })()}
       </div>
 
       {/* AI Summary Card */}
@@ -2495,60 +2570,81 @@ export default function ProfileDetailPage() {
         <AISummaryCard profileId={id} profileType={profile.type} />
       </div>
 
-      {/* Universal Tabs */}
+      {/* Type-specific Tabs */}
       <div className="px-4 md:px-6 pb-6">
-        <Tabs defaultValue="info" className="mt-4">
-          <div className="overflow-x-auto -mx-1 px-1">
-            <TabsList className="w-full grid grid-cols-6 h-9">
-              {UNIVERSAL_TABS.map(tab => (
-                <TabsTrigger
-                  key={tab.value}
-                  value={tab.value}
-                  className="text-xs"
-                  data-testid={tab.testId}
-                >
-                  {tab.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </div>
+        {(() => {
+          const tabs = getTabsForType(profile.type);
+          const tabValues = new Set(tabs.map(t => t.value));
+          const gridClass = tabs.length <= 4 ? "grid-cols-4" : tabs.length <= 5 ? "grid-cols-5" : tabs.length <= 6 ? "grid-cols-6" : "grid-cols-7";
+          return (
+            <Tabs defaultValue="info" className="mt-4">
+              <div className="overflow-x-auto -mx-1 px-1">
+                <TabsList className={`w-full grid ${gridClass} h-9`}>
+                  {tabs.map(tab => (
+                    <TabsTrigger
+                      key={tab.value}
+                      value={tab.value}
+                      className="text-xs"
+                      data-testid={tab.testId}
+                    >
+                      {tab.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </div>
 
-          <TabsContent value="info" className="mt-4 px-1 sm:px-0">
-            <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
-          </TabsContent>
+              {tabValues.has("info") && (
+                <TabsContent value="info" className="mt-4 px-1 sm:px-0">
+                  <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
+                </TabsContent>
+              )}
 
-          <TabsContent value="health" className="mt-4 px-1 sm:px-0">
-            <TrackersTab trackers={profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)))} profileId={profile.id} onChanged={handleSaved} />
-          </TabsContent>
+              {tabValues.has("health") && (
+                <TabsContent value="health" className="mt-4 px-1 sm:px-0">
+                  <TrackersTab trackers={profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)))} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
 
-          <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
-            <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
-          </TabsContent>
+              {tabValues.has("trackers") && (
+                <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
+                  <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
 
-          <TabsContent value="documents" className="mt-4 px-1 sm:px-0">
-            <DocumentsTab
-              documents={profile.relatedDocuments}
-              profileId={profile.id}
-              onUploaded={handleSaved}
-            />
-          </TabsContent>
+              {tabValues.has("documents") && (
+                <TabsContent value="documents" className="mt-4 px-1 sm:px-0">
+                  <DocumentsTab
+                    documents={profile.relatedDocuments}
+                    profileId={profile.id}
+                    onUploaded={handleSaved}
+                  />
+                </TabsContent>
+              )}
 
-          <TabsContent value="finances" className="mt-4 px-1 sm:px-0">
-            <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-          </TabsContent>
+              {tabValues.has("finances") && (
+                <TabsContent value="finances" className="mt-4 px-1 sm:px-0">
+                  <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
 
-          <TabsContent value="timeline" className="mt-4 px-1 sm:px-0">
-            <TimelineTab timeline={profile.timeline} />
-          </TabsContent>
+              {tabValues.has("timeline") && (
+                <TabsContent value="timeline" className="mt-4 px-1 sm:px-0">
+                  <TimelineTab timeline={profile.timeline} />
+                </TabsContent>
+              )}
 
-          <TabsContent value="tasks" className="mt-4 px-1 sm:px-0">
-            <TasksTab
-              tasks={profile.relatedTasks}
-              profileId={profile.id}
-              onChanged={handleSaved}
-            />
-          </TabsContent>
-        </Tabs>
+              {tabValues.has("tasks") && (
+                <TabsContent value="tasks" className="mt-4 px-1 sm:px-0">
+                  <TasksTab
+                    tasks={profile.relatedTasks}
+                    profileId={profile.id}
+                    onChanged={handleSaved}
+                  />
+                </TabsContent>
+              )}
+            </Tabs>
+          );
+        })()}
       </div>
 
       {/* Edit Dialog */}
