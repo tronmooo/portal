@@ -1,3 +1,4 @@
+import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -90,15 +91,15 @@ export default function TasksPage() {
     );
   }
 
-  const activeTasks = (tasks || []).filter((t) => t.status !== "done");
-  const completedTasks = (tasks || []).filter((t) => t.status === "done");
+  const activeTasks = React.useMemo(() => (tasks || []).filter((t) => t.status !== "done"), [tasks]);
+  const completedTasks = React.useMemo(() => (tasks || []).filter((t) => t.status === "done"), [tasks]);
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full" data-testid="page-tasks">
       <div>
         <div className="flex items-center gap-3 mb-4">
           <Link href="/dashboard">
-            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to dashboard">
               <ArrowLeft className="w-4 h-4" />
             </button>
           </Link>

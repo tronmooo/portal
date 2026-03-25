@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 import type { Habit } from "@shared/schema";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
 
@@ -22,11 +22,14 @@ function HabitCard({ habit }: { habit: Habit }) {
   });
 
   // Build last 14 days grid
-  const last14: { date: string; done: boolean }[] = [];
-  for (let i = 13; i >= 0; i--) {
-    const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-    last14.push({ date: dateStr, done: habit.checkins.some(c => c.date === dateStr) });
-  }
+  const last14 = useMemo(() => {
+    const days: { date: string; done: boolean }[] = [];
+    for (let i = 13; i >= 0; i--) {
+      const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      days.push({ date: dateStr, done: habit.checkins.some(c => c.date === dateStr) });
+    }
+    return days;
+  }, [habit.checkins]);
 
   return (
     <Card className="relative overflow-hidden" data-testid={`card-habit-${habit.id}`}>
@@ -65,9 +68,9 @@ function HabitCard({ habit }: { habit: Habit }) {
 
         {/* 14-day grid */}
         <div className="flex gap-1">
-          {last14.map((day, i) => (
+          {last14.map((day) => (
             <div
-              key={i}
+              key={day.date}
               className="w-5 h-5 rounded-sm flex items-center justify-center text-[8px]"
               style={{
                 backgroundColor: day.done ? (habit.color || "#4F98A3") : "var(--color-muted)",
@@ -113,7 +116,7 @@ export default function HabitsPage() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to dashboard">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>

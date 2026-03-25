@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
   amazing: { icon: Sparkles, label: "Amazing", color: "#6DAA45", bg: "bg-green-500/10" },
@@ -56,8 +56,8 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
           <div className="mb-2">
             <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><Star className="h-2.5 w-2.5" /> Highlights</p>
             <div className="flex flex-wrap gap-1">
-              {entry.highlights.map((h, i) => (
-                <Badge key={i} variant="secondary" className="text-[10px]">{h}</Badge>
+              {entry.highlights.map((h) => (
+                <Badge key={h} variant="secondary" className="text-[10px]">{h}</Badge>
               ))}
             </div>
           </div>
@@ -67,8 +67,8 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
           <div>
             <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><BookHeart className="h-2.5 w-2.5" /> Gratitude</p>
             <div className="flex flex-wrap gap-1">
-              {entry.gratitude.map((g, i) => (
-                <Badge key={i} variant="outline" className="text-[10px]">{g}</Badge>
+              {entry.gratitude.map((g) => (
+                <Badge key={g} variant="outline" className="text-[10px]">{g}</Badge>
               ))}
             </div>
           </div>
@@ -76,8 +76,8 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
 
         {entry.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {entry.tags.map((t, i) => (
-              <span key={i} className="text-[10px] text-muted-foreground">#{t}</span>
+            {entry.tags.map((t) => (
+              <span key={t} className="text-[10px] text-muted-foreground">#{t}</span>
             ))}
           </div>
         )}
@@ -106,12 +106,15 @@ export default function JournalPage() {
   });
 
   // 7-day mood strip
-  const last7: { date: string; mood?: MoodLevel }[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-    const entry = entries.find(e => e.date === dateStr);
-    last7.push({ date: dateStr, mood: entry?.mood });
-  }
+  const last7 = useMemo(() => {
+    const days: { date: string; mood?: MoodLevel }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      const entry = entries.find(e => e.date === dateStr);
+      days.push({ date: dateStr, mood: entry?.mood });
+    }
+    return days;
+  }, [entries]);
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4">
@@ -119,7 +122,7 @@ export default function JournalPage() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to dashboard">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>

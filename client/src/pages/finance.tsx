@@ -1,3 +1,4 @@
+import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,17 @@ export default function FinancePage() {
     queryKey: ["/api/expenses"],
   });
 
+  const { total, chartData } = React.useMemo(() => {
+    const expenseList = expenses || [];
+    const t = expenseList.reduce((s, e) => s + e.amount, 0);
+    const byCategory = expenseList.reduce((acc: Record<string, number>, e) => {
+      acc[e.category] = (acc[e.category] || 0) + e.amount;
+      return acc;
+    }, {});
+    const cd = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }));
+    return { total: t, chartData: cd };
+  }, [expenses]);
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-4">
@@ -37,21 +49,12 @@ export default function FinancePage() {
     );
   }
 
-  const total = (expenses || []).reduce((s, e) => s + e.amount, 0);
-
-  // Group by category
-  const byCategory = (expenses || []).reduce((acc: Record<string, number>, e) => {
-    acc[e.category] = (acc[e.category] || 0) + e.amount;
-    return acc;
-  }, {});
-  const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }));
-
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full" data-testid="page-finance">
       <div>
         <div className="flex items-center gap-3 mb-4">
           <Link href="/dashboard">
-            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to dashboard">
               <ArrowLeft className="w-4 h-4" />
             </button>
           </Link>
