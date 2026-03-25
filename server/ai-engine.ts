@@ -1800,7 +1800,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "sync_calendar": {
       try {
-        const { execSync } = require("child_process");
+        const { execFileSync } = require("child_process");
         const now = new Date();
         const startDate = new Date(now);
         startDate.setMonth(startDate.getMonth() - 1);
@@ -1817,7 +1817,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           },
         });
 
-        const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+        const stdout = execFileSync("external-tool", ["call", params], {
           timeout: 30000,
           encoding: "utf-8",
         });

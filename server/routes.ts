@@ -43,9 +43,15 @@ setInterval(() => {
   }
 }, 300000);
 
-// Simple HTML sanitizer — strips < and > to prevent XSS
+// HTML sanitizer — escapes dangerous characters to prevent XSS
 function sanitize(input: string): string {
-  return input.replace(/[<>]/g, '').trim();
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .trim();
 }
 
 export async function registerRoutes(
@@ -2059,7 +2065,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // ---- Google Calendar Sync ----
   app.post("/api/calendar/sync", async (req, res) => {
     try {
-      const { execSync } = require("child_process");
+      const { execFileSync } = require("child_process");
 
       // Determine date range — sync 2 months (1 month back, 1 month forward)
       const now = new Date();
@@ -2071,7 +2077,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const startStr = startDate.toISOString().replace("Z", "-07:00");
       const endStr = endDate.toISOString().replace("Z", "-07:00");
 
-      // Call Google Calendar via external-tool CLI
+      // Call Google Calendar via external-tool CLI (using execFileSync to prevent shell injection)
       const params = JSON.stringify({
         source_id: "gcal",
         tool_name: "search_calendar",
@@ -2084,7 +2090,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       let gcalResult: any;
       try {
-        const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+        const stdout = execFileSync("external-tool", ["call", params], {
           timeout: 30000,
           encoding: "utf-8",
         });
@@ -2192,7 +2198,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // Export a Portol event to Google Calendar
   app.post("/api/calendar/export/:id", async (req, res) => {
     try {
-      const { execSync } = require("child_process");
+      const { execFileSync } = require("child_process");
       const event = await storage.getEvent(req.params.id);
       if (!event) return res.status(404).json({ error: "Event not found" });
 
@@ -2241,7 +2247,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         },
       });
 
-      const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+      const stdout = execFileSync("external-tool", ["call", params], {
         timeout: 30000,
         encoding: "utf-8",
       });

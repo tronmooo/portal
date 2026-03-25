@@ -1581,8 +1581,9 @@ function getStorage(): IStorage {
       console.log('[storage] Using Supabase PostgreSQL storage');
       _storageInstance = new SupabaseStorage(supabaseUrl, supabaseKey, 'anonymous');
     } else {
-      // Dynamic import — use eval to prevent esbuild from resolving at bundle time
-      const mod = eval('require')("./sqlite-storage");
+      // Dynamic require — use Function constructor to prevent esbuild from resolving at bundle time
+      const dynamicRequire = new Function('p', 'return require(p)');
+      const mod = dynamicRequire("./sqlite-storage");
       const { SqliteStorage } = mod;
       console.log('[storage] Using SQLite local storage (env vars not found)');
       _storageInstance = new SqliteStorage();
