@@ -425,7 +425,68 @@ export class SqliteStorage implements IStorage {
     const id = randomUUID();
     this.db.prepare("INSERT INTO profiles (id, type, name, fields, tags, notes, documents, linkedTrackers, linkedExpenses, linkedTasks, linkedEvents, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '[]', '[]', '[]', ?, ?)").run(id, data.type, data.name, toJSON(data.fields || {}), toJSON(data.tags || []), data.notes || "", now, now);
     this.logActivity("profile", `Created profile: ${data.name}`);
+    await this.autoGenerateProfileEvents(id, data.type, data.name, data.fields || {});
     return (await this.getProfile(id))!;
+  }
+
+  private async autoGenerateProfileEvents(profileId: string, type: string, name: string, fields: Record<string, any>): Promise<void> {
+    const eventDefs: { fieldKey: string; titleFn: (n: string) => string; category: string; recurrence: string; color: string }[] = [];
+    switch (type) {
+      case "person":
+      case "self":
+        eventDefs.push({ fieldKey: "birthday", titleFn: (n) => `🎂 ${n}'s Birthday`, category: "family", recurrence: "yearly", color: "#A86FDF" });
+        break;
+      case "medical":
+        eventDefs.push({ fieldKey: "nextVisit", titleFn: (n) => `🏥 ${n} — Visit`, category: "health", recurrence: "none", color: "#6DAA45" });
+        break;
+      case "vehicle":
+        eventDefs.push({ fieldKey: "nextService", titleFn: (n) => `🚗 ${n} — Service`, category: "other", recurrence: "none", color: "#BB653B" });
+        break;
+      case "subscription":
+        eventDefs.push({ fieldKey: "renewalDate", titleFn: (n) => `🔄 ${n} — Renewal`, category: "finance", recurrence: "monthly", color: "#D19900" });
+        break;
+      case "loan":
+        eventDefs.push({ fieldKey: "nextPayment", titleFn: (n) => `💰 ${n} — Payment Due`, category: "finance", recurrence: "monthly", color: "#BB653B" });
+        eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `💰 ${n} — Start Date`, category: "finance", recurrence: "none", color: "#BB653B" });
+        break;
+      case "pet":
+        eventDefs.push({ fieldKey: "nextVetVisit", titleFn: (n) => `🐾 ${n} — Vet Visit`, category: "health", recurrence: "none", color: "#6DAA45" });
+        break;
+      case "property":
+        eventDefs.push({ fieldKey: "insuranceExpiry", titleFn: (n) => `🏠 ${n} — Insurance Expiry`, category: "finance", recurrence: "none", color: "#BB653B" });
+        eventDefs.push({ fieldKey: "leaseEnd", titleFn: (n) => `🏠 ${n} — Lease End`, category: "finance", recurrence: "none", color: "#A13544" });
+        break;
+      case "investment":
+        eventDefs.push({ fieldKey: "maturityDate", titleFn: (n) => `📈 ${n} — Maturity`, category: "finance", recurrence: "none", color: "#D19900" });
+        break;
+      case "account":
+        eventDefs.push({ fieldKey: "expirationDate", titleFn: (n) => `⚠️ ${n} — Expires`, category: "other", recurrence: "none", color: "#A13544" });
+        break;
+      case "asset":
+        eventDefs.push({ fieldKey: "warrantyExpiry", titleFn: (n) => `🛡️ ${n} — Warranty Expiry`, category: "other", recurrence: "none", color: "#BB653B" });
+        break;
+    }
+    for (const def of eventDefs) {
+      const dateVal = fields[def.fieldKey];
+      if (dateVal && typeof dateVal === "string" && dateVal.length >= 10) {
+        try {
+          await this.createEvent({
+            title: def.titleFn(name),
+            date: dateVal.slice(0, 10),
+            allDay: true,
+            category: def.category as any,
+            color: def.color,
+            recurrence: def.recurrence as any,
+            linkedProfiles: [profileId],
+            linkedDocuments: [],
+            tags: ["auto-generated"],
+            source: "ai",
+          });
+        } catch (e) {
+          console.error(`Auto-event generation failed for ${name} / ${def.fieldKey}:`, e);
+        }
+      }
+    }
   }
 
   async updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined> {
@@ -841,6 +902,27 @@ export class SqliteStorage implements IStorage {
     const id = randomUUID();
     this.db.prepare("INSERT INTO obligations (id, name, amount, frequency, category, nextDueDate, autopay, linkedProfiles, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)").run(id, data.name, data.amount, data.frequency || "monthly", data.category || "general", data.nextDueDate, data.autopay ? 1 : 0, data.notes || null, new Date().toISOString());
     this.logActivity("obligation", `Created obligation: ${data.name} ($${data.amount}/${data.frequency || "monthly"})`);
+    if (data.nextDueDate) {
+      try {
+        const freqMap: Record<string, string> = { weekly: "weekly", biweekly: "biweekly", monthly: "monthly", quarterly: "monthly", yearly: "yearly" };
+        const recurrence = freqMap[data.frequency || "monthly"] || "monthly";
+        await this.createEvent({
+          title: `💳 ${data.name} — $${data.amount}`,
+          date: data.nextDueDate.slice(0, 10),
+          allDay: true,
+          category: "finance",
+          color: "#BB653B",
+          recurrence: recurrence as any,
+          linkedProfiles: [],
+          linkedDocuments: [],
+          tags: ["auto-generated", "obligation"],
+          source: "ai",
+          description: data.autopay ? "Autopay enabled" : `$${data.amount} due`,
+        });
+      } catch (e) {
+        console.error(`Auto-event generation failed for obligation ${data.name}:`, e);
+      }
+    }
     return (await this.getObligation(id))!;
   }
   async updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined> {
