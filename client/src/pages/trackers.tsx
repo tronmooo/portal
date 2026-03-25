@@ -1923,10 +1923,13 @@ export default function TrackersPage() {
     return a.name.localeCompare(b.name);
   });
 
-  // Apply profile filter
+  // Apply profile filter — for "me", also include orphaned trackers (no linked profiles)
   const filteredTrackers = (trackers || []).filter(t => {
     if (resolvedFilter === "all") return true;
-    return t.linkedProfiles?.includes(resolvedFilter);
+    if (t.linkedProfiles?.includes(resolvedFilter)) return true;
+    // If filtering by self and tracker has no linked profiles, it's mine
+    if (profileFilter === "me" && (!t.linkedProfiles || t.linkedProfiles.length === 0)) return true;
+    return false;
   });
 
   // Group by category
@@ -1991,43 +1994,33 @@ export default function TrackersPage() {
         </div>
       </div>
 
-      {/* Profile tabs — no "All", just your profiles */}
+      {/* Profile dropdown selector */}
       {sortedFilterProfiles.length > 0 && (
-        <div className="flex flex-wrap gap-1.5" data-testid="profile-filter-bar">
-            {sortedFilterProfiles.map(p => {
-              const Icon = PROFILE_TYPE_ICONS[p.type] || User;
-              const count = countForProfile(p.id);
-              const isActive = resolvedFilter === p.id;
-              const handleClick = () => {
-                if (p.type === "self") {
-                  setProfileFilter("me");
-                } else {
-                  setProfileFilter(p.id);
-                }
-              };
+        <div data-testid="profile-filter-bar">
+          <Select
+            value={profileFilter}
+            onValueChange={(val) => setProfileFilter(val)}
+          >
+            <SelectTrigger className="w-[220px] h-9" data-testid="select-profile-filter">
+              <SelectValue placeholder="Select profile" />
+            </SelectTrigger>
+            <SelectContent>
+              {sortedFilterProfiles.map(p => {
+                const Icon = PROFILE_TYPE_ICONS[p.type] || User;
+                const count = countForProfile(p.id);
+                const val = p.type === "self" ? "me" : p.id;
               return (
-                <button
-                  key={p.id}
-                  onClick={handleClick}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
-                    isActive
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
-                  }`}
-                  data-testid={`filter-profile-${p.id}`}
-                >
-                  {p.avatar ? (
-                    <img src={p.avatar} alt={p.name} className="h-3.5 w-3.5 rounded-full object-cover" />
-                  ) : (
-                    <Icon className="h-3 w-3" />
-                  )}
-                  {p.name}
-                  <span className={`text-[10px] px-1 py-0 rounded-full ${isActive ? "bg-primary-foreground/20" : "bg-muted-foreground/20"}`}>
-                    {count}
+                <SelectItem key={p.id} value={val} data-testid={`filter-profile-${p.id}`}>
+                  <span className="flex items-center gap-2">
+                    <Icon className="h-3.5 w-3.5" />
+                    {p.type === "self" ? "My Trackers" : p.name}
+                    <span className="text-muted-foreground text-xs">({count})</span>
                   </span>
-                </button>
+                </SelectItem>
               );
             })}
+            </SelectContent>
+          </Select>
         </div>
       )}
 

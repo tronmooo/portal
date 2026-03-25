@@ -3481,6 +3481,8 @@ function GoalsSection() {
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [editGoal, setEditGoal] = useState<any>(null);
+  const [logProgressGoal, setLogProgressGoal] = useState<any>(null);
+  const [logAmount, setLogAmount] = useState("");
   const [form, setForm] = useState({
     title: "",
     type: "custom" as Goal["type"],
@@ -3635,9 +3637,14 @@ function GoalsSection() {
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
                     {goal.status === "active" && (
-                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => updateMutation.mutate({ id: goal.id, data: { status: "completed" } })} data-testid={`goal-complete-${goal.id}`}>
-                        <Check className="h-3 w-3 text-green-500" />
-                      </Button>
+                      <>
+                        <Button variant="ghost" size="sm" className="h-5 px-1 text-[9px] gap-0.5 text-primary" onClick={() => { setLogProgressGoal(goal); setLogAmount(""); }} data-testid={`goal-log-${goal.id}`}>
+                          <Plus className="h-3 w-3" /> Log
+                        </Button>
+                        <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => updateMutation.mutate({ id: goal.id, data: { status: "completed" } })} data-testid={`goal-complete-${goal.id}`}>
+                          <Check className="h-3 w-3 text-green-500" />
+                        </Button>
+                      </>
                     )}
                     <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => setEditGoal(goal)} data-testid={`goal-edit-${goal.id}`}>
                       <Pencil className="h-3 w-3 text-muted-foreground" />
@@ -3837,6 +3844,32 @@ function GoalsSection() {
         </DialogContent>
       </Dialog>
       {editGoal && <GoalEditDialog open={!!editGoal} onClose={() => setEditGoal(null)} goal={editGoal} />}
+
+      {/* Log Progress Dialog */}
+      <Dialog open={!!logProgressGoal} onOpenChange={(v) => { if (!v) setLogProgressGoal(null); }}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Log Progress</DialogTitle>
+            <DialogDescription className="text-xs">
+              {logProgressGoal?.title} — currently {logProgressGoal?.current} / {logProgressGoal?.target} {logProgressGoal?.unit}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const amount = parseFloat(logAmount);
+            if (isNaN(amount) || amount === 0) return;
+            const newCurrent = (logProgressGoal?.current || 0) + amount;
+            updateMutation.mutate({ id: logProgressGoal.id, data: { current: newCurrent } });
+            toast({ title: "Progress logged", description: `Added ${amount} ${logProgressGoal?.unit || ""} to ${logProgressGoal?.title}` });
+            setLogProgressGoal(null);
+          }}>
+            <Input type="number" step="any" placeholder={`Amount to add (${logProgressGoal?.unit || ""})`} value={logAmount} onChange={e => setLogAmount(e.target.value)} className="mb-3" autoFocus data-testid="input-log-goal-amount" />
+            <Button type="submit" className="w-full h-8 text-xs" disabled={!logAmount || parseFloat(logAmount) === 0} data-testid="btn-submit-goal-progress">
+              Log {logAmount ? `+${logAmount} ${logProgressGoal?.unit || ""}` : "Progress"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </CollapsibleSection>
   );
 }

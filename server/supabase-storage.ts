@@ -1867,8 +1867,19 @@ export class SupabaseStorage implements IStorage {
     expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
 
     const trackers = await this.getTrackers();
+    const profiles = await this.getProfiles();
+    const selfProfile = profiles.find(p => p.type === 'self');
+    const selfId = selfProfile?.id;
     const healthCategories = ['health', 'fitness', 'weight', 'sleep', 'blood_pressure', 'running', 'exercise', 'nutrition', 'wellness'];
-    const healthTrackers = trackers.filter(t => healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c)));
+    // Only show MY health trackers on the dashboard — filter to self-profile-linked or unlinked trackers
+    const healthTrackers = trackers.filter(t => {
+      const isHealthCategory = healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c));
+      if (!isHealthCategory) return false;
+      // Only include if linked to self OR has no linked profiles (orphaned = mine)
+      if (selfId && t.linkedProfiles.includes(selfId)) return true;
+      if (t.linkedProfiles.length === 0) return true;
+      return false;
+    });
     const healthSnapshot: any[] = [];
     for (const t of healthTrackers) {
       const recent = t.entries.slice(-7);
