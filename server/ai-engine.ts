@@ -570,7 +570,8 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker (partial match)" },
-        values: { type: "object", description: "Key-value pairs to log (e.g., { weight: 183 } or { systolic: 120, diastolic: 80 })" },
+        values: { type: "object", description: "Key-value pairs to log. Include ALL relevant fields. For nutrition: { calories, protein, carbs, fat, description }. For running: { distance, duration, pace, caloriesBurned }. For BP: { systolic, diastolic }. For weight: { weight }. For sleep: { hours, quality }." },
+        notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
       },
       required: ["trackerName", "values"],
@@ -1178,8 +1179,11 @@ ${context}
 
 BEHAVIOR:
 - Be concise and confirm what you did after each action.
-- Handle multiple actions in one message when appropriate (e.g., "I ate lunch for $12 and ran 3 miles" → create_expense + log_tracker_entry).
+- Handle multiple actions in one message when appropriate.
 - When the user mentions an existing entity, match it by name (partial matching is fine).
+- CRITICAL: When a user mentions eating food ("ate a sandwich", "had lunch", "ate chicken"), ALWAYS log it as a NUTRITION tracker entry with estimated calories, protein, carbs, fat — NOT as an expense. Only create an expense if the user explicitly mentions a dollar amount ("$12 lunch").
+  Example: "I ate a chicken sandwich and ran 2 miles" → log_tracker_entry for Nutrition (calories, protein, carbs, fat) + log_tracker_entry for Running (distance, estimated calories burned). TWO separate tracker entries.
+- When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - When searching, use the search tool to find relevant data before answering.
@@ -1415,23 +1419,29 @@ async function executeTool(name: string, input: any): Promise<any> {
       const tracker = trackers.find(
         t => t.name.toLowerCase() === trackerName || t.name.toLowerCase().includes(trackerName)
       );
+      // Merge notes into values if provided
+      const entryValues = { ...input.values };
+      if (input.notes) entryValues._notes = input.notes;
       if (tracker) {
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: input.values });
-        // Auto-link tracker to any matching profiles by name + explicit forProfile
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues });
         await autoLinkToProfiles("tracker", tracker.id, tracker.name, input.forProfile);
         return entry;
       }
-      // Auto-create tracker if not found
+      // Auto-create tracker if not found — infer category from name
+      const nameLC = (input.trackerName || "").toLowerCase();
+      let autoCategory = "custom";
+      if (["nutrition","food","diet","meal","calories"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
+      else if (["running","cycling","swimming","workout","exercise","walk"].some(k => nameLC.includes(k))) autoCategory = "fitness";
+      else if (["weight","blood","bp","sleep","heart","cholesterol"].some(k => nameLC.includes(k))) autoCategory = "health";
       const newTracker = await storage.createTracker({
         name: input.trackerName || "Custom",
-        category: "custom",
-        fields: Object.keys(input.values || {}).map(k => ({
+        category: autoCategory,
+        fields: Object.keys(input.values || {}).filter(k => k !== '_notes').map(k => ({
           name: k,
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       });
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: input.values });
-      // Auto-link the new tracker to any matching profiles + explicit forProfile
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues });
       await autoLinkToProfiles("tracker", newTracker.id, input.trackerName || "", input.forProfile);
       return entry;
     }

@@ -2,6 +2,9 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { Request, Response, NextFunction } from "express";
 import { storage, isSupabaseStorage } from "./storage";
 
+// Track which users have had their self profile checked this session
+const autoProfileCreated = new Set<string>();
+
 // Create a Supabase client with the anon key (for verifying user tokens)
 let supabaseAuth: SupabaseClient | null = null;
 
@@ -64,6 +67,29 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     // Set the user ID on the storage adapter so queries are scoped
     if ((storage as any).setUserId) {
       (storage as any).setUserId(user.id);
+    }
+
+    // Auto-create "Me" self profile if none exists (runs once per session, cached)
+    if (!autoProfileCreated.has(user.id)) {
+      autoProfileCreated.add(user.id);
+      try {
+        const profiles = await storage.getProfiles();
+        const hasSelf = profiles.some(p => p.type === 'self');
+        if (!hasSelf) {
+          const displayName = user.email?.split('@')[0] || 'Me';
+          await storage.createProfile({
+            name: displayName.charAt(0).toUpperCase() + displayName.slice(1),
+            type: 'self',
+            notes: '',
+            fields: {},
+            tags: [],
+          });
+          console.log(`[auth] Auto-created self profile for ${user.email}`);
+        }
+      } catch (e) {
+        // Non-fatal — don't block auth
+        console.error('[auth] Auto-profile creation failed:', e);
+      }
     }
 
     next();

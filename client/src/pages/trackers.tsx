@@ -157,7 +157,36 @@ const tooltipStyle = {
 
 // ── Stats Row ──────────────────────────────────────────────────────────────────
 
-function StatsRow({ entries, primaryField, unit }: { entries: TrackerEntry[]; primaryField: string; unit?: string }) {
+function StatsRow({ entries, primaryField, unit, isBP }: { entries: TrackerEntry[]; primaryField: string; unit?: string; isBP?: boolean }) {
+  // Blood pressure: show systolic/diastolic format
+  if (isBP) {
+    const bpEntries = entries.map(e => ({
+      s: (e.values["systolic"] ?? e.values["systolic_pressure"] ?? e.values["sbp"]) as number | undefined,
+      d: (e.values["diastolic"] ?? e.values["diastolic_pressure"] ?? e.values["dbp"]) as number | undefined,
+    })).filter(v => typeof v.s === "number" && typeof v.d === "number") as { s: number; d: number }[];
+    if (bpEntries.length === 0) return null;
+    const latest = bpEntries[bpEntries.length - 1];
+    const avgS = Math.round(bpEntries.reduce((a, b) => a + b.s, 0) / bpEntries.length);
+    const avgD = Math.round(bpEntries.reduce((a, b) => a + b.d, 0) / bpEntries.length);
+    const stats = [
+      { label: "Latest", value: `${latest.s}/${latest.d}` },
+      { label: "Avg", value: `${avgS}/${avgD}` },
+      { label: "High", value: `${Math.max(...bpEntries.map(e => e.s))}/${Math.max(...bpEntries.map(e => e.d))}` },
+      { label: "Low", value: `${Math.min(...bpEntries.map(e => e.s))}/${Math.min(...bpEntries.map(e => e.d))}` },
+      { label: "Entries", value: String(entries.length) },
+    ];
+    return (
+      <div className="grid grid-cols-5 gap-1 mt-3" data-testid="stats-row">
+        {stats.map((s) => (
+          <div key={s.label} className="text-center rounded-md bg-muted/40 px-1.5 py-1.5">
+            <div className="text-[10px] text-muted-foreground">{s.label}</div>
+            <div className="text-xs font-semibold tabular-nums mt-0.5">{s.value}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const nums = entries
     .map((e) => e.values[primaryField])
     .filter((v): v is number => typeof v === "number");
@@ -586,7 +615,7 @@ function ExpandedDetailView({
           )}
 
           {/* Stats row */}
-          <StatsRow entries={filteredEntries} primaryField={primaryField} unit={tracker.unit} />
+          <StatsRow entries={filteredEntries} primaryField={primaryField} unit={tracker.unit} isBP={specialization === "bloodpressure"} />
         </>
       )}
     </div>
@@ -854,9 +883,13 @@ function TrackerCard({
   const prevEntry = tracker.entries.length > 1 ? tracker.entries[tracker.entries.length - 2] : null;
 
   const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
-  const lastVal = lastEntry?.values[primaryField];
+  const specialization = detectSpecialization(tracker);
+  const isBP = specialization === "bloodpressure";
+  const lastVal = isBP && lastEntry
+    ? `${lastEntry.values["systolic"] ?? lastEntry.values["systolic_pressure"] ?? lastEntry.values["sbp"] ?? "-"}/${lastEntry.values["diastolic"] ?? lastEntry.values["diastolic_pressure"] ?? lastEntry.values["dbp"] ?? "-"}`
+    : lastEntry?.values[primaryField];
   const prevVal = prevEntry?.values[primaryField];
-  const trend = typeof lastVal === "number" && typeof prevVal === "number" ? lastVal - prevVal : null;
+  const trend = !isBP && typeof lastEntry?.values[primaryField] === "number" && typeof prevVal === "number" ? (lastEntry.values[primaryField] as number) - (prevVal as number) : null;
 
   const sparklineData = tracker.entries.slice(-10).map((e) => ({
     date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
@@ -866,7 +899,6 @@ function TrackerCard({
   // Entries sorted newest first for the expanded list
   const sortedEntries = [...tracker.entries].reverse();
 
-  const specialization = detectSpecialization(tracker);
   const specIcon = specialization === "weight" ? <Activity className="h-3 w-3" />
     : specialization === "bloodpressure" ? <Heart className="h-3 w-3" />
     : specialization === "sleep" ? <Moon className="h-3 w-3" />
@@ -1076,6 +1108,11 @@ function EntryRow({
 }) {
   const primaryVal = entry.values[primaryField];
   const otherFields = tracker.fields.filter((f) => f.name !== primaryField);
+  // BP detection for display
+  const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"] ?? entry.values["sbp"];
+  const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"] ?? entry.values["dbp"];
+  const isEntryBP = typeof bpS === "number" && typeof bpD === "number";
+  const entryNotes = (entry.values["_notes"] as string | undefined) || entry.notes;
 
   return (
     <div
@@ -1085,14 +1122,16 @@ function EntryRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5 flex-wrap">
           <span className="font-medium tabular-nums">
-            {primaryVal !== undefined ? String(primaryVal) : "—"}
+            {isEntryBP ? `${bpS}/${bpD}` : (primaryVal !== undefined ? String(primaryVal) : "—")}
           </span>
-          {tracker.unit && (
+          {isEntryBP ? (
+            <span className="text-muted-foreground text-[10px]">mmHg</span>
+          ) : tracker.unit ? (
             <span className="text-muted-foreground text-[10px]">{tracker.unit}</span>
-          )}
-          {otherFields.map((f) => {
+          ) : null}
+          {!isEntryBP && otherFields.map((f) => {
             const v = entry.values[f.name];
-            if (v === undefined || v === "") return null;
+            if (v === undefined || v === "" || f.name === "_notes") return null;
             return (
               <span key={f.name} className="text-muted-foreground text-[10px]">
                 {f.name}: {String(v)}{f.unit ? ` ${f.unit}` : ""}
@@ -1100,8 +1139,8 @@ function EntryRow({
             );
           })}
         </div>
-        {entry.notes && (
-          <p className="text-muted-foreground mt-0.5 truncate">{entry.notes}</p>
+        {entryNotes && (
+          <p className="text-muted-foreground mt-0.5 truncate">{entryNotes}</p>
         )}
         <ComputedBadges computed={entry.computed} />
         <span className="text-muted-foreground text-[10px]">
@@ -1764,12 +1803,19 @@ function TrackerDetailDialog({
             ) : (
               sortedEntries.map((entry, idx) => {
                 const val = entry.values[primaryField];
-                const allVals = Object.entries(entry.values).filter(([, v]) => v != null && v !== "");
-                const displayVal = val != null
-                  ? `${val} ${tracker.unit || ""}`
-                  : allVals.length > 0
-                    ? allVals.map(([k, v]) => `${k}: ${v}`).join(", ")
-                    : "(empty entry)";
+                const allVals = Object.entries(entry.values).filter(([k, v]) => v != null && v !== "" && k !== "_notes");
+                const notes = entry.values["_notes"] as string | undefined;
+                // BP: show systolic/diastolic format
+                const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"] ?? entry.values["sbp"];
+                const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"] ?? entry.values["dbp"];
+                const isBPEntry = typeof bpS === "number" && typeof bpD === "number";
+                const displayVal = isBPEntry
+                  ? `${bpS}/${bpD} mmHg`
+                  : val != null
+                    ? `${val} ${tracker.unit || ""}`
+                    : allVals.length > 0
+                      ? allVals.map(([k, v]) => `${k}: ${v}`).join(", ")
+                      : "(empty entry)";
                 // Show delta vs previous entry
                 const nextEntry = sortedEntries[idx + 1]; // next = older
                 const nextVal = nextEntry?.values[primaryField];
@@ -1788,9 +1834,9 @@ function TrackerDetailDialog({
                           {entryDelta > 0 ? "+" : ""}{entryDelta.toFixed(1)}
                         </span>
                       )}
-                      {entry.notes && (
-                        <span className="text-[10px] text-muted-foreground truncate max-w-[120px]" title={entry.notes}>
-                          {entry.notes}
+                      {(notes || entry.notes) && (
+                        <span className="text-[10px] text-muted-foreground truncate max-w-[120px]" title={notes || entry.notes}>
+                          {notes || entry.notes}
                         </span>
                       )}
                     </div>
