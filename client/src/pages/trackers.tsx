@@ -1605,57 +1605,192 @@ function TrackerDetailDialog({
   onClose: () => void;
 }) {
   const [addEntryOpen, setAddEntryOpen] = useState(false);
+  const [deleteTrackerOpen, setDeleteTrackerOpen] = useState(false);
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const deleteTrackerMut = useMutation({
+    mutationFn: async () => {
+      if (!tracker) return;
+      await apiRequest("DELETE", `/api/trackers/${tracker.id}`);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/trackers"] });
+      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Tracker deleted" });
+      onClose();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to delete tracker", description: err.message, variant: "destructive" });
+    },
+  });
 
   if (!tracker) return null;
 
   const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
   const sortedEntries = [...tracker.entries].reverse();
 
+  // ── Compute stats from numeric primary field ──
+  const numericValues = tracker.entries
+    .map((e) => e.values[primaryField])
+    .filter((v): v is number => typeof v === "number");
+  const hasNumeric = numericValues.length > 0;
+  const min = hasNumeric ? Math.min(...numericValues) : null;
+  const max = hasNumeric ? Math.max(...numericValues) : null;
+  const avg = hasNumeric ? numericValues.reduce((s, v) => s + v, 0) / numericValues.length : null;
+  const latest = numericValues.length > 0 ? numericValues[numericValues.length - 1] : null;
+  const prev = numericValues.length > 1 ? numericValues[numericValues.length - 2] : null;
+  const trendDelta = latest != null && prev != null ? latest - prev : null;
+
+  // ── Chart data (last 20 entries, chronological) ──
+  const chartEntries = tracker.entries.slice(-20);
+  const chartData = chartEntries.map((e) => ({
+    date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    value: typeof e.values[primaryField] === "number" ? e.values[primaryField] : 0,
+  }));
+
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-        <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
-              <span>{tracker.name}</span>
-              <Badge variant="secondary" className="text-xs capitalize">{tracker.category}</Badge>
-            </DialogTitle>
-            <DialogDescription>
-              {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
-              {tracker.unit ? ` · ${tracker.unit}` : ""}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex gap-2 mb-3">
-            <Button size="sm" onClick={() => setAddEntryOpen(true)} data-testid="button-add-entry-detail">
-              <Plus className="w-3 h-3 mr-1" /> Add Entry
-            </Button>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0" data-testid="tracker-detail-dialog">
+          {/* ── Header ── */}
+          <div className="px-5 pt-5 pb-3 border-b">
+            <div className="flex items-center justify-between">
+              <div>
+                <DialogTitle className="text-base font-semibold">{tracker.name}</DialogTitle>
+                <DialogDescription className="text-xs mt-0.5">
+                  {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
+                  {tracker.unit ? ` · ${tracker.unit}` : ""}
+                  {" · "}<span className="capitalize">{tracker.category}</span>
+                </DialogDescription>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button size="sm" onClick={() => setAddEntryOpen(true)} data-testid="button-add-entry-detail" className="h-7 text-xs">
+                  <Plus className="w-3 h-3 mr-1" /> Add Entry
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                  onClick={() => setDeleteTrackerOpen(true)}
+                  data-testid="button-delete-tracker-detail"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
           </div>
 
-          <div className="overflow-y-auto flex-1 space-y-2">
-            {sortedEntries.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">No entries yet. Click "Add Entry" to log data.</p>
-            ) : (
-              sortedEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center justify-between p-2.5 rounded-lg border bg-card text-sm gap-2">
-                  <span className="font-mono font-medium tabular-nums shrink-0">
-                    {entry.values[primaryField] != null
-                      ? `${entry.values[primaryField]} ${tracker.unit || ""}`
-                      : Object.entries(entry.values).map(([k, v]) => `${k}: ${v}`).join(", ")}
-                  </span>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(entry.timestamp).toLocaleDateString()} {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          {/* ── Stats Row ── */}
+          {hasNumeric && (
+            <div className="grid grid-cols-4 gap-px bg-border mx-5 mt-3 rounded-lg overflow-hidden" data-testid="tracker-stats-row">
+              <div className="bg-card p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Latest</p>
+                <p className="text-sm font-semibold tabular-nums mt-0.5">
+                  {latest != null ? latest : "—"}
+                  {trendDelta != null && (
+                    <span className={`text-[10px] ml-1 ${trendDelta < 0 ? "text-green-600" : trendDelta > 0 ? "text-orange-500" : "text-muted-foreground"}`}>
+                      {trendDelta > 0 ? "+" : ""}{trendDelta.toFixed(1)}
                     </span>
-                    <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+                  )}
+                </p>
+              </div>
+              <div className="bg-card p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Average</p>
+                <p className="text-sm font-semibold tabular-nums mt-0.5">{avg != null ? avg.toFixed(1) : "—"}</p>
+              </div>
+              <div className="bg-card p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Min</p>
+                <p className="text-sm font-semibold tabular-nums mt-0.5">{min != null ? min : "—"}</p>
+              </div>
+              <div className="bg-card p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Max</p>
+                <p className="text-sm font-semibold tabular-nums mt-0.5">{max != null ? max : "—"}</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Mini Chart ── */}
+          {hasNumeric && chartData.length >= 2 && (
+            <div className="mx-5 mt-3 h-[120px]" data-testid="tracker-mini-chart">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                  <defs>
+                    <linearGradient id="detailGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={CHART_COLORS.primary} stopOpacity={0.25} />
+                      <stop offset="95%" stopColor={CHART_COLORS.primary} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="date" tick={{ fontSize: 9 }} stroke="hsl(var(--muted-foreground))" />
+                  <YAxis tick={{ fontSize: 9 }} stroke="hsl(var(--muted-foreground))" domain={["auto", "auto"]} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid hsl(var(--border))" }}
+                    formatter={(val: number) => [`${val} ${tracker.unit || ""}`, primaryField]}
+                  />
+                  {avg != null && <ReferenceLine y={avg} stroke={CHART_COLORS.secondary} strokeDasharray="4 4" label={{ value: "avg", fontSize: 9, fill: CHART_COLORS.secondary }} />}
+                  <Area type="monotone" dataKey="value" stroke={CHART_COLORS.primary} strokeWidth={2} fill="url(#detailGrad)" dot={{ r: 2.5, fill: CHART_COLORS.primary }} activeDot={{ r: 4 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* ── Entry List ── */}
+          <div className="flex-1 overflow-y-auto px-5 pb-5 mt-3 space-y-1.5" data-testid="tracker-entry-list">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium mb-2">All Entries</p>
+            {sortedEntries.length === 0 ? (
+              <div className="text-center py-8">
+                <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                <p className="text-sm text-muted-foreground">No entries yet</p>
+                <p className="text-xs text-muted-foreground mt-1">Click "Add Entry" to start logging data.</p>
+              </div>
+            ) : (
+              sortedEntries.map((entry, idx) => {
+                const val = entry.values[primaryField];
+                const displayVal = val != null
+                  ? `${val} ${tracker.unit || ""}`
+                  : Object.entries(entry.values).map(([k, v]) => `${k}: ${v}`).join(", ");
+                // Show delta vs previous entry
+                const nextEntry = sortedEntries[idx + 1]; // next = older
+                const nextVal = nextEntry?.values[primaryField];
+                const entryDelta = typeof val === "number" && typeof nextVal === "number" ? val - nextVal : null;
+
+                return (
+                  <div
+                    key={entry.id}
+                    className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm"
+                    data-testid={`entry-row-${entry.id}`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
+                      {entryDelta != null && entryDelta !== 0 && (
+                        <span className={`text-[10px] font-medium tabular-nums ${entryDelta < 0 ? "text-green-600" : "text-orange-500"}`}>
+                          {entryDelta > 0 ? "+" : ""}{entryDelta.toFixed(1)}
+                        </span>
+                      )}
+                      {entry.notes && (
+                        <span className="text-[10px] text-muted-foreground truncate max-w-[120px]" title={entry.notes}>
+                          {entry.notes}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[11px] text-muted-foreground tabular-nums">
+                        {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        {" "}
+                        {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                      <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </DialogContent>
       </Dialog>
 
+      {/* ── Add Entry sub-dialog ── */}
       <AddEntryDialog
         tracker={tracker}
         open={addEntryOpen}
@@ -1666,6 +1801,28 @@ function TrackerDetailDialog({
           }
         }}
       />
+
+      {/* ── Delete Tracker confirmation ── */}
+      <AlertDialog open={deleteTrackerOpen} onOpenChange={setDeleteTrackerOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{tracker.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this tracker and all {tracker.entries.length} entries. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteTrackerMut.mutate()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-delete-tracker-confirm"
+            >
+              {deleteTrackerMut.isPending ? "Deleting..." : "Delete Tracker"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
