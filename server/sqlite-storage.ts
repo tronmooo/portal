@@ -1606,3 +1606,4 @@ export class SqliteStorage implements IStorage {
   private seedData() {
     return;
   }
+}

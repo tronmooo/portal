@@ -55630,7 +55630,7 @@ async function executeTool(name, input) {
     }
     case "sync_calendar": {
       try {
-        const { execSync } = __require("child_process");
+        const { execFileSync } = __require("child_process");
         const now = /* @__PURE__ */ new Date();
         const startDate = new Date(now);
         startDate.setMonth(startDate.getMonth() - 1);
@@ -55645,7 +55645,7 @@ async function executeTool(name, input) {
             queries: [""]
           }
         });
-        const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+        const stdout = execFileSync("external-tool", ["call", params], {
           timeout: 3e4,
           encoding: "utf-8"
         });
@@ -58447,7 +58447,7 @@ Generate my Weekly Digest JSON.`;
   });
   app2.post("/api/calendar/sync", async (req, res) => {
     try {
-      const { execSync } = __require("child_process");
+      const { execFileSync } = __require("child_process");
       const now = /* @__PURE__ */ new Date();
       const startDate = new Date(now);
       startDate.setMonth(startDate.getMonth() - 1);
@@ -58466,7 +58466,7 @@ Generate my Weekly Digest JSON.`;
       });
       let gcalResult;
       try {
-        const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+        const stdout = execFileSync("external-tool", ["call", params], {
           timeout: 3e4,
           encoding: "utf-8"
         });
@@ -58549,7 +58549,7 @@ Generate my Weekly Digest JSON.`;
   });
   app2.post("/api/calendar/export/:id", async (req, res) => {
     try {
-      const { execSync } = __require("child_process");
+      const { execFileSync } = __require("child_process");
       const event = await storage.getEvent(req.params.id);
       if (!event) return res.status(404).json({ error: "Event not found" });
       let startHour = 0, startMin = 0;
@@ -58592,7 +58592,7 @@ Generate my Weekly Digest JSON.`;
           user_prompt: null
         }
       });
-      const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+      const stdout = execFileSync("external-tool", ["call", params], {
         timeout: 3e4,
         encoding: "utf-8"
       });

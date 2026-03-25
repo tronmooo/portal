@@ -254,8 +254,15 @@ export function registerAuthRoutes(app: any) {
       return res.status(400).json({ error: "Email is required" });
     }
 
+    // Validate origin to prevent open redirect — only allow same-origin or configured app URL
+    const origin = req.headers.origin;
+    const allowedOrigins = [process.env.APP_URL, process.env.VITE_APP_URL].filter(Boolean);
+    const safeOrigin = (origin && allowedOrigins.length > 0 && allowedOrigins.includes(origin))
+      ? origin
+      : (allowedOrigins[0] || `${req.protocol}://${req.get('host')}`);
+
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${req.headers.origin}/#/reset-password`,
+      redirectTo: `${safeOrigin}/#/reset-password`,
     });
 
     if (error) {

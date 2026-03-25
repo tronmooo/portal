@@ -1640,7 +1640,7 @@ export default function TrackersPage() {
         apiRequest("POST", "/api/trackers/migrate-to-self").then(() => {
           queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
           queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-        }).catch(() => {});
+        }).catch((err: unknown) => { console.error("Tracker migration failed:", err); });
       }
     }
   }, [trackers, profiles]);

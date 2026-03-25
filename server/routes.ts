@@ -43,6 +43,32 @@ setInterval(() => {
   }
 }, 300000);
 
+// Validate file content by checking magic bytes (first few bytes of decoded base64)
+function validateFileMagicBytes(base64Data: string, claimedMime: string): boolean {
+  try {
+    // Decode first 16 bytes to check file signature
+    const sample = Buffer.from(base64Data.slice(0, 24), "base64");
+    const hex = sample.toString("hex").toLowerCase();
+
+    // Common magic bytes
+    const signatures: Record<string, string[]> = {
+      "image/jpeg": ["ffd8ff"],
+      "image/png": ["89504e47"],
+      "image/gif": ["47494638"],
+      "image/webp": ["52494646"],
+      "application/pdf": ["25504446"],
+      "image/bmp": ["424d"],
+      "image/tiff": ["49492a00", "4d4d002a"],
+    };
+
+    const expected = signatures[claimedMime];
+    if (!expected) return true; // Unknown MIME — allow (can't validate)
+    return expected.some(sig => hex.startsWith(sig));
+  } catch {
+    return false;
+  }
+}
+
 // HTML sanitizer — escapes dangerous characters to prevent XSS
 function sanitize(input: string): string {
   return input
@@ -127,6 +153,10 @@ export async function registerRoutes(
       }
       // Validate MIME type format
       const safeMime = /^[a-z]+\/[a-z0-9.+-]+$/.test(mimeType || "") ? mimeType : "image/jpeg";
+      // Validate file content matches claimed MIME type (magic byte check)
+      if (!validateFileMagicBytes(fileData, safeMime)) {
+        return res.status(400).json({ error: "File content does not match the claimed file type" });
+      }
       const result = await processFileUpload(fileName, safeMime || "image/jpeg", fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
@@ -321,19 +351,19 @@ export async function registerRoutes(
             await storage.createEvent({
               title: event.title || `📅 ${event.field}`,
               date: dateStr,
-              time: null,
-              endTime: null,
+              time: undefined,
+              endTime: undefined,
               description: `Auto-created from document extraction (${event.field})`,
-              location: null,
+              location: undefined,
               allDay: true,
               category: event.category || "other",
               recurrence: "none",
-              recurrenceEnd: null,
-              color: null,
+              recurrenceEnd: undefined,
+              color: undefined,
               linkedProfiles: targetProfileId ? [targetProfileId] : [],
               linkedDocuments: [extractionId],
               tags: ["document-extraction"],
-              source: "extraction",
+              source: "external",
             });
             saved.push(`Created event: ${event.title || event.field}`);
           } catch (evErr: any) {
@@ -354,7 +384,7 @@ export async function registerRoutes(
             if (!tracker) {
               tracker = await storage.createTracker({
                 name: entry.trackerName,
-                type: "numeric",
+                category: "custom",
                 unit: entry.unit || "",
                 fields: Object.keys(entry.values || {}).map((k: string) => ({
                   name: k,
@@ -362,7 +392,6 @@ export async function registerRoutes(
                   unit: "",
                   options: [],
                 })),
-                linkedProfiles: targetProfileId ? [targetProfileId] : [],
               });
             }
             await storage.logEntry({

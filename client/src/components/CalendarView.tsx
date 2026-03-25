@@ -789,7 +789,7 @@ export default function CalendarView() {
         setDetailItem(null);
         setEditEvent(ev);
       })
-      .catch(() => {});
+      .catch((err: unknown) => { console.error("Failed to load event for editing:", err); });
   };
 
   // Count items by type for filter badges

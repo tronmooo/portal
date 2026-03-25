@@ -854,6 +854,16 @@ export default function ChatPage() {
       }
     } catch (err) {
       console.error("Confirm extraction failed:", err);
+      // Show error inline as a system message so user gets feedback
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant" as const,
+          content: "Sorry, I couldn't save that extracted data. Please try again.",
+          timestamp: new Date().toISOString(),
+        },
+      ]);
     }
   };
 

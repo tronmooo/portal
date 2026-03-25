@@ -503,7 +503,8 @@ export class SupabaseStorage implements IStorage {
         break;
     }
     if (field && snakeField) {
-      await this.supabase.from("profiles").update({ [snakeField]: (profile as any)[field] }).eq("id", profileId).eq("user_id", this.userId);
+      const { error } = await this.supabase.from("profiles").update({ [snakeField]: (profile as any)[field] }).eq("id", profileId).eq("user_id", this.userId);
+      if (error) console.error(`linkProfileTo update failed for profile ${profileId}:`, error);
     }
   }
 
@@ -535,14 +536,16 @@ export class SupabaseStorage implements IStorage {
         break;
     }
     if (field && snakeField) {
-      await this.supabase.from("profiles").update({ [snakeField]: (profile as any)[field] }).eq("id", profileId).eq("user_id", this.userId);
+      const { error: updateErr } = await this.supabase.from("profiles").update({ [snakeField]: (profile as any)[field] }).eq("id", profileId).eq("user_id", this.userId);
+      if (updateErr) console.error(`unlinkProfileFrom update failed for profile ${profileId}:`, updateErr);
       // Also remove from entity_links table
-      await this.supabase.from("entity_links").delete()
+      const { error: deleteErr } = await this.supabase.from("entity_links").delete()
         .eq("user_id", this.userId)
         .eq("source_type", "profile")
         .eq("source_id", profileId)
         .eq("target_type", entityType)
         .eq("target_id", entityId);
+      if (deleteErr) console.error(`unlinkProfileFrom entity_links delete failed:`, deleteErr);
     }
   }
 
@@ -562,7 +565,8 @@ export class SupabaseStorage implements IStorage {
     for (const t of trackers) {
       if (!t.linkedProfiles || t.linkedProfiles.length === 0) {
         // Update tracker's linkedProfiles
-        await this.supabase.from("trackers").update({ linked_profiles: [selfProfile.id] }).eq("id", t.id).eq("user_id", this.userId);
+        const { error: migErr } = await this.supabase.from("trackers").update({ linked_profiles: [selfProfile.id] }).eq("id", t.id).eq("user_id", this.userId);
+        if (migErr) console.error(`migrateUnlinkedTrackersToSelf failed for tracker ${t.id}:`, migErr);
         // Update profile's linkedTrackers
         await this.linkProfileTo(selfProfile.id, "tracker", t.id);
         count++;
@@ -1107,7 +1111,9 @@ export class SupabaseStorage implements IStorage {
       await this.linkProfileTo(pid, "document", id);
     }
     this.logActivity("document", `Stored document: ${data.name}`);
-    return (await this.getDocument(id))!;
+    const created = await this.getDocument(id);
+    if (!created) throw new Error(`Failed to retrieve document after creation: ${id}`);
+    return created;
   }
 
   async updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined> {
@@ -1119,7 +1125,8 @@ export class SupabaseStorage implements IStorage {
           const profile = await this.getProfile(pid);
           if (profile) {
             const newDocs = profile.documents.filter(did => did !== id);
-            await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+            const { error: unlinkErr } = await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+            if (unlinkErr) console.error(`updateDocument: failed to unlink doc from profile ${pid}:`, unlinkErr);
           }
         }
       }
@@ -1146,7 +1153,8 @@ export class SupabaseStorage implements IStorage {
       const profile = await this.getProfile(pid);
       if (profile) {
         const newDocs = profile.documents.filter(did => did !== id);
-        await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+        const { error: unlinkErr } = await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+        if (unlinkErr) console.error(`deleteDocument: failed to unlink doc from profile ${pid}:`, unlinkErr);
       }
     }
     const { error } = await this.supabase.from("documents").delete().eq("id", id).eq("user_id", this.userId);
@@ -1190,7 +1198,9 @@ export class SupabaseStorage implements IStorage {
     });
     if (error) throw error;
     this.logActivity("habit", `Created habit: ${data.name}`);
-    return (await this.getHabit(id))!;
+    const created = await this.getHabit(id);
+    if (!created) throw new Error(`Failed to retrieve habit after creation: ${id}`);
+    return created;
   }
 
   async checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined> {
@@ -1209,9 +1219,10 @@ export class SupabaseStorage implements IStorage {
     // Recalculate streaks
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
     const { current, longest } = calculateStreak(allCheckins || []);
-    await this.supabase.from("habits").update({
+    const { error: streakErr } = await this.supabase.from("habits").update({
       current_streak: current, longest_streak: Math.max(longest, habit.longestStreak),
     }).eq("id", habitId).eq("user_id", this.userId);
+    if (streakErr) console.error(`checkinHabit: streak update failed for habit ${habitId}:`, streakErr);
     this.logActivity("habit", `Checked in: ${habit.name}`);
     return { id, date: checkinDate, value, notes, timestamp: ts };
   }
@@ -1539,7 +1550,9 @@ export class SupabaseStorage implements IStorage {
     });
     if (error) throw error;
     this.logActivity("goal", `Created goal: ${data.title}`);
-    return (await this.getGoal(id))!;
+    const created = await this.getGoal(id);
+    if (!created) throw new Error(`Failed to retrieve goal after creation: ${id}`);
+    return created;
   }
 
   async updateGoal(id: string, data: Partial<Goal>): Promise<Goal | undefined> {
@@ -1679,7 +1692,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteDomain(id: string): Promise<boolean> {
-    await this.supabase.from("domain_entries").delete().eq("domain_id", id).eq("user_id", this.userId);
+    const { error: entryErr } = await this.supabase.from("domain_entries").delete().eq("domain_id", id).eq("user_id", this.userId);
+    if (entryErr) console.error(`deleteDomain: failed to delete entries for domain ${id}:`, entryErr);
     const { error } = await this.supabase.from("domains").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }

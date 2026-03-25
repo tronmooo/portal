@@ -3850,7 +3850,7 @@ function InsightsSection() {
       .then(data => {
         queryClient.setQueryData(["/api/ai-digest"], data);
       })
-      .catch(() => {});
+      .catch((err: unknown) => { console.error("AI digest refresh failed:", err); });
   };
 
   // Fallback to static insights on error

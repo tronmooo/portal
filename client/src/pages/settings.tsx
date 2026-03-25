@@ -130,7 +130,7 @@ export default function SettingsPage() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Link href="/">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to home">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
