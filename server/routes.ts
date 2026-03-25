@@ -43,9 +43,16 @@ setInterval(() => {
   }
 }, 300000);
 
-// Simple HTML sanitizer — strips < and > to prevent XSS
+// HTML sanitizer — strips dangerous characters and entities
 function sanitize(input: string): string {
-  return input.replace(/[<>]/g, '').trim();
+  return input
+    .replace(/[<>]/g, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+\s*=/gi, '')
+    .replace(/&lt;/gi, '').replace(/&gt;/gi, '')
+    .replace(/&#/g, '')
+    .trim()
+    .slice(0, 10000); // prevent excessively long strings
 }
 
 export async function registerRoutes(
@@ -793,7 +800,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!doc || !doc.fileData) return res.status(404).json({ error: "Not found" });
     const buffer = Buffer.from(doc.fileData, "base64");
     res.setHeader("Content-Type", doc.mimeType);
-    res.setHeader("Content-Disposition", `inline; filename="${doc.name}"`);
+    const safeName = (doc.name || 'document').replace(/["\\\n\r]/g, '_');
+    res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
     res.setHeader("Content-Length", buffer.length.toString());
     res.send(buffer);
   });
@@ -1456,7 +1464,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         try {
           const fields = parseRow(lines[i]);
           const rawAmount = fields[colMap.amount] || "";
-          const amount = Math.abs(parseFloat(rawAmount.replace(/[$,\s]/g, "")));
+          const parsedAmount = parseFloat(rawAmount.replace(/[$,\s]/g, ""));
+          // Preserve sign: negative = refund/credit, positive = expense
+          const amount = parsedAmount;
+          const isRefund = parsedAmount < 0;
           if (isNaN(amount) || amount === 0) { skipped++; continue; }
 
           const description = fields[colMap.description ?? colMap.amount] || `Row ${i}`;
