@@ -57052,7 +57052,7 @@ async function registerRoutes(httpServer2, app2) {
         medical: "Summarize this medical profile: conditions, medications, appointments, documents, and upcoming care needs."
       };
       const typePrompt = typePrompts[detail.type] || "Summarize this profile's key information, linked entities, and any action items.";
-      const systemPrompt = `You are the AI engine for LifeOS, a personal life management app. You analyze profile data to produce a concise, actionable summary.
+      const systemPrompt = `You are the AI engine for Portol, a personal life management app. You analyze profile data to produce a concise, actionable summary.
 
 Rules:
 - Be specific with numbers and dates. Say "Last vet visit was 8 months ago" not "It's been a while."
@@ -58238,7 +58238,7 @@ ${JSON.stringify(profileData, null, 1)}`;
         profiles: profiles.map((p) => ({ name: p.name, type: p.type })),
         memories: memories.slice(-10).map((m) => ({ key: m.key, value: m.value }))
       };
-      const systemPrompt = `You are the AI engine for LifeOS, a personal life management app. You analyze the user's data to produce a Weekly Digest \u2014 a structured personal report card.
+      const systemPrompt = `You are the AI engine for Portol, a personal life management app. You analyze the user's data to produce a Weekly Digest \u2014 a structured personal report card.
 
 Rules:
 - Be specific with numbers. Say "You ran 12 miles this week, up from 8 last week" not "You've been active."
@@ -58270,7 +58270,7 @@ JSON Schema:
 }
 
 Generate 3-6 sections covering different life areas. Generate 1-3 correlations if patterns exist. If data is insufficient for correlations, return an empty array.`;
-      const userPrompt = `Here is my LifeOS data snapshot for the week of ${weekAgoStr} to ${todayStr}:
+      const userPrompt = `Here is my Portol data snapshot for the week of ${weekAgoStr} to ${todayStr}:
 
 ${JSON.stringify(dataSnapshot, null, 1)}
 
@@ -58435,23 +58435,7 @@ Generate my Weekly Digest JSON.`;
     }
   });
   app2.get("/api/onboarding-status", async (_req, res) => {
-    try {
-      const completed = await storage.getPreference("onboarding_completed");
-      const profiles = await storage.getProfiles();
-      const trackers = await storage.getTrackers();
-      const tasks = await storage.getTasks();
-      res.json({
-        completed: completed === "true",
-        hasProfiles: profiles.length > 0,
-        hasTrackers: trackers.length > 0,
-        hasTasks: tasks.length > 0,
-        profileCount: profiles.length,
-        trackerCount: trackers.length,
-        taskCount: tasks.length
-      });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to check onboarding status" });
-    }
+    res.json({ completed: true, hasProfiles: true, hasTrackers: true, hasTasks: true, profileCount: 0, trackerCount: 0, taskCount: 0 });
   });
   app2.post("/api/onboarding/complete", async (_req, res) => {
     try {

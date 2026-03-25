@@ -551,7 +551,7 @@ export async function registerRoutes(
 
       const typePrompt = typePrompts[detail.type] || "Summarize this profile's key information, linked entities, and any action items.";
 
-      const systemPrompt = `You are the AI engine for LifeOS, a personal life management app. You analyze profile data to produce a concise, actionable summary.
+      const systemPrompt = `You are the AI engine for Portol, a personal life management app. You analyze profile data to produce a concise, actionable summary.
 
 Rules:
 - Be specific with numbers and dates. Say "Last vet visit was 8 months ago" not "It's been a while."
@@ -1824,7 +1824,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         memories: memories.slice(-10).map(m => ({ key: m.key, value: m.value })),
       };
 
-      const systemPrompt = `You are the AI engine for LifeOS, a personal life management app. You analyze the user's data to produce a Weekly Digest — a structured personal report card.
+      const systemPrompt = `You are the AI engine for Portol, a personal life management app. You analyze the user's data to produce a Weekly Digest — a structured personal report card.
 
 Rules:
 - Be specific with numbers. Say "You ran 12 miles this week, up from 8 last week" not "You've been active."
@@ -1857,7 +1857,7 @@ JSON Schema:
 
 Generate 3-6 sections covering different life areas. Generate 1-3 correlations if patterns exist. If data is insufficient for correlations, return an empty array.`;
 
-      const userPrompt = `Here is my LifeOS data snapshot for the week of ${weekAgoStr} to ${todayStr}:\n\n${JSON.stringify(dataSnapshot, null, 1)}\n\nGenerate my Weekly Digest JSON.`;
+      const userPrompt = `Here is my Portol data snapshot for the week of ${weekAgoStr} to ${todayStr}:\n\n${JSON.stringify(dataSnapshot, null, 1)}\n\nGenerate my Weekly Digest JSON.`;
 
       const client = new Anthropic();
       const response = await client.messages.create({
@@ -2043,23 +2043,8 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   // ---- Onboarding Status ----
   app.get("/api/onboarding-status", async (_req, res) => {
-    try {
-      const completed = await storage.getPreference("onboarding_completed");
-      const profiles = await storage.getProfiles();
-      const trackers = await storage.getTrackers();
-      const tasks = await storage.getTasks();
-      res.json({
-        completed: completed === "true",
-        hasProfiles: profiles.length > 0,
-        hasTrackers: trackers.length > 0,
-        hasTasks: tasks.length > 0,
-        profileCount: profiles.length,
-        trackerCount: trackers.length,
-        taskCount: tasks.length,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: "Failed to check onboarding status" });
-    }
+    // Onboarding wizard removed — always return completed
+    res.json({ completed: true, hasProfiles: true, hasTrackers: true, hasTasks: true, profileCount: 0, trackerCount: 0, taskCount: 0 });
   });
 
   app.post("/api/onboarding/complete", async (_req, res) => {
@@ -2114,7 +2099,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         return res.json({ imported: 0, exported: 0, message: "No events found in Google Calendar for this period." });
       }
 
-      // Get existing LifeOS events to avoid duplicates
+      // Get existing Portol events to avoid duplicates
       const existingEvents = await storage.getEvents();
       const gcalMappings = new Set<string>();
       for (const e of existingEvents) {
@@ -2138,7 +2123,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         );
         if (isDuplicate) continue;
 
-        // Map Google Calendar event → LifeOS event
+        // Map Google Calendar event → Portol event
         const startTime = gcEvent.is_all_day ? undefined : startParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
         const endParsed = gcEvent.end ? new Date(gcEvent.end) : null;
         const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : endParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
@@ -2204,7 +2189,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     }
   });
 
-  // Export a LifeOS event to Google Calendar
+  // Export a Portol event to Google Calendar
   app.post("/api/calendar/export/:id", async (req, res) => {
     try {
       const { execSync } = require("child_process");

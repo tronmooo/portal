@@ -4756,7 +4756,7 @@ export default function DashboardPage() {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Import Backup</DialogTitle>
-            <DialogDescription>Upload a LifeOS backup JSON file to restore your data. New items will be added alongside existing data.</DialogDescription>
+            <DialogDescription>Upload a Portol backup JSON file to restore your data. New items will be added alongside existing data.</DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <Label htmlFor="import-file" className="cursor-pointer">

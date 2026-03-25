@@ -1867,7 +1867,7 @@ export default function TrackersPage() {
               {filteredTrackers.map((tracker) => {
                 const lastEntry = tracker.entries[tracker.entries.length - 1];
                 const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
-                const latestValue = lastEntry?.values?.[primaryField];
+                const latestValue = lastEntry?.values?.[primaryField] ?? (lastEntry?.values ? Object.values(lastEntry.values)[0] : null);
                 const unit = tracker.unit || "";
                 const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
                 return (

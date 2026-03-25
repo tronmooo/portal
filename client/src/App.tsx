@@ -19,7 +19,7 @@ import {
   CommandSearchTrigger,
 } from "@/components/CommandSearch";
 import { NotificationBell } from "@/components/NotificationBell";
-import { OnboardingWizard } from "@/components/OnboardingWizard";
+
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
@@ -177,7 +177,6 @@ function App() {
                       </div>
                     </header>
                     <main className="flex-1 overflow-hidden pb-[60px] md:pb-0">
-                      <OnboardingWizard />
                       <AppRouter />
                     </main>
                     <div className="hidden md:block">
