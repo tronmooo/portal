@@ -237,11 +237,11 @@ export function computeSecondaryData(trackerName: string, category: string, valu
     }
   }
 
-  // BMI from weight tracker
+  // BMI from weight tracker (requires height in values or defaults to skipping)
   if (name === "weight" || name.includes("body weight")) {
     const weight = parseFloat(values.weight) || parseFloat(values.value) || 0;
-    if (weight > 0) {
-      const heightInches = 70;
+    const heightInches = parseFloat(values.heightInches) || parseFloat(values.height) || 0;
+    if (weight > 0 && heightInches > 0) {
       computed.bmi = Math.round((weight / (heightInches * heightInches)) * 703 * 10) / 10;
     }
   }

@@ -290,9 +290,23 @@ Respond with JSON:
     const text = response.content[0].type === "text" ? response.content[0].text : "{}";
     let parsed: any;
     try {
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-    } catch { parsed = {}; }
+      // Try direct parse first, then extract JSON with non-greedy match
+      parsed = JSON.parse(text);
+    } catch {
+      try {
+        const jsonMatch = text.match(/\{[\s\S]*?\}(?=[^}]*$)/);
+        parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      } catch {
+        // Try finding balanced braces
+        const start = text.indexOf("{");
+        const end = text.lastIndexOf("}");
+        if (start !== -1 && end > start) {
+          try { parsed = JSON.parse(text.slice(start, end + 1)); } catch { parsed = {}; }
+        } else {
+          parsed = {};
+        }
+      }
+    }
 
     // Resolve target profile (for linking the document), but do NOT update profile fields yet
     let linkedProfiles: string[] = [];
@@ -1807,12 +1821,15 @@ async function executeTool(name: string, input: any): Promise<any> {
         const endDate = new Date(now);
         endDate.setMonth(endDate.getMonth() + 1);
 
+        // Use stored timezone preference or UTC
+        const userTz = await storage.getPreference("user_timezone") || "UTC";
+        const tzOffset = userTz === "UTC" ? "Z" : userTz;
         const params = JSON.stringify({
           source_id: "gcal",
           tool_name: "search_calendar",
           arguments: {
-            start_date: startDate.toISOString().replace("Z", "-07:00"),
-            end_date: endDate.toISOString().replace("Z", "-07:00"),
+            start_date: startDate.toISOString().replace("Z", tzOffset === "Z" ? "Z" : tzOffset),
+            end_date: endDate.toISOString().replace("Z", tzOffset === "Z" ? "Z" : tzOffset),
             queries: [""],
           },
         });

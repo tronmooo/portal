@@ -54,6 +54,27 @@ function sanitize(input: string): string {
     .trim();
 }
 
+// Convert IANA timezone to UTC offset string (e.g. "America/Los_Angeles" -> "-07:00")
+function getTimezoneOffset(tz: string): string {
+  try {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" });
+    const parts = formatter.formatToParts(now);
+    const tzPart = parts.find(p => p.type === "timeZoneName");
+    if (tzPart?.value) {
+      const match = tzPart.value.match(/GMT([+-]\d{1,2})(?::?(\d{2}))?/);
+      if (match) {
+        const hours = parseInt(match[1]);
+        const mins = match[2] || "00";
+        const sign = hours >= 0 ? "+" : "-";
+        return `${sign}${String(Math.abs(hours)).padStart(2, "0")}:${mins}`;
+      }
+      if (tzPart.value === "GMT") return "+00:00";
+    }
+  } catch {}
+  return "+00:00";
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -346,8 +367,7 @@ export async function registerRoutes(
             }
             await storage.logEntry({
               trackerId: tracker.id,
-              value: entry.values ? JSON.stringify(entry.values) : "0",
-              date: new Date().toISOString().slice(0, 10),
+              values: entry.values || {},
               notes: `From document extraction`,
             });
             saved.push(`Logged ${entry.trackerName} entry`);
@@ -2025,12 +2045,15 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   app.post("/api/entity-links", async (req, res) => {
     try {
-      const parsed = insertEntityLinkSchema.parse(req.body);
-      const link = await storage.createEntityLink(parsed);
+      const result = insertEntityLinkSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ error: result.error.message });
+      }
+      const link = await storage.createEntityLink(result.data);
       res.json(link);
     } catch (err: any) {
       console.error("Create entity link error:", err);
-      res.status(400).json({ error: err.message || "Failed to create entity link" });
+      res.status(500).json({ error: "Failed to create entity link" });
     }
   });
 
@@ -2094,8 +2117,11 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const endDate = new Date(now);
       endDate.setMonth(endDate.getMonth() + 1);
 
-      const startStr = startDate.toISOString().replace("Z", "-07:00");
-      const endStr = endDate.toISOString().replace("Z", "-07:00");
+      // Use user's timezone preference or fall back to UTC
+      const userTz = await storage.getPreference("user_timezone") || "UTC";
+      const tzOffset = getTimezoneOffset(userTz);
+      const startStr = startDate.toISOString().replace("Z", tzOffset);
+      const endStr = endDate.toISOString().replace("Z", tzOffset);
 
       // Call Google Calendar via external-tool CLI (using execFileSync to prevent shell injection)
       const params = JSON.stringify({
@@ -2233,7 +2259,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       }
 
       const dateStr = event.date;
-      const startDateTime = `${dateStr}T${String(startHour).padStart(2, "0")}:${String(startMin).padStart(2, "0")}:00-07:00`;
+      const userTz = await storage.getPreference("user_timezone") || "UTC";
+      const tzOffset = getTimezoneOffset(userTz);
+      const startDateTime = `${dateStr}T${String(startHour).padStart(2, "0")}:${String(startMin).padStart(2, "0")}:00${tzOffset}`;
 
       let endHour = startHour + 1, endMin = startMin;
       if (event.endTime) {
@@ -2245,7 +2273,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
           if (endMatch[3]?.toUpperCase() === "AM" && endHour === 12) endHour = 0;
         }
       }
-      const endDateTime = `${event.endDate || dateStr}T${String(endHour).padStart(2, "0")}:${String(endMin).padStart(2, "0")}:00-07:00`;
+      const endDateTime = `${event.endDate || dateStr}T${String(endHour).padStart(2, "0")}:${String(endMin).padStart(2, "0")}:00${tzOffset}`;
 
       const params = JSON.stringify({
         source_id: "gcal",
