@@ -329,8 +329,13 @@ export async function registerRoutes(
                       options: [],
                     }))
                   : [{ name: "value", type: "number" as const, unit: entry.unit || "", isPrimary: true, options: [] }],
-                linkedProfiles: targetProfileId ? [targetProfileId] : [],
               });
+              // Link tracker to profile if specified
+              if (targetProfileId && tracker) {
+                try {
+                  await storage.updateTracker(tracker.id, { linkedProfiles: [targetProfileId] } as any);
+                } catch { /* non-critical */ }
+              }
               saved.push(`Created tracker: ${humanName}`);
             }
             // Log the entry with proper values object

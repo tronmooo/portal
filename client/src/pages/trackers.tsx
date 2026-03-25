@@ -1153,7 +1153,7 @@ function CreateTrackerDialog({
         }));
       // If no fields defined, create a default "value" field
       if (builtFields.length === 0) {
-        builtFields = [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true }];
+        builtFields = [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true, options: undefined }];
       }
 
       const res = await apiRequest("POST", "/api/trackers", {
