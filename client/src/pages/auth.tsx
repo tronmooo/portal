@@ -87,9 +87,9 @@ export default function AuthPage() {
         <Card className="border-border/50">
           <CardHeader className="pb-4">
             <Tabs value={tab} onValueChange={(v) => { setTab(v as any); setError(""); }}>
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="signin" data-testid="tab-signin">Sign In</TabsTrigger>
-                <TabsTrigger value="signup" data-testid="tab-signup">Create Account</TabsTrigger>
+              <TabsList className="grid w-full grid-cols-2 bg-muted/60">
+                <TabsTrigger value="signin" data-testid="tab-signin" className="data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:font-semibold">Sign In</TabsTrigger>
+                <TabsTrigger value="signup" data-testid="tab-signup" className="data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:font-semibold">Create Account</TabsTrigger>
               </TabsList>
 
               <TabsContent value="signin" className="mt-4">
@@ -132,10 +132,10 @@ export default function AuthPage() {
 
                 <div className="relative my-4">
                   <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t border-border" />
+                    <span className="w-full border-t border-border/80" />
                   </div>
                   <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-card px-2 text-muted-foreground">Or continue with email</span>
+                    <span className="bg-card px-3 text-xs font-medium text-muted-foreground/80 uppercase tracking-wider">or continue with email</span>
                   </div>
                 </div>
               </>
@@ -173,7 +173,7 @@ export default function AuthPage() {
                 </Button>
                 <button
                   type="button"
-                  className="w-full text-xs text-muted-foreground hover:text-primary transition-colors"
+                  className="w-full text-xs text-muted-foreground/90 hover:text-primary transition-colors underline-offset-4 hover:underline"
                   onClick={() => { setForgotMode(true); setError(""); setForgotEmail(email); setForgotSent(false); }}
                   data-testid="link-forgot-password"
                 >

@@ -1075,7 +1075,9 @@ export default function ProfilesPage() {
             <h1 className="text-xl font-semibold" data-testid="text-profiles-title">Profiles</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {(profiles || []).length} total — people, pets, vehicles, subscriptions, and more
+            {(profiles || []).length === 0
+              ? "You haven't added any profiles yet"
+              : `${(profiles || []).length} total — people, pets, vehicles, subscriptions, and more`}
           </p>
         </div>
         <Button
@@ -1091,12 +1093,16 @@ export default function ProfilesPage() {
 
       {/* Empty state */}
       {(!profiles || profiles.length === 0) ? (
-        <div className="text-center py-16">
-          <Users className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">No profiles yet.</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            Click the + button to create your first profile.
-          </p>
+        <div className="flex flex-col items-center justify-center py-16 space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center">
+            <Users className="w-8 h-8 text-muted-foreground/50" />
+          </div>
+          <div className="text-center space-y-1">
+            <p className="text-sm text-muted-foreground">Add people, pets, vehicles, and more</p>
+          </div>
+          <Button onClick={() => setCreateOpen(true)} data-testid="button-add-profile-empty">
+            <Plus className="w-4 h-4 mr-1" /> Add First Profile
+          </Button>
         </div>
       ) : (
         sortedTypes.map((type) => (

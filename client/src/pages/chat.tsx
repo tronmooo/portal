@@ -1109,9 +1109,9 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                <p className="text-sm whitespace-pre-wrap leading-relaxed">
+                <div className="text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2">
                   {msg.content}
-                </p>
+                </div>
 
                 {/* Document previews - inline with zoom & share */}
                 <ChatDocumentPreviews
@@ -1174,12 +1174,12 @@ export default function ChatPage() {
         <div className="px-4 pb-2">
           <div className="max-w-2xl mx-auto">
             <p className="text-xs text-muted-foreground mb-2">Try saying:</p>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-2 justify-center px-4">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   onClick={() => handleSuggestion(s)}
-                  className="text-xs px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full border border-border bg-card hover:bg-accent transition-colors"
+                  className="text-xs px-3 py-1.5 rounded-full border border-border/60 hover:bg-muted/60 transition-colors whitespace-nowrap"
                   data-testid={`button-suggestion-${s.slice(0, 20)}`}
                 >
                   {s}
@@ -1255,7 +1255,7 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type anything — log food, track workouts, upload documents..."
+              placeholder="Ask anything or log data..."
               className="min-h-[44px] max-h-[120px] resize-none rounded-xl bg-card text-sm"
               rows={1}
               data-testid="input-chat"

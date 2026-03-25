@@ -1244,6 +1244,7 @@ function CreateTrackerDialog({
               className="mt-1"
               data-testid="input-tracker-unit"
             />
+            <p className="text-xs text-muted-foreground mt-1">Optional — e.g., lbs, miles, hours</p>
           </div>
 
           {/* Fields builder */}
@@ -1713,7 +1714,11 @@ export default function TrackersPage() {
             <h1 className="text-xl font-semibold" data-testid="text-trackers-title">Trackers</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {filteredTrackers.length}{resolvedFilter !== "all" ? ` of ${(trackers || []).length}` : ""} trackers{resolvedFilter !== "all" ? " shown" : ""}
+            {(trackers || []).length === 0
+              ? "Create a tracker to start logging data"
+              : filteredTrackers.length === (trackers || []).length
+                ? `${(trackers || []).length} tracker${(trackers || []).length !== 1 ? 's' : ''}`
+                : `${filteredTrackers.length} of ${(trackers || []).length} trackers shown`}
           </p>
         </div>
         <div className="flex items-center gap-2">

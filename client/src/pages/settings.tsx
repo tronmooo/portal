@@ -290,9 +290,12 @@ export default function SettingsPage() {
             {/* Bank CSV Import */}
             <div className="flex items-center justify-between">
               <div>
-                <Label className="text-sm font-medium">Import Bank CSV</Label>
+                <Label className="text-sm font-medium flex items-center gap-2">
+                  <FileSpreadsheet className="w-4 h-4" />
+                  Import Bank CSV
+                </Label>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Upload a bank statement CSV to auto-create expenses.
+                  Upload a bank statement CSV to import transactions into the Finance section
                 </p>
                 {lastCsvImport && (
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">

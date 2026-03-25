@@ -7,9 +7,11 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+let globalDismissed = false;
+
 export function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(globalDismissed);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -22,6 +24,11 @@ export function InstallPrompt() {
 
   if (!deferredPrompt || dismissed) return null;
 
+  function handleDismiss() {
+    globalDismissed = true;
+    setDismissed(true);
+  }
+
   async function handleInstall() {
     if (!deferredPrompt) return;
     await deferredPrompt.prompt();
@@ -29,7 +36,7 @@ export function InstallPrompt() {
     if (outcome === "accepted") {
       setDeferredPrompt(null);
     }
-    setDismissed(true);
+    handleDismiss();
   }
 
   return (
@@ -42,7 +49,7 @@ export function InstallPrompt() {
         <Download className="w-4 h-4 mr-1" />
         Install
       </Button>
-      <button onClick={() => setDismissed(true)} className="p-1 hover:bg-muted rounded-md shrink-0" data-testid="button-dismiss-install" aria-label="Dismiss">
+      <button onClick={handleDismiss} className="p-1 hover:bg-muted rounded-md shrink-0" data-testid="button-dismiss-install" aria-label="Dismiss">
         <X className="w-3.5 h-3.5 text-muted-foreground" />
       </button>
     </div>
