@@ -24,9 +24,7 @@ import {
   HeartPulse, ArrowUp, ArrowDown, Minus, FileWarning, CalendarClock,
   Download, UploadCloud,
   EyeOff, GripVertical, Settings, RotateCcw, Target,
-  Trash2, Pencil, FileText, CheckCircle2, X,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import type {
   DashboardStats, Insight, MoodLevel,
 } from "@shared/schema";
@@ -336,7 +334,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
 
 function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any }) {
   const [, navigate] = useLocation();
-  const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | null>(null);
+  const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | null>(null);
 
   const finSnap = enhanced?.financeSnapshot;
   const spendTrend: "up" | "down" | "flat" = finSnap?.spendTrend > 0 ? "up" : finSnap?.spendTrend < 0 ? "down" : "flat";
@@ -349,7 +347,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
       <CollapsibleSection icon={BarChart3} label="Key Metrics" testId="section-kpis">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
           <MiniStat icon={ListTodo} label="Open Tasks" value={stats.activeTasks}
-            onClick={() => setPopup("tasks")} />
+            onClick={() => navigate("/tasks")} />
           <MiniStat icon={DollarSign} label="Monthly Spend" value={formatMoney(stats.monthlySpend)}
             trend={spendTrend} onClick={() => setPopup("spending")} />
           <MiniStat icon={Flame} label="Habits Today" value={`${stats.habitCompletionRate}%`}
@@ -364,11 +362,10 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
             value={stats.upcomingObligations}
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
-          <MiniStat icon={FileWarning} label="Expiring Docs"
-            value={enhanced?.expiringDocuments?.length || 0}
-            sub={enhanced?.expiringDocuments?.[0] ? `next: ${fmtDate(enhanced.expiringDocuments[0].expirationDate)}` : "all clear"}
-            color={enhanced?.expiringDocuments?.some((d: any) => d.status === 'expired') ? '#A13544' : enhanced?.expiringDocuments?.length > 0 ? '#BB653B' : undefined}
-            onClick={() => setPopup("docs")} />
+          <MiniStat icon={Target} label="Trackers"
+            value={stats.totalTrackers}
+            sub={`${stats.weeklyEntries} this week`}
+            onClick={() => navigate("/trackers")} />
         </div>
       </CollapsibleSection>
 
@@ -439,152 +436,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
           <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
         </DialogContent>
       </Dialog>
-
-      {/* Tasks Popup */}
-      <TasksPopup open={popup === "tasks"} onClose={() => setPopup(null)} />
-
-      {/* Expiring Documents Popup */}
-      <Dialog open={popup === "docs"} onOpenChange={() => setPopup(null)}>
-        <DialogContent className="max-w-md max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="text-sm flex items-center gap-2">
-              <FileWarning className="h-4 w-4 text-amber-500" />
-              Expiring Documents
-              <Badge variant="secondary" className="ml-1">{enhanced?.expiringDocuments?.length || 0}</Badge>
-            </DialogTitle>
-            <DialogDescription className="text-xs">Documents with upcoming or past expiration dates</DialogDescription>
-          </DialogHeader>
-          <ScrollArea className="flex-1 max-h-[60vh]">
-            <div className="space-y-1.5 py-2 pr-2">
-              {(enhanced?.expiringDocuments || []).map((doc: any, i: number) => {
-                const expired = doc.status === "expired";
-                const expiringSoon = doc.status === "expiring_soon";
-                return (
-                  <div key={`${doc.documentId}-${i}`}
-                    onClick={() => { setPopup(null); navigate(`/dashboard/documents/${doc.documentId}`); }}
-                    className={`flex items-center gap-2.5 p-2.5 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors border ${
-                      expired ? "border-red-500/30 bg-red-500/5" : expiringSoon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"
-                    }`}>
-                    <FileText className={`h-3.5 w-3.5 shrink-0 ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{doc.documentName}</p>
-                      <p className={`text-[10px] ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>
-                        {doc.fieldName}: {fmtDate(doc.expirationDate)} ({daysUntilStr(doc.daysUntil)})
-                      </p>
-                    </div>
-                    <Badge variant="outline" className={`shrink-0 text-[9px] px-1.5 py-0 h-4 ${
-                      expired ? "border-red-500/40 text-red-500" : expiringSoon ? "border-amber-500/40 text-amber-500" : ""
-                    }`}>
-                      {expired ? "Expired" : expiringSoon ? "Soon" : "Upcoming"}
-                    </Badge>
-                  </div>
-                );
-              })}
-              {(!enhanced?.expiringDocuments || enhanced.expiringDocuments.length === 0) && (
-                <div className="text-center py-6">
-                  <FileText className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-                  <p className="text-xs text-muted-foreground">No expiring documents</p>
-                </div>
-              )}
-            </div>
-          </ScrollArea>
-          <ViewPageLink href="/dashboard/documents" label="View All Documents" />
-        </DialogContent>
-      </Dialog>
     </>
-  );
-}
-
-// ─── Tasks Popup ──────────────────────────────────────────────────────────────
-
-function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [, navigate] = useLocation();
-  const { toast } = useToast();
-  const { data: tasks = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/tasks"],
-    queryFn: () => apiRequest("GET", "/api/tasks").then(r => r.json()),
-    enabled: open,
-  });
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
-      apiRequest("PATCH", `/api/tasks/${id}`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/tasks/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Task deleted" });
-    },
-  });
-
-  const activeTasks = tasks.filter((t: any) => t.status !== "done").sort((a: any, b: any) => {
-    const p: Record<string, number> = { high: 0, medium: 1, low: 2 };
-    return (p[a.priority] ?? 2) - (p[b.priority] ?? 2);
-  });
-  const doneTasks = tasks.filter((t: any) => t.status === "done").slice(0, 5);
-  const PRIORITY_CLR: Record<string, string> = { high: "text-red-500 border-red-500/40", medium: "text-amber-500 border-amber-500/40", low: "" };
-
-  return (
-    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md max-h-[85vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="text-sm flex items-center gap-2">
-            <ListTodo className="h-4 w-4 text-primary" />
-            Tasks
-            <Badge variant="secondary" className="ml-1">{activeTasks.length} active</Badge>
-          </DialogTitle>
-        </DialogHeader>
-        <ScrollArea className="flex-1 max-h-[60vh]">
-          {isLoading ? (
-            <div className="space-y-2 py-2">{[1,2,3].map(i => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
-          ) : (
-            <div className="space-y-1 py-1 pr-2">
-              {activeTasks.map((t: any) => (
-                <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted/50 transition-colors group">
-                  <button onClick={() => toggleMutation.mutate({ id: t.id, status: "done" })}
-                    className="shrink-0 w-4 h-4 rounded border border-primary/40 hover:bg-primary/10 flex items-center justify-center">
-                    {toggleMutation.isPending ? <span className="animate-spin h-2 w-2 border border-primary rounded-full border-t-transparent" /> : null}
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs truncate">{t.title}</p>
-                    <div className="flex items-center gap-1.5">
-                      <Badge variant="outline" className={`text-[9px] px-1 py-0 h-3.5 ${PRIORITY_CLR[t.priority] || ""}`}>{t.priority}</Badge>
-                      {t.dueDate && <span className="text-[9px] text-muted-foreground">{fmtDate(t.dueDate)}</span>}
-                    </div>
-                  </div>
-                  <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={() => deleteMutation.mutate(t.id)}><Trash2 className="h-3 w-3" /></Button>
-                </div>
-              ))}
-              {doneTasks.length > 0 && (
-                <div className="pt-2 border-t border-border/30">
-                  <p className="text-[10px] text-muted-foreground mb-1">{doneTasks.length} recently completed</p>
-                  {doneTasks.map((t: any) => (
-                    <div key={t.id} className="flex items-center gap-2 py-1 text-muted-foreground">
-                      <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
-                      <span className="text-[10px] line-through truncate">{t.title}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {activeTasks.length === 0 && doneTasks.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-6">No tasks yet</p>
-              )}
-            </div>
-          )}
-        </ScrollArea>
-        <ViewPageLink href="/tasks" label="View All Tasks" />
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -739,8 +591,6 @@ function TrendsSection({ stats, enhanced }: { stats: DashboardStats; enhanced: a
 
 function HealthSection({ data }: { data: any[] }) {
   const [, navigate] = useLocation();
-  const [selectedTracker, setSelectedTracker] = useState<any>(null);
-
   if (!data || data.length === 0) return (
     <CollapsibleSection icon={HeartPulse} label="Health" testId="section-health">
       <div className="text-center py-4">
@@ -751,56 +601,31 @@ function HealthSection({ data }: { data: any[] }) {
   );
 
   return (
-    <>
-      <CollapsibleSection icon={HeartPulse} label="Health" count={data.length} testId="section-health">
-        <div className="grid grid-cols-2 gap-2">
-          {data.slice(0, 6).map((item: any) => (
-            <div key={item.trackerId}
-              onClick={() => setSelectedTracker(item)}
-              className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
-              <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-muted-foreground truncate">{item.name}</p>
-                <div className="flex items-center gap-1">
-                  <span className="text-sm font-bold tabular-nums">{item.latestValue}</span>
-                  {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
-                  <TrendIcon trend={item.trend} />
-                  {item.trendValue > 0 && (
-                    <span className={`text-[10px] ${item.trend === "up" ? "text-green-500" : item.trend === "down" ? "text-red-500" : "text-muted-foreground"}`}>
-                      {item.trendValue}
-                    </span>
-                  )}
-                </div>
+    <CollapsibleSection icon={HeartPulse} label="Health" count={data.length} testId="section-health">
+      <div className="grid grid-cols-2 gap-2">
+        {data.slice(0, 6).map((item: any) => (
+          <div key={item.trackerId}
+            onClick={() => navigate("/trackers")}
+            className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] text-muted-foreground truncate">{item.name}</p>
+              <div className="flex items-center gap-1">
+                <span className="text-sm font-bold tabular-nums">{item.latestValue}</span>
+                {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
+                <TrendIcon trend={item.trend} />
+                {item.trendValue > 0 && (
+                  <span className={`text-[10px] ${item.trend === "up" ? "text-green-500" : item.trend === "down" ? "text-red-500" : "text-muted-foreground"}`}>
+                    {item.trendValue}
+                  </span>
+                )}
               </div>
-              <span className="text-[9px] text-muted-foreground">avg {item.average}</span>
             </div>
-          ))}
-        </div>
-        <ViewPageLink href="/trackers" label="View All Trackers" />
-      </CollapsibleSection>
-
-      {/* Health Tracker Detail Popup */}
-      <Dialog open={!!selectedTracker} onOpenChange={o => { if (!o) setSelectedTracker(null); }}>
-        <DialogContent className="max-w-xs">
-          <DialogHeader>
-            <DialogTitle className="text-sm flex items-center gap-2">
-              <HeartPulse className="h-4 w-4 text-primary" />
-              {selectedTracker?.name}
-            </DialogTitle>
-            <DialogDescription className="text-xs">{selectedTracker?.category} tracker</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Latest</span><span className="font-semibold">{selectedTracker?.latestValue} {selectedTracker?.unit}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">7-day avg</span><span>{selectedTracker?.average} {selectedTracker?.unit}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trend</span><span className="flex items-center gap-1"><TrendIcon trend={selectedTracker?.trend || "flat"} /> {selectedTracker?.trendValue > 0 ? `Δ ${selectedTracker.trendValue}` : "Stable"}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Entries</span><span>{selectedTracker?.entryCount} in last 7 days</span></div>
-            {selectedTracker?.lastEntry && <div className="flex justify-between text-xs"><span className="text-muted-foreground">Last logged</span><span>{timeAgo(selectedTracker.lastEntry)}</span></div>}
+            <span className="text-[9px] text-muted-foreground">avg {item.average}</span>
           </div>
-          <Button size="sm" variant="outline" className="w-full h-7 text-xs mt-1" onClick={() => { setSelectedTracker(null); navigate("/trackers"); }}>
-            <ExternalLink className="h-3 w-3 mr-1" /> Open in Trackers
-          </Button>
-        </DialogContent>
-      </Dialog>
-    </>
+        ))}
+      </div>
+      <ViewPageLink href="/trackers" label="View All Trackers" />
+    </CollapsibleSection>
   );
 }
 
@@ -808,28 +633,6 @@ function HealthSection({ data }: { data: any[] }) {
 
 function ObligationsSection({ data }: { data: any[] }) {
   const [, navigate] = useLocation();
-  const { toast } = useToast();
-  const [selectedBill, setSelectedBill] = useState<any>(null);
-
-  const payMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("POST", `/api/obligations/${id}/pay`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Payment recorded" });
-      setSelectedBill(null);
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/obligations/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Obligation deleted" });
-      setSelectedBill(null);
-    },
-  });
 
   if (!data || data.length === 0) return (
     <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions" testId="section-obligations">
@@ -841,71 +644,36 @@ function ObligationsSection({ data }: { data: any[] }) {
   );
 
   return (
-    <>
-      <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions" count={data.length} testId="section-obligations">
-        <div className="space-y-1">
-          {data.slice(0, 8).map((bill: any) => {
-            const urgent = bill.daysUntil <= 3;
-            const soon = bill.daysUntil <= 7;
-            return (
-              <div key={bill.id}
-                onClick={() => setSelectedBill(bill)}
-                className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors ${urgent ? "bg-red-500/5 border border-red-500/20" : soon ? "bg-amber-500/5 border border-amber-500/20" : "bg-muted/40"}`}>
-                <CreditCard className={`h-3 w-3 shrink-0 ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs truncate">{bill.name}</p>
-                  <p className={`text-[10px] ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
-                    {daysUntilStr(bill.daysUntil)}
-                    {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
-                  </p>
-                </div>
-                <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+    <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions" count={data.length} testId="section-obligations">
+      <div className="space-y-1">
+        {data.slice(0, 8).map((bill: any) => {
+          const urgent = bill.daysUntil <= 3;
+          const soon = bill.daysUntil <= 7;
+          return (
+            <div key={bill.id}
+              onClick={() => navigate("/dashboard/obligations")}
+              className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors ${urgent ? "bg-red-500/5 border border-red-500/20" : soon ? "bg-amber-500/5 border border-amber-500/20" : "bg-muted/40"}`}>
+              <CreditCard className={`h-3 w-3 shrink-0 ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`} />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs truncate">{bill.name}</p>
+                <p className={`text-[10px] ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
+                  {daysUntilStr(bill.daysUntil)}
+                  {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
+                </p>
               </div>
-            );
-          })}
-        </div>
-        <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
-      </CollapsibleSection>
-
-      {/* Obligation Detail Popup */}
-      <Dialog open={!!selectedBill} onOpenChange={o => { if (!o) setSelectedBill(null); }}>
-        <DialogContent className="max-w-xs">
-          <DialogHeader>
-            <DialogTitle className="text-sm">{selectedBill?.name}</DialogTitle>
-            <DialogDescription className="text-xs">Bill details</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Amount</span><span className="font-semibold">{formatMoney(selectedBill?.amount || 0)}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Due</span><span>{selectedBill?.dueDate ? fmtDate(selectedBill.dueDate) : "N/A"}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Category</span><span className="capitalize">{selectedBill?.category || "general"}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Autopay</span><span>{selectedBill?.autopay ? "Yes" : "No"}</span></div>
-          </div>
-          <div className="flex gap-2 pt-2">
-            <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => selectedBill && payMutation.mutate(selectedBill.id)}
-              disabled={payMutation.isPending}>
-              <Check className="h-3 w-3 mr-1" /> Mark Paid
-            </Button>
-            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => selectedBill && deleteMutation.mutate(selectedBill.id)}
-              disabled={deleteMutation.isPending}>
-              <Trash2 className="h-3 w-3 mr-1" /> Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
+              <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+            </div>
+          );
+        })}
+      </div>
+      <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
+    </CollapsibleSection>
   );
 }
 
 // ─── Section: Recent Activity ────────────────────────────────────────────────
 
 function ActivitySection({ activities }: { activities: DashboardStats["recentActivity"] }) {
-  const [, navigate] = useLocation();
-  const ACTIVITY_ROUTES: Record<string, string> = {
-    tracker_entry: "/trackers",
-    task_completed: "/tasks",
-    expense: "/dashboard/finance",
-  };
-
   if (!activities || activities.length === 0) return (
     <CollapsibleSection icon={Activity} label="Recent Activity" testId="section-activity">
       <div className="text-center py-4">
@@ -920,11 +688,8 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
       <div className="space-y-0.5">
         {activities.slice(0, 10).map((item, i) => {
           const Icon = ACTIVITY_ICONS[item.type] || Activity;
-          const route = ACTIVITY_ROUTES[item.type];
           return (
-            <div key={i}
-              onClick={() => route && navigate(route)}
-              className={`flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0 ${route ? "cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors" : ""}`}>
+            <div key={i} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
               <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
               <span className="text-xs truncate flex-1">{item.description}</span>
               <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{timeAgo(item.timestamp)}</span>
@@ -1208,7 +973,7 @@ export default function DashboardPage() {
   const rightSections = sections.filter(s => s.visible && s.column === "right");
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden p-3 md:p-4 space-y-2.5 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
+    <div className="h-full overflow-y-auto overflow-x-hidden p-3 md:p-4 space-y-2.5 max-w-full" data-testid="page-dashboard">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
