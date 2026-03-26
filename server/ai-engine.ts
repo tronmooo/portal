@@ -462,18 +462,18 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Profiles ---
   {
     name: "create_profile",
-    description: "Create a new profile for a person, pet, vehicle, account, property, subscription, medical record, self, loan, investment, or asset.",
+    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Loan: lender, amount, apr, term, monthlyPayment. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty. Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.",
     input_schema: {
       type: "object" as const,
       properties: {
         type: {
           type: "string",
           enum: ["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset"],
-          description: "Profile type",
+          description: "Profile type — choose based on what the entity IS, not what the user calls it. Dog/cat/bird → pet. Car/truck → vehicle. Laptop/phone → asset. Netflix/Spotify → subscription. Doctor → medical.",
         },
         name: { type: "string", description: "Name of the profile" },
-        fields: { type: "object", description: "Key-value fields for the profile" },
-        tags: { type: "array", items: { type: "string" }, description: "Tags" },
+        fields: { type: "object", description: "Entity-specific fields. Include ALL known info in the right keys." },
+        tags: { type: "array", items: { type: "string" }, description: "Tags for categorization" },
         notes: { type: "string", description: "Additional notes" },
       },
       required: ["type", "name"],
@@ -559,7 +559,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "create_tracker",
-    description: "Create a new tracker for tracking any kind of data over time.",
+    description: "Create a new tracker. Use smart field definitions: Blood Pressure needs fields [systolic:number, diastolic:number, pulse:number]. Weight needs [weight:number]. Running needs [distance:number, duration:number, pace:number, caloriesBurned:number]. Sleep needs [hours:number, quality:text]. Nutrition needs [calories:number, protein:number, carbs:number, fat:number, item:text]. Medication needs [medication:text, dosage:text, time:text]. Always create compound fields for compound measurements.",
     input_schema: {
       type: "object" as const,
       properties: {

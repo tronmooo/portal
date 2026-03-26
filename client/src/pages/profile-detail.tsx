@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -2404,14 +2405,16 @@ function EditProfileDialog({
 // Type-specific tab configurations — each profile type gets its own relevant tabs
 type TabDef = { value: string; label: string; testId: string };
 
-const TABS_BY_TYPE: Record<string, TabDef[]> = {
+// Dynamic entity-specific tab configs — each entity type gets tabs that make sense for it
+const ENTITY_TABS: Record<string, TabDef[]> = {
   // Person / Self — full life hub
   person: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "trackers", label: "Trackers", testId: "tab-trackers" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
@@ -2419,49 +2422,82 @@ const TABS_BY_TYPE: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "trackers", label: "Trackers", testId: "tab-trackers" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
-  // Pet — care tracking focused
+  // Pet — health + care focused
   pet: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "trackers", label: "Trackers", testId: "tab-trackers" },
-    { value: "timeline", label: "Notes", testId: "tab-timeline" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
-  // Vehicle / Asset — ownership + cost + maintenance
+  // Vehicle — maintenance + cost focused
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "trackers", label: "Maintenance", testId: "tab-trackers" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
-  asset: [
+  // Loan — payment focused
+  loan: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "trackers", label: "Tracking", testId: "tab-trackers" },
+    { value: "finances", label: "Payments", testId: "tab-finances" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
-  // Subscription — recurring finance
+  // Investment
+  investment: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Performance", testId: "tab-finances" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+  // Subscription
   subscription: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "finances", label: "Billing", testId: "tab-finances" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
-    { value: "timeline", label: "Notes", testId: "tab-timeline" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
-  // Medical
+  // Medical provider
   medical: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
+    { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "documents", label: "Records", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+  // Property / Home
+  property: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "trackers", label: "Utilities", testId: "tab-trackers" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+  ],
+  // Asset (laptop, device, etc.)
+  asset: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "documents", label: "Documents", testId: "tab-documents" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
 };
@@ -2469,13 +2505,73 @@ const TABS_BY_TYPE: Record<string, TabDef[]> = {
 // Fallback for any type not explicitly defined
 const DEFAULT_TABS: TabDef[] = [
   { value: "info", label: "Overview", testId: "tab-info" },
+  { value: "finances", label: "Finance", testId: "tab-finances" },
   { value: "documents", label: "Documents", testId: "tab-documents" },
+  { value: "notes", label: "Notes", testId: "tab-notes" },
   { value: "trackers", label: "Trackers", testId: "tab-trackers" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
 ];
 
 function getTabsForType(type: string): TabDef[] {
-  return TABS_BY_TYPE[type] || DEFAULT_TABS;
+  return ENTITY_TABS[type] || DEFAULT_TABS;
+}
+
+// ============================================================
+// NOTES TAB — full CRUD for profile notes
+// ============================================================
+
+function NotesTab({ profileId, currentNotes, onChanged }: { profileId: string; currentNotes: string; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [notes, setNotes] = useState(currentNotes);
+  const [isEditing, setIsEditing] = useState(false);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes });
+    },
+    onSuccess: () => {
+      toast({ title: "Notes saved" });
+      setIsEditing(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to save notes", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold">Notes</h3>
+          {!isEditing ? (
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setIsEditing(true)} data-testid="button-edit-notes">
+              <Edit className="h-3 w-3" /> Edit
+            </Button>
+          ) : (
+            <div className="flex gap-1">
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setNotes(currentNotes); setIsEditing(false); }}>Cancel</Button>
+              <Button size="sm" className="h-7 text-xs" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-notes">
+                {saveMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          )}
+        </div>
+        {isEditing ? (
+          <Textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="min-h-[200px] text-sm"
+            placeholder="Add notes about this profile..."
+            data-testid="textarea-notes"
+          />
+        ) : (
+          <div className="text-sm text-muted-foreground whitespace-pre-wrap min-h-[100px]">
+            {notes || "No notes yet. Click Edit to add notes."}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 // ============================================================
@@ -2669,6 +2765,12 @@ export default function ProfileDetailPage() {
               {tabValues.has("timeline") && (
                 <TabsContent value="timeline" className="mt-4 px-1 sm:px-0">
                   <TimelineTab timeline={profile.timeline} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("notes") && (
+                <TabsContent value="notes" className="mt-4 px-1 sm:px-0">
+                  <NotesTab profileId={id} currentNotes={profile.notes || ""} onChanged={handleSaved} />
                 </TabsContent>
               )}
 

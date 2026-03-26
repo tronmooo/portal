@@ -862,9 +862,11 @@ function DeleteEntryButton({
 function TrackerCard({
   tracker,
   onDelete,
+  onOpenDetail,
 }: {
   tracker: Tracker;
   onDelete: (id: string) => void;
+  onOpenDetail?: (id: string) => void;
 }) {
   // Read cached profiles (already fetched by TrackersPage)
   const { data: allProfiles } = useQuery<Profile[]>({
@@ -910,7 +912,11 @@ function TrackerCard({
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div>
-            <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
+            <CardTitle
+              className="text-sm font-semibold flex items-center gap-1.5 cursor-pointer hover:text-primary transition-colors"
+              onClick={() => onOpenDetail?.(tracker.id)}
+              data-testid={`tracker-name-link-${tracker.id}`}
+            >
               {specIcon && <span className="text-muted-foreground">{specIcon}</span>}
               {tracker.name}
             </CardTitle>
@@ -1686,25 +1692,6 @@ function TrackerDetailDialog({
   const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
   const sortedEntries = [...tracker.entries].reverse();
 
-  // ── Compute stats from numeric primary field ──
-  const numericValues = tracker.entries
-    .map((e) => e.values[primaryField])
-    .filter((v): v is number => typeof v === "number");
-  const hasNumeric = numericValues.length > 0;
-  const min = hasNumeric ? Math.min(...numericValues) : null;
-  const max = hasNumeric ? Math.max(...numericValues) : null;
-  const avg = hasNumeric ? numericValues.reduce((s, v) => s + v, 0) / numericValues.length : null;
-  const latest = numericValues.length > 0 ? numericValues[numericValues.length - 1] : null;
-  const prev = numericValues.length > 1 ? numericValues[numericValues.length - 2] : null;
-  const trendDelta = latest != null && prev != null ? latest - prev : null;
-
-  // ── Chart data (last 20 entries, chronological) ──
-  const chartEntries = tracker.entries.slice(-20);
-  const chartData = chartEntries.map((e) => ({
-    date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-    value: typeof e.values[primaryField] === "number" ? e.values[primaryField] : 0,
-  }));
-
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -1737,57 +1724,10 @@ function TrackerDetailDialog({
             </div>
           </div>
 
-          {/* ── Stats Row ── */}
-          {hasNumeric && (
-            <div className="grid grid-cols-4 gap-px bg-border mx-5 mt-3 rounded-lg overflow-hidden" data-testid="tracker-stats-row">
-              <div className="bg-card p-2.5 text-center">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Latest</p>
-                <p className="text-sm font-semibold tabular-nums mt-0.5">
-                  {latest != null ? latest : "—"}
-                  {trendDelta != null && (
-                    <span className={`text-[10px] ml-1 ${trendDelta < 0 ? "text-green-600" : trendDelta > 0 ? "text-orange-500" : "text-muted-foreground"}`}>
-                      {trendDelta > 0 ? "+" : ""}{trendDelta.toFixed(1)}
-                    </span>
-                  )}
-                </p>
-              </div>
-              <div className="bg-card p-2.5 text-center">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Average</p>
-                <p className="text-sm font-semibold tabular-nums mt-0.5">{avg != null ? avg.toFixed(1) : "—"}</p>
-              </div>
-              <div className="bg-card p-2.5 text-center">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Min</p>
-                <p className="text-sm font-semibold tabular-nums mt-0.5">{min != null ? min : "—"}</p>
-              </div>
-              <div className="bg-card p-2.5 text-center">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Max</p>
-                <p className="text-sm font-semibold tabular-nums mt-0.5">{max != null ? max : "—"}</p>
-              </div>
-            </div>
-          )}
-
-          {/* ── Mini Chart ── */}
-          {hasNumeric && chartData.length >= 2 && (
-            <div className="mx-5 mt-3 h-[120px]" data-testid="tracker-mini-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
-                  <defs>
-                    <linearGradient id="detailGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={CHART_COLORS.primary} stopOpacity={0.25} />
-                      <stop offset="95%" stopColor={CHART_COLORS.primary} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="date" tick={{ fontSize: 9 }} stroke="hsl(var(--muted-foreground))" />
-                  <YAxis tick={{ fontSize: 9 }} stroke="hsl(var(--muted-foreground))" domain={["auto", "auto"]} />
-                  <Tooltip
-                    contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid hsl(var(--border))" }}
-                    formatter={(val: number) => [`${val} ${tracker.unit || ""}`, primaryField]}
-                  />
-                  {avg != null && <ReferenceLine y={avg} stroke={CHART_COLORS.secondary} strokeDasharray="4 4" label={{ value: "avg", fontSize: 9, fill: CHART_COLORS.secondary }} />}
-                  <Area type="monotone" dataKey="value" stroke={CHART_COLORS.primary} strokeWidth={2} fill="url(#detailGrad)" dot={{ r: 2.5, fill: CHART_COLORS.primary }} activeDot={{ r: 4 }} />
-                </AreaChart>
-              </ResponsiveContainer>
+          {/* ── Specialized Charts & Stats (ExpandedDetailView) ── */}
+          {tracker.entries.length > 0 && (
+            <div className="px-5 mt-1" data-testid="tracker-detail-charts">
+              <ExpandedDetailView tracker={tracker} primaryField={primaryField} />
             </div>
           )}
 
@@ -1827,16 +1767,22 @@ function TrackerDetailDialog({
                     className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm"
                     data-testid={`entry-row-${entry.id}`}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0 flex-wrap">
                       <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
                       {entryDelta != null && entryDelta !== 0 && (
                         <span className={`text-[10px] font-medium tabular-nums ${entryDelta < 0 ? "text-green-600" : "text-orange-500"}`}>
                           {entryDelta > 0 ? "+" : ""}{entryDelta.toFixed(1)}
                         </span>
                       )}
+                      {/* Show secondary fields (non-primary, non-BP, non-notes) */}
+                      {!isBPEntry && allVals.filter(([k]) => k !== primaryField).length > 0 && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {allVals.filter(([k]) => k !== primaryField).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                        </span>
+                      )}
                       {(notes || entry.notes) && (
-                        <span className="text-[10px] text-muted-foreground truncate max-w-[120px]" title={notes || entry.notes}>
-                          {notes || entry.notes}
+                        <span className="text-[10px] text-muted-foreground italic truncate max-w-[200px]" title={notes || entry.notes}>
+                          "{notes || entry.notes}"
                         </span>
                       )}
                     </div>
@@ -2189,6 +2135,7 @@ export default function TrackersPage() {
                   key={tracker.id}
                   tracker={tracker}
                   onDelete={(id) => setDeleteTargetId(id)}
+                  onOpenDetail={(id) => setSelectedTrackerId(id)}
                 />
               ))}
             </div>
