@@ -710,7 +710,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     input_schema: {
       type: "object" as const,
       properties: {
-        mood: { type: "string", enum: ["amazing", "good", "neutral", "bad", "awful"], description: "Mood level" },
+        mood: { type: "string", enum: ["amazing", "great", "good", "neutral", "bad", "awful"], description: "Mood level. Map user's words: 'amazing/incredible/fantastic' → amazing, 'great/wonderful/excellent' → great, 'good/fine/okay' → good, 'meh/so-so/alright' → neutral, 'bad/rough/down' → bad, 'awful/terrible/horrible' → awful" },
         content: { type: "string", description: "Journal content" },
         energy: { type: "number", description: "Energy level 1-5" },
         gratitude: { type: "array", items: { type: "string" }, description: "Things grateful for" },
@@ -1164,7 +1164,7 @@ BEHAVIOR:
 - CRITICAL: When a user mentions eating food ("ate a sandwich", "had lunch", "ate chicken"), ALWAYS log it as a NUTRITION tracker entry with estimated calories, protein, carbs, fat — NOT as an expense. Only create an expense if the user explicitly mentions a dollar amount ("$12 lunch").
   Example: "I ate a chicken sandwich and ran 2 miles" → log_tracker_entry for Nutrition (calories, protein, carbs, fat) + log_tracker_entry for Running (distance, estimated calories burned). TWO separate tracker entries.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
-- RECURRING EXPENSES: When a user mentions a recurring payment ("I pay $X per month for Y", "subscription costs $X"), use create_obligation (NOT create_expense). Obligations track recurring bills with frequency, next due date, and optional autopay status.
+- RECURRING EXPENSES: When a user mentions a recurring payment ("I pay $X per month for Y", "subscription costs $X"), use create_obligation ONLY (NOT create_expense AND NOT create_event). Obligations automatically appear on the calendar on their due dates — do NOT create a separate calendar event for the same bill, or it will show up twice.
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
@@ -1428,6 +1428,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       if (tracker) {
         const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues });
         await autoLinkToProfiles("tracker", tracker.id, tracker.name, input.forProfile);
+        // Auto-update any linked goals (e.g., running 1.5 mi updates 5K goal progress)
+        await autoUpdateGoalProgress(tracker.id, entryValues);
         return entry;
       }
       // Auto-create tracker if not found — infer category from name
@@ -2025,6 +2027,40 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     default:
       return null;
+  }
+}
+
+// ============================================================
+// AUTO-UPDATE GOAL PROGRESS when tracker entries are logged
+// ============================================================
+
+async function autoUpdateGoalProgress(trackerId: string, values: Record<string, any>): Promise<void> {
+  try {
+    const goals = await storage.getGoals();
+    const linkedGoals = goals.filter(g => g.trackerId === trackerId && g.status === 'active');
+    for (const goal of linkedGoals) {
+      // Determine the increment from the entry values
+      let increment = 0;
+      // For distance goals (running, cycling): use distance field
+      if (values.distance && typeof values.distance === 'number') {
+        increment = values.distance;
+      } else if (values.value && typeof values.value === 'number') {
+        increment = values.value;
+      } else {
+        // Use the first numeric value
+        const numVals = Object.entries(values)
+          .filter(([k, v]) => typeof v === 'number' && !k.startsWith('_'))
+          .map(([, v]) => v as number);
+        if (numVals.length > 0) increment = numVals[0];
+      }
+      if (increment > 0) {
+        const newCurrent = (goal.current || 0) + increment;
+        await storage.updateGoal(goal.id, { current: Math.min(newCurrent, goal.target * 2) }); // cap at 2x target
+        console.log(`[goal] Auto-updated "${goal.title}": ${goal.current} → ${newCurrent} ${goal.unit}`);
+      }
+    }
+  } catch (e) {
+    console.error('[goal] autoUpdateGoalProgress failed:', e);
   }
 }
 

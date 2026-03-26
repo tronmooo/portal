@@ -1825,7 +1825,23 @@ export class SupabaseStorage implements IStorage {
       monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),
       weeklyEntries,
       streaks,
-      recentActivity: [],
+      recentActivity: [
+        ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
+          type: 'tracker_entry',
+          description: `Logged ${t.name}: ${Object.values(e.values).filter(v => typeof v === 'number').map(v => v).join(', ')}`,
+          timestamp: e.timestamp,
+        }))),
+        ...tasks.filter(t => t.status === 'done').slice(-3).map(t => ({
+          type: 'task_completed',
+          description: `Completed: ${t.title}`,
+          timestamp: t.createdAt,
+        })),
+        ...expenses.slice(-3).map(e => ({
+          type: 'expense',
+          description: `$${e.amount} — ${e.description}`,
+          timestamp: e.date || e.createdAt,
+        })),
+      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
       totalHabits: habits.length,
       habitCompletionRate,
       totalObligations: obligations.length,

@@ -942,13 +942,13 @@ export default function CalendarView() {
                         {dayItems.slice(0, 2).map(item => (
                           <div
                             key={item.id}
-                            className="text-[9px] leading-tight truncate px-1 py-0.5 rounded"
+                            className={`text-[9px] leading-tight truncate px-1 py-0.5 rounded ${item.completed ? 'line-through opacity-50' : ''}`}
                             style={{
                               backgroundColor: `${item.color}18`,
                               color: item.color,
                             }}
                           >
-                            {item.time ? `${item.time.slice(0, 5)} ` : ""}{item.title}
+                            {item.completed ? '✓ ' : ''}{item.time ? `${item.time.slice(0, 5)} ` : ''}{item.title}
                           </div>
                         ))}
                         {dayItems.length > 2 && (

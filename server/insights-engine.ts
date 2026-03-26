@@ -348,7 +348,13 @@ function analyzeHealth(trackers: Tracker[], todayStr: string, now: Date, insight
   // Weight trends
   const weightTracker = trackers.find(t => t.name.toLowerCase().includes("weight") && t.category === "health");
   if (weightTracker && weightTracker.entries.length >= 3) {
-    const recent = weightTracker.entries.slice(-5);
+    // Filter to realistic weight values (50-600 lbs) to avoid junk data skewing trends
+    const validEntries = weightTracker.entries.filter(e => {
+      const w = parseFloat(e.values.weight || e.values.value || "0");
+      return w > 50 && w < 600;
+    });
+    const recent = validEntries.slice(-5);
+    if (recent.length < 2) { /* skip */ } else {
     const firstVal = parseFloat(recent[0].values.weight || recent[0].values.value || "0");
     const lastVal = parseFloat(recent[recent.length - 1].values.weight || recent[recent.length - 1].values.value || "0");
     const diff = lastVal - firstVal;
@@ -365,7 +371,8 @@ function analyzeHealth(trackers: Tracker[], todayStr: string, now: Date, insight
         createdAt: now.toISOString(),
       });
     }
-  }
+  } // end if recent.length >= 2
+  } // end if weightTracker
 
   // Blood pressure alerts
   const bpTracker = trackers.find(t => t.name.toLowerCase().includes("blood pressure") || t.name.toLowerCase().includes("bp"));
