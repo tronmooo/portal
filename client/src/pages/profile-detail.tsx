@@ -77,6 +77,11 @@ import {
   ChevronUp,
   Pencil,
   Check,
+  HeartPulse,
+  AlertTriangle,
+  FileWarning,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import {
   LineChart,
@@ -489,7 +494,6 @@ function InfoTab({
   profile: ProfileDetail;
   onEdit: () => void;
 }) {
-  const [customFields, setCustomFields] = useState<{ key: string; value: string }[]>([]);
   const [addingField, setAddingField] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
@@ -516,35 +520,136 @@ function InfoTab({
 
   const fields = Object.entries(profile.fields).filter(([_, v]) => v != null && v !== "" && typeof v !== "object");
 
-  // Type-specific field groups
-  const medicalKeys = ["allergies", "medicalHistory", "medications", "conditions", "bloodType", "height", "weight"];
-  const vetKeys = ["vetName", "vetPhone", "vetAddress", "lastVisit", "nextAppointment", "vetClinic"];
-  const healthKeys = ["vaccinations", "medications", "conditions", "dietNotes"];
-  const insuranceKeys = ["insuranceProvider", "policyNumber", "premium", "coverage", "deductible", "insuranceExpiration", "insurer", "policyExpiry"];
-  const maintenanceHistory: any[] = Array.isArray(profile.fields.maintenanceHistory) ? profile.fields.maintenanceHistory : [];
-  const warrantyKeys = ["warrantyProvider", "warrantyExpiration", "warrantyCoverage", "warrantyExpiry", "warrantyMonths"];
+  // ── Computed stats ──
+  const trackers = profile.relatedTrackers || [];
+  const docs = profile.relatedDocuments || [];
+  const expenses = profile.relatedExpenses || [];
+  const tasks = profile.relatedTasks || [];
+  const events = profile.relatedEvents || [];
+  const timeline = profile.timeline || [];
+  const openTasks = tasks.filter(t => t.status !== "done");
+  const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
 
-  const isPerson = profile.type === "person" || profile.type === "self";
-  const isPet = profile.type === "pet";
-  const isVehicle = profile.type === "vehicle";
-  const isAsset = profile.type === "asset";
-  const isLoan = profile.type === "loan";
-  const isInvestment = profile.type === "investment";
-  const isSubscription = profile.type === "subscription";
+  // ── Alerts ──
+  const now = new Date();
+  const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
 
-  const hasInsuranceFields = isVehicle && Object.entries(profile.fields).some(
-    ([k, v]) => (insuranceKeys.includes(k) || k.toLowerCase().includes("insurance") || k.toLowerCase().includes("policy")) && v != null && v !== "" && typeof v !== "object"
-  );
-  const hasMedicalFields = isPerson && medicalKeys.some(k => profile.fields[k]);
-  const hasVetFields = isPet && vetKeys.some(k => profile.fields[k]);
-  const hasHealthFields = isPet && healthKeys.some(k => profile.fields[k]);
-  const hasWarrantyFields = isAsset && Object.entries(profile.fields).some(
-    ([k, v]) => (warrantyKeys.includes(k) || k.toLowerCase().includes("warrant")) && v != null && v !== "" && typeof v !== "object"
-  );
+  const expiringDocs: { name: string; field: string; date: string; daysUntil: number }[] = [];
+  const dateFields = ["expiration_date", "expirationdate", "expiry", "expires", "expdate", "expiration", "validuntil", "enddate", "renewaldate"];
+  for (const doc of docs) {
+    const ed = doc.extractedData || {};
+    for (const [key, val] of Object.entries(ed)) {
+      if (!val || typeof val !== "string") continue;
+      const lk = key.toLowerCase().replace(/[\s_-]+/g, "");
+      if (!dateFields.some(df => lk.includes(df.replace(/[\s_-]+/g, "")))) continue;
+      const parsed = new Date(val);
+      if (isNaN(parsed.getTime())) continue;
+      const days = Math.ceil((parsed.getTime() - now.getTime()) / 86400000);
+      if (days <= 90) expiringDocs.push({ name: doc.name, field: key, date: val, daysUntil: days });
+    }
+  }
+  expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
+
+  const overdueTasks = openTasks.filter(t => t.dueDate && new Date(t.dueDate) < now);
+  const upcomingEvents = events.filter(e => { const d = new Date(e.date); return d >= now && d <= sevenDaysOut; });
+  const hasAlerts = expiringDocs.length > 0 || overdueTasks.length > 0 || upcomingEvents.length > 0;
+
+  // ── Top trackers ──
+  const topTrackers = trackers.slice(0, 3).map(t => {
+    const primaryField = t.fields?.find((f: any) => f.isPrimary) || t.fields?.[0];
+    const fieldName = primaryField?.name || "value";
+    const sorted = [...(t.entries || [])].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const latest = sorted[0]?.values?.[fieldName];
+    const prev = sorted[1]?.values?.[fieldName];
+    const trend: "up" | "down" | "flat" = typeof latest === "number" && typeof prev === "number"
+      ? latest > prev ? "up" : latest < prev ? "down" : "flat"
+      : "flat";
+    return { id: t.id, name: t.name, unit: primaryField?.unit || t.unit || "", latest, trend, entryCount: t.entries.length };
+  });
+
+  // ── Timeline icons ──
+  const timelineIcons: Record<string, any> = {
+    tracker: HeartPulse, expense: DollarSign, task: ListTodo,
+    event: Calendar, document: FileText, note: FileText,
+    habit: Activity, obligation: CreditCard, journal: FileText,
+  };
+
+  function timeAgo(ts: string): string {
+    const diff = Date.now() - new Date(ts).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  }
 
   return (
-    <div className="space-y-4">
-      {/* Main Details */}
+    <div className="space-y-3">
+      {/* ── 1. Quick Stats Row ── */}
+      <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
+        {[
+          { icon: HeartPulse, label: "Trackers", value: trackers.length },
+          { icon: FileText, label: "Documents", value: docs.length },
+          { icon: DollarSign, label: "Expenses", value: totalExpenses > 0 ? formatCurrency(totalExpenses) : "$0" },
+          { icon: ListTodo, label: "Open Tasks", value: openTasks.length },
+          { icon: Calendar, label: "Events", value: events.length },
+        ].map(s => {
+          const SI = s.icon;
+          return (
+            <div key={s.label} className="flex items-center gap-2 p-2 rounded-lg border border-border/50">
+              <div className="w-7 h-7 rounded-md flex items-center justify-center shrink-0 bg-primary/8">
+                <SI className="h-3 w-3 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[9px] text-muted-foreground leading-none">{s.label}</p>
+                <p className="text-sm font-bold tabular-nums leading-tight">{s.value}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── 2. Alerts ── */}
+      {hasAlerts && (
+        <Card>
+          <CardHeader className="py-2 px-3">
+            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Alerts
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-2.5 pt-0 space-y-1">
+            {expiringDocs.map((d, i) => (
+              <div key={`doc-${i}`} className={`flex items-center gap-2 p-2 rounded-lg border ${d.daysUntil <= 0 ? "border-red-500/30 bg-red-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+                <FileWarning className={`h-3 w-3 shrink-0 ${d.daysUntil <= 0 ? "text-red-500" : "text-amber-500"}`} />
+                <span className="text-xs truncate flex-1">{d.name}</span>
+                <Badge variant="outline" className={`text-[9px] px-1.5 py-0 h-4 ${d.daysUntil <= 0 ? "text-red-500 border-red-500/30" : "text-amber-500 border-amber-500/30"}`}>
+                  {d.daysUntil <= 0 ? "Expired" : `${d.daysUntil}d left`}
+                </Badge>
+              </div>
+            ))}
+            {overdueTasks.map(t => (
+              <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg border border-red-500/30 bg-red-500/5">
+                <ListTodo className="h-3 w-3 text-red-500 shrink-0" />
+                <span className="text-xs truncate flex-1">{t.title}</span>
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-red-500 border-red-500/30">Overdue</Badge>
+              </div>
+            ))}
+            {upcomingEvents.slice(0, 3).map(ev => (
+              <div key={ev.id} className="flex items-center gap-2 p-2 rounded-lg border border-blue-500/30 bg-blue-500/5">
+                <Calendar className="h-3 w-3 text-blue-500 shrink-0" />
+                <span className="text-xs truncate flex-1">{ev.title}</span>
+                <span className="text-[10px] text-blue-500 shrink-0">
+                  {new Date(ev.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── 3. Details Card ── */}
       <Card>
         <CardHeader className="pb-2 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-semibold">Details</CardTitle>
@@ -560,51 +665,25 @@ function InfoTab({
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground py-4 text-center">No details yet. Add info via chat.</p>
+            <p className="text-sm text-muted-foreground py-3 text-center">No details yet. Add info via chat.</p>
           )}
-
-          {/* Add custom field */}
           {addingField ? (
             <div className="mt-3 pt-3 border-t border-border space-y-2">
               <div className="flex gap-2">
-                <Input
-                  placeholder="Field name"
-                  value={newFieldKey}
-                  onChange={e => setNewFieldKey(e.target.value)}
-                  className="h-7 text-xs"
-                  data-testid="input-new-field-key"
-                />
-                <Input
-                  placeholder="Value"
-                  value={newFieldValue}
-                  onChange={e => setNewFieldValue(e.target.value)}
-                  className="h-7 text-xs"
-                  data-testid="input-new-field-value"
-                />
+                <Input placeholder="Field name" value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-key" />
+                <Input placeholder="Value" value={newFieldValue} onChange={e => setNewFieldValue(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-value" />
               </div>
               <div className="flex gap-2 justify-end">
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setAddingField(false); setNewFieldKey(""); setNewFieldValue(""); }} data-testid="button-cancel-add-field">
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  className="h-7 text-xs"
-                  disabled={!newFieldKey.trim() || saveCustomFieldMutation.isPending}
-                  onClick={() => saveCustomFieldMutation.mutate({ key: newFieldKey.trim(), value: newFieldValue })}
-                  data-testid="button-save-new-field"
-                >
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setAddingField(false); setNewFieldKey(""); setNewFieldValue(""); }} data-testid="button-cancel-add-field">Cancel</Button>
+                <Button size="sm" className="h-7 text-xs" disabled={!newFieldKey.trim() || saveCustomFieldMutation.isPending}
+                  onClick={() => saveCustomFieldMutation.mutate({ key: newFieldKey.trim(), value: newFieldValue })} data-testid="button-save-new-field">
                   {saveCustomFieldMutation.isPending ? "Saving..." : "Add"}
                 </Button>
               </div>
             </div>
           ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mt-2 h-7 text-xs gap-1 text-muted-foreground hover:text-foreground w-full"
-              onClick={() => setAddingField(true)}
-              data-testid="button-add-custom-field"
-            >
+            <Button variant="ghost" size="sm" className="mt-2 h-7 text-xs gap-1 text-muted-foreground hover:text-foreground w-full"
+              onClick={() => setAddingField(true)} data-testid="button-add-custom-field">
               <Plus className="h-3 w-3" /> Add Field
             </Button>
           )}
@@ -614,13 +693,13 @@ function InfoTab({
       {/* Notes */}
       {profile.notes && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <FileText className="h-4 w-4 text-muted-foreground" /> Notes
+          <CardHeader className="py-2 px-3">
+            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
+              <FileText className="h-3.5 w-3.5 text-muted-foreground" /> Notes
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{profile.notes}</p>
+          <CardContent className="px-3 pb-2.5 pt-0">
+            <p className="text-xs text-muted-foreground whitespace-pre-wrap">{profile.notes}</p>
           </CardContent>
         </Card>
       )}
@@ -628,226 +707,71 @@ function InfoTab({
       {/* Tags */}
       {profile.tags.length > 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Tag className="h-4 w-4 text-muted-foreground" /> Tags
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-1.5">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
               {profile.tags.map(tag => (
-                <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
+                <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>
               ))}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Person/Self: Medical Info */}
-      {hasMedicalFields && (
+      {/* ── 4. Recent Activity ── */}
+      {timeline.length > 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Heart className="h-4 w-4 text-muted-foreground" /> Medical Info
+          <CardHeader className="py-2 px-3">
+            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
+              <Activity className="h-3.5 w-3.5 text-primary" /> Recent Activity
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-3 pb-2.5 pt-0">
             <div className="space-y-0">
-              {medicalKeys.filter(k => profile.fields[k]).map(k => (
-                <div key={k} className="flex items-start justify-between py-2 border-b border-border last:border-0">
-                  <span className="text-xs text-muted-foreground">{formatKey(k)}</span>
-                  <span className="text-sm font-medium text-right max-w-[60%]">{String(profile.fields[k])}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Pet: Vet Info */}
-      {hasVetFields && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Stethoscope className="h-4 w-4 text-muted-foreground" /> Veterinarian
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-0">
-              {vetKeys.filter(k => profile.fields[k]).map(k => (
-                <div key={k} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    {k.toLowerCase().includes("phone") && <Phone className="h-3 w-3" />}
-                    {k.toLowerCase().includes("address") && <MapPin className="h-3 w-3" />}
-                    {k.toLowerCase().includes("appoint") && <Calendar className="h-3 w-3" />}
-                    {formatKey(k)}
+              {timeline.slice(0, 5).map(entry => {
+                const TIcon = timelineIcons[entry.type] || Activity;
+                return (
+                  <div key={entry.id} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                    <TIcon className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <span className="text-xs truncate flex-1">{entry.title}</span>
+                    <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{timeAgo(entry.timestamp)}</span>
                   </div>
-                  <span className="text-sm font-medium text-right max-w-[60%] truncate">{String(profile.fields[k])}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Pet: Health Fields */}
-      {hasHealthFields && (
+      {/* ── 5. Linked Trackers Summary ── */}
+      {topTrackers.length > 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Heart className="h-4 w-4 text-muted-foreground" /> Health Information
+          <CardHeader className="py-2 px-3">
+            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
+              <HeartPulse className="h-3.5 w-3.5 text-primary" /> Trackers
+              <Badge variant="secondary" className="text-[9px] h-4 px-1.5 ml-auto">{trackers.length}</Badge>
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-0">
-              {healthKeys.filter(k => profile.fields[k]).map(k => (
-                <div key={k} className="flex items-start justify-between py-2 border-b border-border last:border-0">
-                  <span className="text-xs text-muted-foreground">{formatKey(k)}</span>
-                  <span className="text-sm font-medium text-right max-w-[60%]">{String(profile.fields[k])}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Vehicle: Insurance Info */}
-      {hasInsuranceFields && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Shield className="h-4 w-4 text-muted-foreground" /> Insurance Policy
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-0">
-              {Object.entries(profile.fields)
-                .filter(([k, v]) => (insuranceKeys.includes(k) || k.toLowerCase().includes("insurance") || k.toLowerCase().includes("policy")) && v != null && v !== "" && typeof v !== "object")
-                .map(([k, v]) => (
-                  <div key={k} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                    <span className="text-xs text-muted-foreground">{formatKey(k)}</span>
-                    <span className="text-sm font-medium text-right max-w-[60%] truncate">{String(v)}</span>
-                  </div>
-                ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Vehicle: Maintenance History */}
-      {isVehicle && maintenanceHistory.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Wrench className="h-4 w-4 text-muted-foreground" /> Maintenance History
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {maintenanceHistory.map((item: any, idx: number) => (
-                <div key={idx} className="border border-border rounded-lg p-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium">{item.type || "Service"}</p>
-                    {item.cost != null && (
-                      <span className="text-sm font-semibold tabular-nums">{formatCurrency(Number(item.cost))}</span>
-                    )}
-                  </div>
-                  <div className="flex gap-3 mt-1.5 flex-wrap">
-                    {item.date && (
-                      <span className="text-xs text-muted-foreground flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />{item.date}
+          <CardContent className="px-3 pb-2.5 pt-0">
+            <div className="space-y-1">
+              {topTrackers.map(t => (
+                <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg bg-muted/40">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate">{t.name}</p>
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm font-bold tabular-nums">
+                        {t.latest != null ? String(t.latest) : "—"}
                       </span>
-                    )}
-                    {item.mileage && (
-                      <span className="text-xs text-muted-foreground">{item.mileage} mi</span>
-                    )}
+                      {t.unit && <span className="text-[10px] text-muted-foreground">{t.unit}</span>}
+                      {t.trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
+                      {t.trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
+                      {t.trend === "flat" && <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+                    </div>
                   </div>
-                  {item.notes && <p className="text-xs text-muted-foreground mt-1">{item.notes}</p>}
+                  <span className="text-[9px] text-muted-foreground">{t.entryCount} entries</span>
                 </div>
               ))}
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Asset: Warranty Info */}
-      {hasWarrantyFields && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Shield className="h-4 w-4 text-muted-foreground" /> Warranty Details
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-0">
-              {Object.entries(profile.fields)
-                .filter(([k, v]) => (warrantyKeys.includes(k) || k.toLowerCase().includes("warrant")) && v != null && v !== "" && typeof v !== "object")
-                .map(([k, v]) => (
-                  <div key={k} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                    <span className="text-xs text-muted-foreground">{formatKey(k)}</span>
-                    <span className="text-sm font-medium text-right max-w-[60%] truncate">{String(v)}</span>
-                  </div>
-                ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Loan: Balance Summary */}
-      {isLoan && (profile.fields.remainingBalance || profile.fields.balance || profile.fields.originalAmount) && (
-        <Card>
-          <CardContent className="p-4">
-            <div className="grid grid-cols-2 gap-4">
-              {profile.fields.originalAmount && (
-                <div>
-                  <p className="text-xs text-muted-foreground">Original Amount</p>
-                  <p className="text-lg font-semibold tabular-nums">{formatCurrency(Number(profile.fields.originalAmount))}</p>
-                </div>
-              )}
-              {(profile.fields.remainingBalance || profile.fields.balance) && (
-                <div>
-                  <p className="text-xs text-muted-foreground">Remaining Balance</p>
-                  <p className="text-lg font-semibold tabular-nums text-orange-600">
-                    {formatCurrency(Number(profile.fields.remainingBalance || profile.fields.balance))}
-                  </p>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Investment: Balance Summary */}
-      {isInvestment && (profile.fields.balance || profile.fields.contributions) && (
-        <Card>
-          <CardContent className="p-4">
-            <div className="grid grid-cols-2 gap-4">
-              {profile.fields.balance && (
-                <div>
-                  <p className="text-xs text-muted-foreground">Current Balance</p>
-                  <p className="text-xl font-semibold tabular-nums text-green-600">{formatCurrency(Number(profile.fields.balance))}</p>
-                </div>
-              )}
-              {(profile.fields.contributions || profile.fields.ytdContributions) && (
-                <div>
-                  <p className="text-xs text-muted-foreground">YTD Contributions</p>
-                  <p className="text-xl font-semibold tabular-nums">{formatCurrency(Number(profile.fields.contributions || profile.fields.ytdContributions))}</p>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Subscription: Billing Summary */}
-      {isSubscription && (profile.fields.cost || profile.fields.price) && profile.fields.frequency && (
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground">Billing</p>
-              <p className="text-xl font-semibold tabular-nums">{formatCurrency(Number(profile.fields.cost || profile.fields.price))}</p>
-            </div>
-            <Badge variant="secondary" className="capitalize">{String(profile.fields.frequency)}</Badge>
           </CardContent>
         </Card>
       )}
@@ -872,6 +796,20 @@ function DocumentsTab({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [docSearch, setDocSearch] = useState("");
+  const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
+
+  // Get unique doc types for filter
+  const docTypes = [...new Set(documents.map(d => d.type))].sort();
+  // Filter documents
+  const filteredDocs = documents.filter(d => {
+    if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
+    if (docSearch) {
+      const q = docSearch.toLowerCase();
+      return d.name.toLowerCase().includes(q) || d.type.toLowerCase().includes(q) || (d.tags || []).some(t => t.toLowerCase().includes(q));
+    }
+    return true;
+  });
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -943,7 +881,28 @@ function DocumentsTab({
         </Button>
       </div>
 
-      {documents.length === 0 ? (
+      {/* Search and Filter */}
+      {documents.length > 0 && (
+        <div className="space-y-2">
+          <input
+            type="text"
+            placeholder="Search documents..."
+            value={docSearch}
+            onChange={e => setDocSearch(e.target.value)}
+            className="w-full h-8 px-3 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          {docTypes.length > 1 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({documents.length})</button>
+              {docTypes.map(t => (
+                <button key={t} onClick={() => setDocTypeFilter(t)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{t} ({documents.filter(d => d.type === t).length})</button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {filteredDocs.length === 0 && documents.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center">
             <FileText className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -951,9 +910,15 @@ function DocumentsTab({
             <p className="text-xs text-muted-foreground mt-1">Upload a file to get started</p>
           </CardContent>
         </Card>
+      ) : filteredDocs.length === 0 ? (
+        <Card>
+          <CardContent className="py-6 text-center">
+            <p className="text-sm text-muted-foreground">No documents match your search</p>
+          </CardContent>
+        </Card>
       ) : (
         <div className="space-y-2">
-          {documents.map(doc => {
+          {filteredDocs.map(doc => {
             const expStatus = getExpirationStatus(doc);
             const expDate = doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
             return (
