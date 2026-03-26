@@ -1237,7 +1237,19 @@ For document extractions, dates are automatically detected and presented to the 
 CHAT-FIRST PHILOSOPHY:
 You are the universal interface to ALL data in Portol. Every piece of data — documents, events, finances, health, profiles — is accessible through you. When users ask questions about their data, search proactively. When they mention documents, retrieve them. When they mention dates, route them to the calendar. You are the single point of intelligence for the user's entire life data.
 
-Today's date: ${new Date().toISOString().split("T")[0]}`;
+RESPONSE FORMAT:
+After completing actions, confirm EACH one with WHERE to find it:
+- Expense → "Saved to Finance page + [Profile]'s Expenses tab"
+- Task → "Added to Tasks page + Calendar on [date]"
+- Event → "Scheduled in Calendar on [date] at [time]"
+- Tracker entry → "Logged to [Tracker] in Trackers page + [Profile]'s Health tab"
+- Obligation → "Added to Bills — will show on Calendar every [frequency]"
+- Profile update → "Updated [Profile] → visible in Profiles page"
+This helps the user trust and verify the data.
+
+Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} (${new Date().toISOString().split('T')[0]}).
+When the user says "next Friday", "this Saturday", "tomorrow", etc., resolve to the actual calendar date and use it.
+When the user says "before May 10", set the due date to May 9 and mention this in your response.`;
 }
 
 // ============================================================
@@ -2319,7 +2331,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     let documentPreview: { id: string; name: string; mimeType: string; data: string } | undefined;
     const documentPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
     let iterations = 0;
-    const MAX_ITERATIONS = 8;
+    const MAX_ITERATIONS = 15;
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -2383,10 +2395,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             if (!documentPreview) documentPreview = preview;
           }
 
+          // If result is null/undefined, report failure to AI so it doesn't claim success
+          const isSuccess = result !== null && result !== undefined;
           toolResults.push({
             type: "tool_result",
             tool_use_id: toolUse.id,
-            content: JSON.stringify(result ? summarizeResult(result) : { error: "Not found" }),
+            content: JSON.stringify(isSuccess ? summarizeResult(result) : { error: "Action failed — data was not saved. Tell the user it didn't work." }),
+            is_error: !isSuccess,
           });
         } catch (err: any) {
           console.error(`Tool ${toolUse.name} failed:`, err.message);

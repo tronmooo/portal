@@ -4666,7 +4666,14 @@ export default function DashboardPage() {
 
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced"],
-    queryFn: () => apiRequest("GET", "/api/dashboard-enhanced").then(r => r.json()),
+    queryFn: async () => {
+      try {
+        const res = await fetch('/api/dashboard-enhanced');
+        if (res.ok) return res.json();
+        return null;
+      } catch { return null; }
+    },
+    retry: false,
   });
 
   // Load saved dashboard layout

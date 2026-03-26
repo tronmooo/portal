@@ -901,9 +901,29 @@ export class SupabaseStorage implements IStorage {
 
     const obligations = await this.getObligations();
     for (const ob of obligations) {
-      const d = ob.nextDueDate.slice(0, 10);
-      if (d >= startDate && d <= endDate) {
-        items.push({ id: `obligation-${ob.id}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: d, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : undefined, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
+      // Show the next due date
+      const baseDate = ob.nextDueDate.slice(0, 10);
+      if (baseDate >= startDate && baseDate <= endDate) {
+        items.push({ id: `obligation-${ob.id}-${baseDate}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: baseDate, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
+      }
+      // Generate future occurrences based on frequency
+      if (ob.frequency !== "once") {
+        const base = new Date(ob.nextDueDate);
+        for (let i = 1; i <= 24; i++) {
+          const next = new Date(base);
+          switch (ob.frequency) {
+            case "weekly": next.setDate(next.getDate() + i * 7); break;
+            case "biweekly": next.setDate(next.getDate() + i * 14); break;
+            case "monthly": next.setMonth(next.getMonth() + i); break;
+            case "quarterly": next.setMonth(next.getMonth() + i * 3); break;
+            case "yearly": next.setFullYear(next.getFullYear() + i); break;
+          }
+          const nextStr = next.toISOString().slice(0, 10);
+          if (nextStr > endDate) break;
+          if (nextStr >= startDate) {
+            items.push({ id: `obligation-${ob.id}-${nextStr}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: nextStr, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
+          }
+        }
       }
     }
 

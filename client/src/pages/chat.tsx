@@ -843,6 +843,10 @@ export default function ChatPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
     queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
     queryClient.invalidateQueries({ queryKey: ["/api/insights"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/ai-digest"] });
   }
 
   const handleConfirmExtraction = async (data: {
