@@ -2926,16 +2926,15 @@ export default function ProfileDetailPage() {
         {(() => {
           const tabs = getTabsForType(profile.type);
           const tabValues = new Set(tabs.map(t => t.value));
-          const gridClass = tabs.length <= 4 ? "grid-cols-4" : tabs.length <= 5 ? "grid-cols-5" : tabs.length <= 6 ? "grid-cols-6" : "grid-cols-7";
           return (
             <Tabs defaultValue="info" className="mt-4">
-              <div className="overflow-x-auto -mx-1 px-1">
-                <TabsList className={`w-full grid ${gridClass} h-9`}>
+              <div className="overflow-x-auto -mx-4 px-4 pb-1 sticky top-0 z-20 bg-background border-b border-border/50" style={{WebkitOverflowScrolling: 'touch'}}>
+                <TabsList className="inline-flex h-9 w-max gap-1 p-1">
                   {tabs.map(tab => (
                     <TabsTrigger
                       key={tab.value}
                       value={tab.value}
-                      className="text-xs"
+                      className="text-xs px-3 whitespace-nowrap"
                       data-testid={tab.testId}
                     >
                       {tab.label}
