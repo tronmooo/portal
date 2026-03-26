@@ -65,24 +65,49 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     
     for (const term of searchTerms) {
       // Strip possessive, trailing type words, and noise words
-      const cleaned = term.replace(/(?:'s|s')\s+/g, " ").replace(/\s+(?:document|file|record|report|pdf|photo|image|license|licence)$/i, "").replace(/\b(?:up|the|a|an)\b/g, "").replace(/\s+/g, " ").trim();
+      const cleaned = term.replace(/(?:'s|s')\s+/g, " ").replace(/\s+(?:document|file|record|report|pdf|photo|image)$/i, "").replace(/\b(?:up|the|a|an)\b/g, "").replace(/\s+/g, " ").trim();
       const cleanedWords = cleaned.split(/\s+/).filter(w => w.length > 1);
       
-      // Also resolve profile names (e.g., "mom" -> find profile -> find their docs)
+      // Resolve profile name from query
       const profileMatch = allProfiles.find(p => cleaned.includes(p.name.toLowerCase()));
-      
-      let doc = allDocuments.find(d => {
+      // Extract content words (words that aren't the profile name)
+      const contentWords = cleanedWords.filter(w => !profileMatch || !profileMatch.name.toLowerCase().includes(w));
+
+      // Score-based document matching
+      const scoreDoc = (d: any): number => {
         const dName = d.name.toLowerCase();
-        return dName.includes(cleaned) || (cleanedWords.length >= 2 && cleanedWords.every(w => dName.includes(w)));
-      });
-      
-      // If no direct match, try profile-based search (find docs linked to the matched profile)
-      if (!doc && profileMatch) {
-        doc = allDocuments.find(d => d.linkedProfiles.includes(profileMatch.id) && 
-          cleanedWords.some(w => d.name.toLowerCase().includes(w) || d.type.toLowerCase().includes(w)));
-        // If still no match, just get the first doc linked to this profile
-        if (!doc) doc = allDocuments.find(d => d.linkedProfiles.includes(profileMatch.id));
+        const dType = (d.type || "").toLowerCase();
+        const dTags = (d.tags || []).map((t: string) => t.toLowerCase());
+        let score = 0;
+        // Full name match = highest
+        if (dName.includes(cleaned)) score += 100;
+        // Content word matches in name (e.g., "wellness" in "Jane Doe's Wellness Check")
+        for (const w of contentWords) {
+          if (dName.includes(w)) score += 30;
+          if (dType.includes(w)) score += 20;
+          if (dTags.some((t: string) => t.includes(w))) score += 15;
+        }
+        // Profile match bonus
+        if (profileMatch && d.linkedProfiles.includes(profileMatch.id)) score += 25;
+        // Keyword synonyms
+        const synonyms: Record<string, string[]> = {
+          wellness: ["medical", "health", "visit", "checkup", "check"],
+          license: ["drivers", "driver", "licence", "id"],
+          lab: ["blood", "results", "test"],
+          insurance: ["policy", "coverage"],
+        };
+        for (const w of contentWords) {
+          for (const [key, syns] of Object.entries(synonyms)) {
+            if (syns.includes(w) && (dName.includes(key) || dType.includes(key))) score += 20;
+            if (w === key && syns.some(s => dName.includes(s) || dType.includes(s))) score += 20;
+          }
+        }
+        return score;
       }
+
+      // Score all docs and pick the best
+      const scored = allDocuments.map(d => ({ doc: d, score: scoreDoc(d) })).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
+      const doc = scored[0]?.doc;
       if (doc) {
         const fullDoc = await storage.getDocument(doc.id);
         actions.push({ type: "retrieve", category: "document", data: { documentId: doc.id, name: doc.name } });
