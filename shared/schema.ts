@@ -40,8 +40,7 @@ export interface AIAction {
 
 // Legacy compat
 export interface ParsedAction {
-  type: "create_profile" | "create_tracker" | "log_entry" | "create_task" | "log_expense" | "create_event" | "update_profile" | "retrieve" | "unknown"
-    | "create_habit" | "checkin_habit" | "create_obligation" | "pay_obligation" | "journal_entry" | "create_artifact" | "save_memory" | "recall_memory";
+  type: "create_profile" | "create_tracker" | "log_entry" | "create_task" | "log_expense" | "create_event" | "update_profile" | "create_goal" | "create_habit" | "checkin_habit" | "create_obligation" | "pay_obligation" | "journal_entry" | "create_artifact" | "save_memory" | "recall_memory" | "retrieve" | "unknown";
   category: string;
   data: Record<string, any>;
   confirmed?: boolean;

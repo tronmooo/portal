@@ -28,6 +28,9 @@ import {
   Check,
   Calendar,
   Camera,
+  Target,
+  Flame,
+  BookOpen,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
@@ -81,6 +84,16 @@ function actionIcon(type: string) {
       return <DollarSign className="h-3 w-3" />;
     case "create_event":
       return <CalendarDays className="h-3 w-3" />;
+    case "create_goal":
+      return <Target className="h-3 w-3" />;
+    case "create_habit":
+    case "checkin_habit":
+      return <Flame className="h-3 w-3" />;
+    case "journal_entry":
+      return <BookOpen className="h-3 w-3" />;
+    case "create_obligation":
+    case "pay_obligation":
+      return <DollarSign className="h-3 w-3" />;
     default:
       return <Sparkles className="h-3 w-3" />;
   }

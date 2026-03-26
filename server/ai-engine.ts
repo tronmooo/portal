@@ -1184,7 +1184,12 @@ For FOOD/NUTRITION entries:
 - Estimate macros (protein, carbs, fat in grams) when possible
 
 For SLEEP: Calculate sleep quality (≥8h: excellent, ≥7h: good, ≥6h: fair, <6h: poor)
-For BLOOD PRESSURE: Classify per AHA guidelines (normal, elevated, high_stage1, high_stage2, crisis)
+For BLOOD PRESSURE: Classify per AHA guidelines:
+  - Normal: systolic < 120 AND diastolic < 80
+  - Elevated: systolic 120-129 AND diastolic < 80
+  - High Stage 1: systolic 130-139 OR diastolic 80-89 (note: 120/80 is borderline normal — mention it's at the upper edge of normal, don't alarm the user)
+  - High Stage 2: systolic >= 140 OR diastolic >= 90
+  - Crisis: systolic >= 180 OR diastolic >= 120
 For WEIGHT: Note trend direction if previous entries exist
 
 TRACKER FIELD MATCHING — CRITICAL:
@@ -2403,8 +2408,12 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     navigate: "retrieve",
     link_entities: "retrieve",
     get_related: "retrieve",
+    create_goal: "create_goal",
+    update_goal: "create_goal",
+    delete_goal: "create_goal",
+    retrieve_document: "retrieve",
   };
-  return mapping[toolName] || "unknown";
+  return mapping[toolName] || "retrieve";
 }
 
 // Fallback rule-based parsing when AI is unavailable
