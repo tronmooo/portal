@@ -339,12 +339,10 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(id);
     if (!profile) return undefined;
 
-    const allTrackers = await this.getTrackers();
-    const allExpenses = await this.getExpenses();
-    const allTasks = await this.getTasks();
-    const allEvents = await this.getEvents();
-    const allDocs = await this.getDocuments();
-    const allObs = await this.getObligations();
+    const [allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs] = await Promise.all([
+      this.getTrackers(), this.getExpenses(), this.getTasks(),
+      this.getEvents(), this.getDocuments(), this.getObligations(),
+    ]);
 
     const relatedTrackers = allTrackers.filter(t => t.linkedProfiles.includes(id));
     const relatedExpenses = allExpenses.filter(e => e.linkedProfiles.includes(id) || profile.linkedExpenses.includes(e.id));
@@ -1776,12 +1774,10 @@ export class SupabaseStorage implements IStorage {
   // DASHBOARD
   // ============================================================
   async getStats(): Promise<DashboardStats> {
-    const tasks = await this.getTasks();
-    const expenses = await this.getExpenses();
-    const trackers = await this.getTrackers();
-    const habits = await this.getHabits();
-    const obligations = await this.getObligations();
-    const journalEntries = await this.getJournalEntries();
+    const [tasks, expenses, trackers, habits, obligations, journalEntries] = await Promise.all([
+      this.getTasks(), this.getExpenses(), this.getTrackers(),
+      this.getHabits(), this.getObligations(), this.getJournalEntries(),
+    ]);
     const now = new Date();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
@@ -1876,7 +1872,10 @@ export class SupabaseStorage implements IStorage {
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
 
-    const documents = await this.getDocuments();
+    const [documents, allTrackers, allProfiles, allExpenses, allObligations, allTasks, allEvents] = await Promise.all([
+      this.getDocuments(), this.getTrackers(), this.getProfiles(),
+      this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
+    ]);
     const expiringDocs: any[] = [];
     for (const doc of documents) {
       const ed = doc.extractedData || {};
@@ -1895,13 +1894,11 @@ export class SupabaseStorage implements IStorage {
     }
     expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
 
-    const trackers = await this.getTrackers();
-    const profiles = await this.getProfiles();
-    const selfProfile = profiles.find(p => p.type === 'self');
+    const selfProfile = allProfiles.find(p => p.type === 'self');
     const selfId = selfProfile?.id;
     const healthCategories = ['health', 'fitness', 'weight', 'sleep', 'blood_pressure', 'running', 'exercise', 'nutrition', 'wellness'];
     // Only show MY health trackers on the dashboard — filter to self-profile-linked or unlinked trackers
-    const healthTrackers = trackers.filter(t => {
+    const healthTrackers = allTrackers.filter(t => {
       const isHealthCategory = healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c));
       if (!isHealthCategory) return false;
       // Only include if linked to self OR has no linked profiles (orphaned = mine)
@@ -1922,20 +1919,18 @@ export class SupabaseStorage implements IStorage {
       healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: recent[recent.length - 1]?.timestamp });
     }
 
-    const expenses = await this.getExpenses();
-    const monthlyExpenses = expenses.filter(e => { const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear; });
+    const monthlyExpenses = allExpenses.filter(e => { const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear; });
     const spendByCategory: Record<string, number> = {};
     for (const e of monthlyExpenses) spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
 
     const lastMonthDate = new Date(thisYear, thisMonth - 1, 1);
-    const lastMonthExpenses = expenses.filter(e => { const d = new Date(e.date); return d.getMonth() === lastMonthDate.getMonth() && d.getFullYear() === lastMonthDate.getFullYear(); });
+    const lastMonthExpenses = allExpenses.filter(e => { const d = new Date(e.date); return d.getMonth() === lastMonthDate.getMonth() && d.getFullYear() === lastMonthDate.getFullYear(); });
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const obligations = await this.getObligations();
-    const upcomingBills = obligations.filter(o => { const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => ({ id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil: Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000), autopay: o.autopay, category: o.category }));
+    const upcomingBills = allObligations.filter(o => { const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => ({ id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil: Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000), autopay: o.autopay, category: o.category }));
 
-    const monthlyObligationTotal = obligations.reduce((s, o) => {
+    const monthlyObligationTotal = allObligations.reduce((s, o) => {
       switch (o.frequency) {
         case 'weekly': return s + o.amount * 4.33;
         case 'biweekly': return s + o.amount * 2.17;
@@ -1946,11 +1941,9 @@ export class SupabaseStorage implements IStorage {
       }
     }, 0);
 
-    const tasks = await this.getTasks();
-    const overdueTasks = tasks.filter(t => { if (t.status === 'done' || !t.dueDate) return false; return new Date(t.dueDate) < now; }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
+    const overdueTasks = allTasks.filter(t => { if (t.status === 'done' || !t.dueDate) return false; return new Date(t.dueDate) < now; }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 
-    const events = await this.getEvents();
-    const todaysEvents = events.filter(e => e.date === today).map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
+    const todaysEvents = allEvents.filter(e => e.date === today).map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
 
     return {
       expiringDocuments: expiringDocs.filter(d => d.status !== 'ok'),
