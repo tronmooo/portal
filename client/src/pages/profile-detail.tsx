@@ -796,6 +796,7 @@ function DocumentsTab({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
 
@@ -933,62 +934,88 @@ function DocumentsTab({
                 }
                 data-testid={`card-document-${doc.id}`}
               >
-                <CardContent className="p-3 flex items-center gap-3">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-                    doc.mimeType.startsWith("image/") ? "bg-blue-500/10 text-blue-500" : "bg-red-500/10 text-red-500"
-                  }`}>
-                    {doc.mimeType.startsWith("image/") ? (
-                      <Eye className="h-4 w-4" />
-                    ) : (
-                      <FileText className="h-4 w-4" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{doc.name}</p>
-                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                      </span>
-                      {expStatus === "expired" && expDate && (
-                        <Badge variant="destructive" className="text-[10px] gap-0.5">
-                          <AlertCircle className="h-2.5 w-2.5" /> Expired {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                        </Badge>
-                      )}
-                      {expStatus === "soon" && expDate && (
-                        <Badge className="text-[10px] gap-0.5 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
-                          <AlertCircle className="h-2.5 w-2.5" /> Expires {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                        </Badge>
-                      )}
+                <CardContent className="p-0">
+                  <div className="p-3 flex items-center gap-3">
+                    {(() => {
+                      const DOC_TYPE_COLORS: Record<string, string> = {
+                        medical: "bg-red-500/10 text-red-500",
+                        insurance: "bg-blue-500/10 text-blue-500",
+                        legal: "bg-purple-500/10 text-purple-500",
+                        financial: "bg-green-500/10 text-green-500",
+                        identity: "bg-amber-500/10 text-amber-500",
+                        warranty: "bg-orange-500/10 text-orange-500",
+                        receipt: "bg-emerald-500/10 text-emerald-500",
+                      };
+                      const colorClass = DOC_TYPE_COLORS[doc.type] || (doc.mimeType.startsWith("image/") ? "bg-blue-500/10 text-blue-500" : "bg-slate-500/10 text-slate-500");
+                      return (
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${colorClass}`}>
+                          {doc.mimeType.startsWith("image/") ? <Eye className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                        </div>
+                      );
+                    })()}
+                    <button className="flex-1 min-w-0 text-left" onClick={() => setExpandedDocId(expandedDocId === doc.id ? null : doc.id)}>
+                      <p className="text-sm font-medium truncate">{doc.name}</p>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                        </span>
+                        {expStatus === "expired" && expDate && (
+                          <Badge variant="destructive" className="text-[10px] gap-0.5">
+                            <AlertCircle className="h-2.5 w-2.5" /> Expired {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                          </Badge>
+                        )}
+                        {expStatus === "soon" && expDate && (
+                          <Badge className="text-[10px] gap-0.5 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
+                            <AlertCircle className="h-2.5 w-2.5" /> Expires {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                          </Badge>
+                        )}
+                        {doc.extractedData && Object.keys(doc.extractedData).length > 0 && (
+                          <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                            {expandedDocId === doc.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                            {Object.keys(doc.extractedData).length} fields
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                    <div className="flex gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setViewingDoc(doc)}
+                        data-testid={`button-view-doc-${doc.id}`}
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
+                      <ShareButton
+                        id={doc.id}
+                        name={doc.name}
+                        mimeType={doc.mimeType}
+                        data={doc.fileData}
+                        size="icon"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={() => setDeletingDocId(doc.id)}
+                        data-testid={`button-delete-doc-${doc.id}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => setViewingDoc(doc)}
-                      data-testid={`button-view-doc-${doc.id}`}
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                    </Button>
-                    <ShareButton
-                      id={doc.id}
-                      name={doc.name}
-                      mimeType={doc.mimeType}
-                      data={doc.fileData}
-                      size="icon"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={() => setDeletingDocId(doc.id)}
-                      data-testid={`button-delete-doc-${doc.id}`}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+                  {expandedDocId === doc.id && doc.extractedData && Object.keys(doc.extractedData).length > 0 && (
+                    <div className="border-t bg-muted/30 px-4 py-2.5 grid grid-cols-2 gap-x-4 gap-y-1.5">
+                      {Object.entries(doc.extractedData).map(([key, value]) => (
+                        <div key={key} className="min-w-0">
+                          <span className="text-[10px] text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim()}</span>
+                          <p className="text-xs font-medium truncate">{String(value)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             );
@@ -2008,24 +2035,172 @@ function TrackersTab({
 // TIMELINE TAB
 // ============================================================
 
-function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
-  return timeline.length === 0 ? (
-    <Card>
-      <CardContent className="py-8 text-center">
-        <Clock className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
-        <p className="text-sm text-muted-foreground">No activity yet</p>
-      </CardContent>
-    </Card>
-  ) : (
-    <Card>
-      <CardContent className="pt-4">
-        <div className="divide-y divide-border">
-          {timeline.slice(0, 30).map(entry => (
-            <TimelineItem key={entry.id} entry={entry} />
-          ))}
+// ============================================================
+// HEALTH TAB VIEW — summary + grouped trackers
+// ============================================================
+
+function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChanged: () => void }) {
+  const healthCats = ["health", "fitness", "weight", "sleep", "wellness", "nutrition"];
+  const healthTrackers = profile.relatedTrackers.filter((t: any) =>
+    healthCats.some(c => (t.category || "").toLowerCase().includes(c) || (t.name || "").toLowerCase().includes(c))
+  );
+
+  // Extract latest vitals from trackers
+  const vitals: { name: string; value: string; unit: string; trend: "up" | "down" | "flat" }[] = [];
+  for (const t of healthTrackers.slice(0, 6)) {
+    const pf = t.fields?.find((f: any) => f.isPrimary) || t.fields?.[0];
+    const fn = pf?.name || "value";
+    const sorted = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const latest = sorted[0]?.values?.[fn];
+    const prev = sorted[1]?.values?.[fn];
+    if (latest == null) continue;
+    const trend: "up" | "down" | "flat" = typeof latest === "number" && typeof prev === "number"
+      ? latest > prev ? "up" : latest < prev ? "down" : "flat" : "flat";
+    vitals.push({ name: t.name, value: String(latest), unit: pf?.unit || t.unit || "", trend });
+  }
+
+  // Group trackers by category
+  const groups: Record<string, typeof healthTrackers> = {};
+  for (const t of healthTrackers) {
+    const cat = (t.category || "custom").toLowerCase();
+    const group = cat.includes("fitness") ? "Fitness" : cat.includes("nutrition") ? "Nutrition" : cat.includes("sleep") ? "Sleep" : "Vitals";
+    (groups[group] ||= []).push(t);
+  }
+
+  if (healthTrackers.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center">
+          <HeartPulse className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+          <p className="text-sm font-medium text-muted-foreground">No health data yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Upload a medical document or tell the AI to track your vitals.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Vitals Summary */}
+      {vitals.length > 0 && (
+        <Card>
+          <CardHeader className="py-2 px-3">
+            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
+              <Heart className="h-3.5 w-3.5 text-primary" /> Latest Vitals
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-2.5 pt-0">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {vitals.map(v => (
+                <div key={v.name} className="flex items-center gap-2 p-2 rounded-lg bg-muted/40">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[9px] text-muted-foreground truncate">{v.name}</p>
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm font-bold tabular-nums">{v.value}</span>
+                      {v.unit && <span className="text-[10px] text-muted-foreground">{v.unit}</span>}
+                      {v.trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
+                      {v.trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
+                      {v.trend === "flat" && <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Grouped Trackers */}
+      {Object.entries(groups).map(([group, trks]) => (
+        <div key={group}>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">{group}</p>
+          <TrackersTab trackers={trks} profileId={profile.id} onChanged={onChanged} />
         </div>
-      </CardContent>
-    </Card>
+      ))}
+    </div>
+  );
+}
+
+function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
+  const [filter, setFilter] = useState<string>("all");
+
+  const TIMELINE_ICONS: Record<string, any> = {
+    tracker: HeartPulse, expense: DollarSign, task: ListTodo,
+    event: Calendar, document: FileText, note: FileText,
+    habit: Activity, obligation: CreditCard, journal: FileText,
+  };
+
+  const typeCounts: Record<string, number> = {};
+  for (const e of timeline) typeCounts[e.type] = (typeCounts[e.type] || 0) + 1;
+
+  const filtered = filter === "all" ? timeline : timeline.filter(e => e.type === filter);
+
+  // Group by relative date
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const weekAgo = new Date(now.getTime() - 7 * 86400000).getTime();
+
+  const groups: { label: string; items: TimelineEntry[] }[] = [
+    { label: "Today", items: [] },
+    { label: "Yesterday", items: [] },
+    { label: "This Week", items: [] },
+    { label: "Earlier", items: [] },
+  ];
+  for (const e of filtered.slice(0, 50)) {
+    const d = e.timestamp.slice(0, 10);
+    const t = new Date(e.timestamp).getTime();
+    if (d === todayStr) groups[0].items.push(e);
+    else if (d === yesterday) groups[1].items.push(e);
+    else if (t >= weekAgo) groups[2].items.push(e);
+    else groups[3].items.push(e);
+  }
+
+  const filterTypes = ["all", ...Object.keys(typeCounts)];
+
+  if (timeline.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center">
+          <Clock className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No activity yet</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Filter buttons */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {filterTypes.map(f => (
+          <Button key={f} size="sm" variant={filter === f ? "default" : "outline"} className="h-7 text-xs capitalize gap-1"
+            onClick={() => setFilter(f)}>
+            {f !== "all" && (() => { const FI = TIMELINE_ICONS[f] || Activity; return <FI className="h-3 w-3" />; })()}
+            {f === "all" ? "All" : f}
+            {f !== "all" && typeCounts[f] && (
+              <Badge variant="secondary" className="text-[9px] h-4 px-1 ml-0.5">{typeCounts[f]}</Badge>
+            )}
+          </Button>
+        ))}
+      </div>
+
+      {/* Grouped entries */}
+      {groups.filter(g => g.items.length > 0).map(g => (
+        <div key={g.label}>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">{g.label}</p>
+          <Card>
+            <CardContent className="pt-3 pb-1">
+              <div className="divide-y divide-border">
+                {g.items.map(entry => (
+                  <TimelineItem key={entry.id} entry={entry} />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -2106,18 +2281,18 @@ function TasksTab({
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
   });
 
+  const [taskFilter, setTaskFilter] = useState<"all" | "open" | "done">("all");
+
   const open = tasks.filter(t => t.status !== "done");
   const done = tasks.filter(t => t.status === "done");
+  const filtered = taskFilter === "open" ? open : taskFilter === "done" ? done : tasks;
 
-  function priorityDot(priority: string) {
-    const colors: Record<string, string> = {
-      high: "bg-red-500",
-      medium: "bg-amber-500",
-      low: "bg-green-500",
-      urgent: "bg-red-600",
-    };
-    return colors[priority] || "bg-muted-foreground";
-  }
+  const PRIORITY_BADGE: Record<string, string> = {
+    urgent: "bg-red-600/15 text-red-600 dark:text-red-400 border-red-500/30",
+    high: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
+    medium: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+    low: "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20",
+  };
 
   function statusBadge(status: string) {
     const map: Record<string, string> = {
@@ -2131,8 +2306,25 @@ function TasksTab({
 
   return (
     <div className="space-y-4">
-      {/* Add Task Button */}
-      <div className="flex justify-end">
+      {/* Header row: filters + add button */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1">
+          {(["all", "open", "done"] as const).map(f => {
+            const count = f === "all" ? tasks.length : f === "open" ? open.length : done.length;
+            const label = f === "all" ? "All" : f === "open" ? "Open" : "Completed";
+            return (
+              <button
+                key={f}
+                onClick={() => setTaskFilter(f)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  taskFilter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                {label} ({count})
+              </button>
+            );
+          })}
+        </div>
         <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => { setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate(""); setShowAddTask(true); }} data-testid="button-add-task">
           <Plus className="h-3.5 w-3.5" /> Add Task
         </Button>
@@ -2148,95 +2340,67 @@ function TasksTab({
         </Card>
       )}
 
-      {/* Open tasks */}
-      {open.length > 0 && (
+      {tasks.length > 0 && filtered.length === 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Circle className="h-4 w-4 text-muted-foreground" /> Open ({open.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-0">
-            {open.map(task => (
-              <div
-                key={task.id}
-                className="flex items-start gap-3 py-2.5 border-b border-border last:border-0 group"
-                data-testid={`row-task-${task.id}`}
-              >
-                <button
-                  onClick={() => toggleMutation.mutate({ taskId: task.id, status: "done" })}
-                  disabled={toggleMutation.isPending}
-                  className="mt-0.5 shrink-0 w-4 h-4 rounded-full border border-border hover:border-primary hover:bg-primary/10 transition-colors"
-                  data-testid={`button-complete-task-${task.id}`}
-                  aria-label="Mark complete"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{task.title}</span>
-                    {task.priority && (
-                      <div className={`w-2 h-2 rounded-full shrink-0 ${priorityDot(task.priority)}`} title={task.priority} />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                    {task.status && (
-                      <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium capitalize ${statusBadge(task.status)}`}>
-                        {task.status.replace("-", " ")}
-                      </span>
-                    )}
-                    {task.dueDate && (
-                      <span className={`text-xs flex items-center gap-1 ${new Date(task.dueDate) < new Date() ? "text-red-500" : "text-muted-foreground"}`}>
-                        <Calendar className="h-3 w-3" />
-                        {new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-task-${task.id}`}>
-                  <Trash2 className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
+          <CardContent className="py-8 text-center">
+            <p className="text-sm text-muted-foreground">No {taskFilter === "open" ? "open" : "completed"} tasks</p>
           </CardContent>
         </Card>
       )}
 
-      {/* Done tasks */}
-      {done.length > 0 && (
+      {filtered.length > 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
-              <CheckCheck className="h-4 w-4" /> Completed ({done.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-0">
-            {done.map(task => (
-              <div
-                key={task.id}
-                className="flex items-start gap-3 py-2.5 border-b border-border last:border-0 opacity-60 group"
-                data-testid={`row-task-done-${task.id}`}
-              >
-                <button
-                  onClick={() => toggleMutation.mutate({ taskId: task.id, status: "todo" })}
-                  disabled={toggleMutation.isPending}
-                  className="mt-0.5 shrink-0"
-                  data-testid={`button-reopen-task-${task.id}`}
-                  aria-label="Mark incomplete"
+          <CardContent className="space-y-0 p-0">
+            {filtered.map(task => {
+              const isDone = task.status === "done";
+              return (
+                <div
+                  key={task.id}
+                  className={`flex items-start gap-3 py-2.5 px-4 border-b border-border last:border-0 group ${isDone ? "opacity-60" : ""}`}
+                  data-testid={`row-task-${task.id}`}
                 >
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                </button>
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm line-through text-muted-foreground">{task.title}</span>
-                  {task.dueDate && (
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Due {new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                    </p>
-                  )}
+                  <button
+                    onClick={() => toggleMutation.mutate({ taskId: task.id, status: isDone ? "todo" : "done" })}
+                    disabled={toggleMutation.isPending}
+                    className="mt-0.5 shrink-0"
+                    data-testid={`button-toggle-task-${task.id}`}
+                    aria-label={isDone ? "Mark incomplete" : "Mark complete"}
+                  >
+                    {isDone ? (
+                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <div className="w-4 h-4 rounded-full border border-border hover:border-primary hover:bg-primary/10 transition-colors" />
+                    )}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-sm font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}>{task.title}</span>
+                      {task.priority && (
+                        <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium capitalize border ${PRIORITY_BADGE[task.priority] || "bg-muted text-muted-foreground"}`}>
+                          {task.priority}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                      {task.status && !isDone && (
+                        <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium capitalize ${statusBadge(task.status)}`}>
+                          {task.status.replace("-", " ")}
+                        </span>
+                      )}
+                      {task.dueDate && (
+                        <span className={`text-xs flex items-center gap-1 ${new Date(task.dueDate) < new Date() && !isDone ? "text-red-500" : "text-muted-foreground"}`}>
+                          <Calendar className="h-3 w-3" />
+                          {new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-task-${task.id}`}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
                 </div>
-                <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-done-task-${task.id}`}>
-                  <Trash2 className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
       )}
@@ -2554,7 +2718,7 @@ function getTabsForType(type: string): TabDef[] {
 // NOTES TAB — full CRUD for profile notes
 // ============================================================
 
-function NotesTab({ profileId, currentNotes, onChanged }: { profileId: string; currentNotes: string; onChanged: () => void }) {
+function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId: string; currentNotes: string; updatedAt?: string; onChanged: () => void }) {
   const { toast } = useToast();
   const [notes, setNotes] = useState(currentNotes);
   const [isEditing, setIsEditing] = useState(false);
@@ -2576,10 +2740,17 @@ function NotesTab({ profileId, currentNotes, onChanged }: { profileId: string; c
     <Card>
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold">Notes</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold">Notes</h3>
+            {updatedAt && (
+              <span className="text-[10px] text-muted-foreground">
+                Last edited {new Date(updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+              </span>
+            )}
+          </div>
           {!isEditing ? (
             <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setIsEditing(true)} data-testid="button-edit-notes">
-              <Edit className="h-3 w-3" /> Edit
+              <Pencil className="h-3 w-3" /> Edit
             </Button>
           ) : (
             <div className="flex gap-1">
@@ -2591,16 +2762,27 @@ function NotesTab({ profileId, currentNotes, onChanged }: { profileId: string; c
           )}
         </div>
         {isEditing ? (
-          <Textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className="min-h-[200px] text-sm"
-            placeholder="Add notes about this profile..."
-            data-testid="textarea-notes"
-          />
+          <div>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="min-h-[200px] text-sm"
+              placeholder="Add notes about this profile..."
+              data-testid="textarea-notes"
+            />
+            <p className="text-[10px] text-muted-foreground mt-1 text-right">{notes.length} characters</p>
+          </div>
+        ) : currentNotes ? (
+          <div className="rounded-lg border bg-muted/30 p-4 text-sm whitespace-pre-wrap min-h-[100px]">
+            {currentNotes}
+          </div>
         ) : (
-          <div className="text-sm text-muted-foreground whitespace-pre-wrap min-h-[100px]">
-            {notes || "No notes yet. Click Edit to add notes."}
+          <div className="rounded-lg border border-dashed p-8 text-center">
+            <FileText className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No notes yet</p>
+            <Button size="sm" variant="outline" className="mt-3 h-7 text-xs gap-1" onClick={() => setIsEditing(true)}>
+              <Pencil className="h-3 w-3" /> Add Notes
+            </Button>
           </div>
         )}
       </CardContent>
@@ -2770,7 +2952,7 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("health") && (
                 <TabsContent value="health" className="mt-4 px-1 sm:px-0">
-                  <TrackersTab trackers={profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)))} profileId={profile.id} onChanged={handleSaved} />
+                  <HealthTabView profile={profile} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
@@ -2804,7 +2986,7 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("notes") && (
                 <TabsContent value="notes" className="mt-4 px-1 sm:px-0">
-                  <NotesTab profileId={id} currentNotes={profile.notes || ""} onChanged={handleSaved} />
+                  <NotesTab profileId={id} currentNotes={profile.notes || ""} updatedAt={profile.updatedAt} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
