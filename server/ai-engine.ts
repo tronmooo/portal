@@ -481,12 +481,12 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "update_profile",
-    description: "Update an existing profile. Find by name, then apply changes to fields or notes.",
+    description: "Update an existing profile's data. Use this for personal info (blood type, allergies, height, birthday, phone number), pet info (breed, weight, microchip), vehicle info (VIN, mileage, insurance), or any profile field update. Find by name, then apply changes.",
     input_schema: {
       type: "object" as const,
       properties: {
-        name: { type: "string", description: "Name of the profile to update (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'fields' (object), 'notes' (string), 'tags' (array)" },
+        name: { type: "string", description: "Name of the profile to update (partial match). Use 'Me' for self profile." },
+        changes: { type: "object", description: "Fields to update — use 'fields' object for data like { bloodType: 'O+', allergies: 'penicillin', height: '5\'10\"' }. Can also include 'notes' (string) or 'tags' (array)." },
       },
       required: ["name", "changes"],
     },
@@ -1166,10 +1166,16 @@ BEHAVIOR:
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - RECURRING EXPENSES: When a user mentions a recurring payment ("I pay $X per month for Y", "subscription costs $X"), use create_obligation ONLY (NOT create_expense AND NOT create_event). Obligations automatically appear on the calendar on their due dates — do NOT create a separate calendar event for the same bill, or it will show up twice.
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
-- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action.
+- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 actions, you MUST execute exactly 10 tool calls. Do not merge or skip any.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - When searching, use the search tool to find relevant data before answering.
+
+TOOL CHOICE RULES — CRITICAL:
+- "X owes me $Y" or "collect $Y from X" → ALWAYS create_task with title like "Collect $Y from X for Z" and forProfile: "X". NEVER use save_memory for debts/money owed.
+- "My blood type is X" or personal health facts about me (allergies, height, etc.) → ALWAYS update_profile on the "self" profile to add/update the field. NEVER use save_memory for profile-level health data.
+- "X's birthday is Y" → create_event (yearly recurring) AND update_profile to set birthday field on X's profile.
+- save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type (e.g., "Remember that I prefer window seats", "I'm vegetarian").
 
 SECONDARY DATA EXTRACTION — critical. When logging tracker entries, compute all possible secondary data:
 
