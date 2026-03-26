@@ -1804,17 +1804,10 @@ export class SupabaseStorage implements IStorage {
       if (streak >= 2) streaks.push({ name: t.name, days: streak });
     }
 
-    const totalDailyHabits = habits.filter(h => h.frequency === "daily").length;
-    let completedCheckins = 0;
-    if (totalDailyHabits > 0) {
-      for (let i = 0; i < 7; i++) {
-        const dayStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-        for (const h of habits) {
-          if (h.checkins.some(c => c.date === dayStr)) completedCheckins++;
-        }
-      }
-    }
-    const habitCompletionRate = totalDailyHabits > 0 ? Math.round((completedCheckins / (totalDailyHabits * 7)) * 100) : 0;
+    const todayStr2 = now.toISOString().slice(0, 10);
+    const allActiveHabits = habits.filter(h => h.frequency === "daily" || h.frequency === "weekly");
+    const todayCompleted = allActiveHabits.filter(h => h.checkins.some(c => c.date === todayStr2)).length;
+    const habitCompletionRate = allActiveHabits.length > 0 ? Math.round((todayCompleted / allActiveHabits.length) * 100) : 0;
 
     const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
     const upcomingObs = obligations.filter(o => { const due = new Date(o.nextDueDate); return due >= now && due <= sevenDaysOut; });

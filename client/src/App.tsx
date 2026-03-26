@@ -12,7 +12,6 @@ import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Settings, Calendar } from "lucide-react";
 import { Loader2 } from "lucide-react";
-import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 import {
   CommandSearch,
   CommandSearchProvider,
@@ -179,9 +178,6 @@ function App() {
                     <main className="flex-1 overflow-hidden pb-[60px] md:pb-0">
                       <AppRouter />
                     </main>
-                    <div className="hidden md:block">
-                      <PerplexityAttribution />
-                    </div>
                   </div>
                 </div>
                 <MobileBottomNav />
