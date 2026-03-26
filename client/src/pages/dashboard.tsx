@@ -3886,7 +3886,13 @@ function GoalsSection() {
 function InsightsSection() {
   const { data: digest, isLoading, isError, refetch, isFetching } = useQuery<AIDigestData>({
     queryKey: ["/api/ai-digest"],
-    queryFn: () => apiRequest("GET", "/api/ai-digest").then(r => r.json()),
+    queryFn: async () => {
+      try {
+        const res = await fetch('/api/ai-digest');
+        if (res.ok) return res.json();
+        return null;
+      } catch { return null; }
+    },
     retry: false,
   });
 
@@ -4667,9 +4673,11 @@ export default function DashboardPage() {
   const { data: savedLayoutData } = useQuery<{ value: string } | null>({
     queryKey: ["/api/preferences", "dashboard_layout"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/preferences/dashboard_layout");
-      if (res.ok) return res.json();
-      return null;
+      try {
+        const res = await fetch('/api/preferences/dashboard_layout');
+        if (res.ok) return res.json();
+        return null;
+      } catch { return null; }
     },
   });
 

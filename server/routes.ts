@@ -602,9 +602,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       const userPrompt = `${typePrompt}\n\nProfile data:\n${JSON.stringify(profileData, null, 1)}`;
 
-      const client = new Anthropic();
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const response = await client.messages.create({
-        model: "claude_sonnet_4_6",
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
         max_tokens: 1024,
         messages: [
           { role: "user", content: userPrompt },
@@ -1943,9 +1943,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       const userPrompt = `Here is my Portol data snapshot for the week of ${weekAgoStr} to ${todayStr}:\n\n${JSON.stringify(dataSnapshot, null, 1)}\n\nGenerate my Weekly Digest JSON.`;
 
-      const client = new Anthropic();
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const response = await client.messages.create({
-        model: "claude_sonnet_4_6",
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
         max_tokens: 2048,
         messages: [
           { role: "user", content: userPrompt },
