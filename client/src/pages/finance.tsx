@@ -47,7 +47,7 @@ export default function FinancePage() {
   const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }));
 
   return (
-    <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full" data-testid="page-finance">
+    <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
       <div>
         <div className="flex items-center gap-3 mb-4">
           <Link href="/dashboard">

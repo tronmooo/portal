@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -75,6 +75,8 @@ import {
   Link2,
   ChevronDown,
   ChevronUp,
+  Pencil,
+  Check,
 } from "lucide-react";
 import {
   LineChart,
@@ -410,6 +412,76 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
 // INFO TAB — Universal with type-specific enrichments
 // ============================================================
 
+function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
+  profileId: string; fieldKey: string; fieldValue: string; allFields: Record<string, any>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(fieldValue);
+  const { toast } = useToast();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const mutation = useMutation({
+    mutationFn: async (newVal: string) => {
+      const num = Number(newVal);
+      const parsed = newVal !== "" && !isNaN(num) && newVal.trim() !== "" ? num : newVal;
+      const res = await apiRequest("PATCH", `/api/profiles/${profileId}`, {
+        fields: { ...allFields, [fieldKey]: parsed },
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      setEditing(false);
+    },
+    onError: () => {
+      toast({ title: "Failed to update", variant: "destructive" });
+      setValue(fieldValue);
+      setEditing(false);
+    },
+  });
+
+  useEffect(() => {
+    if (editing && inputRef.current) inputRef.current.focus();
+  }, [editing]);
+
+  const handleSave = () => {
+    if (value.trim() === fieldValue) { setEditing(false); return; }
+    mutation.mutate(value.trim());
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center justify-between py-1.5 border-b border-border last:border-0 gap-2">
+        <span className="text-xs text-muted-foreground shrink-0">{formatKey(fieldKey)}</span>
+        <div className="flex items-center gap-1 flex-1 justify-end">
+          <Input ref={inputRef} value={value} onChange={e => setValue(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") { setValue(fieldValue); setEditing(false); } }}
+            className="h-7 text-xs text-right max-w-[200px]" />
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={handleSave} disabled={mutation.isPending}>
+            <Check className="h-3 w-3 text-green-500" />
+          </Button>
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => { setValue(fieldValue); setEditing(false); }}>
+            <X className="h-3 w-3 text-muted-foreground" />
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between py-2 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 -mx-2 px-2 rounded transition-colors group"
+      onClick={() => setEditing(true)}
+    >
+      <span className="text-xs text-muted-foreground">{formatKey(fieldKey)}</span>
+      <div className="flex items-center gap-1.5">
+        <span className="text-sm font-medium text-right max-w-[60%] truncate">{fieldValue}</span>
+        <Pencil className="h-2.5 w-2.5 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+      </div>
+    </div>
+  );
+}
+
 function InfoTab({
   profile,
   onEdit,
@@ -484,10 +556,7 @@ function InfoTab({
           {fields.length > 0 ? (
             <div className="space-y-0">
               {fields.map(([key, val]) => (
-                <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                  <span className="text-xs text-muted-foreground">{formatKey(key)}</span>
-                  <span className="text-sm font-medium text-right max-w-[60%] truncate">{String(val)}</span>
-                </div>
+                <InlineEditField key={key} profileId={profile.id} fieldKey={key} fieldValue={String(val)} allFields={profile.fields} />
               ))}
             </div>
           ) : (
@@ -2627,7 +2696,7 @@ export default function ProfileDetailPage() {
   }
 
   return (
-    <div className="overflow-y-auto h-full" data-testid="page-profile-detail">
+    <div className="overflow-y-auto h-full pb-24" data-testid="page-profile-detail">
       {/* Hero Header */}
       <div className={`bg-gradient-to-b ${profileGradient(profile.type)} px-4 md:px-6 pt-4 pb-6`}>
         <div className="flex items-center justify-between mb-3">

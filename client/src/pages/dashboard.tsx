@@ -98,7 +98,7 @@ function insightRoute(insight: Insight): string {
   if (t === "obligation_due") return "#/dashboard/obligations";
   if (t === "streak" || t === "habit_streak") return "#/dashboard/habits";
   if (t === "mood_trend") return "#/dashboard/journal";
-  if (t === "reminder") return "#/tasks";
+  if (t === "reminder") return "#/dashboard/tasks";
   return "#/dashboard";
 }
 
@@ -307,7 +307,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
           <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Needs Attention</p>
           {overdueTasks.length > 0 && overdueTasks.slice(0, 4).map((t: any) => (
             <div key={t.id}
-              onClick={() => navigate("/tasks")}
+              onClick={() => navigate("/dashboard/tasks")}
               className="flex items-center gap-2 p-2 rounded-lg bg-red-500/5 border border-red-500/20 cursor-pointer hover:bg-red-500/10 transition-colors">
               <ListTodo className="h-3 w-3 text-red-500 shrink-0" />
               <span className="text-xs truncate flex-1">{t.title}</span>
@@ -461,7 +461,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
                 const expiringSoon = doc.status === "expiring_soon";
                 return (
                   <div key={`${doc.documentId}-${i}`}
-                    onClick={() => { setPopup(null); navigate(`/dashboard/documents/${doc.documentId}`); }}
+                    onClick={() => { setPopup(null); navigate(`/documents/${doc.documentId}`); }}
                     className={`flex items-center gap-2.5 p-2.5 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors border ${
                       expired ? "border-red-500/30 bg-red-500/5" : expiringSoon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"
                     }`}>
@@ -488,7 +488,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
               )}
             </div>
           </ScrollArea>
-          <ViewPageLink href="/dashboard/documents" label="View All Documents" />
+          <ViewPageLink href="/dashboard/artifacts" label="View All Documents" />
         </DialogContent>
       </Dialog>
     </>
@@ -582,7 +582,7 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
             </div>
           )}
         </ScrollArea>
-        <ViewPageLink href="/tasks" label="View All Tasks" />
+        <ViewPageLink href="/dashboard/tasks" label="View All Tasks" />
       </DialogContent>
     </Dialog>
   );
@@ -611,7 +611,7 @@ function UpcomingSection({ enhanced, stats }: { enhanced: any; stats: DashboardS
       date: t.dueDate, daysUntil: Math.ceil((new Date(t.dueDate).getTime() - Date.now()) / 86400000),
       type: "task", icon: ListTodo, title: t.title,
       detail: t.priority ? `${t.priority} priority` : "Task",
-      route: "/tasks",
+      route: "/dashboard/tasks",
     });
   }
 
@@ -621,7 +621,7 @@ function UpcomingSection({ enhanced, stats }: { enhanced: any; stats: DashboardS
       date: d.expirationDate, daysUntil: d.daysUntil, type: "document",
       icon: FileWarning, title: d.documentName,
       detail: `${d.fieldName}: ${d.status === "expired" ? "Expired" : `Expires ${fmtDate(d.expirationDate)}`}`,
-      route: "/dashboard/documents",
+      route: "/dashboard/artifacts",
     });
   }
 
@@ -902,7 +902,7 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
   const [, navigate] = useLocation();
   const ACTIVITY_ROUTES: Record<string, string> = {
     tracker_entry: "/trackers",
-    task_completed: "/tasks",
+    task_completed: "/dashboard/tasks",
     expense: "/dashboard/finance",
   };
 

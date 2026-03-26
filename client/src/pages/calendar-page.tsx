@@ -4,7 +4,7 @@ import { Link } from "wouter";
 
 export default function CalendarPage() {
   return (
-    <div className="h-full overflow-y-auto" data-testid="calendar-page">
+    <div className="h-full overflow-y-auto pb-24" data-testid="calendar-page">
       <div className="p-4 md:p-6">
         <div className="flex items-center gap-3 mb-4">
           <Link href="/">

@@ -1094,7 +1094,7 @@ export default function ProfilesPage() {
   const profileToDelete = deleteId ? (profiles || []).find((p) => p.id === deleteId) : null;
 
   return (
-    <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full" data-testid="page-profiles">
+    <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-profiles">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
