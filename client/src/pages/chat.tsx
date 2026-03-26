@@ -1158,11 +1158,11 @@ export default function ChatPage() {
                     {msg.actions.map((action, i) => (
                       <Badge
                         key={i}
-                        variant="secondary"
-                        className="text-xs flex items-center gap-1"
+                        variant="outline"
+                        className="text-xs flex items-center gap-1 text-muted-foreground border-green-600/30 bg-green-500/5"
                         data-testid={`badge-action-${action.type}-${i}`}
                       >
-                        {actionIcon(action.type)}
+                        <Check className="h-2.5 w-2.5 text-green-600" />
                         {actionLabel(action.type)}
                       </Badge>
                     ))}

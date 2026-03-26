@@ -9,12 +9,14 @@ import {
   SidebarMenuItem,
   SidebarHeader,
 } from "@/components/ui/sidebar";
-import { MessageSquare, LayoutDashboard, BarChart3, Users, Settings } from "lucide-react";
+import { MessageSquare, LayoutDashboard, BarChart3, Users, Settings, Wallet, Calendar } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Chat", href: "/", icon: MessageSquare },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Trackers", href: "/trackers", icon: BarChart3 },
+  { label: "Finance", href: "/dashboard/finance", icon: Wallet },
+  { label: "Calendar", href: "/calendar", icon: Calendar },
   { label: "Profiles", href: "/profiles", icon: Users },
 ];
 

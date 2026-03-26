@@ -680,6 +680,33 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (Object.values(values).some((v: any) => typeof v === "number" && isNaN(v))) {
       return res.status(400).json({ error: "All values must be valid numbers" });
     }
+    // Sanity bounds — reject obviously impossible values
+    const numericVals = Object.entries(values).filter(([, v]) => typeof v === 'number') as [string, number][];
+    for (const [key, val] of numericVals) {
+      if (key === '_notes') continue;
+      // Weight (human): max 1000 lbs
+      if (key === 'weight' && val > 1000) return res.status(400).json({ error: `Weight ${val} lbs is unrealistic. Max: 1000 lbs.` });
+      // Weight (pet): max 500 lbs
+      if (key === 'weight' && val > 500 && req.body.trackerId) {
+        // Check if this is a pet tracker by name
+        const tracker = await storage.getTracker(req.params.id);
+        if (tracker && tracker.name.toLowerCase().includes('max')) {
+          return res.status(400).json({ error: `Pet weight ${val} lbs is unrealistic. Max: 500 lbs.` });
+        }
+      }
+      // Blood pressure systolic: max 300
+      if ((key === 'systolic' || key === 'sbp') && val > 300) return res.status(400).json({ error: `Systolic ${val} is unrealistic. Max: 300.` });
+      // Blood pressure diastolic: max 200
+      if ((key === 'diastolic' || key === 'dbp') && val > 200) return res.status(400).json({ error: `Diastolic ${val} is unrealistic. Max: 200.` });
+      // Heart rate: max 250
+      if ((key === 'heartRate' || key === 'bpm' || key === 'pulse') && val > 250) return res.status(400).json({ error: `Heart rate ${val} is unrealistic. Max: 250.` });
+      // Sleep hours: max 24
+      if (key === 'hours' && val > 24) return res.status(400).json({ error: `Sleep ${val} hours is impossible. Max: 24.` });
+      // Calories: max 20000
+      if (key === 'calories' && val > 20000) return res.status(400).json({ error: `${val} calories is unrealistic. Max: 20,000.` });
+      // Generic upper bound: no single numeric value over 100,000
+      if (val > 100000) return res.status(400).json({ error: `Value ${val} for "${key}" exceeds maximum (100,000).` });
+    }
     const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     const entry = await storage.logEntry(parsed.data);
