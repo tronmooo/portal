@@ -53,23 +53,36 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
 
   // ---- Open document command: "open my drivers license", "show max's vaccination record" ----
   // Also handles multiple documents: "open my insurance and my license"
-  const openDocPattern = /^(?:open|show|view|pull up|display|get)\s+/i;
+  const openDocPattern = /^(?:open\s*(?:up)?|show|view|pull\s*up|display|get|find)\s+/i;
   if (openDocPattern.test(lower)) {
     const searchPart = lower.replace(openDocPattern, "").trim();
     // Split on "and", commas, "&" to handle multiple docs
-    const searchTerms = searchPart.split(/\s*(?:,|\band\b|&)\s*/).map(s => s.replace(/^(?:my|the|also)\s+/i, "").trim()).filter(Boolean);
+    const searchTerms = searchPart.split(/\s*(?:,|\band\b|&)\s*/).map(s => s.replace(/^(?:my|the|also|up)\s+/i, "").trim()).filter(Boolean);
     
-    const allDocuments = await storage.getDocuments();
+    const [allDocuments, allProfiles] = await Promise.all([storage.getDocuments(), storage.getProfiles()]);
     const foundDocs: any[] = [];
     const documentPreviews: any[] = [];
     
     for (const term of searchTerms) {
-      // Strip possessive and trailing type words
-      const cleaned = term.replace(/(?:'s|s')\s+/g, " ").replace(/\s+(?:document|file|record|report|pdf|photo|image)$/i, "").trim();
-      const doc = allDocuments.find(d => {
+      // Strip possessive, trailing type words, and noise words
+      const cleaned = term.replace(/(?:'s|s')\s+/g, " ").replace(/\s+(?:document|file|record|report|pdf|photo|image|license|licence)$/i, "").replace(/\b(?:up|the|a|an)\b/g, "").replace(/\s+/g, " ").trim();
+      const cleanedWords = cleaned.split(/\s+/).filter(w => w.length > 1);
+      
+      // Also resolve profile names (e.g., "mom" -> find profile -> find their docs)
+      const profileMatch = allProfiles.find(p => cleaned.includes(p.name.toLowerCase()));
+      
+      let doc = allDocuments.find(d => {
         const dName = d.name.toLowerCase();
-        return dName.includes(cleaned) || cleaned.split(/\s+/).every(w => dName.includes(w));
+        return dName.includes(cleaned) || (cleanedWords.length >= 2 && cleanedWords.every(w => dName.includes(w)));
       });
+      
+      // If no direct match, try profile-based search (find docs linked to the matched profile)
+      if (!doc && profileMatch) {
+        doc = allDocuments.find(d => d.linkedProfiles.includes(profileMatch.id) && 
+          cleanedWords.some(w => d.name.toLowerCase().includes(w) || d.type.toLowerCase().includes(w)));
+        // If still no match, just get the first doc linked to this profile
+        if (!doc) doc = allDocuments.find(d => d.linkedProfiles.includes(profileMatch.id));
+      }
       if (doc) {
         const fullDoc = await storage.getDocument(doc.id);
         actions.push({ type: "retrieve", category: "document", data: { documentId: doc.id, name: doc.name } });
@@ -328,12 +341,66 @@ Respond with JSON:
     });
     results.push(document);
 
-    // Build pending extraction for user confirmation (two-phase: extract now, save on confirm)
-    const DATE_PATTERNS = /\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{4}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2},?\s+\d{4}/gi;
+    // === AUTO-SAVE: Write extracted data to profile + create trackers immediately ===
+    const savedItems: string[] = [];
 
+    // 1. Save extracted fields to profile automatically
+    if (existingProfileId && parsed.extractedData && Object.keys(parsed.extractedData).length > 0) {
+      try {
+        const existingProfile = await storage.getProfile(existingProfileId);
+        if (existingProfile) {
+          const fieldUpdates: Record<string, any> = {};
+          for (const [key, value] of Object.entries(parsed.extractedData)) {
+            fieldUpdates[key] = value;
+          }
+          await storage.updateProfile(existingProfileId, {
+            fields: { ...(existingProfile.fields || {}), ...fieldUpdates },
+          });
+          savedItems.push(`Saved ${Object.keys(fieldUpdates).length} fields to ${existingProfile.name}'s profile`);
+        }
+      } catch (err: any) {
+        console.error("Auto-save profile fields failed:", err.message);
+      }
+    }
+
+    // 2. Auto-create trackers from extracted health/lab data
+    if (parsed.trackerEntries && parsed.trackerEntries.length > 0) {
+      for (const entry of parsed.trackerEntries) {
+        try {
+          const allTrackers = await storage.getTrackers();
+          const humanName = (entry.trackerName || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+          let tracker = allTrackers.find(
+            (t: any) => t.name.toLowerCase().replace(/[_\s]/g, "") === (entry.trackerName || "").toLowerCase().replace(/[_\s]/g, "")
+          );
+          if (!tracker) {
+            const fieldKeys = Object.keys(entry.values || {});
+            tracker = await storage.createTracker({
+              name: humanName,
+              unit: entry.unit || "",
+              category: entry.category || "health",
+              fields: fieldKeys.length > 0
+                ? fieldKeys.map((k: string, i: number) => ({ name: k, type: "number" as const, unit: entry.unit || "", isPrimary: i === 0, options: [] }))
+                : [{ name: "value", type: "number" as const, unit: entry.unit || "", isPrimary: true, options: [] }],
+            });
+            if (existingProfileId && tracker) {
+              try { await storage.updateTracker(tracker.id, { linkedProfiles: [existingProfileId] } as any); } catch { /* non-critical */ }
+            }
+            savedItems.push(`Created tracker: ${humanName}`);
+          }
+          const entryValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
+          await storage.logEntry({ trackerId: tracker.id, values: entryValues, notes: `From document: ${parsed.label || fileName}` });
+          savedItems.push(`Logged ${humanName}: ${Object.values(entryValues).join(", ")} ${entry.unit || ""}`);
+        } catch (err: any) {
+          console.error("Auto-create tracker failed:", err.message);
+        }
+      }
+    }
+
+    // Build extraction fields list for the pending extraction UI
     const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; suggestedEvent?: string}> = [];
 
     if (parsed.extractedData) {
+      const DATE_PATTERNS = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/;
       for (const [key, value] of Object.entries(parsed.extractedData)) {
         const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
         const strVal = String(value);
@@ -369,8 +436,12 @@ Respond with JSON:
     };
 
     let reply = parsed.summary || `Processed "${fileName}"`;
-    if (extractedFields.length > 0) {
-      reply += `\n\nI extracted ${extractedFields.length} fields from this document. Please review and confirm which data to save.`;
+    if (savedItems.length > 0) {
+      reply += `\n\n\u2705 Auto-saved:\n\u2022 ${savedItems.join("\n\u2022 ")}`;
+    }
+    if (existingProfileId) {
+      const profileName = (await storage.getProfile(existingProfileId))?.name;
+      reply += `\n\n\ud83d\udcce Linked to ${profileName || "profile"}.`;
     }
     reply += `\n\nDocument saved. Say "open ${parsed.label || fileName}" anytime to view it.`;
 
@@ -2295,22 +2366,21 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     storage.getGoals(),
   ]);
 
+  // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = [
-    `Profiles: ${profiles.map(p => `${p.name} (${p.type}, tags: ${p.tags.join(",") || "none"})`).join("; ") || "none"}`,
+    `Profiles: ${profiles.map(p => `${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("; ") || "none"}`,
     `Trackers: ${trackers.map(t => {
-      const lastEntry = t.entries[t.entries.length - 1];
-      const lastVal = lastEntry ? JSON.stringify(lastEntry.values) : "no entries";
-      const fields = t.fields.map((f: any) => `${f.name}:${f.type}${f.unit ? `(${f.unit})` : ''}`).join(', ');
-      return `${t.name} (${t.category}, fields:[${fields}], ${t.entries.length} entries, last: ${lastVal})`;
+      const last = t.entries[t.entries.length - 1];
+      return `${t.name} (${t.category}, ${t.entries.length} entries${last ? `, latest: ${JSON.stringify(last.values).slice(0,60)}` : ""})`;
     }).join("; ") || "none"}`,
-    `Active Tasks: ${tasks.filter(t => t.status !== "done").map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
-    `Recent Expenses: ${expenses.slice(-5).map(e => `$${e.amount} - ${e.description}${e.vendor ? ` at ${e.vendor}` : ""}`).join("; ") || "none"}`,
-    `Upcoming Events: ${events.slice(-3).map(e => `${e.title} on ${e.date}${e.recurrence !== "none" ? ` (${e.recurrence})` : ""}`).join("; ") || "none"}`,
-    `Habits: ${habits.map(h => `${h.name} (${h.frequency}, ${h.currentStreak}-day streak)`).join("; ") || "none"}`,
-    `Obligations: ${obligations.map(o => `${o.name}: $${o.amount}/${o.frequency}, due ${o.nextDueDate}${o.autopay ? " (autopay)" : ""}`).join("; ") || "none"}`,
-    `Memories: ${memories.map(m => `${m.key}: ${m.value}`).join("; ") || "none"}`,
-    `Documents: ${documents.map(d => `"${d.name}" (${d.type}, linked: ${d.linkedProfiles.length > 0 ? "yes" : "no"})`).join("; ") || "none"}`,
-    `Goals: ${goals.filter(g => g.status === "active").map(g => `${g.title} (${g.type}, ${g.current}/${g.target} ${g.unit}, ${g.deadline ? `deadline: ${g.deadline}` : "no deadline"})`).join("; ") || "none"}`,
+    `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
+    `Recent Expenses (last 5): ${expenses.slice(-5).map(e => `$${e.amount} - ${e.description}`).join("; ") || "none"}`,
+    `Upcoming Events (next 5): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 5).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
+    `Habits: ${habits.map(h => `${h.name} (${h.frequency}, ${h.currentStreak}d streak)`).join("; ") || "none"}`,
+    `Obligations: ${obligations.map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
+    `Memories: ${memories.slice(0, 20).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
+    `Documents: ${documents.map(d => `"${d.name}" (${d.type})`).join("; ") || "none"}`,
+    `Goals: ${goals.filter(g => g.status === "active").map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
   ].join("\n");
 
   const systemPrompt = buildSystemPrompt(context);
@@ -2508,7 +2578,8 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     results.push(task);
     reply = `Created task: "${title}"`;
   } else {
-    reply = `I'm running in offline mode. Try commands like:\n• "ran 3 miles in 25:00"\n• "weight 183"\n• "bp 120/80"\n• "slept 7.5 hours"\n• "$50 groceries"\n• "mood good"\n• "done meditation"\n• "remind me to call mom"\n• "open my drivers license"`;
+    // Try to handle as AI message — don't show offline mode
+    reply = `I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• "weight 183" • "bp 120/80" • "$50 groceries"\n• "mood good" • "remind me to call mom"\n• "open my drivers license"\nOr refresh and try again.`;
   }
 
   return { reply, actions, results };
