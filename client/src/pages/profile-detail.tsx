@@ -953,8 +953,8 @@ function DocumentsTab({
                         </div>
                       );
                     })()}
-                    <button className="flex-1 min-w-0 text-left" onClick={() => setExpandedDocId(expandedDocId === doc.id ? null : doc.id)}>
-                      <p className="text-sm font-medium truncate">{doc.name}</p>
+                    <button className="flex-1 min-w-0 text-left" onClick={() => setViewingDoc(doc)}>
+                      <p className="text-sm font-medium truncate text-primary hover:underline">{doc.name}</p>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
                         <span className="text-xs text-muted-foreground">

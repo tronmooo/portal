@@ -235,8 +235,8 @@ function useViewerControls() {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
 
-  const zoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.25, 5)), []);
-  const zoomOut = useCallback(() => setZoom((z) => Math.max(z - 0.25, 0.25)), []);
+  const zoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.1, 5)), []);
+  const zoomOut = useCallback(() => setZoom((z) => Math.max(z - 0.1, 0.25)), []);
   const resetZoom = useCallback(() => {
     setZoom(1);
     setTranslate({ x: 0, y: 0 });
@@ -244,12 +244,20 @@ function useViewerControls() {
   }, []);
   const rotate = useCallback(() => setRotation((r) => (r + 90) % 360), []);
 
+  // Debounced wheel zoom — accumulate delta to prevent hyper-sensitivity
+  const wheelAccum = useRef(0);
+  const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (e.deltaY < 0) zoomIn();
-      else zoomOut();
+      wheelAccum.current += e.deltaY;
+      if (wheelTimer.current) clearTimeout(wheelTimer.current);
+      wheelTimer.current = setTimeout(() => {
+        if (wheelAccum.current < -30) zoomIn();
+        else if (wheelAccum.current > 30) zoomOut();
+        wheelAccum.current = 0;
+      }, 80);
     },
     [zoomIn, zoomOut]
   );
@@ -264,8 +272,8 @@ function useViewerControls() {
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (lastTouchDist.current !== null) {
           const diff = dist - lastTouchDist.current;
-          if (diff > 5) zoomIn();
-          else if (diff < -5) zoomOut();
+          if (diff > 15) zoomIn();
+          else if (diff < -15) zoomOut();
         }
         lastTouchDist.current = dist;
       }
