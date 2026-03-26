@@ -1412,7 +1412,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
       {/* Add Expense Dialog */}
       <Dialog open={showAddExpense} onOpenChange={setShowAddExpense}>
-        <DialogContent className="max-w-md" data-testid="dialog-add-expense">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-add-expense">
           <DialogHeader>
             <DialogTitle>Add Expense</DialogTitle>
             <DialogDescription>Add a new expense linked to this profile.</DialogDescription>
@@ -1455,7 +1455,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
       {/* Edit Expense Dialog */}
       <Dialog open={!!editingExpense} onOpenChange={() => setEditingExpense(null)}>
-        <DialogContent className="max-w-md" data-testid="dialog-edit-expense">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-expense">
           <DialogHeader>
             <DialogTitle>Edit Expense</DialogTitle>
             <DialogDescription>Update this expense.</DialogDescription>
@@ -1890,7 +1890,7 @@ function TrackersTab({
 
       {/* Create Tracker Dialog */}
       <Dialog open={showCreateTracker} onOpenChange={setShowCreateTracker}>
-        <DialogContent className="max-w-md" data-testid="dialog-create-tracker">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-create-tracker">
           <DialogHeader>
             <DialogTitle>New Tracker</DialogTitle>
             <DialogDescription>Create a new tracker linked to this profile.</DialogDescription>
@@ -1939,7 +1939,7 @@ function TrackersTab({
 
       {/* Link Existing Tracker Dialog */}
       <Dialog open={showLinkTracker} onOpenChange={setShowLinkTracker}>
-        <DialogContent className="max-w-md" data-testid="dialog-link-tracker">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-link-tracker">
           <DialogHeader>
             <DialogTitle>Link Tracker</DialogTitle>
             <DialogDescription>Link an existing tracker to this profile.</DialogDescription>
@@ -1966,7 +1966,7 @@ function TrackersTab({
 
       {/* Log Entry Dialog */}
       <Dialog open={!!showLogEntry} onOpenChange={() => setShowLogEntry(null)}>
-        <DialogContent className="max-w-md" data-testid="dialog-log-entry">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-log-entry">
           <DialogHeader>
             <DialogTitle>Log Entry</DialogTitle>
             <DialogDescription>Add a new entry to {trackers.find(t => t.id === showLogEntry)?.name || "this tracker"}.</DialogDescription>
@@ -2278,7 +2278,7 @@ function TasksTab({
 
       {/* Add Task Dialog */}
       <Dialog open={showAddTask} onOpenChange={setShowAddTask}>
-        <DialogContent className="max-w-md" data-testid="dialog-add-task">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-add-task">
           <DialogHeader>
             <DialogTitle>Add Task</DialogTitle>
             <DialogDescription>Create a new task linked to this profile.</DialogDescription>

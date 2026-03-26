@@ -374,7 +374,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
 
       {/* Spending Breakdown Popup */}
       <Dialog open={popup === "spending"} onOpenChange={() => setPopup(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">Spending Breakdown</DialogTitle>
             <DialogDescription className="text-xs">This month's expenses by category</DialogDescription>
@@ -407,7 +407,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
 
       {/* Bills Popup */}
       <Dialog open={popup === "bills"} onOpenChange={() => setPopup(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">Upcoming Bills</DialogTitle>
             <DialogDescription className="text-xs">Bills due in the next 30 days</DialogDescription>
@@ -780,7 +780,7 @@ function HealthSection({ data }: { data: any[] }) {
 
       {/* Health Tracker Detail Popup */}
       <Dialog open={!!selectedTracker} onOpenChange={o => { if (!o) setSelectedTracker(null); }}>
-        <DialogContent className="max-w-xs">
+        <DialogContent className="max-w-xs max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <HeartPulse className="h-4 w-4 text-primary" />
@@ -869,7 +869,7 @@ function ObligationsSection({ data }: { data: any[] }) {
 
       {/* Obligation Detail Popup */}
       <Dialog open={!!selectedBill} onOpenChange={o => { if (!o) setSelectedBill(null); }}>
-        <DialogContent className="max-w-xs">
+        <DialogContent className="max-w-xs max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">{selectedBill?.name}</DialogTitle>
             <DialogDescription className="text-xs">Bill details</DialogDescription>
@@ -1235,7 +1235,7 @@ export default function DashboardPage() {
 
       {/* Import Dialog */}
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Import Backup</DialogTitle>
             <DialogDescription className="text-xs">Upload a Portol backup JSON file to restore your data.</DialogDescription>

@@ -1668,6 +1668,9 @@ function TrackerDetailDialog({
 }) {
   const [addEntryOpen, setAddEntryOpen] = useState(false);
   const [deleteTrackerOpen, setDeleteTrackerOpen] = useState(false);
+  const [showChart, setShowChart] = useState(true);
+  const [entrySearch, setEntrySearch] = useState("");
+  const [entryDateFilter, setEntryDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
   const qc = useQueryClient();
   const { toast } = useToast();
 
@@ -1692,12 +1695,29 @@ function TrackerDetailDialog({
   const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
   const sortedEntries = [...tracker.entries].reverse();
 
+  // Filter entries by date range
+  const now = Date.now();
+  const dateFilterMs: Record<string, number> = { "7d": 7*86400000, "30d": 30*86400000, "90d": 90*86400000 };
+  const dateFiltered = entryDateFilter === "all" ? sortedEntries :
+    sortedEntries.filter(e => now - new Date(e.timestamp).getTime() <= (dateFilterMs[entryDateFilter] || Infinity));
+
+  // Filter by search
+  const searchLower = entrySearch.toLowerCase();
+  const filteredEntries = searchLower
+    ? dateFiltered.filter(e => {
+        const vals = Object.values(e.values).map(v => String(v ?? "").toLowerCase()).join(" ");
+        const dateStr = new Date(e.timestamp).toLocaleDateString();
+        const notes = (e.values["_notes"] as string || e.notes || "").toLowerCase();
+        return vals.includes(searchLower) || dateStr.includes(searchLower) || notes.includes(searchLower);
+      })
+    : dateFiltered;
+
   return (
     <>
-      <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0" data-testid="tracker-detail-dialog">
+      <Dialog open={open} onOpenChange={(v) => { if (!v) { onClose(); setEntrySearch(""); setEntryDateFilter("all"); } }}>
+        <DialogContent className="max-w-2xl h-[90vh] max-h-[90vh] flex flex-col p-0" data-testid="tracker-detail-dialog">
           {/* ── Header ── */}
-          <div className="px-5 pt-5 pb-3 border-b">
+          <div className="px-5 pt-5 pb-3 border-b shrink-0">
             <div className="flex items-center justify-between">
               <div>
                 <DialogTitle className="text-base font-semibold">{tracker.name}</DialogTitle>
@@ -1711,6 +1731,11 @@ function TrackerDetailDialog({
                 <Button size="sm" onClick={() => setAddEntryOpen(true)} data-testid="button-add-entry-detail" className="h-7 text-xs">
                   <Plus className="w-3 h-3 mr-1" /> Add Entry
                 </Button>
+                {tracker.entries.length > 0 && (
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowChart(v => !v)}>
+                    {showChart ? "Hide Chart" : "Show Chart"}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -1724,80 +1749,110 @@ function TrackerDetailDialog({
             </div>
           </div>
 
-          {/* ── Specialized Charts & Stats (ExpandedDetailView) ── */}
-          {tracker.entries.length > 0 && (
-            <div className="px-5 mt-1" data-testid="tracker-detail-charts">
-              <ExpandedDetailView tracker={tracker} primaryField={primaryField} />
-            </div>
-          )}
-
-          {/* ── Entry List ── */}
-          <div className="flex-1 overflow-y-auto px-5 pb-5 mt-3 space-y-1.5" data-testid="tracker-entry-list">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium mb-2">All Entries</p>
-            {sortedEntries.length === 0 ? (
-              <div className="text-center py-8">
-                <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                <p className="text-sm text-muted-foreground">No entries yet</p>
-                <p className="text-xs text-muted-foreground mt-1">Click "Add Entry" to start logging data.</p>
+          {/* ── Scrollable body ── */}
+          <div className="flex-1 overflow-y-auto min-h-0" style={{WebkitOverflowScrolling: 'touch'}}>
+            {/* ── Charts & Stats (collapsible, constrained) ── */}
+            {showChart && tracker.entries.length > 0 && (
+              <div className="px-5 mt-1 max-h-[35vh] overflow-hidden" data-testid="tracker-detail-charts">
+                <ExpandedDetailView tracker={tracker} primaryField={primaryField} />
               </div>
-            ) : (
-              sortedEntries.map((entry, idx) => {
-                const val = entry.values[primaryField];
-                const allVals = Object.entries(entry.values).filter(([k, v]) => v != null && v !== "" && k !== "_notes");
-                const notes = entry.values["_notes"] as string | undefined;
-                // BP: show systolic/diastolic format
-                const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"] ?? entry.values["sbp"];
-                const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"] ?? entry.values["dbp"];
-                const isBPEntry = typeof bpS === "number" && typeof bpD === "number";
-                const displayVal = isBPEntry
-                  ? `${bpS}/${bpD} mmHg`
-                  : val != null
-                    ? `${val} ${tracker.unit || ""}`
-                    : allVals.length > 0
-                      ? allVals.map(([k, v]) => `${k}: ${v}`).join(", ")
-                      : "(empty entry)";
-                // Show delta vs previous entry
-                const nextEntry = sortedEntries[idx + 1]; // next = older
-                const nextVal = nextEntry?.values[primaryField];
-                const entryDelta = typeof val === "number" && typeof nextVal === "number" ? val - nextVal : null;
-
-                return (
-                  <div
-                    key={entry.id}
-                    className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm"
-                    data-testid={`entry-row-${entry.id}`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0 flex-wrap">
-                      <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
-                      {entryDelta != null && entryDelta !== 0 && (
-                        <span className={`text-[10px] font-medium tabular-nums ${entryDelta < 0 ? "text-green-600" : "text-orange-500"}`}>
-                          {entryDelta > 0 ? "+" : ""}{entryDelta.toFixed(1)}
-                        </span>
-                      )}
-                      {/* Show secondary fields (non-primary, non-BP, non-notes) */}
-                      {!isBPEntry && allVals.filter(([k]) => k !== primaryField).length > 0 && (
-                        <span className="text-[10px] text-muted-foreground">
-                          {allVals.filter(([k]) => k !== primaryField).map(([k, v]) => `${k}: ${v}`).join(", ")}
-                        </span>
-                      )}
-                      {(notes || entry.notes) && (
-                        <span className="text-[10px] text-muted-foreground italic truncate max-w-[200px]" title={notes || entry.notes}>
-                          "{notes || entry.notes}"
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-[11px] text-muted-foreground tabular-nums">
-                        {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                        {" "}
-                        {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                      <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
-                    </div>
-                  </div>
-                );
-              })
             )}
+
+            {/* ── Entry Filter Bar ── */}
+            <div className="px-5 pt-3 pb-2 sticky top-0 bg-background z-10 border-b border-border/50">
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Entries</p>
+                <span className="text-[10px] text-muted-foreground">({filteredEntries.length})</span>
+                <div className="flex-1" />
+                <div className="flex items-center gap-1">
+                  {(["all", "7d", "30d", "90d"] as const).map(range => (
+                    <button key={range}
+                      onClick={() => setEntryDateFilter(range)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${entryDateFilter === range ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+                      {range === "all" ? "All" : range}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {sortedEntries.length > 5 && (
+                <input
+                  type="text"
+                  placeholder="Search entries by value, date, notes..."
+                  value={entrySearch}
+                  onChange={e => setEntrySearch(e.target.value)}
+                  className="mt-2 w-full h-7 px-2.5 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  data-testid="entry-search-input"
+                />
+              )}
+            </div>
+
+            {/* ── Entry List ── */}
+            <div className="px-5 pb-5 mt-1 space-y-1.5" data-testid="tracker-entry-list">
+              {filteredEntries.length === 0 ? (
+                <div className="text-center py-8">
+                  <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">{entrySearch ? "No matching entries" : "No entries yet"}</p>
+                  {!entrySearch && <p className="text-xs text-muted-foreground mt-1">Click "Add Entry" to start logging data.</p>}
+                </div>
+              ) : (
+                filteredEntries.map((entry, idx) => {
+                  const val = entry.values[primaryField];
+                  const allVals = Object.entries(entry.values).filter(([k, v]) => v != null && v !== "" && k !== "_notes");
+                  const notes = entry.values["_notes"] as string | undefined;
+                  // BP: show systolic/diastolic format
+                  const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"] ?? entry.values["sbp"];
+                  const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"] ?? entry.values["dbp"];
+                  const isBPEntry = typeof bpS === "number" && typeof bpD === "number";
+                  const displayVal = isBPEntry
+                    ? `${bpS}/${bpD} mmHg`
+                    : val != null
+                      ? `${val} ${tracker.unit || ""}`
+                      : allVals.length > 0
+                        ? allVals.map(([k, v]) => `${k}: ${v}`).join(", ")
+                        : "(empty entry)";
+                  // Show delta vs previous entry
+                  const nextEntry = filteredEntries[idx + 1]; // next = older
+                  const nextVal = nextEntry?.values[primaryField];
+                  const entryDelta = typeof val === "number" && typeof nextVal === "number" ? val - nextVal : null;
+
+                  return (
+                    <div
+                      key={entry.id}
+                      className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm"
+                      data-testid={`entry-row-${entry.id}`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-wrap">
+                        <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
+                        {entryDelta != null && entryDelta !== 0 && (
+                          <span className={`text-[10px] font-medium tabular-nums ${entryDelta < 0 ? "text-green-600" : "text-orange-500"}`}>
+                            {entryDelta > 0 ? "+" : ""}{entryDelta.toFixed(1)}
+                          </span>
+                        )}
+                        {/* Show secondary fields (non-primary, non-BP, non-notes) */}
+                        {!isBPEntry && allVals.filter(([k]) => k !== primaryField).length > 0 && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {allVals.filter(([k]) => k !== primaryField).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                          </span>
+                        )}
+                        {(notes || entry.notes) && (
+                          <span className="text-[10px] text-muted-foreground italic truncate max-w-[200px]" title={notes || entry.notes}>
+                            "{notes || entry.notes}"
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-[11px] text-muted-foreground tabular-nums">
+                          {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                          {" "}
+                          {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                        <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>
