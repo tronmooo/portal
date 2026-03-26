@@ -23,6 +23,7 @@ import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { lazy, Suspense } from "react";
+import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // Keep lightweight pages as direct imports
 import NotFound from "@/pages/not-found";
@@ -114,6 +115,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
 function AppRouter() {
   return (
+    <SectionErrorBoundary name="app">
     <Suspense fallback={<PageLoader />}>
       <Switch>
         <Route path="/" component={ChatPage} />
@@ -134,6 +136,7 @@ function AppRouter() {
         <Route component={NotFound} />
       </Switch>
     </Suspense>
+    </SectionErrorBoundary>
   );
 }
 
