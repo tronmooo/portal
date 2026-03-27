@@ -1948,6 +1948,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "create_document": {
       const doc = await storage.createDocument({
         name: input.name,
+        type: "document",
         mimeType: "text/plain",
         fileData: Buffer.from(input.content || "").toString("base64"),
         size: input.content?.length || 0,

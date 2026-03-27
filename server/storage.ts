@@ -5,7 +5,7 @@ import {
   type Expense, type InsertExpense,
   type CalendarEvent, type InsertEvent, type CalendarTimelineItem,
   type EventCategory, EVENT_CATEGORY_COLORS,
-  type Document, type DashboardStats,
+  type Document, type InsertDocument, type DashboardStats,
   type ProfileDetail, type TimelineEntry, type Insight,
   type ComputedData,
   type Habit, type InsertHabit, type HabitCheckin,
@@ -68,7 +68,7 @@ export interface IStorage {
   // Documents
   getDocuments(): Promise<Document[]>;
   getDocument(id: string): Promise<Document | undefined>;
-  createDocument(data: any): Promise<Document>;
+  createDocument(data: Partial<InsertDocument> & { name: string; type: string } & Record<string, unknown>): Promise<Document>;
   updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
   deleteDocument(id: string): Promise<boolean>;
   getDocumentsForProfile(profileId: string): Promise<Document[]>;
@@ -133,7 +133,7 @@ export interface IStorage {
 
   // Dashboard
   getStats(filterProfileId?: string): Promise<DashboardStats>;
-  getDashboardEnhanced(filterProfileId?: string): Promise<any>;
+  getDashboardEnhanced(filterProfileId?: string): Promise<Record<string, unknown>>;
 
   // Insights
   getInsights(): Promise<Insight[]>;

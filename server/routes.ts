@@ -81,6 +81,14 @@ function isValidDateStr(d: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
 }
 
+// Pagination helper — applies ?limit= and ?offset= to any array
+function paginate<T>(items: T[], req: any): { data: T[]; total: number; limit: number; offset: number } {
+  const total = items.length;
+  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || total, 1), 500);
+  const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+  return { data: items.slice(offset, offset + limit), total, limit, offset };
+}
+
 // Wrap async route handlers to catch unhandled errors and send 500 instead of crashing
 type AsyncHandler = (req: any, res: any, next?: any) => Promise<any>;
 function asyncHandler(fn: AsyncHandler): AsyncHandler {
@@ -492,7 +500,7 @@ export async function registerRoutes(
   }));
 
   // ---- Profiles ----
-  app.get("/api/profiles", asyncHandler(async (_req, res) => { res.json(await storage.getProfiles()); }));
+  app.get("/api/profiles", asyncHandler(async (req, res) => { const items = await storage.getProfiles(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/profiles/:id", asyncHandler(async (req, res) => {
     const profile = await storage.getProfile(req.params.id);
     if (!profile) return res.status(404).json({ error: "Not found" });
@@ -729,7 +737,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Trackers ----
-  app.get("/api/trackers", asyncHandler(async (_req, res) => { res.json(await storage.getTrackers()); }));
+  app.get("/api/trackers", asyncHandler(async (req, res) => { const items = await storage.getTrackers(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);
     if (!tracker) return res.status(404).json({ error: "Not found" });
@@ -827,7 +835,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Tasks ----
-  app.get("/api/tasks", asyncHandler(async (_req, res) => { res.json(await storage.getTasks()); }));
+  app.get("/api/tasks", asyncHandler(async (req, res) => { const items = await storage.getTasks(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
     const tasks = await storage.getTasks();
     const task = tasks.find(t => t.id === req.params.id);
@@ -864,7 +872,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Expenses ----
-  app.get("/api/expenses", asyncHandler(async (_req, res) => { res.json(await storage.getExpenses()); }));
+  app.get("/api/expenses", asyncHandler(async (req, res) => { const items = await storage.getExpenses(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.post("/api/expenses", asyncHandler(async (req, res) => {
     if (!req.body.amount || typeof req.body.amount !== "number" || req.body.amount <= 0) {
       return res.status(400).json({ error: "Positive amount required" });
@@ -896,7 +904,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Events ----
-  app.get("/api/events", asyncHandler(async (_req, res) => { res.json(await storage.getEvents()); }));
+  app.get("/api/events", asyncHandler(async (req, res) => { const items = await storage.getEvents(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: "Not found" });
@@ -939,13 +947,20 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Documents ----
-  app.get("/api/documents", asyncHandler(async (_req, res) => { res.json(await storage.getDocuments()); }));
+  app.get("/api/documents", asyncHandler(async (req, res) => { const items = await storage.getDocuments(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
     res.json(doc);
   }));
   app.post("/api/documents", asyncHandler(async (req, res) => {
+    if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
+      return res.status(400).json({ error: "Document name is required" });
+    }
+    req.body.name = sanitize(req.body.name);
+    if (!req.body.type || typeof req.body.type !== "string") {
+      return res.status(400).json({ error: "Document type is required" });
+    }
     try {
       const doc = await storage.createDocument(req.body);
       res.status(201).json(doc);
@@ -985,7 +1000,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Habits ----
-  app.get("/api/habits", asyncHandler(async (_req, res) => { res.json(await storage.getHabits()); }));
+  app.get("/api/habits", asyncHandler(async (req, res) => { const items = await storage.getHabits(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
     if (!habit) return res.status(404).json({ error: "Not found" });
@@ -1020,7 +1035,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Obligations ----
-  app.get("/api/obligations", asyncHandler(async (_req, res) => { res.json(await storage.getObligations()); }));
+  app.get("/api/obligations", asyncHandler(async (req, res) => { const items = await storage.getObligations(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Not found" });
@@ -1060,7 +1075,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Artifacts ----
-  app.get("/api/artifacts", asyncHandler(async (_req, res) => { res.json(await storage.getArtifacts()); }));
+  app.get("/api/artifacts", asyncHandler(async (req, res) => { const items = await storage.getArtifacts(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.get("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const artifact = await storage.getArtifact(req.params.id);
     if (!artifact) return res.status(404).json({ error: "Not found" });
@@ -1095,7 +1110,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Journal ----
-  app.get("/api/journal", asyncHandler(async (_req, res) => { res.json(await storage.getJournalEntries()); }));
+  app.get("/api/journal", asyncHandler(async (req, res) => { const items = await storage.getJournalEntries(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.post("/api/journal", asyncHandler(async (req, res) => {
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
       return res.status(400).json({ error: "Journal content is required" });
@@ -1162,7 +1177,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Domains ----
-  app.get("/api/domains", asyncHandler(async (_req, res) => { res.json(await storage.getDomains()); }));
+  app.get("/api/domains", asyncHandler(async (req, res) => { const items = await storage.getDomains(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
   app.post("/api/domains", asyncHandler(async (req, res) => {
     const parsed = insertDomainSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
@@ -1191,6 +1206,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
   app.post("/api/domains/:id/entries", asyncHandler(async (req, res) => {
     const { values, tags, notes } = req.body;
+    if (!values || typeof values !== "object") {
+      return res.status(400).json({ error: "Entry values are required and must be an object" });
+    }
+    if (tags !== undefined && !Array.isArray(tags)) {
+      return res.status(400).json({ error: "Tags must be an array" });
+    }
+    if (notes !== undefined && typeof notes !== "string") {
+      return res.status(400).json({ error: "Notes must be a string" });
+    }
     const entry = await storage.addDomainEntry(req.params.id, values, tags, notes);
     if (!entry) return res.status(404).json({ error: "Domain not found" });
     res.status(201).json(entry);

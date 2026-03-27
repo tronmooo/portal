@@ -1,6 +1,18 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import type { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction, Express } from "express";
 import { storage, isSupabaseStorage } from "./storage";
+
+// Type-safe helpers for storage methods that only exist on Supabase implementation
+function setStorageUserId(userId: string): void {
+  if (typeof (storage as Record<string, any>).setUserId === 'function') {
+    (storage as Record<string, any>).setUserId(userId);
+  }
+}
+async function seedStorageIfEmpty(): Promise<void> {
+  if (typeof (storage as Record<string, any>).seedIfEmpty === 'function') {
+    await (storage as Record<string, any>).seedIfEmpty();
+  }
+}
 
 // Track which users have had their self profile checked this session
 const autoProfileCreated = new Set<string>();
@@ -65,9 +77,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     req.userEmail = user.email;
 
     // Set the user ID on the storage adapter so queries are scoped
-    if ((storage as any).setUserId) {
-      (storage as any).setUserId(user.id);
-    }
+      setStorageUserId(user.id);
 
     // Auto-create "Me" self profile if none exists (runs once per session, cached)
     if (!autoProfileCreated.has(user.id)) {
@@ -102,7 +112,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 /**
  * Register auth-related API endpoints
  */
-export function registerAuthRoutes(app: any) {
+export function registerAuthRoutes(app: Express) {
   // Per-IP rate limiter for auth endpoints
   const authRateLimits = new Map<string, { count: number; resetAt: number }>();
   function checkAuthRateLimit(ip: string, max = 10, windowMs = 60000): boolean {
@@ -149,12 +159,8 @@ export function registerAuthRoutes(app: any) {
     }
 
     // Seed data for the new user
-    if ((storage as any).setUserId) {
-      (storage as any).setUserId(data.user.id);
-    }
-    if ((storage as any).seedIfEmpty) {
-      await (storage as any).seedIfEmpty();
-    }
+      setStorageUserId(data.user.id);
+      await seedStorageIfEmpty();
 
     res.json({
       user: { id: data.user.id, email: data.user.email },
@@ -322,12 +328,8 @@ export function registerAuthRoutes(app: any) {
       }
 
       // Seed data for brand-new users (first-time Google sign-in creates a new account)
-      if ((storage as any).setUserId) {
-        (storage as any).setUserId(user.id);
-      }
-      if ((storage as any).seedIfEmpty) {
-        await (storage as any).seedIfEmpty();
-      }
+        setStorageUserId(user.id);
+        await seedStorageIfEmpty();
 
       res.json({
         user: { id: user.id, email: user.email },

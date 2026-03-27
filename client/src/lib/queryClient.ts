@@ -41,7 +41,9 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(`${API_BASE}${queryKey.join("/")}`);
+    // Build URL from queryKey — first element is the path, rest are ignored (used for cache segmentation)
+    const url = String(queryKey[0]);
+    const res = await fetch(`${API_BASE}${url}`);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
@@ -61,8 +63,13 @@ export const queryClient = new QueryClient({
       staleTime: 30000,
       gcTime: 5 * 60 * 1000,
       retry: (failureCount, error) => {
-        // Don't retry auth errors
-        if (error instanceof Error && error.message.includes("401")) return false;
+        // Don't retry auth errors or client errors
+        if (error instanceof Error) {
+          const msg = error.message;
+          if (msg.includes("401") || msg.includes("403") || msg.includes("404")) return false;
+          // Retry 5xx server errors up to 2 times
+          if (msg.includes("500") || msg.includes("502") || msg.includes("503")) return failureCount < 2;
+        }
         return failureCount < 1;
       },
     },
