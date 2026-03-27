@@ -4,6 +4,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
@@ -57,15 +61,35 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
                 <Zap className="h-2.5 w-2.5 mr-0.5" />{ENERGY_LABELS[entry.energy]}
               </Badge>
             )}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-              onClick={() => { if (window.confirm("Delete this journal entry? This cannot be undone.")) deleteMutation.mutate(); }}
-              data-testid={`button-delete-journal-${entry.id}`}
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                  aria-label="Delete journal entry"
+                  data-testid={`button-delete-journal-${entry.id}`}
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this journal entry?</AlertDialogTitle>
+                  <AlertDialogDescription>This will permanently remove this entry. This cannot be undone.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => deleteMutation.mutate()}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    disabled={deleteMutation.isPending}
+                  >
+                    {deleteMutation.isPending ? "Deleting..." : "Delete"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
 

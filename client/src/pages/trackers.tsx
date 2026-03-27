@@ -2892,9 +2892,12 @@ export default function TrackersPage() {
               {filteredTrackers.map((tracker) => {
                 const lastEntry = tracker.entries[tracker.entries.length - 1];
                 const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
-                const latestValue = lastEntry?.values?.[primaryField]
-                  ?? (lastEntry?.values ? Object.values(lastEntry.values).find(v => typeof v === 'number') : null)
-                  ?? (lastEntry?.values ? Object.values(lastEntry.values)[0] : null);
+                // Parse values if stored as JSON string
+                const rawValues = lastEntry?.values;
+                const parsedValues = typeof rawValues === 'string' ? (() => { try { return JSON.parse(rawValues); } catch { return null; } })() : rawValues;
+                const latestValue = parsedValues?.[primaryField]
+                  ?? (parsedValues ? Object.values(parsedValues).find(v => typeof v === 'number') : null)
+                  ?? (parsedValues ? Object.values(parsedValues).find(v => v !== null && v !== undefined && v !== '') : null);
                 const unit = tracker.unit || "";
                 const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
                 return (

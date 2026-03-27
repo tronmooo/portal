@@ -758,6 +758,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!values || typeof values !== "object") {
       return res.status(400).json({ error: "Values required" });
     }
+    // Reject entries where all meaningful values are empty/null/undefined
+    const meaningfulKeys = Object.keys(values).filter(k => k !== '_notes' && k !== 'notes' && k !== 'timestamp');
+    const hasAtLeastOneValue = meaningfulKeys.some(k => {
+      const v = values[k];
+      return v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && isNaN(v));
+    });
+    if (meaningfulKeys.length > 0 && !hasAtLeastOneValue) {
+      return res.status(400).json({ error: "At least one value is required. Cannot log an empty entry." });
+    }
     if (Object.values(values).some((v: any) => typeof v === "number" && v < 0)) {
       return res.status(400).json({ error: "Values must not be negative" });
     }

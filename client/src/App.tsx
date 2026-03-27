@@ -60,7 +60,7 @@ function PageLoader() {
 function ThemeToggle() {
   const { theme, toggle } = useTheme();
   return (
-    <Button variant="ghost" size="icon" onClick={toggle} className="h-8 w-8" data-testid="button-theme-toggle">
+    <Button variant="ghost" size="icon" onClick={toggle} className="h-8 w-8" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} data-testid="button-theme-toggle">
       {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </Button>
   );
@@ -69,7 +69,7 @@ function ThemeToggle() {
 function CalendarButton() {
   const [, navigate] = useLocation();
   return (
-    <Button variant="ghost" size="icon" onClick={() => navigate("/calendar")} className="h-8 w-8" title="Calendar" data-testid="button-calendar-header">
+    <Button variant="ghost" size="icon" onClick={() => navigate("/calendar")} className="h-8 w-8" title="Calendar" aria-label="Open calendar" data-testid="button-calendar-header">
       <Calendar className="h-4 w-4" />
     </Button>
   );
@@ -78,7 +78,7 @@ function CalendarButton() {
 function SettingsButton() {
   const [, navigate] = useLocation();
   return (
-    <Button variant="ghost" size="icon" onClick={() => navigate("/settings")} className="h-8 w-8" title="Settings" data-testid="button-settings-header">
+    <Button variant="ghost" size="icon" onClick={() => navigate("/settings")} className="h-8 w-8" title="Settings" aria-label="Open settings" data-testid="button-settings-header">
       <Settings className="h-4 w-4" />
     </Button>
   );

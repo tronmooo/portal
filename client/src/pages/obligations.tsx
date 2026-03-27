@@ -241,6 +241,15 @@ export default function ObligationsPage() {
         <div className="space-y-3">
           {[1, 2, 3].map(i => <div key={i} className="h-24 rounded-lg bg-muted animate-pulse" />)}
         </div>
+      ) : sorted.length === 0 ? (
+        <div className="text-center py-12">
+          <CreditCard className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+          <h3 className="text-sm font-medium mb-1">No obligations yet</h3>
+          <p className="text-xs text-muted-foreground mb-4">Track recurring bills, subscriptions, and payments.</p>
+          <Button size="sm" onClick={() => setAddOpen(true)} data-testid="button-add-obligation-empty">
+            <Plus className="w-4 h-4 mr-1" /> Add Your First Obligation
+          </Button>
+        </div>
       ) : (
         <div className="grid gap-3">
           {sorted.map(ob => (

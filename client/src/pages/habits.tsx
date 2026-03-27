@@ -4,6 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Habit } from "@shared/schema";
@@ -58,15 +62,35 @@ function HabitCard({ habit }: { habit: Habit }) {
             >
               {checkedToday ? <><Check className="h-3 w-3 mr-1" /> Done</> : "Check In"}
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-              onClick={() => { if (window.confirm(`Delete "${habit.name}"? This cannot be undone.`)) deleteMutation.mutate(); }}
-              data-testid={`button-delete-habit-${habit.id}`}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                  aria-label={`Delete ${habit.name}`}
+                  data-testid={`button-delete-habit-${habit.id}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete "{habit.name}"?</AlertDialogTitle>
+                  <AlertDialogDescription>This will permanently delete this habit and all its check-in history. This cannot be undone.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => deleteMutation.mutate()}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    disabled={deleteMutation.isPending}
+                  >
+                    {deleteMutation.isPending ? "Deleting..." : "Delete"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
       </CardHeader>
@@ -141,7 +165,7 @@ export default function HabitsPage() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back to Dashboard" data-testid="button-back">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
@@ -191,6 +215,15 @@ export default function HabitsPage() {
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
+        </div>
+      ) : habits.length === 0 ? (
+        <div className="text-center py-12">
+          <Flame className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+          <h3 className="text-sm font-medium mb-1">No habits yet</h3>
+          <p className="text-xs text-muted-foreground mb-4">Start building positive routines by creating your first habit.</p>
+          <Button size="sm" onClick={() => setShowCreate(true)} data-testid="button-create-habit-empty">
+            <Plus className="h-3.5 w-3.5 mr-1" /> Create Your First Habit
+          </Button>
         </div>
       ) : (
         <div className="grid gap-3">
