@@ -825,7 +825,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Obligations ---
   {
     name: "create_obligation",
-    description: "Create a recurring bill, subscription, or financial obligation.",
+    description: "Create a recurring bill, subscription, or financial obligation. A subscription profile is auto-created and linked to the specified person/pet.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -835,6 +835,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         nextDueDate: { type: "string", description: "Next due date (YYYY-MM-DD)" },
         category: { type: "string", description: "Category (rent, utilities, insurance, subscription, loan, etc.)" },
         autopay: { type: "boolean", description: "Whether this is on autopay" },
+        forProfile: { type: "string", description: "Name of the person/pet this obligation belongs to (e.g. 'Max', 'Mom', 'Luna'). The auto-created subscription profile will be nested under this person/pet. ALWAYS set this when the user mentions a specific person or pet." },
       },
       required: ["name", "amount", "frequency"],
     },
@@ -1822,8 +1823,13 @@ async function executeTool(name: string, input: any): Promise<any> {
         });
         if (!existingProfile && serviceName.length > 0) {
           try {
-            // Auto-link subscription to self profile as parent
+            // Determine parent: use forProfile's profile if specified, otherwise self
             const selfProfile = profiles.find(p => p.type === "self");
+            let parentId = selfProfile?.id;
+            if (input.forProfile) {
+              const targetProfile = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+              if (targetProfile) parentId = targetProfile.id;
+            }
             const newProfile = await storage.createProfile({
               type: "subscription",
               name: serviceName,
@@ -1835,7 +1841,7 @@ async function executeTool(name: string, input: any): Promise<any> {
               },
               tags: ["subscription"],
               notes: `${input.frequency || "monthly"} subscription — $${input.amount}`,
-              parentProfileId: selfProfile?.id,
+              parentProfileId: parentId,
             });
             // Link the obligation to the new profile
             await autoLinkToProfiles("obligation", newObligation.id, serviceName);
