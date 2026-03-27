@@ -604,7 +604,14 @@ export class MemStorage implements IStorage {
     for (const o of relatedObligations) { timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt }); }
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, timeline };
+    // Find child profiles (assets, subscriptions, loans nested under this profile)
+    const allProfiles = await this.getProfiles();
+    const childProfiles = allProfiles.filter(p => {
+      const parentId = p.fields && typeof p.fields === 'object' ? (p.fields as any)._parentProfileId : null;
+      return parentId === profile.id;
+    });
+
+    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, childProfiles, timeline };
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {

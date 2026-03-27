@@ -85,6 +85,7 @@ import {
   ChevronRight,
   Camera,
   Image as ImageIcon,
+  Star,
 } from "lucide-react";
 import {
   LineChart,
@@ -97,7 +98,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import type { ProfileDetail, Document, TimelineEntry, Tracker } from "@shared/schema";
+import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";

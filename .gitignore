@@ -12,3 +12,7 @@ vite.config.ts.*
 lifeos.db
 screenshots/
 api/_bundle.mjs
+
+# Build output — deployed via CI, not committed
+public/assets/
+api/

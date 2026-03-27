@@ -62,12 +62,14 @@ function daysUntilStr(days: number): string {
 }
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
-  amazing: { icon: Sparkles, label: "Amazing", color: "#6DAA45", bg: "bg-green-500/10" },
-  great:   { icon: Smile,    label: "Great",   color: "#5BAA6A", bg: "bg-emerald-500/10" },
-  good:    { icon: Smile,    label: "Good",    color: "#4F98A3", bg: "bg-teal-500/10" },
-  neutral: { icon: Meh,      label: "Neutral", color: "#797876", bg: "bg-gray-500/10" },
-  bad:     { icon: Frown,    label: "Bad",     color: "#BB653B", bg: "bg-orange-500/10" },
-  awful:   { icon: Frown,    label: "Awful",   color: "#A13544", bg: "bg-red-500/10" },
+  amazing:   { icon: Sparkles, label: "Amazing",   color: "#6DAA45", bg: "bg-green-500/10" },
+  great:     { icon: Smile,    label: "Great",     color: "#5BAA6A", bg: "bg-emerald-500/10" },
+  good:      { icon: Smile,    label: "Good",      color: "#4F98A3", bg: "bg-teal-500/10" },
+  okay:      { icon: Meh,      label: "Okay",      color: "#8A8A7A", bg: "bg-gray-400/10" },
+  neutral:   { icon: Meh,      label: "Neutral",   color: "#797876", bg: "bg-gray-500/10" },
+  bad:       { icon: Frown,    label: "Bad",       color: "#BB653B", bg: "bg-orange-500/10" },
+  awful:     { icon: Frown,    label: "Awful",     color: "#A13544", bg: "bg-red-500/10" },
+  terrible:  { icon: Frown,    label: "Terrible",  color: "#8B1A2B", bg: "bg-red-600/10" },
 };
 
 const SEVERITY_CONFIG: Record<string, { color: string; bg: string; border: string }> = {

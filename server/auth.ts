@@ -262,8 +262,8 @@ export function registerAuthRoutes(app: any) {
     if (!access_token || !password) {
       return res.status(400).json({ error: "Access token and new password are required" });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
     }
 
     // Use the access token to set the user context, then update password

@@ -90,6 +90,19 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
+  // GUARD: Skip fast-path for multi-intent messages.
+  // If the message contains conjunctions, multiple sentences, or commas separating actions,
+  // let the AI handle it to avoid losing secondary intents.
+  const multiIntentSignals = [
+    /\band\s+(?:also|then|i|my|please|add|log|create|set|track|record|remind)/i,
+    /[.!?]\s+[A-Z]/,     // Multiple sentences
+    /,\s*(?:also|then|and|plus)/i,  // Comma-separated actions
+    /\balso\b.*\b(?:add|log|create|set|track|remind|save|record)\b/i,
+  ];
+  if (multiIntentSignals.some(re => re.test(message))) {
+    return { matched: false, reply: "", actions: [], results: [] };
+  }
+
   // ---- Open document command: "open my drivers license", "show max's vaccination record" ----
   // Also handles multiple documents: "open my insurance and my license"
   const openDocPattern = /^(?:open\s*(?:up)?|show|view|pull\s*up|display|get|find)\s+/i;
@@ -268,7 +281,7 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   }
 
   // ---- Journal shortcut: "mood good", "feeling amazing" ----
-  const moodMatch = lower.match(/^(?:mood|feeling|i\s+feel)\s+(amazing|good|neutral|bad|awful)/);
+  const moodMatch = lower.match(/^(?:mood|feeling|i\s+feel)\s+(amazing|great|good|okay|neutral|bad|awful|terrible)/);
   if (moodMatch) {
     const mood = moodMatch[1] as any;
     const entry = await storage.createJournalEntry({ mood, content: message, tags: [] });
@@ -2623,7 +2636,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   if (fast.matched) return { reply: fast.reply, actions: fast.actions, results: fast.results, documentPreview: (fast as any).documentPreview, documentPreviews: (fast as any).documentPreviews };
 
   // Build rich context from current data (uses short-lived cache to avoid redundant DB hits)
-  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData();
+  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData() as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = [

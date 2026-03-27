@@ -15,12 +15,14 @@ import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
-  amazing: { icon: Sparkles, label: "Amazing", color: "#6DAA45", bg: "bg-green-500/10" },
-  great: { icon: Smile, label: "Great", color: "#5BAA6A", bg: "bg-emerald-500/10" },
-  good: { icon: Smile, label: "Good", color: "#4F98A3", bg: "bg-teal-500/10" },
-  neutral: { icon: Meh, label: "Neutral", color: "#797876", bg: "bg-gray-500/10" },
-  bad: { icon: Frown, label: "Bad", color: "#BB653B", bg: "bg-orange-500/10" },
-  awful: { icon: Frown, label: "Awful", color: "#A13544", bg: "bg-red-500/10" },
+  amazing:   { icon: Sparkles, label: "Amazing",   color: "#6DAA45", bg: "bg-green-500/10" },
+  great:     { icon: Smile,    label: "Great",     color: "#5BAA6A", bg: "bg-emerald-500/10" },
+  good:      { icon: Smile,    label: "Good",      color: "#4F98A3", bg: "bg-teal-500/10" },
+  okay:      { icon: Meh,      label: "Okay",      color: "#8A8A7A", bg: "bg-gray-400/10" },
+  neutral:   { icon: Meh,      label: "Neutral",   color: "#797876", bg: "bg-gray-500/10" },
+  bad:       { icon: Frown,    label: "Bad",       color: "#BB653B", bg: "bg-orange-500/10" },
+  awful:     { icon: Frown,    label: "Awful",     color: "#A13544", bg: "bg-red-500/10" },
+  terrible:  { icon: Frown,    label: "Terrible",  color: "#8B1A2B", bg: "bg-red-600/10" },
 };
 
 const ENERGY_LABELS = ["", "Exhausted", "Low", "Normal", "High", "Energized"];
@@ -171,7 +173,7 @@ export default function JournalPage() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>

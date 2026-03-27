@@ -537,6 +537,8 @@ export async function registerRoutes(
     res.json(updated);
   }));
   app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {
+    const existing = await storage.getProfile(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Profile not found" });
     await storage.deleteProfile(req.params.id);
     res.status(204).send();
   }));
@@ -812,6 +814,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(204).send();
   }));
   app.delete("/api/trackers/:id", asyncHandler(async (req, res) => {
+    const existing = await storage.getTracker(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Tracker not found" });
     await storage.deleteTracker(req.params.id);
     res.status(204).send();
   }));
@@ -853,6 +857,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
+    const tasks = await storage.getTasks();
+    if (!tasks.find(t => t.id === req.params.id)) return res.status(404).json({ error: "Task not found" });
     await storage.deleteTask(req.params.id);
     res.status(204).send();
   }));
@@ -883,6 +889,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
+    const expenses = await storage.getExpenses();
+    if (!expenses.find(e => e.id === req.params.id)) return res.status(404).json({ error: "Expense not found" });
     await storage.deleteExpense(req.params.id);
     res.status(204).send();
   }));
@@ -909,6 +917,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
+    const existing = await storage.getEvent(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Event not found" });
     await storage.deleteEvent(req.params.id);
     res.status(204).send();
   }));
@@ -1003,6 +1013,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   }));
   app.delete("/api/habits/:id", asyncHandler(async (req, res) => {
+    const existing = await storage.getHabit(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Habit not found" });
     await storage.deleteHabit(req.params.id);
     res.status(204).send();
   }));
@@ -1041,6 +1053,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(payment);
   }));
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
+    const existing = await storage.getObligation(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Obligation not found" });
     await storage.deleteObligation(req.params.id);
     res.status(204).send();
   }));
@@ -1069,6 +1083,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(result);
   }));
   app.delete("/api/artifacts/:id", asyncHandler(async (req, res) => {
+    const existing = await storage.getArtifact(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Artifact not found" });
     await storage.deleteArtifact(req.params.id);
     res.status(204).send();
   }));
@@ -1090,6 +1106,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/journal/:id", asyncHandler(async (req, res) => {
+    const entries = await storage.getJournalEntries();
+    if (!entries.find(e => e.id === req.params.id)) return res.status(404).json({ error: "Journal entry not found" });
     await storage.deleteJournalEntry(req.params.id);
     res.status(204).send();
   }));

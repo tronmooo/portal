@@ -1028,14 +1028,14 @@ export class SupabaseStorage implements IStorage {
     for (const item of items) {
       if (item.type === "obligation") {
         // Normalize: strip emoji, $amounts, and extra whitespace for matching
-        const normTitle = item.title.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").replace(/\s*[—-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
+        const normTitle = item.title.replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]/g, "").replace(/\s*[\u2014-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
         obligationFingerprints.add(`${normTitle}::${item.date}`);
       }
     }
     // Filter out events that match an obligation's fingerprint
     const dedupedItems = items.filter(item => {
       if (item.type !== "event") return true; // Keep non-events
-      const normTitle = item.title.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").replace(/\s*[—-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
+      const normTitle = item.title.replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]/g, "").replace(/\s*[\u2014-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
       const fp = `${normTitle}::${item.date}`;
       // Also check if event title contains any obligation name
       for (const ofp of obligationFingerprints) {
