@@ -782,6 +782,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         amount: { type: "number", description: "Amount in dollars" },
         description: { type: "string", description: "What was purchased" },
         category: { type: "string", description: "Category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general. Auto-detect from context (e.g., vet visit → pet, oil change → vehicle, groceries → food)." },
+        date: { type: "string", description: "Date of the expense in YYYY-MM-DD format. Use today's date if not specified. Use the actual date the expense occurred if the user says 'yesterday', 'last Tuesday', etc." },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
         forProfile: { type: "string", description: "Name of the profile this expense belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
@@ -1808,6 +1809,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         amount: parseFloat(input.amount) || 0,
         category: input.category || "general",
         description: input.description || "Expense",
+        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), // YYYY-MM-DD in Pacific
         vendor: input.vendor,
         tags: input.tags || [],
       });
@@ -1868,6 +1870,13 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_obligation": {
+      // Dedup: check if an obligation with the same name already exists
+      const existingObs = await storage.getObligations();
+      const dupOb = existingObs.find(o => o.name.toLowerCase() === (input.name || "").toLowerCase());
+      if (dupOb) {
+        logger.info("ai", `Skipped duplicate obligation: ${dupOb.name}`);
+        return dupOb;
+      }
       const newObligation = await storage.createObligation({
         name: input.name,
         amount: parseFloat(input.amount) || 0,

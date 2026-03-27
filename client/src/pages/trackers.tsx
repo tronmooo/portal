@@ -2614,6 +2614,11 @@ export default function TrackersPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
+  const { data: obligations = [] } = useQuery<any[]>({
+    queryKey: ["/api/obligations"],
+    queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
+  });
+
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
@@ -2804,8 +2809,7 @@ export default function TrackersPage() {
                 const displayFields = Object.entries(fields).filter(([k, v]) => v != null && v !== '' && !k.startsWith('_'));
                 return (
                   <div key={child.id} className="rounded-lg border bg-card overflow-hidden">
-                    <div className="flex items-center gap-3 p-3 cursor-pointer hover:bg-muted/30 transition-colors"
-                      onClick={() => setSelectedTrackerId(null)}>
+                    <div className="flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors">
                       <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                         <Icon className="h-4 w-4 text-primary" />
                       </div>
@@ -2818,7 +2822,7 @@ export default function TrackersPage() {
                         </p>
                       </div>
                       <Link href={`/profiles/${child.id}`}>
-                        <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0">View</Button>
+                        <Button variant="outline" size="sm" className="h-7 text-xs shrink-0" data-testid={`button-view-child-${child.id}`}>View</Button>
                       </Link>
                     </div>
                     {displayFields.length > 0 && (
@@ -2840,6 +2844,35 @@ export default function TrackersPage() {
           </div>
         );
       })()}
+
+      {/* Active Obligations / Subscriptions */}
+      {obligations.length > 0 && (
+        <div className="space-y-2">
+          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations & Subscriptions ({obligations.length})</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {obligations.map((ob: any) => {
+              const dueDate = new Date(ob.nextDueDate);
+              const daysUntil = Math.ceil((dueDate.getTime() - Date.now()) / 86400000);
+              return (
+                <div key={ob.id} className={`rounded-lg border p-3 ${daysUntil <= 3 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-card'}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{ob.name}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        ${ob.amount}/{ob.frequency} · Due {dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        {daysUntil <= 0 ? ' (overdue)' : daysUntil <= 7 ? ` (in ${daysUntil}d)` : ''}
+                      </p>
+                    </div>
+                    <Link href="/dashboard/obligations">
+                      <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0">Manage</Button>
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {(!trackers || trackers.length === 0) ? (
         <div className="text-center py-16">

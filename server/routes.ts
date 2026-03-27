@@ -136,8 +136,20 @@ export async function registerRoutes(
       const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined);
       res.json(result);
     } catch (err: any) {
-      console.error("[Chat]", err?.message || "unknown error");
-      res.status(500).json({ error: "Failed to process message" });
+      const msg = err?.message || "unknown error";
+      console.error("[Chat]", msg);
+      // Provide actionable error messages based on error type
+      const status = err?.status || err?.error?.status || 500;
+      if (status === 529 || status === 503 || msg.includes('overloaded')) {
+        return res.status(503).json({ error: "The AI is temporarily busy. Please try again in a few seconds.", reply: "I'm a bit overloaded right now. Could you try again in a moment?" });
+      }
+      if (status === 429) {
+        return res.status(429).json({ error: "Rate limit reached. Please wait a moment.", reply: "I need a short break. Please try again in about 30 seconds." });
+      }
+      if (msg.includes('timeout') || msg.includes('ETIMEDOUT')) {
+        return res.status(504).json({ error: "Request timed out.", reply: "That took too long. Could you try a simpler question, or try again?" });
+      }
+      res.status(500).json({ error: "Failed to process message", reply: "Something went wrong. Please try again." });
     }
   }));
 

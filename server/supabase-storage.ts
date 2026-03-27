@@ -450,13 +450,22 @@ export class SupabaseStorage implements IStorage {
         break;
     }
 
+    // Fetch existing events to dedup — don't create if a matching event already exists
+    const existingEvents = await this.getEvents();
     for (const def of eventDefs) {
       const dateVal = fields[def.fieldKey];
       if (dateVal && typeof dateVal === "string" && dateVal.length >= 10) {
+        const title = def.titleFn(name);
+        const date = dateVal.slice(0, 10);
+        // Dedup: skip if an event with the same title already exists for this profile
+        const alreadyExists = existingEvents.some(e => 
+          e.title === title && e.linkedProfiles.includes(profileId)
+        );
+        if (alreadyExists) continue;
         try {
           await this.createEvent({
-            title: def.titleFn(name),
-            date: dateVal.slice(0, 10),
+            title,
+            date,
             allDay: true,
             category: def.category as any,
             color: def.color,
@@ -1933,11 +1942,21 @@ export class SupabaseStorage implements IStorage {
 
     // Filter by profile if specified
     const fp = filterProfileId;
-    const tasks = fp ? allTasks.filter(t => t.linkedProfiles.includes(fp)) : allTasks;
-    const expenses = fp ? allExpenses.filter(e => e.linkedProfiles.includes(fp)) : allExpenses;
-    const trackers = fp ? allTrackers.filter(t => t.linkedProfiles.includes(fp)) : allTrackers;
+    // Determine if the filter is for the "self" profile
+    const allProfiles = await this.getProfiles();
+    const isSelfFilter = fp && allProfiles.find(p => p.id === fp)?.type === "self";
+    // For self profile: include items linked to self OR items with no profile links (unlinked = self)
+    const matchesProfile = (linkedProfiles: string[]) => {
+      if (!fp) return true;
+      if (linkedProfiles.includes(fp)) return true;
+      if (isSelfFilter && linkedProfiles.length === 0) return true;
+      return false;
+    };
+    const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
+    const expenses = allExpenses.filter(e => matchesProfile(e.linkedProfiles));
+    const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
     const habits = allHabits; // Habits are global (not profile-specific yet)
-    const obligations = fp ? allObligations.filter(o => o.linkedProfiles.includes(fp)) : allObligations;
+    const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
     const now = new Date();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
@@ -1979,10 +1998,10 @@ export class SupabaseStorage implements IStorage {
     const recentJournal = [...journalEntries].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
-    const [allProfiles, allEvents, artifacts, memories] = await Promise.all([
+    const [profileList, allEvents, artifacts, memories] = await Promise.all([
       this.getProfiles(), this.getEvents(), this.getArtifacts(), this.getMemories(),
     ]);
-    const profiles = allProfiles;
+    const profiles = profileList;
     const events = fp ? allEvents.filter(e => e.linkedProfiles.includes(fp)) : allEvents;
 
     return {
@@ -2038,12 +2057,19 @@ export class SupabaseStorage implements IStorage {
       this.getDocuments(), this.getTrackers(), this.getProfiles(),
       this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
     ]);
-    // Apply profile filter
-    const allTrackers = fp ? rawTrackers.filter(t => t.linkedProfiles.includes(fp)) : rawTrackers;
-    const allExpenses = fp ? rawExpenses.filter(e => e.linkedProfiles.includes(fp)) : rawExpenses;
-    const allObligations = fp ? rawObligations.filter(o => o.linkedProfiles.includes(fp)) : rawObligations;
-    const allTasks = fp ? rawTasks.filter(t => t.linkedProfiles.includes(fp)) : rawTasks;
-    const allEvents = fp ? rawEvents.filter(e => e.linkedProfiles.includes(fp)) : rawEvents;
+    // Apply profile filter (self profile also matches unlinked items)
+    const isSelfFilterEnhanced = fp && allProfiles.find(p => p.id === fp)?.type === "self";
+    const matchesProfileEnhanced = (linkedProfiles: string[]) => {
+      if (!fp) return true;
+      if (linkedProfiles.includes(fp)) return true;
+      if (isSelfFilterEnhanced && linkedProfiles.length === 0) return true;
+      return false;
+    };
+    const allTrackers = rawTrackers.filter(t => matchesProfileEnhanced(t.linkedProfiles));
+    const allExpenses = rawExpenses.filter(e => matchesProfileEnhanced(e.linkedProfiles));
+    const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
+    const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));
+    const allEvents = rawEvents.filter(e => matchesProfileEnhanced(e.linkedProfiles));
     const expiringDocs: any[] = [];
     for (const doc of documents) {
       const ed = doc.extractedData || {};
