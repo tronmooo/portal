@@ -43,6 +43,26 @@ setInterval(() => {
   }
 }, 300000);
 
+// Simple response cache for expensive endpoints (10s TTL)
+const responseCache = new Map<string, { data: any; expiresAt: number }>();
+function getCached(key: string): any | null {
+  const entry = responseCache.get(key);
+  if (entry && Date.now() < entry.expiresAt) return entry.data;
+  return null;
+}
+function setCache(key: string, data: any, ttlMs: number = 10000): void {
+  responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+function bustCache(prefix: string): void {
+  for (const key of responseCache.keys()) {
+    if (key.startsWith(prefix)) responseCache.delete(key);
+  }
+}
+// Bust relevant caches after any write operation
+function bustAllCaches(): void {
+  responseCache.clear();
+}
+
 // HTML sanitizer — strips dangerous characters and entities
 function sanitize(input: string): string {
   return input
@@ -59,6 +79,14 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // Bust response cache on any write operation
+  app.use("/api", (req, _res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
+      bustAllCaches();
+    }
+    next();
+  });
 
   // ---- Chat / AI ----
   app.post("/api/chat", async (req, res) => {
@@ -373,8 +401,13 @@ export async function registerRoutes(
   });
 
   // ---- Dashboard ----
-  app.get("/api/stats", async (_req, res) => {
+  app.get("/api/stats", async (req, res) => {
+    const userId = (req as any).userId || "anon";
+    const cacheKey = `stats:${userId}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
     const stats = await storage.getStats();
+    setCache(cacheKey, stats, 15000);
     res.json(stats);
   });
 
@@ -433,8 +466,12 @@ export async function registerRoutes(
     res.json(profile);
   });
   app.get("/api/profiles/:id/detail", async (req, res) => {
+    const cacheKey = `profile-detail:${req.params.id}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
     const detail = await storage.getProfileDetail(req.params.id);
     if (!detail) return res.status(404).json({ error: "Not found" });
+    setCache(cacheKey, detail, 10000);
     res.json(detail);
   });
   app.post("/api/profiles", async (req, res) => {

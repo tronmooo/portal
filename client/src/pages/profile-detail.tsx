@@ -2039,6 +2039,44 @@ function TrackersTab({
 // HEALTH TAB VIEW — summary + grouped trackers
 // ============================================================
 
+// Quick-add health tracker button for empty health tab
+function QuickHealthButton({ profileId, name, unit, field, category, fieldType = "number", onCreated }: {
+  profileId: string; name: string; unit: string; field: string; category: string; fieldType?: "number" | "text"; onCreated: () => void;
+}) {
+  const { toast } = useToast();
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/trackers", {
+        name, unit: unit || undefined, category,
+        fields: [{ name: field, type: fieldType, isPrimary: true }],
+      });
+      const tracker = await res.json();
+      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "tracker", entityId: tracker.id });
+      // Also update tracker's linkedProfiles
+      await apiRequest("PATCH", `/api/trackers/${tracker.id}`, { linkedProfiles: [profileId] });
+      return tracker;
+    },
+    onSuccess: (tracker) => {
+      toast({ title: `${name} tracker created` });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      onCreated();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+      onClick={() => mutation.mutate()}
+      disabled={mutation.isPending}
+      data-testid={`quick-health-${name.toLowerCase().replace(/\s/g, '-')}`}>
+      <Plus className="h-3 w-3" />
+      {mutation.isPending ? "Creating..." : name}
+    </Button>
+  );
+}
+
 function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChanged: () => void }) {
   const healthCats = ["health", "fitness", "weight", "sleep", "wellness", "nutrition"];
   const healthTrackers = profile.relatedTrackers.filter((t: any) =>
@@ -2069,13 +2107,23 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
 
   if (healthTrackers.length === 0) {
     return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <HeartPulse className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-sm font-medium text-muted-foreground">No health data yet</p>
-          <p className="text-xs text-muted-foreground mt-1">Upload a medical document or tell the AI to track your vitals.</p>
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        <Card>
+          <CardContent className="py-8 text-center">
+            <HeartPulse className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No health data yet</p>
+            <p className="text-xs text-muted-foreground mt-2 mb-4">Create a health tracker to start logging data</p>
+            <div className="flex flex-wrap gap-2 justify-center">
+              <QuickHealthButton profileId={profile.id} name="Weight" unit={profile.type === 'pet' ? 'lbs' : 'lbs'} field="weight" category="health" onCreated={onChanged} />
+              <QuickHealthButton profileId={profile.id} name="Blood Pressure" unit="mmHg" field="systolic" category="health" onCreated={onChanged} />
+              <QuickHealthButton profileId={profile.id} name="Medication" unit="" field="medication" category="health" fieldType="text" onCreated={onChanged} />
+              {profile.type === 'pet' && (
+                <QuickHealthButton profileId={profile.id} name="Vaccination" unit="" field="vaccine" category="health" fieldType="text" onCreated={onChanged} />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 

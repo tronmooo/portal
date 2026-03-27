@@ -336,13 +336,13 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getProfileDetail(id: string): Promise<ProfileDetail | undefined> {
-    const profile = await this.getProfile(id);
-    if (!profile) return undefined;
-
-    const [allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs] = await Promise.all([
+    // Fetch profile AND all related entities in parallel for speed
+    const [profile, allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs] = await Promise.all([
+      this.getProfile(id),
       this.getTrackers(), this.getExpenses(), this.getTasks(),
       this.getEvents(), this.getDocuments(), this.getObligations(),
     ]);
+    if (!profile) return undefined;
 
     const relatedTrackers = allTrackers.filter(t => t.linkedProfiles.includes(id));
     const relatedExpenses = allExpenses.filter(e => e.linkedProfiles.includes(id) || profile.linkedExpenses.includes(e.id));
