@@ -1305,7 +1305,8 @@ BEHAVIOR:
   Example: "I drank a Coke" → log_tracker_entry for Nutrition with: calories: ~140, sugar: 39g, carbs: 39g, protein: 0, fat: 0. Include the item name in notes.
   Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with estimated macros for a 16oz latte.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
-- RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything.
+- RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
+  In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 actions, you MUST execute exactly 10 tool calls. Do not merge or skip any.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
@@ -1705,8 +1706,53 @@ async function executeTool(name: string, input: any): Promise<any> {
         nextDueDate: input.nextDueDate || new Date().toISOString().split("T")[0],
         autopay: input.autopay ?? false,
       });
-      // Auto-link obligation to matching profile
-      await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
+
+      // Auto-create subscription profile if this looks like a subscription/service
+      // and no matching profile already exists
+      const isSubscriptionLike = (input.category === "subscription") ||
+        (input.frequency === "monthly" || input.frequency === "yearly" || input.frequency === "quarterly") ||
+        /subscription|premium|plus|pro|membership|plan/i.test(input.name || "");
+      if (isSubscriptionLike) {
+        const profiles = await storage.getProfiles();
+        const obNameLower = (input.name || "").toLowerCase();
+        // Extract the service name (strip common suffixes like "subscription", "premium", "payment")
+        const serviceName = (input.name || "").replace(/\s*(subscription|premium|plus|pro|payment|bill|membership|plan|monthly|annual|yearly)\s*/gi, "").trim() || input.name || "";
+        const serviceNameLower = serviceName.toLowerCase();
+        const existingProfile = profiles.find(p => {
+          const pName = p.name.toLowerCase();
+          return pName === serviceNameLower || pName.includes(serviceNameLower) || serviceNameLower.includes(pName) ||
+            pName === obNameLower || obNameLower.includes(pName);
+        });
+        if (!existingProfile && serviceName.length > 0) {
+          try {
+            const newProfile = await storage.createProfile({
+              type: "subscription",
+              name: serviceName,
+              fields: {
+                cost: parseFloat(input.amount) || 0,
+                frequency: input.frequency || "monthly",
+                provider: serviceName,
+                renewalDate: input.nextDueDate || "",
+              },
+              tags: ["subscription"],
+              notes: `${input.frequency || "monthly"} subscription — $${input.amount}`,
+            });
+            // Link the obligation to the new profile
+            await autoLinkToProfiles("obligation", newObligation.id, serviceName);
+            // Also link obligation directly to the new profile
+            try { await storage.linkProfileTo(newProfile.id, "obligation", newObligation.id); } catch { /* non-critical */ }
+            try { await updateEntityLinkedProfiles("obligation", newObligation.id, newProfile.id); } catch { /* non-critical */ }
+          } catch (e) {
+            console.error("Auto-create subscription profile failed:", e);
+          }
+        } else {
+          // Link to existing profile
+          await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
+        }
+      } else {
+        await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
+      }
+
       return newObligation;
     }
 
