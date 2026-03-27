@@ -346,18 +346,36 @@ Respond with JSON:
 }`;
 
   try {
-    const mediaType = mimeType.startsWith("image/") ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
+    const isImage = mimeType.startsWith("image/");
+    const isPdf = mimeType === "application/pdf";
+    const mediaType = isImage ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
 
+    // Build content based on file type
+    const messageContent: any[] = [];
+    if (isImage || isPdf) {
+      // Images and PDFs can be sent to Vision API
+      messageContent.push({
+        type: isPdf ? "document" : "image",
+        source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: base64Data },
+      });
+    } else {
+      // Text files: decode and send as text
+      try {
+        const textContent = Buffer.from(base64Data, "base64").toString("utf-8").slice(0, 10000);
+        messageContent.push({ type: "text", text: `File content of ${fileName}:\n\n${textContent}` });
+      } catch {
+        messageContent.push({ type: "text", text: `File: ${fileName} (${mimeType}) — could not decode content` });
+      }
+    }
+
+    // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
       max_tokens: 2048,
       messages: [{
         role: "user",
         content: [
-          {
-            type: "image",
-            source: { type: "base64", media_type: mediaType, data: base64Data },
-          },
+          ...messageContent,
           { type: "text", text: extractionPrompt },
         ],
       }],

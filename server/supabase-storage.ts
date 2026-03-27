@@ -493,79 +493,83 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(id);
     if (!profile) return false;
 
-    // ── Cascade delete: remove all linked entities ──
-    // 1. Delete linked obligations (subscriptions, bills tied to this profile)
-    const allObligations = await this.getObligations();
+    // ── Cascade delete: remove all linked entities (each step wrapped in try-catch to prevent partial failure) ──
     const profileNameLower = profile.name.toLowerCase();
-    for (const ob of allObligations) {
-      // Match by linkedProfiles OR by name similarity (for obligations created before linking was added)
-      const nameMatch = ob.name.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ob.name.toLowerCase());
-      if (ob.linkedProfiles.includes(id) || nameMatch) {
-        await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
-      }
-    }
+    const errors: string[] = [];
 
-    // 2. Delete linked events that belong ONLY to this profile
-    const allEvents = await this.getEvents();
-    for (const ev of allEvents) {
-      const evNameMatch = ev.title.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ev.title.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim());
-      if (ev.linkedProfiles.includes(id) || evNameMatch) {
-        if (ev.linkedProfiles.length <= 1 || evNameMatch) {
-          await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
-        } else {
-          const newLinked = ev.linkedProfiles.filter(pid => pid !== id);
-          await this.supabase.from("events").update({ linked_profiles: newLinked }).eq("id", ev.id).eq("user_id", this.userId);
+    try { // 1. Delete linked obligations
+      const allObligations = await this.getObligations();
+      for (const ob of allObligations) {
+        const nameMatch = ob.name.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ob.name.toLowerCase());
+        if (ob.linkedProfiles.includes(id) || nameMatch) {
+          await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
         }
       }
-    }
+    } catch (e) { errors.push("obligations"); }
 
-    // 3. Delete linked expenses that belong ONLY to this profile
-    const allExpenses = await this.getExpenses();
-    for (const exp of allExpenses) {
-      if (exp.linkedProfiles.includes(id)) {
-        if (exp.linkedProfiles.length <= 1) {
-          await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
-        } else {
-          const newLinked = exp.linkedProfiles.filter(pid => pid !== id);
-          await this.supabase.from("expenses").update({ linked_profiles: newLinked }).eq("id", exp.id).eq("user_id", this.userId);
+    try { // 2. Delete/unlink events
+      const allEvents = await this.getEvents();
+      for (const ev of allEvents) {
+        const evNameMatch = ev.title.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ev.title.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim());
+        if (ev.linkedProfiles.includes(id) || evNameMatch) {
+          if (ev.linkedProfiles.length <= 1 || evNameMatch) {
+            await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("events").update({ linked_profiles: ev.linkedProfiles.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
+          }
         }
       }
-    }
+    } catch (e) { errors.push("events"); }
 
-    // 4. Unlink from tasks (don't delete tasks — they might still be relevant)
-    const allTasks = await this.getTasks();
-    for (const task of allTasks) {
-      if (task.linkedProfiles.includes(id)) {
-        const newLinked = task.linkedProfiles.filter(pid => pid !== id);
-        await this.supabase.from("tasks").update({ linked_profiles: newLinked }).eq("id", task.id).eq("user_id", this.userId);
+    try { // 3. Delete/unlink expenses
+      const allExpenses = await this.getExpenses();
+      for (const exp of allExpenses) {
+        if (exp.linkedProfiles.includes(id)) {
+          if (exp.linkedProfiles.length <= 1) {
+            await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("expenses").update({ linked_profiles: exp.linkedProfiles.filter(pid => pid !== id) }).eq("id", exp.id).eq("user_id", this.userId);
+          }
+        }
       }
-    }
+    } catch (e) { errors.push("expenses"); }
 
-    // 5. Unlink from trackers (don't delete trackers — data is valuable)
-    const allTrackers = await this.getTrackers();
-    for (const tracker of allTrackers) {
-      if (tracker.linkedProfiles.includes(id)) {
-        const newLinked = tracker.linkedProfiles.filter(pid => pid !== id);
-        await this.supabase.from("trackers").update({ linked_profiles: newLinked }).eq("id", tracker.id).eq("user_id", this.userId);
+    try { // 4. Unlink tasks
+      const allTasks = await this.getTasks();
+      for (const task of allTasks) {
+        if (task.linkedProfiles.includes(id)) {
+          await this.supabase.from("tasks").update({ linked_profiles: task.linkedProfiles.filter(pid => pid !== id) }).eq("id", task.id).eq("user_id", this.userId);
+        }
       }
-    }
+    } catch (e) { errors.push("tasks"); }
 
-    // 6. Unlink from documents
-    for (const docId of profile.documents) {
-      const doc = await this.getDocument(docId);
-      if (doc) {
-        const newLinked = doc.linkedProfiles.filter(pid => pid !== id);
-        await this.supabase.from("documents").update({ linked_profiles: newLinked }).eq("id", docId).eq("user_id", this.userId);
+    try { // 5. Unlink trackers
+      const allTrackers = await this.getTrackers();
+      for (const tracker of allTrackers) {
+        if (tracker.linkedProfiles.includes(id)) {
+          await this.supabase.from("trackers").update({ linked_profiles: tracker.linkedProfiles.filter(pid => pid !== id) }).eq("id", tracker.id).eq("user_id", this.userId);
+        }
       }
-    }
+    } catch (e) { errors.push("trackers"); }
 
-    // 7. Delete entity_links referencing this profile
-    await this.supabase.from("entity_links")
-      .delete()
-      .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
-      .eq("user_id", this.userId);
+    try { // 6. Unlink documents
+      for (const docId of profile.documents) {
+        const doc = await this.getDocument(docId);
+        if (doc) {
+          await this.supabase.from("documents").update({ linked_profiles: doc.linkedProfiles.filter(pid => pid !== id) }).eq("id", docId).eq("user_id", this.userId);
+        }
+      }
+    } catch (e) { errors.push("documents"); }
 
-    // 8. Finally delete the profile itself
+    try { // 7. Delete entity_links
+      await this.supabase.from("entity_links").delete()
+        .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
+        .eq("user_id", this.userId);
+    } catch (e) { errors.push("entity_links"); }
+
+    if (errors.length > 0) console.error(`Cascade delete partial failures for profile ${id}:`, errors);
+
+    // 8. Delete the profile itself
     const { error } = await this.supabase.from("profiles").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }

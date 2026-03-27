@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -206,9 +206,9 @@ function InsightsSection() {
     queryFn: () => apiRequest("GET", "/api/insights").then(r => r.json()),
   });
 
-  const sorted = [...insights]
+  const sorted = useMemo(() => [...insights]
     .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9))
-    .slice(0, 10);
+    .slice(0, 10), [insights]);
 
   if (isLoading) return (
     <CollapsibleSection icon={Brain} label="Important Right Now" testId="section-insights">
@@ -1095,13 +1095,13 @@ export default function DashboardPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const primaryProfiles = allProfiles.filter((p: any) => ["self", "person", "pet"].includes(p.type));
-  const selectedProfileName = profileFilter === "me" ? "Me" : allProfiles.find((p: any) => p.id === profileFilter)?.name || "Me";
+  const primaryProfiles = useMemo(() => allProfiles.filter((p: any) => ["self", "person", "pet"].includes(p.type)), [allProfiles]);
+  const selectedProfileName = useMemo(() => profileFilter === "me" ? "Me" : allProfiles.find((p: any) => p.id === profileFilter)?.name || "Me", [profileFilter, allProfiles]);
 
   // Resolve the actual profile ID for API calls
-  const selfProfileObj = allProfiles.find((p: any) => p.type === "self");
-  const resolvedFilterId = profileFilter === "me" ? selfProfileObj?.id : profileFilter;
-  const statsProfileParam = resolvedFilterId ? `?profileId=${resolvedFilterId}` : "";
+  const selfProfileObj = useMemo(() => allProfiles.find((p: any) => p.type === "self"), [allProfiles]);
+  const resolvedFilterId = useMemo(() => profileFilter === "me" ? selfProfileObj?.id : profileFilter, [profileFilter, selfProfileObj]);
+  const statsProfileParam = useMemo(() => resolvedFilterId ? `?profileId=${resolvedFilterId}` : "", [resolvedFilterId]);
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", resolvedFilterId || "all"],
@@ -1221,9 +1221,9 @@ export default function DashboardPage() {
     return content ? <SectionErrorBoundary name={id}>{content}</SectionErrorBoundary> : null;
   }
 
-  const fullWidthSections = sections.filter(s => s.visible && s.column === "full");
-  const leftSections = sections.filter(s => s.visible && s.column === "left");
-  const rightSections = sections.filter(s => s.visible && s.column === "right");
+  const fullWidthSections = useMemo(() => sections.filter(s => s.visible && s.column === "full"), [sections]);
+  const leftSections = useMemo(() => sections.filter(s => s.visible && s.column === "left"), [sections]);
+  const rightSections = useMemo(() => sections.filter(s => s.visible && s.column === "right"), [sections]);
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden p-3 md:p-4 space-y-2.5 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">

@@ -371,7 +371,7 @@ export type InsertArtifact = z.infer<typeof insertArtifactSchema>;
 // JOURNAL / MOOD
 // ============================================================
 
-export type MoodLevel = "amazing" | "great" | "good" | "neutral" | "bad" | "awful";
+export type MoodLevel = "amazing" | "great" | "good" | "okay" | "neutral" | "bad" | "awful" | "terrible";
 
 export interface JournalEntry {
   id: string;
@@ -387,7 +387,7 @@ export interface JournalEntry {
 
 export const insertJournalEntrySchema = z.object({
   date: z.string().optional(),
-  mood: z.enum(["amazing", "great", "good", "neutral", "bad", "awful"]),
+  mood: z.enum(["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"]),
   content: z.string().default(""),
   tags: z.array(z.string()).optional().default([]),
   energy: z.number().min(1).max(5).optional(),

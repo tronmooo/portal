@@ -167,12 +167,16 @@ export function CommandSearch() {
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef(0);
 
-  // Debounced search
+  // Debounced search with stale-result protection
   const handleQueryChange = useCallback(
     (value: string) => {
       setQuery(value);
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      // Abort any in-flight request
+      if (abortRef.current) abortRef.current.abort();
       if (!value.trim()) {
         setResults(null);
         setLoading(false);
@@ -180,8 +184,13 @@ export function CommandSearch() {
       }
       setLoading(true);
       debounceRef.current = setTimeout(async () => {
+        const thisRequestId = ++requestIdRef.current;
+        const controller = new AbortController();
+        abortRef.current = controller;
         try {
           const res = await apiRequest("GET", `/api/search?q=${encodeURIComponent(value.trim())}`);
+          // Discard if a newer request was fired
+          if (thisRequestId !== requestIdRef.current) return;
           const raw: any[] = await res.json();
           // API returns flat array with _type field — group into SearchResults
           const grouped: SearchResults = {};
@@ -200,10 +209,15 @@ export function CommandSearch() {
             else if (t === "memory") (grouped as any).memories ??= [];
           }
           setResults(grouped);
-        } catch {
-          setResults(null);
+        } catch (err: any) {
+          // Don't clear results on abort
+          if (err?.name !== "AbortError" && thisRequestId === requestIdRef.current) {
+            setResults(null);
+          }
         } finally {
-          setLoading(false);
+          if (thisRequestId === requestIdRef.current) {
+            setLoading(false);
+          }
         }
       }, 300);
     },
