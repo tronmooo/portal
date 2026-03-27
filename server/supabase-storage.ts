@@ -669,14 +669,22 @@ export class SupabaseStorage implements IStorage {
   // TRACKERS
   // ============================================================
   async getTrackers(): Promise<Tracker[]> {
-    const { data, error } = await this.supabase.from("trackers").select("*").eq("user_id", this.userId);
-    if (error) throw error;
-    const trackers: Tracker[] = [];
-    for (const r of data || []) {
-      const { data: entries } = await this.supabase.from("tracker_entries").select("*").eq("tracker_id", r.id).eq("user_id", this.userId).order("timestamp", { ascending: true });
-      trackers.push(this.rowToTracker(r, (entries || []).map(e => this.rowToTrackerEntry(e))));
+    // Fetch all trackers and ALL entries in 2 parallel queries (not N+1)
+    const [trackersResult, entriesResult] = await Promise.all([
+      this.supabase.from("trackers").select("*").eq("user_id", this.userId),
+      this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).order("timestamp", { ascending: true }),
+    ]);
+    if (trackersResult.error) throw trackersResult.error;
+    // Group entries by tracker_id
+    const entriesByTracker = new Map<string, any[]>();
+    for (const e of entriesResult.data || []) {
+      const arr = entriesByTracker.get(e.tracker_id) || [];
+      arr.push(e);
+      entriesByTracker.set(e.tracker_id, arr);
     }
-    return trackers;
+    return (trackersResult.data || []).map(r =>
+      this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map(e => this.rowToTrackerEntry(e)))
+    );
   }
 
   async getTracker(id: string): Promise<Tracker | undefined> {
@@ -1291,14 +1299,21 @@ export class SupabaseStorage implements IStorage {
   // HABITS
   // ============================================================
   async getHabits(): Promise<Habit[]> {
-    const { data, error } = await this.supabase.from("habits").select("*").eq("user_id", this.userId);
-    if (error) throw error;
-    const habits: Habit[] = [];
-    for (const r of data || []) {
-      const { data: checkins } = await this.supabase.from("habit_checkins").select("*").eq("habit_id", r.id).eq("user_id", this.userId).order("date", { ascending: true });
-      habits.push(this.rowToHabit(r, (checkins || []).map(c => this.rowToHabitCheckin(c))));
+    // Fetch all habits and ALL checkins in 2 parallel queries (not N+1)
+    const [habitsResult, checkinsResult] = await Promise.all([
+      this.supabase.from("habits").select("*").eq("user_id", this.userId),
+      this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
+    ]);
+    if (habitsResult.error) throw habitsResult.error;
+    const checkinsByHabit = new Map<string, any[]>();
+    for (const c of checkinsResult.data || []) {
+      const arr = checkinsByHabit.get(c.habit_id) || [];
+      arr.push(c);
+      checkinsByHabit.set(c.habit_id, arr);
     }
-    return habits;
+    return (habitsResult.data || []).map(r =>
+      this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map(c => this.rowToHabitCheckin(c)))
+    );
   }
 
   async getHabit(id: string): Promise<Habit | undefined> {
@@ -1367,14 +1382,21 @@ export class SupabaseStorage implements IStorage {
   // OBLIGATIONS
   // ============================================================
   async getObligations(): Promise<Obligation[]> {
-    const { data, error } = await this.supabase.from("obligations").select("*").eq("user_id", this.userId);
-    if (error) throw error;
-    const obligations: Obligation[] = [];
-    for (const r of data || []) {
-      const { data: payments } = await this.supabase.from("obligation_payments").select("*").eq("obligation_id", r.id).eq("user_id", this.userId).order("date", { ascending: true });
-      obligations.push(this.rowToObligation(r, (payments || []).map(p => this.rowToPayment(p))));
+    // Fetch all obligations and ALL payments in 2 parallel queries (not N+1)
+    const [obligationsResult, paymentsResult] = await Promise.all([
+      this.supabase.from("obligations").select("*").eq("user_id", this.userId),
+      this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
+    ]);
+    if (obligationsResult.error) throw obligationsResult.error;
+    const paymentsByObligation = new Map<string, any[]>();
+    for (const p of paymentsResult.data || []) {
+      const arr = paymentsByObligation.get(p.obligation_id) || [];
+      arr.push(p);
+      paymentsByObligation.set(p.obligation_id, arr);
     }
-    return obligations;
+    return (obligationsResult.data || []).map(r =>
+      this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map(p => this.rowToPayment(p)))
+    );
   }
 
   async getObligation(id: string): Promise<Obligation | undefined> {
