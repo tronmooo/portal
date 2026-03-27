@@ -19,6 +19,7 @@ const CATEGORY_ICONS: Record<string, any> = {
 };
 
 function ObligationCard({ ob }: { ob: Obligation }) {
+  const { toast } = useToast();
   const Icon = CATEGORY_ICONS[ob.category] || DollarSign;
   const dueDate = new Date(ob.nextDueDate);
   const now = new Date();
@@ -29,6 +30,7 @@ function ObligationCard({ ob }: { ob: Obligation }) {
   const payMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/obligations"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
+    onError: () => toast({ title: "Failed to record payment", variant: "destructive" }),
   });
 
   return (

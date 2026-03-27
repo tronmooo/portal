@@ -213,6 +213,7 @@ export default function SettingsPage() {
                   <Label className="text-sm font-medium">Dark Mode</Label>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {theme === "dark" ? "Currently using dark theme" : "Currently using light theme"}
+                    {" · Follows your system preference on reload"}
                   </p>
                 </div>
               </div>

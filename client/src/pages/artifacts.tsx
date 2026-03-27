@@ -10,8 +10,10 @@ import { CheckSquare, FileText, Pin, Plus, X, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 import type { Artifact } from "@shared/schema";
 import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
 
 function ChecklistCard({ artifact }: { artifact: Artifact }) {
+  const { toast } = useToast();
   const total = artifact.items.length;
   const done = artifact.items.filter(i => i.checked).length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -19,6 +21,7 @@ function ChecklistCard({ artifact }: { artifact: Artifact }) {
   const toggleMutation = useMutation({
     mutationFn: (itemId: string) => apiRequest("POST", `/api/artifacts/${artifact.id}/toggle/${itemId}`),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] }); },
+    onError: () => toast({ title: "Failed to toggle item", variant: "destructive" }),
   });
 
   return (
@@ -96,6 +99,7 @@ function NoteCard({ artifact }: { artifact: Artifact }) {
 }
 
 export default function ArtifactsPage() {
+  const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [createType, setCreateType] = useState<"checklist" | "note">("checklist");
   const [title, setTitle] = useState("");
@@ -113,6 +117,7 @@ export default function ArtifactsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
       setTitle(""); setContent(""); setItems([""]); setShowCreate(false);
     },
+    onError: () => toast({ title: "Failed to create artifact", variant: "destructive" }),
   });
 
   const pinned = artifacts.filter(a => a.pinned);

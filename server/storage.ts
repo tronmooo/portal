@@ -1,3 +1,4 @@
+import { logger } from "./logger";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -1586,7 +1587,7 @@ function getStorage(): IStorage {
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (supabaseUrl && supabaseKey) {
-      console.log('[storage] Using Supabase PostgreSQL storage');
+      logger.info("storage", "Using Supabase PostgreSQL storage");
       _storageInstance = new SupabaseStorage(supabaseUrl, supabaseKey, 'anonymous');
     } else {
       // INTENTIONAL: eval('require') prevents esbuild from resolving better-sqlite3
@@ -1594,7 +1595,7 @@ function getStorage(): IStorage {
       // This code path is only used for local development with SQLite.
       const mod = eval('require')("./sqlite-storage");
       const { SqliteStorage } = mod;
-      console.log('[storage] Using SQLite local storage (env vars not found)');
+      logger.info("storage", "Using SQLite local storage (env vars not found)");
       _storageInstance = new SqliteStorage();
     }
   }

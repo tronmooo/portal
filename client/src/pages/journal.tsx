@@ -157,6 +157,7 @@ export default function JournalPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
       setMood(null); setContent(""); setEnergy(3); setShowCreate(false);
     },
+    onError: () => toast({ title: "Failed to create journal entry", variant: "destructive" }),
   });
 
   // 7-day mood strip

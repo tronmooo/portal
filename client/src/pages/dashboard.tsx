@@ -526,6 +526,7 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
+    onError: () => toast({ title: "Failed to update task", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -536,6 +537,7 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: "Task deleted" });
     },
+    onError: () => toast({ title: "Failed to delete task", variant: "destructive" }),
   });
 
   const activeTasks = tasks.filter((t: any) => t.status !== "done").sort((a: any, b: any) => {
@@ -831,6 +833,7 @@ function ObligationsSection({ data }: { data: any[] }) {
       toast({ title: "Payment recorded" });
       setSelectedBill(null);
     },
+    onError: () => toast({ title: "Failed to record payment", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -841,6 +844,7 @@ function ObligationsSection({ data }: { data: any[] }) {
       toast({ title: "Obligation deleted" });
       setSelectedBill(null);
     },
+    onError: () => toast({ title: "Failed to delete obligation", variant: "destructive" }),
   });
 
   if (!data || data.length === 0) return (

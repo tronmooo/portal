@@ -1,5 +1,10 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
+
+// Augment Express Request with auth middleware userId
+interface AuthenticatedRequest extends Request {
+  userId?: string;
+}
 import { storage } from "./storage";
 import { processMessage, processFileUpload, getActionLog } from "./ai-engine";
 import Anthropic from "@anthropic-ai/sdk";
@@ -19,7 +24,7 @@ import {
   insertGoalSchema,
   insertEntityLinkSchema,
 } from "@shared/schema";
-import type { ParsedAction } from "@shared/schema";
+import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
 
 // Simple rate limiter
@@ -119,7 +124,7 @@ export async function registerRoutes(
 
   // ---- Chat / AI ----
   app.post("/api/chat", asyncHandler(async (req, res) => {
-    const userId = (req as any).userId || req.ip || 'anonymous';
+    const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`chat:${userId}`, 20)) {
       return res.status(429).json({ error: "Too many requests. Please wait a moment." });
     }
@@ -144,7 +149,7 @@ export async function registerRoutes(
 
   // ---- File Upload + AI Extraction ----
   app.post("/api/upload", asyncHandler(async (req, res) => {
-    const uploadUserId = (req as any).userId || req.ip || 'anonymous';
+    const uploadUserId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`upload:${uploadUserId}`, 10)) {
       return res.status(429).json({ error: "Too many uploads. Please wait." });
     }
@@ -172,7 +177,7 @@ export async function registerRoutes(
 
   // ---- Batch File Upload + AI Extraction ----
   app.post("/api/upload/batch", asyncHandler(async (req, res) => {
-    const batchUserId = (req as any).userId || req.ip || 'anonymous';
+    const batchUserId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`upload:${batchUserId}`, 10)) {
       return res.status(429).json({ error: "Too many uploads. Please wait." });
     }
@@ -407,7 +412,7 @@ export async function registerRoutes(
               // Link tracker to profile if specified
               if (targetProfileId && tracker) {
                 try {
-                  await storage.updateTracker(tracker.id, { linkedProfiles: [targetProfileId] } as any);
+                  await storage.updateTracker(tracker.id, { linkedProfiles: [targetProfileId] } as Partial<Tracker>);
                 } catch { /* non-critical */ }
               }
               saved.push(`Created tracker: ${humanName}`);
@@ -442,7 +447,7 @@ export async function registerRoutes(
   // ---- Dashboard ----
   app.get("/api/stats", asyncHandler(async (req, res) => {
     const profileId = req.query.profileId as string | undefined;
-    const userId = (req as any).userId || "anon";
+    const userId = (req as AuthenticatedRequest).userId || "anon";
     const cacheKey = `stats:${userId}:${profileId || 'all'}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
@@ -780,6 +785,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       return res.status(400).json({ error: "Tracker name is required" });
     }
     req.body.name = sanitize(req.body.name);
+    // Duplicate tracker name detection
+    const existing = await storage.getTrackers();
+    const dup = existing.find(t => t.name.toLowerCase() === req.body.name.toLowerCase());
+    if (dup) {
+      return res.status(409).json({ error: `A tracker named "${dup.name}" already exists`, existingId: dup.id });
+    }
     const parsed = insertTrackerSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createTracker(parsed.data));
@@ -2590,7 +2601,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const result = JSON.parse(stdout);
 
       // Mark the event as synced
-      await storage.updateEvent(event.id, { source: "external" } as any);
+      await storage.updateEvent(event.id, { source: "external" } as Partial<CalendarEvent>);
 
       res.json({ exported: true, title: event.title, result });
     } catch (err: any) {

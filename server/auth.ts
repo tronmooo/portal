@@ -1,3 +1,4 @@
+import { logger } from "./logger";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { Request, Response, NextFunction, Express } from "express";
 import { storage, isSupabaseStorage } from "./storage";
@@ -94,7 +95,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
             fields: {},
             tags: [],
           });
-          console.log(`[auth] Auto-created self profile for user ${user.id.slice(0, 8)}...`);
+          logger.info("auth", `Auto-created self profile for user ${user.id.slice(0, 8)}`);
         }
       } catch (e) {
         // Non-fatal — don't block auth

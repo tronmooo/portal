@@ -1,3 +1,4 @@
+import { logger } from "./logger";
 import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
@@ -2414,7 +2415,7 @@ async function autoUpdateGoalProgress(trackerId: string, values: Record<string, 
       if (increment > 0) {
         const newCurrent = (goal.current || 0) + increment;
         await storage.updateGoal(goal.id, { current: Math.min(newCurrent, goal.target * 2) }); // cap at 2x target
-        console.log(`[goal] Auto-updated "${goal.title}": ${goal.current} → ${newCurrent} ${goal.unit}`);
+        logger.info("goal", `Auto-updated "${goal.title}": ${goal.current} → ${newCurrent} ${goal.unit}`);
       }
     }
   } catch (e) {

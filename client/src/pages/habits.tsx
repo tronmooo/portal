@@ -26,6 +26,7 @@ function HabitCard({ habit }: { habit: Habit }) {
   const checkinMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); },
+    onError: () => toast({ title: "Failed to check in", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -151,6 +152,7 @@ export default function HabitsPage() {
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); setNewName(""); setShowCreate(false); },
+    onError: () => toast({ title: "Failed to create habit", variant: "destructive" }),
   });
 
   // Summary stats
