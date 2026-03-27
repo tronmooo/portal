@@ -533,8 +533,9 @@ function analyzeEvents(events: CalendarEvent[], now: Date, insights: Insight[]) 
 // ─── Tracker Staleness ───────────────────────────────────────────────────────
 
 function analyzeTrackerStaleness(trackers: Tracker[], now: Date, insights: Insight[]) {
+  // Only flag trackers that have entries but are stale — skip zero-entry trackers
   const stale = trackers.filter(t => {
-    if (t.entries.length === 0) return true;
+    if (t.entries.length === 0) return false; // Never had data — don't flag as stale
     const last = new Date(t.entries[t.entries.length - 1].timestamp);
     return (now.getTime() - last.getTime()) > 3 * 86400000;
   });

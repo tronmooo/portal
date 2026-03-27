@@ -110,7 +110,7 @@ export async function registerRoutes(
   });
 
   // ---- Chat / AI ----
-  app.post("/api/chat", async (req, res) => {
+  app.post("/api/chat", asyncHandler(async (req, res) => {
     const userId = (req as any).userId || req.ip || 'anonymous';
     if (rateLimit(`chat:${userId}`, 20)) {
       return res.status(429).json({ error: "Too many requests. Please wait a moment." });
@@ -126,16 +126,16 @@ export async function registerRoutes(
       console.error("Chat error:", err);
       res.status(500).json({ error: "Failed to process message" });
     }
-  });
+  }));
 
   // ---- Activity Feed ----
-  app.get("/api/activity", async (_req, res) => {
+  app.get("/api/activity", asyncHandler(async (_req, res) => {
     const count = 10;
     res.json(getActionLog(count));
-  });
+  }));
 
   // ---- File Upload + AI Extraction ----
-  app.post("/api/upload", async (req, res) => {
+  app.post("/api/upload", asyncHandler(async (req, res) => {
     const uploadUserId = (req as any).userId || req.ip || 'anonymous';
     if (rateLimit(`upload:${uploadUserId}`, 10)) {
       return res.status(429).json({ error: "Too many uploads. Please wait." });
@@ -160,10 +160,10 @@ export async function registerRoutes(
       console.error("Upload error:", err);
       res.status(500).json({ error: "Failed to process upload" });
     }
-  });
+  }));
 
   // ---- Batch File Upload + AI Extraction ----
-  app.post("/api/upload/batch", async (req, res) => {
+  app.post("/api/upload/batch", asyncHandler(async (req, res) => {
     const batchUserId = (req as any).userId || req.ip || 'anonymous';
     if (rateLimit(`upload:${batchUserId}`, 10)) {
       return res.status(429).json({ error: "Too many uploads. Please wait." });
@@ -302,10 +302,10 @@ export async function registerRoutes(
       console.error("Batch upload error:", err);
       res.status(500).json({ error: "Failed to process batch upload" });
     }
-  });
+  }));
 
   // ---- Confirm Extraction (two-phase: user approves fields before saving) ----
-  app.post("/api/chat/confirm-extraction", async (req, res) => {
+  app.post("/api/chat/confirm-extraction", asyncHandler(async (req, res) => {
     try {
       const { extractionId, confirmedFields, targetProfileId, createCalendarEvents, trackerEntries } = req.body;
       if (!extractionId) {
@@ -429,10 +429,10 @@ export async function registerRoutes(
       console.error("Confirm extraction error:", err);
       res.status(500).json({ error: "Failed to confirm extraction" });
     }
-  });
+  }));
 
   // ---- Dashboard ----
-  app.get("/api/stats", async (req, res) => {
+  app.get("/api/stats", asyncHandler(async (req, res) => {
     const profileId = req.query.profileId as string | undefined;
     const userId = (req as any).userId || "anon";
     const cacheKey = `stats:${userId}:${profileId || 'all'}`;
@@ -441,16 +441,16 @@ export async function registerRoutes(
     const stats = await storage.getStats(profileId);
     setCache(cacheKey, stats, 15000);
     res.json(stats);
-  });
+  }));
 
-  app.get("/api/dashboard-enhanced", async (req, res) => {
+  app.get("/api/dashboard-enhanced", asyncHandler(async (req, res) => {
     const profileId = req.query.profileId as string | undefined;
     const data = await storage.getDashboardEnhanced(profileId);
     res.json(data);
-  });
+  }));
 
   // ---- Insights ----
-  app.get("/api/insights", async (_req, res) => {
+  app.get("/api/insights", asyncHandler(async (_req, res) => {
     try {
       const [profiles, trackers, tasks, expenses, habits, obligations, journal, documents, goals, events] = await Promise.all([
         storage.getProfiles(),
@@ -472,10 +472,10 @@ export async function registerRoutes(
       console.error("Insights error:", err);
       res.status(500).json({ error: "Failed to generate insights" });
     }
-  });
+  }));
 
   // ---- Calendar Status ----
-  app.get("/api/calendar/status", async (_req, res) => {
+  app.get("/api/calendar/status", asyncHandler(async (_req, res) => {
     try {
       const lastSync = await storage.getPreference("gcal_last_sync");
       const events = await storage.getEvents();
@@ -489,16 +489,16 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(500).json({ error: "Failed to get calendar status" });
     }
-  });
+  }));
 
   // ---- Profiles ----
   app.get("/api/profiles", asyncHandler(async (_req, res) => { res.json(await storage.getProfiles()); }));
-  app.get("/api/profiles/:id", async (req, res) => {
+  app.get("/api/profiles/:id", asyncHandler(async (req, res) => {
     const profile = await storage.getProfile(req.params.id);
     if (!profile) return res.status(404).json({ error: "Not found" });
     res.json(profile);
-  });
-  app.get("/api/profiles/:id/detail", async (req, res) => {
+  }));
+  app.get("/api/profiles/:id/detail", asyncHandler(async (req, res) => {
     const cacheKey = `profile-detail:${req.params.id}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
@@ -506,8 +506,8 @@ export async function registerRoutes(
     if (!detail) return res.status(404).json({ error: "Not found" });
     setCache(cacheKey, detail, 10000);
     res.json(detail);
-  });
-  app.post("/api/profiles", async (req, res) => {
+  }));
+  app.post("/api/profiles", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Profile name is required" });
     }
@@ -524,8 +524,8 @@ export async function registerRoutes(
     const parsed = insertProfileSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createProfile(parsed.data));
-  });
-  app.patch("/api/profiles/:id", async (req, res) => {
+  }));
+  app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
@@ -535,14 +535,14 @@ export async function registerRoutes(
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
-  app.delete("/api/profiles/:id", async (req, res) => {
+  }));
+  app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {
     await storage.deleteProfile(req.params.id);
     res.status(204).send();
-  });
+  }));
 
   // ---- Profile Link / Unlink ----
-  app.post("/api/profiles/:id/link", async (req, res) => {
+  app.post("/api/profiles/:id/link", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
     if (!entityType || !entityId) return res.status(400).json({ error: "entityType and entityId required" });
     // Verify profile exists
@@ -554,16 +554,16 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Link failed" });
     }
-  });
+  }));
 
-  app.post("/api/profiles/:id/unlink", async (req, res) => {
+  app.post("/api/profiles/:id/unlink", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
     res.json({ ok: true });
-  });
+  }));
 
   // ---- Profile AI Summary ----
-  app.get("/api/profiles/:id/ai-summary", async (req, res) => {
+  app.get("/api/profiles/:id/ai-summary", asyncHandler(async (req, res) => {
     try {
       const { id } = req.params;
       const force = req.query.force === "true";
@@ -724,16 +724,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       console.error("Profile AI Summary error:", err);
       res.status(500).json({ error: "Failed to generate AI summary" });
     }
-  });
+  }));
 
   // ---- Trackers ----
   app.get("/api/trackers", asyncHandler(async (_req, res) => { res.json(await storage.getTrackers()); }));
-  app.get("/api/trackers/:id", async (req, res) => {
+  app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);
     if (!tracker) return res.status(404).json({ error: "Not found" });
     res.json(tracker);
-  });
-  app.post("/api/trackers", async (req, res) => {
+  }));
+  app.post("/api/trackers", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Tracker name is required" });
     }
@@ -741,8 +741,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const parsed = insertTrackerSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createTracker(parsed.data));
-  });
-  app.patch("/api/trackers/:id", async (req, res) => {
+  }));
+  app.patch("/api/trackers/:id", asyncHandler(async (req, res) => {
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
         return res.status(400).json({ error: "Tracker name must be a non-empty string" });
@@ -752,8 +752,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateTracker(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
-  app.post("/api/trackers/:id/entries", async (req, res) => {
+  }));
+  app.post("/api/trackers/:id/entries", asyncHandler(async (req, res) => {
     const { values } = req.body;
     if (!values || typeof values !== "object") {
       return res.status(400).json({ error: "Values required" });
@@ -796,32 +796,32 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(404).json({ error: "Tracker not found" });
     res.status(201).json(entry);
-  });
-  app.delete("/api/trackers/:id/entries/:entryId", async (req, res) => {
+  }));
+  app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
     if (!deleted) return res.status(404).json({ error: "Entry not found" });
     res.status(204).send();
-  });
-  app.delete("/api/trackers/:id", async (req, res) => {
+  }));
+  app.delete("/api/trackers/:id", asyncHandler(async (req, res) => {
     await storage.deleteTracker(req.params.id);
     res.status(204).send();
-  });
+  }));
 
   // Migrate unlinked trackers to "self" profile
-  app.post("/api/trackers/migrate-to-self", async (_req, res) => {
+  app.post("/api/trackers/migrate-to-self", asyncHandler(async (_req, res) => {
     const count = await storage.migrateUnlinkedTrackersToSelf();
     res.json({ migrated: count });
-  });
+  }));
 
   // ---- Tasks ----
   app.get("/api/tasks", asyncHandler(async (_req, res) => { res.json(await storage.getTasks()); }));
-  app.get("/api/tasks/:id", async (req, res) => {
+  app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
     const tasks = await storage.getTasks();
     const task = tasks.find(t => t.id === req.params.id);
     if (!task) return res.status(404).json({ error: "Task not found" });
     res.json(task);
-  });
-  app.post("/api/tasks", async (req, res) => {
+  }));
+  app.post("/api/tasks", asyncHandler(async (req, res) => {
     if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
       return res.status(400).json({ error: "Task title required" });
     }
@@ -830,8 +830,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createTask(parsed.data));
-  });
-  app.patch("/api/tasks/:id", async (req, res) => {
+  }));
+  app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || req.body.title.trim() === "") {
         return res.status(400).json({ error: "Task title must be a non-empty string" });
@@ -842,15 +842,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
-  app.delete("/api/tasks/:id", async (req, res) => {
+  }));
+  app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     await storage.deleteTask(req.params.id);
     res.status(204).send();
-  });
+  }));
 
   // ---- Expenses ----
   app.get("/api/expenses", asyncHandler(async (_req, res) => { res.json(await storage.getExpenses()); }));
-  app.post("/api/expenses", async (req, res) => {
+  app.post("/api/expenses", asyncHandler(async (req, res) => {
     if (!req.body.amount || typeof req.body.amount !== "number" || req.body.amount <= 0) {
       return res.status(400).json({ error: "Positive amount required" });
     }
@@ -862,8 +862,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createExpense(parsed.data));
-  });
-  app.patch("/api/expenses/:id", async (req, res) => {
+  }));
+  app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
     if (req.body.amount !== undefined && (typeof req.body.amount !== "number" || req.body.amount <= 0)) {
       return res.status(400).json({ error: "Expense amount must be a positive number" });
     }
@@ -872,36 +872,40 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
-  app.delete("/api/expenses/:id", async (req, res) => {
+  }));
+  app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
     await storage.deleteExpense(req.params.id);
     res.status(204).send();
-  });
+  }));
 
   // ---- Events ----
   app.get("/api/events", asyncHandler(async (_req, res) => { res.json(await storage.getEvents()); }));
-  app.get("/api/events/:id", async (req, res) => {
+  app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: "Not found" });
     res.json(event);
-  });
-  app.post("/api/events", async (req, res) => {
+  }));
+  app.post("/api/events", asyncHandler(async (req, res) => {
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createEvent(parsed.data));
-  });
-  app.patch("/api/events/:id", async (req, res) => {
+  }));
+  app.patch("/api/events/:id", asyncHandler(async (req, res) => {
+    if (req.body.title !== undefined) {
+      if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Event title must be a non-empty string" });
+      req.body.title = sanitize(req.body.title);
+    }
     const updated = await storage.updateEvent(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
+  }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
     await storage.deleteEvent(req.params.id);
     res.status(204).send();
   }));
 
   // ---- Unified Calendar Timeline ----
-  app.get("/api/calendar/timeline", async (req, res) => {
+  app.get("/api/calendar/timeline", asyncHandler(async (req, res) => {
     const startRaw = req.query.start as string;
     const endRaw = req.query.end as string;
     const start = (startRaw && isValidDateStr(startRaw)) ? startRaw : new Date().toISOString().slice(0, 10);
@@ -913,39 +917,43 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch (err: any) {
       res.status(500).json({ error: "Failed to load calendar" });
     }
-  });
+  }));
 
   // ---- Documents ----
   app.get("/api/documents", asyncHandler(async (_req, res) => { res.json(await storage.getDocuments()); }));
-  app.get("/api/documents/:id", async (req, res) => {
+  app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
     res.json(doc);
-  });
-  app.post("/api/documents", async (req, res) => {
+  }));
+  app.post("/api/documents", asyncHandler(async (req, res) => {
     try {
       const doc = await storage.createDocument(req.body);
       res.status(201).json(doc);
     } catch (err: any) {
       res.status(400).json({ error: err.message || "Failed to create document" });
     }
-  });
-  app.patch("/api/documents/:id", async (req, res) => {
+  }));
+  app.patch("/api/documents/:id", asyncHandler(async (req, res) => {
+    if (req.body.name !== undefined) {
+      if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Document name must be a non-empty string" });
+      req.body.name = sanitize(req.body.name);
+    }
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
-  app.delete("/api/documents/:id", async (req, res) => {
+  }));
+  app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteDocument(req.params.id);
     if (!deleted) return res.status(404).json({ error: "Not found" });
     res.status(204).send();
-  });
-  app.get("/api/profiles/:id/documents", async (req, res) => {
+  }));
+  app.get("/api/profiles/:id/documents", asyncHandler(async (req, res) => {
     res.json(await storage.getDocumentsForProfile(req.params.id));
-  });
+  }));
 
   // ---- Document file serving (for download / share) ----
-  app.get("/api/documents/:id/file", async (req, res) => {
+  app.get("/api/documents/:id/file", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc || !doc.fileData) return res.status(404).json({ error: "Not found" });
     const buffer = Buffer.from(doc.fileData, "base64");
@@ -955,36 +963,36 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
     res.setHeader("Content-Length", buffer.length.toString());
     res.send(buffer);
-  });
+  }));
 
   // ---- Habits ----
   app.get("/api/habits", asyncHandler(async (_req, res) => { res.json(await storage.getHabits()); }));
-  app.get("/api/habits/:id", async (req, res) => {
+  app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
     if (!habit) return res.status(404).json({ error: "Not found" });
     res.json(habit);
-  });
-  app.post("/api/habits", async (req, res) => {
+  }));
+  app.post("/api/habits", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Habit name is required" });
     }
     const parsed = insertHabitSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createHabit(parsed.data));
-  });
-  app.post("/api/habits/:id/checkin", async (req, res) => {
+  }));
+  app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
     const { date, value, notes } = req.body;
     const checkin = await storage.checkinHabit(req.params.id, date, value, notes);
     if (!checkin) return res.status(404).json({ error: "Habit not found" });
     res.status(201).json(checkin);
-  });
-  app.patch("/api/habits/:id", async (req, res) => {
+  }));
+  app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
       res.json(result);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
+  }));
   app.delete("/api/habits/:id", asyncHandler(async (req, res) => {
     await storage.deleteHabit(req.params.id);
     res.status(204).send();
@@ -992,27 +1000,37 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Obligations ----
   app.get("/api/obligations", asyncHandler(async (_req, res) => { res.json(await storage.getObligations()); }));
-  app.get("/api/obligations/:id", async (req, res) => {
+  app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Not found" });
     res.json(ob);
-  });
-  app.post("/api/obligations", async (req, res) => {
+  }));
+  app.post("/api/obligations", asyncHandler(async (req, res) => {
     const parsed = insertObligationSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createObligation(parsed.data));
-  });
-  app.patch("/api/obligations/:id", async (req, res) => {
+  }));
+  app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
+    if (req.body.name !== undefined) {
+      if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Obligation name must be a non-empty string" });
+      req.body.name = sanitize(req.body.name);
+    }
+    if (req.body.amount !== undefined && (typeof req.body.amount !== "number" || req.body.amount < 0)) {
+      return res.status(400).json({ error: "Amount must be a non-negative number" });
+    }
     const updated = await storage.updateObligation(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
-  app.post("/api/obligations/:id/pay", async (req, res) => {
+  }));
+  app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
     const { amount, method, confirmationNumber } = req.body;
+    if (amount !== undefined && (typeof amount !== "number" || amount <= 0)) {
+      return res.status(400).json({ error: "Payment amount must be a positive number" });
+    }
     const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
     res.status(201).json(payment);
-  });
+  }));
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
     await storage.deleteObligation(req.params.id);
     res.status(204).send();
@@ -1020,27 +1038,27 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Artifacts ----
   app.get("/api/artifacts", asyncHandler(async (_req, res) => { res.json(await storage.getArtifacts()); }));
-  app.get("/api/artifacts/:id", async (req, res) => {
+  app.get("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const artifact = await storage.getArtifact(req.params.id);
     if (!artifact) return res.status(404).json({ error: "Not found" });
     res.json(artifact);
-  });
-  app.post("/api/artifacts", async (req, res) => {
+  }));
+  app.post("/api/artifacts", asyncHandler(async (req, res) => {
     if (req.body.title) req.body.title = sanitize(req.body.title);
     const parsed = insertArtifactSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createArtifact(parsed.data));
-  });
-  app.patch("/api/artifacts/:id", async (req, res) => {
+  }));
+  app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
-  app.post("/api/artifacts/:id/toggle/:itemId", async (req, res) => {
+  }));
+  app.post("/api/artifacts/:id/toggle/:itemId", asyncHandler(async (req, res) => {
     const result = await storage.toggleChecklistItem(req.params.id, req.params.itemId);
     if (!result) return res.status(404).json({ error: "Not found" });
     res.json(result);
-  });
+  }));
   app.delete("/api/artifacts/:id", asyncHandler(async (req, res) => {
     await storage.deleteArtifact(req.params.id);
     res.status(204).send();
@@ -1048,7 +1066,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Journal ----
   app.get("/api/journal", asyncHandler(async (_req, res) => { res.json(await storage.getJournalEntries()); }));
-  app.post("/api/journal", async (req, res) => {
+  app.post("/api/journal", asyncHandler(async (req, res) => {
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
       return res.status(400).json({ error: "Journal content is required" });
     }
@@ -1056,78 +1074,78 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createJournalEntry(parsed.data));
-  });
-  app.patch("/api/journal/:id", async (req, res) => {
+  }));
+  app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
-  });
+  }));
   app.delete("/api/journal/:id", asyncHandler(async (req, res) => {
     await storage.deleteJournalEntry(req.params.id);
     res.status(204).send();
   }));
 
   // ---- Memory ----
-  app.get("/api/memories", async (_req, res) => {
+  app.get("/api/memories", asyncHandler(async (_req, res) => {
     try { res.json(await storage.getMemories()); }
     catch { res.status(500).json({ error: "Failed to load memories" }); }
-  });
-  app.post("/api/memories", async (req, res) => {
+  }));
+  app.post("/api/memories", asyncHandler(async (req, res) => {
     const parsed = insertMemorySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     try { res.status(201).json(await storage.saveMemory(parsed.data)); }
     catch (err: any) { res.status(500).json({ error: err.message || "Failed to save memory" }); }
-  });
-  app.get("/api/memories/recall", async (req, res) => {
+  }));
+  app.get("/api/memories/recall", asyncHandler(async (req, res) => {
     const q = (req.query.q as string) || "";
     try { res.json(await storage.recallMemory(q)); }
     catch { res.status(500).json({ error: "Recall failed" }); }
-  });
-  app.patch("/api/memories/:id", async (req, res) => {
+  }));
+  app.patch("/api/memories/:id", asyncHandler(async (req, res) => {
     try {
       const result = await storage.updateMemory(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Memory not found" });
       res.json(result);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-  app.delete("/api/memories/:id", async (req, res) => {
+  }));
+  app.delete("/api/memories/:id", asyncHandler(async (req, res) => {
     await storage.deleteMemory(req.params.id);
     res.status(204).send();
-  });
+  }));
 
   // ---- Domains ----
-  app.get("/api/domains", async (_req, res) => { res.json(await storage.getDomains()); });
-  app.post("/api/domains", async (req, res) => {
+  app.get("/api/domains", asyncHandler(async (_req, res) => { res.json(await storage.getDomains()); }));
+  app.post("/api/domains", asyncHandler(async (req, res) => {
     const parsed = insertDomainSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createDomain(parsed.data));
-  });
-  app.patch("/api/domains/:id", async (req, res) => {
+  }));
+  app.patch("/api/domains/:id", asyncHandler(async (req, res) => {
     try {
       const result = await storage.updateDomain(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Domain not found" });
       res.json(result);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-  app.delete("/api/domains/:id", async (req, res) => {
+  }));
+  app.delete("/api/domains/:id", asyncHandler(async (req, res) => {
     try {
       const result = await storage.deleteDomain(req.params.id);
       if (!result) return res.status(404).json({ error: "Domain not found" });
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-  app.get("/api/domains/:id/entries", async (req, res) => {
+  }));
+  app.get("/api/domains/:id/entries", asyncHandler(async (req, res) => {
     res.json(await storage.getDomainEntries(req.params.id));
-  });
-  app.post("/api/domains/:id/entries", async (req, res) => {
+  }));
+  app.post("/api/domains/:id/entries", asyncHandler(async (req, res) => {
     const { values, tags, notes } = req.body;
     const entry = await storage.addDomainEntry(req.params.id, values, tags, notes);
     if (!entry) return res.status(404).json({ error: "Domain not found" });
     res.status(201).json(entry);
-  });
+  }));
 
   // ---- Notifications (computed on each request) ----
-  app.get("/api/notifications", async (_req, res) => {
+  app.get("/api/notifications", asyncHandler(async (_req, res) => {
     try {
       interface Notification {
         id: string;
@@ -1405,20 +1423,20 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       console.error("Notifications error:", err);
       res.status(500).json({ error: "Failed to compute notifications" });
     }
-  });
+  }));
 
   // ---- Search ----
-  app.get("/api/search", async (req, res) => {
+  app.get("/api/search", asyncHandler(async (req, res) => {
     const q = (req.query.q as string) || "";
     try {
       res.json(await storage.search(q));
     } catch (err: any) {
       res.status(500).json({ error: "Search failed" });
     }
-  });
+  }));
 
   // ---- Export / Import ----
-  app.get("/api/export", async (_req, res) => {
+  app.get("/api/export", asyncHandler(async (_req, res) => {
     try {
       const data = {
         version: 1,
@@ -1443,9 +1461,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       console.error("Export error:", err);
       res.status(500).json({ error: "Export failed" });
     }
-  });
+  }));
 
-  app.post("/api/import", async (req, res) => {
+  app.post("/api/import", asyncHandler(async (req, res) => {
     try {
       const data = req.body;
       if (!data || !data.version) {
@@ -1549,10 +1567,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       console.error("Import error:", err);
       res.status(500).json({ error: "Import failed" });
     }
-  });
+  }));
 
   // ---- CSV Bank Import ----
-  app.post("/api/import/bank-csv", async (req, res) => {
+  app.post("/api/import/bank-csv", asyncHandler(async (req, res) => {
     try {
       // Accept JSON { csv: "..." } or raw text/csv body
       let csv: string;
@@ -1667,10 +1685,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       console.error("Bank CSV import error:", err);
       res.status(500).json({ error: "CSV import failed" });
     }
-  });
+  }));
 
   // ---- Budgets (uses preferences internally) ----
-  app.get("/api/budgets", async (_req, res) => {
+  app.get("/api/budgets", asyncHandler(async (_req, res) => {
     try {
       const raw = await storage.getPreference("budgets");
       if (!raw) return res.json({});
@@ -1678,9 +1696,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch {
       res.json({});
     }
-  });
+  }));
 
-  app.put("/api/budgets", async (req, res) => {
+  app.put("/api/budgets", asyncHandler(async (req, res) => {
     try {
       const { budgets } = req.body;
       if (!budgets || typeof budgets !== "object") {
@@ -1691,10 +1709,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch (err: any) {
       res.status(500).json({ error: "Failed to save budgets" });
     }
-  });
+  }));
 
   // ---- Spending Analytics ----
-  app.get("/api/analytics/spending", async (req, res) => {
+  app.get("/api/analytics/spending", asyncHandler(async (req, res) => {
     try {
       const monthsBack = Math.min(Math.max(parseInt(req.query.months as string) || 6, 1), 24);
       const now = new Date();
@@ -1871,10 +1889,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       console.error("Spending analytics error:", err);
       res.status(500).json({ error: "Failed to compute spending analytics" });
     }
-  });
+  }));
 
   // ---- AI Digest ----
-  app.get("/api/ai-digest", async (req, res) => {
+  app.get("/api/ai-digest", asyncHandler(async (req, res) => {
     try {
       const force = req.query.force === "true";
 
@@ -2107,10 +2125,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("AI Digest error:", err);
       res.status(500).json({ error: "Failed to generate AI digest" });
     }
-  });
+  }));
 
   // ---- Goals ----
-  app.get("/api/goals", async (req, res) => {
+  app.get("/api/goals", asyncHandler(async (req, res) => {
     try {
       const goals = await storage.getGoals();
       res.json(goals);
@@ -2118,9 +2136,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Goals error:", err);
       res.status(500).json({ error: "Failed to get goals" });
     }
-  });
+  }));
 
-  app.get("/api/goals/:id", async (req, res) => {
+  app.get("/api/goals/:id", asyncHandler(async (req, res) => {
     try {
       const goal = await storage.getGoal(req.params.id);
       if (!goal) return res.status(404).json({ error: "Goal not found" });
@@ -2129,9 +2147,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Goal error:", err);
       res.status(500).json({ error: "Failed to get goal" });
     }
-  });
+  }));
 
-  app.post("/api/goals", async (req, res) => {
+  app.post("/api/goals", asyncHandler(async (req, res) => {
     try {
       if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
         return res.status(400).json({ error: "Goal title required" });
@@ -2147,9 +2165,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Create goal error:", err);
       res.status(500).json({ error: "Failed to create goal" });
     }
-  });
+  }));
 
-  app.patch("/api/goals/:id", async (req, res) => {
+  app.patch("/api/goals/:id", asyncHandler(async (req, res) => {
     try {
       const goal = await storage.updateGoal(req.params.id, req.body);
       if (!goal) return res.status(404).json({ error: "Goal not found" });
@@ -2158,9 +2176,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Update goal error:", err);
       res.status(500).json({ error: "Failed to update goal" });
     }
-  });
+  }));
 
-  app.delete("/api/goals/:id", async (req, res) => {
+  app.delete("/api/goals/:id", asyncHandler(async (req, res) => {
     try {
       const deleted = await storage.deleteGoal(req.params.id);
       if (!deleted) return res.status(404).json({ error: "Goal not found" });
@@ -2169,10 +2187,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Delete goal error:", err);
       res.status(500).json({ error: "Failed to delete goal" });
     }
-  });
+  }));
 
   // ---- Entity Links ----
-  app.get("/api/entity-links/:type/:id", async (req, res) => {
+  app.get("/api/entity-links/:type/:id", asyncHandler(async (req, res) => {
     try {
       const links = await storage.getEntityLinks(req.params.type, req.params.id);
       res.json(links);
@@ -2180,9 +2198,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Get entity links error:", err);
       res.status(500).json({ error: "Failed to get entity links" });
     }
-  });
+  }));
 
-  app.get("/api/entity-links/:type/:id/related", async (req, res) => {
+  app.get("/api/entity-links/:type/:id/related", asyncHandler(async (req, res) => {
     try {
       const related = await storage.getRelatedEntities(req.params.type, req.params.id);
       res.json(related);
@@ -2190,9 +2208,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Get related entities error:", err);
       res.status(500).json({ error: "Failed to get related entities" });
     }
-  });
+  }));
 
-  app.post("/api/entity-links", async (req, res) => {
+  app.post("/api/entity-links", asyncHandler(async (req, res) => {
     try {
       const parsed = insertEntityLinkSchema.parse(req.body);
       const link = await storage.createEntityLink(parsed);
@@ -2201,9 +2219,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Create entity link error:", err);
       res.status(400).json({ error: err.message || "Failed to create entity link" });
     }
-  });
+  }));
 
-  app.delete("/api/entity-links/:id", async (req, res) => {
+  app.delete("/api/entity-links/:id", asyncHandler(async (req, res) => {
     try {
       const deleted = await storage.deleteEntityLink(req.params.id);
       if (!deleted) return res.status(404).json({ error: "Entity link not found" });
@@ -2212,10 +2230,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Delete entity link error:", err);
       res.status(500).json({ error: "Failed to delete entity link" });
     }
-  });
+  }));
 
   // ---- Preferences ----
-  app.get("/api/preferences/:key", async (req, res) => {
+  app.get("/api/preferences/:key", asyncHandler(async (req, res) => {
     try {
       const value = await storage.getPreference(req.params.key);
       if (value === null) return res.status(404).json({ error: "Not found" });
@@ -2223,9 +2241,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     } catch (err: any) {
       res.status(500).json({ error: "Failed to get preference" });
     }
-  });
+  }));
 
-  app.put("/api/preferences/:key", async (req, res) => {
+  app.put("/api/preferences/:key", asyncHandler(async (req, res) => {
     try {
       const { value } = req.body;
       if (typeof value !== "string") return res.status(400).json({ error: "value (string) required" });
@@ -2234,25 +2252,25 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     } catch (err: any) {
       res.status(500).json({ error: "Failed to set preference" });
     }
-  });
+  }));
 
   // ---- Onboarding Status ----
-  app.get("/api/onboarding-status", async (_req, res) => {
+  app.get("/api/onboarding-status", asyncHandler(async (_req, res) => {
     // Onboarding wizard removed — always return completed
     res.json({ completed: true, hasProfiles: true, hasTrackers: true, hasTasks: true, profileCount: 0, trackerCount: 0, taskCount: 0 });
-  });
+  }));
 
-  app.post("/api/onboarding/complete", async (_req, res) => {
+  app.post("/api/onboarding/complete", asyncHandler(async (_req, res) => {
     try {
       await storage.setPreference("onboarding_completed", "true");
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to complete onboarding" });
     }
-  });
+  }));
 
   // ---- Google Calendar Sync ----
-  app.post("/api/calendar/sync", async (req, res) => {
+  app.post("/api/calendar/sync", asyncHandler(async (req, res) => {
     try {
       const { execFileSync } = require("child_process");
 
@@ -2382,10 +2400,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Calendar sync error:", err);
       res.status(500).json({ error: "Calendar sync failed" });
     }
-  });
+  }));
 
   // Export a Portol event to Google Calendar
-  app.post("/api/calendar/export/:id", async (req, res) => {
+  app.post("/api/calendar/export/:id", asyncHandler(async (req, res) => {
     try {
       const { execFileSync } = require("child_process");
       const event = await storage.getEvent(req.params.id);
@@ -2451,10 +2469,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       console.error("Calendar export error:", err);
       res.status(500).json({ error: "Failed to export event to Google Calendar" });
     }
-  });
+  }));
 
   // Get sync status
-  app.get("/api/calendar/sync-status", async (_req, res) => {
+  app.get("/api/calendar/sync-status", asyncHandler(async (_req, res) => {
     try {
       const lastSync = await storage.getPreference("gcal_last_sync");
       const events = await storage.getEvents();
@@ -2467,7 +2485,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     } catch (err: any) {
       res.status(500).json({ error: "Failed to get sync status" });
     }
-  });
+  }));
 
   // Global async error handler — catches unhandled promise rejections from route handlers
   app.use((err: any, _req: any, res: any, _next: any) => {

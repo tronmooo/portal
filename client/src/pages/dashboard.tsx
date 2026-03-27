@@ -128,6 +128,8 @@ function CollapsibleSection({
             {headerRight}
             <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0 text-muted-foreground"
               onClick={() => setOpen(v => !v)}
+              aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
+              aria-expanded={open}
               data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}>
               {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             </Button>
@@ -146,6 +148,10 @@ function MiniStat({
     <div
       className={`flex items-center gap-2 p-2.5 rounded-lg border border-border/50 transition-all duration-200 ${onClick ? "cursor-pointer hover:bg-muted/50 hover:border-primary/30 hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]" : "hover:scale-[1.01]"}`}
       onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={onClick ? `${label}: ${value}${sub ? ` (${sub})` : ""}` : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
     >
       <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-primary/8" style={color ? { backgroundColor: `${color}15` } : {}}>
@@ -161,7 +167,7 @@ function MiniStat({
         </div>
       </div>
       {sub && <span className="text-[9px] text-muted-foreground shrink-0">{sub}</span>}
-      {onClick && <Eye className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" />}
+      {onClick && <Eye className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" aria-hidden="true" />}
     </div>
   );
 }
@@ -1251,15 +1257,15 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-1.5">
           <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1"
-            onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
+            onClick={() => setCustomizeOpen(true)} aria-label="Customize dashboard" data-testid="btn-customize">
             <Settings className="h-3 w-3" /><span className="hidden sm:inline text-xs">Customize</span>
           </Button>
           <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1"
-            onClick={handleExport} data-testid="btn-export">
+            onClick={handleExport} aria-label="Export data" data-testid="btn-export">
             <Download className="h-3 w-3" /><span className="hidden sm:inline text-xs">Export</span>
           </Button>
           <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1"
-            onClick={() => setImportOpen(true)} data-testid="btn-import">
+            onClick={() => setImportOpen(true)} aria-label="Import backup" data-testid="btn-import">
             <UploadCloud className="h-3 w-3" /><span className="hidden sm:inline text-xs">Import</span>
           </Button>
         </div>

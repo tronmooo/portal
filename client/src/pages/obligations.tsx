@@ -1,8 +1,14 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
 import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus } from "lucide-react";
 import { Link } from "wouter";
 import type { Obligation } from "@shared/schema";
@@ -87,9 +93,29 @@ function ObligationCard({ ob }: { ob: Obligation }) {
 }
 
 export default function ObligationsPage() {
+  const { toast } = useToast();
+  const [addOpen, setAddOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newAmount, setNewAmount] = useState("");
+  const [newFrequency, setNewFrequency] = useState("monthly");
+  const [newCategory, setNewCategory] = useState("housing");
+  const [newDueDate, setNewDueDate] = useState(new Date().toISOString().slice(0, 10));
+
   const { data: obligations = [], isLoading } = useQuery<Obligation[]>({
     queryKey: ["/api/obligations"],
     queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/obligations", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Obligation created" });
+      setAddOpen(false);
+      setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing");
+    },
+    onError: () => toast({ title: "Failed to create obligation", variant: "destructive" }),
   });
 
   const sorted = [...obligations].sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime());
@@ -116,7 +142,7 @@ export default function ObligationsPage() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
@@ -124,12 +150,76 @@ export default function ObligationsPage() {
           </div>
           <p className="text-xs text-muted-foreground">Recurring bills and payments</p>
         </div>
-        <Link href="/">
-          <Button size="sm" data-testid="button-add-obligation">
-            <Plus className="w-4 h-4 mr-1" /> New
-          </Button>
-        </Link>
+        <Button size="sm" onClick={() => setAddOpen(true)} data-testid="button-add-obligation">
+          <Plus className="w-4 h-4 mr-1" /> New
+        </Button>
       </div>
+
+      {/* Add Obligation Dialog */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">New Obligation</DialogTitle>
+            <DialogDescription className="text-xs">Add a recurring bill or payment</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-xs">Name</Label>
+              <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Rent, Netflix, Car Payment" data-testid="input-obligation-name" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Amount ($)</Label>
+                <Input type="number" min="0" step="0.01" value={newAmount} onChange={e => setNewAmount(e.target.value)} placeholder="0.00" data-testid="input-obligation-amount" />
+              </div>
+              <div>
+                <Label className="text-xs">Frequency</Label>
+                <Select value={newFrequency} onValueChange={setNewFrequency}>
+                  <SelectTrigger data-testid="select-obligation-frequency"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Biweekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="yearly">Yearly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Category</Label>
+                <Select value={newCategory} onValueChange={setNewCategory}>
+                  <SelectTrigger data-testid="select-obligation-category"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="housing">Housing</SelectItem>
+                    <SelectItem value="loan">Loan</SelectItem>
+                    <SelectItem value="insurance">Insurance</SelectItem>
+                    <SelectItem value="health">Health</SelectItem>
+                    <SelectItem value="subscription">Subscription</SelectItem>
+                    <SelectItem value="utility">Utility</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Next Due Date</Label>
+                <Input type="date" value={newDueDate} onChange={e => setNewDueDate(e.target.value)} data-testid="input-obligation-due-date" />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button size="sm" disabled={!newName.trim() || !newAmount || createMutation.isPending}
+              onClick={() => createMutation.mutate({
+                name: newName.trim(), amount: parseFloat(newAmount), frequency: newFrequency,
+                category: newCategory, nextDueDate: newDueDate, autopay: false,
+              })} data-testid="button-save-obligation">
+              {createMutation.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-3">

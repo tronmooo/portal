@@ -141,8 +141,8 @@ export default function SettingsPage() {
       <div className="max-w-2xl mx-auto p-4 md:p-6 space-y-6">
         <div>
           <div className="flex items-center gap-3 mb-4">
-            <Link href="/">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
+            <Link href="/dashboard">
+              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
