@@ -2790,10 +2790,11 @@ export default function TrackersPage() {
       {/* Linked Profiles (child assets, subscriptions, etc.) */}
       {(() => {
         const childTypeSet = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
-        // Show child profiles of the selected person/pet filter
-        const parentId = resolvedFilter === "all" ? selfProfile?.id : resolvedFilter;
+        // Show child profiles: when filtering by person, show their children; when "all", show all child profiles
+        const parentId = resolvedFilter === "all" ? null : resolvedFilter;
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
+          if (!parentId) return true; // Show all child-type profiles when "all" selected
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
           return pParent === parentId;
         });

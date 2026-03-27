@@ -1364,6 +1364,8 @@ BEHAVIOR:
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
+- PROFILE NAMING ACCURACY: Use EXACTLY the details the user provides. If the user says "2022 Tesla Model 3", the profile name and year field MUST say 2022, not 2023 or any other year. Never change, round, or guess details — use the user's exact words for names, years, models, and other specifics.
+- SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 actions, you MUST execute exactly 10 tool calls. Do not merge or skip any.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
@@ -2763,9 +2765,24 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         break;
       }
 
+      // Track creates within this response to deduplicate
+      const seenCreates = new Set<string>();
+
       // Execute each tool call and collect results
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
       for (const toolUse of toolUses) {
+        // Dedup: skip duplicate create calls for the same entity within this response
+        const inp = toolUse.input as Record<string, any>;
+        const createToolNames = ["create_obligation", "create_expense", "create_event", "create_task", "create_profile"];
+        if (createToolNames.includes(toolUse.name)) {
+          const key = `${toolUse.name}:${(inp.name || inp.title || inp.description || "").toLowerCase().trim()}`;
+          if (seenCreates.has(key)) {
+            logger.info("ai", `Deduped tool call: ${key}`);
+            toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify({ skipped: true, reason: "duplicate call" }) });
+            continue;
+          }
+          seenCreates.add(key);
+        }
         try {
           const result = await executeTool(toolUse.name, toolUse.input);
           
