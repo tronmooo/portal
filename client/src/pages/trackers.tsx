@@ -2782,6 +2782,47 @@ export default function TrackersPage() {
         <TrackerSummary trackers={filteredTrackers} />
       )}
 
+      {/* Linked Profiles (child assets, subscriptions, etc.) */}
+      {(() => {
+        const childTypeSet = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+        // Show child profiles of the selected person/pet filter
+        const parentId = resolvedFilter === "all" ? selfProfile?.id : resolvedFilter;
+        const childProfiles = (profiles || []).filter(p => {
+          if (!childTypeSet.has(p.type)) return false;
+          const pParent = p.fields?._parentProfileId || p.parentProfileId;
+          return pParent === parentId;
+        });
+        if (childProfiles.length === 0) return null;
+        const typeIcons: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: CreditCard };
+        return (
+          <div className="space-y-2">
+            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Linked Profiles ({childProfiles.length})</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {childProfiles.map(child => {
+                const Icon = typeIcons[child.type] || Star;
+                return (
+                  <Link key={child.id} href={`/profiles/${child.id}`}>
+                    <div className="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors cursor-pointer">
+                      <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <Icon className="h-4 w-4 text-primary" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">{child.name}</p>
+                        <p className="text-[10px] text-muted-foreground capitalize">
+                          {child.type}
+                          {child.fields?.cost ? ` · $${child.fields.cost}` : ''}
+                          {child.fields?.frequency ? `/${child.fields.frequency}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {(!trackers || trackers.length === 0) ? (
         <div className="text-center py-16">
           <Activity className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />

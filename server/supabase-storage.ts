@@ -354,7 +354,22 @@ export class SupabaseStorage implements IStorage {
     const relatedDocuments = allDocs.filter(d => d.linkedProfiles.includes(id) || profile.documents.includes(d.id));
     const relatedObligations = allObs.filter(o => o.linkedProfiles.includes(id));
     // Child profiles: profiles whose parentProfileId points to this profile
-    const childProfiles = allProfiles.filter(p => p.parentProfileId === id);
+    let childProfiles = allProfiles.filter(p => p.parentProfileId === id);
+    
+    // Auto-adopt: if this is a "self" profile, also claim orphaned child-type profiles
+    if (profile.type === "self") {
+      const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+      const orphans = allProfiles.filter(p => childTypes.has(p.type) && !p.parentProfileId);
+      if (orphans.length > 0) {
+        // Auto-fix: set parentProfileId on orphans (non-blocking)
+        for (const orphan of orphans) {
+          const updatedFields = { ...(orphan.fields || {}), _parentProfileId: id };
+          this.supabase.from("profiles").update({ fields: updatedFields }).eq("id", orphan.id).eq("user_id", this.userId).then(() => {});
+          orphan.parentProfileId = id;
+        }
+        childProfiles = [...childProfiles, ...orphans];
+      }
+    }
 
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
