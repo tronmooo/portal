@@ -478,9 +478,9 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
       className="flex items-center justify-between py-2 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 -mx-2 px-2 rounded transition-colors group"
       onClick={() => setEditing(true)}
     >
-      <span className="text-xs text-muted-foreground">{formatKey(fieldKey)}</span>
-      <div className="flex items-center gap-1.5">
-        <span className="text-sm font-medium text-right max-w-[60%] truncate">{fieldValue}</span>
+      <span className="text-xs text-muted-foreground shrink-0 min-w-[80px]">{formatKey(fieldKey)}</span>
+      <div className="flex items-center gap-1.5 min-w-0 justify-end">
+        <span className="text-sm font-medium text-right break-words">{fieldValue}</span>
         <Pencil className="h-2.5 w-2.5 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
       </div>
     </div>

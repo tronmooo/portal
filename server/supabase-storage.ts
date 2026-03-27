@@ -925,6 +925,41 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
+    // ── Dedup: remove events that duplicate an obligation on the same date ──
+    // Build a set of obligation fingerprints (normalized title + date)
+    const obligationFingerprints = new Set<string>();
+    for (const item of items) {
+      if (item.type === "obligation") {
+        // Normalize: strip emoji, $amounts, and extra whitespace for matching
+        const normTitle = item.title.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").replace(/\s*[—-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
+        obligationFingerprints.add(`${normTitle}::${item.date}`);
+      }
+    }
+    // Filter out events that match an obligation's fingerprint
+    const dedupedItems = items.filter(item => {
+      if (item.type !== "event") return true; // Keep non-events
+      const normTitle = item.title.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").replace(/\s*[—-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
+      const fp = `${normTitle}::${item.date}`;
+      // Also check if event title contains any obligation name
+      for (const ofp of obligationFingerprints) {
+        const [oName] = ofp.split("::");
+        if (normTitle.includes(oName) && item.date === ofp.split("::")[1]) return false;
+      }
+      return !obligationFingerprints.has(fp);
+    });
+    // Also dedup obligations with same name+date (keep only first)
+    const seenObligations = new Set<string>();
+    const finalItems = dedupedItems.filter(item => {
+      if (item.type === "obligation") {
+        const key = `${item.title}::${item.date}`;
+        if (seenObligations.has(key)) return false;
+        seenObligations.add(key);
+      }
+      return true;
+    });
+    items.length = 0;
+    items.push(...finalItems);
+
     const habits = await this.getHabits();
     for (const habit of habits) {
       for (const checkin of habit.checkins) {
