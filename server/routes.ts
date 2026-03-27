@@ -124,7 +124,16 @@ export async function registerRoutes(
       if (!fileData || !fileName) {
         return res.status(400).json({ error: "fileName and fileData (base64) required" });
       }
-      const result = await processFileUpload(fileName, mimeType || "image/jpeg", fileData, message, profileId);
+      // File size validation: 10MB max (base64 is ~33% larger than binary)
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+      const fileSizeBytes = Math.ceil((fileData.length * 3) / 4);
+      if (fileSizeBytes > MAX_FILE_SIZE) {
+        return res.status(413).json({ error: `File too large (${(fileSizeBytes / 1024 / 1024).toFixed(1)}MB). Maximum is 10MB.` });
+      }
+      // MIME type validation
+      const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      const safeMime = ALLOWED_MIMES.includes(mimeType) ? mimeType : 'application/octet-stream';
+      const result = await processFileUpload(fileName, safeMime, fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
       console.error("Upload error:", err);
@@ -169,12 +178,13 @@ export async function registerRoutes(
       for (const file of files) {
         const { fileName, mimeType, fileData, profileId } = file;
         if (!fileName || !fileData) {
-          results.push({
-            fileName: fileName || "unknown",
-            reply: "Skipped — missing fileName or fileData",
-            actions: [],
-            results: [],
-          });
+          results.push({ fileName: fileName || "unknown", reply: "Skipped — missing fileName or fileData", actions: [], results: [] });
+          continue;
+        }
+        // File size validation per file: 10MB max
+        const fileSizeBytes = Math.ceil((fileData.length * 3) / 4);
+        if (fileSizeBytes > 10 * 1024 * 1024) {
+          results.push({ fileName, reply: `Skipped — file too large (${(fileSizeBytes / 1024 / 1024).toFixed(1)}MB, max 10MB)`, actions: [], results: [] });
           continue;
         }
 
@@ -770,6 +780,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Tasks ----
   app.get("/api/tasks", async (_req, res) => { res.json(await storage.getTasks()); });
+  app.get("/api/tasks/:id", async (req, res) => {
+    const tasks = await storage.getTasks();
+    const task = tasks.find(t => t.id === req.params.id);
+    if (!task) return res.status(404).json({ error: "Task not found" });
+    res.json(task);
+  });
   app.post("/api/tasks", async (req, res) => {
     if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
       return res.status(400).json({ error: "Task title required" });
@@ -2188,7 +2204,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // ---- Google Calendar Sync ----
   app.post("/api/calendar/sync", async (req, res) => {
     try {
-      const { execSync } = require("child_process");
+      const { execFileSync } = require("child_process");
 
       // Determine date range — sync 2 months (1 month back, 1 month forward)
       const now = new Date();
@@ -2213,7 +2229,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       let gcalResult: any;
       try {
-        const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+        const stdout = execFileSync("external-tool", ["call", params], {
           timeout: 30000,
           encoding: "utf-8",
         });
@@ -2321,7 +2337,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // Export a Portol event to Google Calendar
   app.post("/api/calendar/export/:id", async (req, res) => {
     try {
-      const { execSync } = require("child_process");
+      const { execFileSync } = require("child_process");
       const event = await storage.getEvent(req.params.id);
       if (!event) return res.status(404).json({ error: "Event not found" });
 
@@ -2370,7 +2386,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         },
       });
 
-      const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+      const stdout = execFileSync("external-tool", ["call", params], {
         timeout: 30000,
         encoding: "utf-8",
       });

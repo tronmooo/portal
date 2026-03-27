@@ -166,11 +166,14 @@ function MiniStat({
   );
 }
 
+// Tailwind can't compile dynamic class names — use a static map
+const MD_GRID_COLS: Record<number, string> = { 2: "md:grid-cols-2", 3: "md:grid-cols-3", 4: "md:grid-cols-4", 5: "md:grid-cols-5", 6: "md:grid-cols-6" };
+
 function SkeletonGrid({ cols = 4, rows = 1, h = "h-14" }: { cols?: number; rows?: number; h?: string }) {
   return (
-    <div className={`grid grid-cols-2 md:grid-cols-${cols} gap-2`}>
+    <div className={`grid grid-cols-2 ${MD_GRID_COLS[cols] || "md:grid-cols-4"} gap-2`}>
       {Array.from({ length: cols * rows }).map((_, i) => (
-        <Skeleton key={i} className={`${h} rounded-lg`} />
+        <Skeleton key={`skel-${i}`} className={`${h} rounded-lg`} />
       ))}
     </div>
   );

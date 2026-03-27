@@ -382,10 +382,16 @@ Respond with JSON:
       }
     } else if (parsed.targetProfile?.name) {
       const profiles = await storage.getProfiles();
-      const existing = profiles.find((p: any) =>
-        p.name.toLowerCase().includes(parsed.targetProfile.name.toLowerCase()) ||
-        parsed.targetProfile.name.toLowerCase().includes(p.name.toLowerCase())
-      );
+      const targetLower = parsed.targetProfile.name.toLowerCase().trim();
+      const existing = profiles.find((p: any) => {
+        const pLower = p.name.toLowerCase().trim();
+        // Exact match or word-boundary match (avoid "John" matching "Johnson")
+        if (pLower === targetLower) return true;
+        // Check if the target is a complete word within the profile name or vice versa
+        const targetRegex = new RegExp(`\\b${targetLower.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
+        const profileRegex = new RegExp(`\\b${pLower.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
+        return targetRegex.test(pLower) || profileRegex.test(targetLower);
+      });
       if (existing) {
         linkedProfiles = [existing.id];
         existingProfileId = existing.id;

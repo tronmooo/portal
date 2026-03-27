@@ -282,7 +282,7 @@ export const insertHabitSchema = z.object({
   icon: z.string().optional(),
   color: z.string().optional(),
   frequency: z.enum(["daily", "weekly", "custom"]).default("daily"),
-  targetDays: z.array(z.number()).optional(),
+  targetDays: z.array(z.number().min(0).max(6)).optional(),
 });
 
 export type InsertHabit = z.infer<typeof insertHabitSchema>;
@@ -317,7 +317,7 @@ export interface ObligationPayment {
 
 export const insertObligationSchema = z.object({
   name: z.string().min(1),
-  amount: z.number(),
+  amount: z.number().positive("Amount must be positive"),
   frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
   category: z.string().default("general"),
   nextDueDate: z.string(),
