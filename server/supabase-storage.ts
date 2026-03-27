@@ -1899,11 +1899,19 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // DASHBOARD
   // ============================================================
-  async getStats(): Promise<DashboardStats> {
-    const [tasks, expenses, trackers, habits, obligations, journalEntries] = await Promise.all([
+  async getStats(filterProfileId?: string): Promise<DashboardStats> {
+    const [allTasks, allExpenses, allTrackers, allHabits, allObligations, journalEntries] = await Promise.all([
       this.getTasks(), this.getExpenses(), this.getTrackers(),
       this.getHabits(), this.getObligations(), this.getJournalEntries(),
     ]);
+
+    // Filter by profile if specified
+    const fp = filterProfileId;
+    const tasks = fp ? allTasks.filter(t => t.linkedProfiles.includes(fp)) : allTasks;
+    const expenses = fp ? allExpenses.filter(e => e.linkedProfiles.includes(fp)) : allExpenses;
+    const trackers = fp ? allTrackers.filter(t => t.linkedProfiles.includes(fp)) : allTrackers;
+    const habits = allHabits; // Habits are global (not profile-specific yet)
+    const obligations = fp ? allObligations.filter(o => o.linkedProfiles.includes(fp)) : allObligations;
     const now = new Date();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
@@ -1945,9 +1953,11 @@ export class SupabaseStorage implements IStorage {
     const recentJournal = [...journalEntries].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
-    const [profiles, events, artifacts, memories] = await Promise.all([
+    const [allProfiles, allEvents, artifacts, memories] = await Promise.all([
       this.getProfiles(), this.getEvents(), this.getArtifacts(), this.getMemories(),
     ]);
+    const profiles = allProfiles;
+    const events = fp ? allEvents.filter(e => e.linkedProfiles.includes(fp)) : allEvents;
 
     return {
       totalProfiles: profiles.length,
@@ -1991,16 +2001,23 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // ENHANCED DASHBOARD
   // ============================================================
-  async getDashboardEnhanced(): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string): Promise<any> {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
+    const fp = filterProfileId;
 
-    const [documents, allTrackers, allProfiles, allExpenses, allObligations, allTasks, allEvents] = await Promise.all([
+    const [documents, rawTrackers, allProfiles, rawExpenses, rawObligations, rawTasks, rawEvents] = await Promise.all([
       this.getDocuments(), this.getTrackers(), this.getProfiles(),
       this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
     ]);
+    // Apply profile filter
+    const allTrackers = fp ? rawTrackers.filter(t => t.linkedProfiles.includes(fp)) : rawTrackers;
+    const allExpenses = fp ? rawExpenses.filter(e => e.linkedProfiles.includes(fp)) : rawExpenses;
+    const allObligations = fp ? rawObligations.filter(o => o.linkedProfiles.includes(fp)) : rawObligations;
+    const allTasks = fp ? rawTasks.filter(t => t.linkedProfiles.includes(fp)) : rawTasks;
+    const allEvents = fp ? rawEvents.filter(e => e.linkedProfiles.includes(fp)) : rawEvents;
     const expiringDocs: any[] = [];
     for (const doc of documents) {
       const ed = doc.extractedData || {};
@@ -2021,13 +2038,14 @@ export class SupabaseStorage implements IStorage {
 
     const selfProfile = allProfiles.find(p => p.type === 'self');
     const selfId = selfProfile?.id;
+    const targetProfileId = fp || selfId;
     const healthCategories = ['health', 'fitness', 'weight', 'sleep', 'blood_pressure', 'running', 'exercise', 'nutrition', 'wellness'];
-    // Only show MY health trackers on the dashboard — filter to self-profile-linked or unlinked trackers
+    // Health trackers: when filtered by profile, show that profile's trackers. Otherwise show self's.
     const healthTrackers = allTrackers.filter(t => {
       const isHealthCategory = healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c));
       if (!isHealthCategory) return false;
-      // Only include if linked to self OR has no linked profiles (orphaned = mine)
-      if (selfId && t.linkedProfiles.includes(selfId)) return true;
+      if (fp) return true; // Already filtered by profile above
+      if (targetProfileId && t.linkedProfiles.includes(targetProfileId)) return true;
       if (t.linkedProfiles.length === 0) return true;
       return false;
     });

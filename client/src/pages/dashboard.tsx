@@ -1095,16 +1095,21 @@ export default function DashboardPage() {
   const primaryProfiles = allProfiles.filter((p: any) => ["self", "person", "pet"].includes(p.type));
   const selectedProfileName = profileFilter === "me" ? "Me" : allProfiles.find((p: any) => p.id === profileFilter)?.name || "Me";
 
+  // Resolve the actual profile ID for API calls
+  const selfProfileObj = allProfiles.find((p: any) => p.type === "self");
+  const resolvedFilterId = profileFilter === "me" ? selfProfileObj?.id : profileFilter;
+  const statsProfileParam = resolvedFilterId ? `?profileId=${resolvedFilterId}` : "";
+
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ["/api/stats"],
-    queryFn: () => apiRequest("GET", "/api/stats").then(r => r.json()),
+    queryKey: ["/api/stats", resolvedFilterId || "all"],
+    queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
   });
 
   const { data: enhanced } = useQuery<any>({
-    queryKey: ["/api/dashboard-enhanced"],
+    queryKey: ["/api/dashboard-enhanced", resolvedFilterId || "all"],
     queryFn: async () => {
       try {
-        const res = await apiRequest("GET", "/api/dashboard-enhanced");
+        const res = await apiRequest("GET", `/api/dashboard-enhanced${statsProfileParam}`);
         return res.json();
       } catch { return null; }
     },

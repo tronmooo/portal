@@ -132,8 +132,8 @@ export interface IStorage {
   getRelatedEntities(entityType: string, entityId: string): Promise<any[]>;
 
   // Dashboard
-  getStats(): Promise<DashboardStats>;
-  getDashboardEnhanced(): Promise<any>;
+  getStats(filterProfileId?: string): Promise<DashboardStats>;
+  getDashboardEnhanced(filterProfileId?: string): Promise<any>;
 
   // Insights
   getInsights(): Promise<Insight[]>;

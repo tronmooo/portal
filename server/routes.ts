@@ -402,17 +402,19 @@ export async function registerRoutes(
 
   // ---- Dashboard ----
   app.get("/api/stats", async (req, res) => {
+    const profileId = req.query.profileId as string | undefined;
     const userId = (req as any).userId || "anon";
-    const cacheKey = `stats:${userId}`;
+    const cacheKey = `stats:${userId}:${profileId || 'all'}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
-    const stats = await storage.getStats();
+    const stats = await storage.getStats(profileId);
     setCache(cacheKey, stats, 15000);
     res.json(stats);
   });
 
-  app.get("/api/dashboard-enhanced", async (_req, res) => {
-    const data = await storage.getDashboardEnhanced();
+  app.get("/api/dashboard-enhanced", async (req, res) => {
+    const profileId = req.query.profileId as string | undefined;
+    const data = await storage.getDashboardEnhanced(profileId);
     res.json(data);
   });
 

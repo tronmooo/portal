@@ -759,15 +759,22 @@ export default function CalendarView() {
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
       if (filterType !== "all" && item.type !== filterType) continue;
-      // Profile filter: if a profile is selected, only show items linked to that profile
-      if (resolvedProfileId && item.linkedProfiles && item.linkedProfiles.length > 0) {
-        if (!item.linkedProfiles.includes(resolvedProfileId)) continue;
+      // Profile filter: when a specific person/pet is selected, ONLY show their items
+      if (resolvedProfileId) {
+        const linked = item.linkedProfiles || [];
+        // Items with no linkedProfiles are considered global (show for "me" only)
+        if (linked.length === 0) {
+          // Only show unlinked items when viewing self
+          if (profileFilter !== "me") continue;
+        } else {
+          if (!linked.includes(resolvedProfileId)) continue;
+        }
       }
       if (!map[item.date]) map[item.date] = [];
       map[item.date].push(item);
     }
     return map;
-  }, [timelineItems, filterType, resolvedProfileId]);
+  }, [timelineItems, filterType, resolvedProfileId, profileFilter]);
 
   const days = useMemo(
     () => getMonthDays(viewYear, viewMonth),
