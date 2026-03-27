@@ -707,8 +707,18 @@ export default function CalendarView() {
   const [detailItem, setDetailItem] = useState<CalendarTimelineItem | null>(null);
   const [editEvent, setEditEvent] = useState<CalendarEvent | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
+  const [profileFilter, setProfileFilter] = useState<string>("me");
   const [syncing, setSyncing] = useState(false);
   const { toast } = useToast();
+
+  // Fetch profiles for the person/pet filter
+  const { data: filterProfiles = [] } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const primaryProfiles = filterProfiles.filter(p => ["self", "person", "pet"].includes(p.type));
+  const selfProfile = filterProfiles.find(p => p.type === "self");
+  const resolvedProfileId = profileFilter === "me" ? selfProfile?.id : profileFilter === "all" ? null : profileFilter;
 
   const handleGcalSync = async () => {
     setSyncing(true);
@@ -744,16 +754,20 @@ export default function CalendarView() {
       apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}`).then(r => r.json()),
   });
 
-  // Group items by date
+  // Group items by date (with type + profile filtering)
   const itemsByDate = useMemo(() => {
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
       if (filterType !== "all" && item.type !== filterType) continue;
+      // Profile filter: if a profile is selected, only show items linked to that profile
+      if (resolvedProfileId && item.linkedProfiles && item.linkedProfiles.length > 0) {
+        if (!item.linkedProfiles.includes(resolvedProfileId)) continue;
+      }
       if (!map[item.date]) map[item.date] = [];
       map[item.date].push(item);
     }
     return map;
-  }, [timelineItems, filterType]);
+  }, [timelineItems, filterType, resolvedProfileId]);
 
   const days = useMemo(
     () => getMonthDays(viewYear, viewMonth),
@@ -796,11 +810,9 @@ export default function CalendarView() {
       .catch(() => {});
   };
 
-  // Count items by type for filter badges
+  // Filtered items for the selected date
   const selectedDateItems = itemsByDate[selectedDate] || [];
-  const filteredAgenda = filterType === "all"
-    ? timelineItems.filter(i => i.date === selectedDate)
-    : selectedDateItems;
+  const filteredAgenda = selectedDateItems;
 
   return (
     <div className="space-y-4" data-testid="calendar-view">
@@ -862,7 +874,22 @@ export default function CalendarView() {
         </div>
       </div>
 
-      {/* Filter pills */}
+      {/* Profile filter + type filter pills */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Select value={profileFilter} onValueChange={setProfileFilter}>
+          <SelectTrigger className="w-[140px] h-7 text-xs" data-testid="select-calendar-profile">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Everyone</SelectItem>
+            {primaryProfiles.sort((a, b) => a.type === "self" ? -1 : b.type === "self" ? 1 : a.name.localeCompare(b.name)).map(p => (
+              <SelectItem key={p.id} value={p.type === "self" ? "me" : p.id}>
+                {p.type === "self" ? "Me" : p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="flex gap-1.5 flex-wrap">
         {[
           { key: "all", label: "All", color: "#4F98A3" },
@@ -1001,7 +1028,7 @@ export default function CalendarView() {
         <CardContent className="pt-0 pb-3">
           <DayAgenda
             date={selectedDate}
-            items={filterType === "all" ? timelineItems : timelineItems.filter(i => i.type === filterType)}
+            items={filteredAgenda}
             onItemClick={setDetailItem}
           />
         </CardContent>

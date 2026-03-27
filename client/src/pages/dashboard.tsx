@@ -27,6 +27,7 @@ import {
   Trash2, Pencil, FileText, CheckCircle2, X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type {
   DashboardStats, Insight, MoodLevel,
 } from "@shared/schema";
@@ -1084,6 +1085,15 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [profileFilter, setProfileFilter] = useState<string>("me");
+
+  // Fetch profiles for filter
+  const { data: allProfiles = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const primaryProfiles = allProfiles.filter((p: any) => ["self", "person", "pet"].includes(p.type));
+  const selectedProfileName = profileFilter === "me" ? "Me" : allProfiles.find((p: any) => p.id === profileFilter)?.name || "Me";
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats"],
@@ -1212,7 +1222,21 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-base font-semibold">Dashboard</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-base font-semibold">Dashboard</h1>
+            <Select value={profileFilter} onValueChange={setProfileFilter}>
+              <SelectTrigger className="w-[120px] h-7 text-xs" data-testid="select-dashboard-profile">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {primaryProfiles.sort((a: any, b: any) => a.type === "self" ? -1 : b.type === "self" ? 1 : a.name.localeCompare(b.name)).map((p: any) => (
+                  <SelectItem key={p.id} value={p.type === "self" ? "me" : p.id}>
+                    {p.type === "self" ? "Me" : p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <p className="text-[10px] text-muted-foreground">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
           </p>
