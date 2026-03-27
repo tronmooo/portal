@@ -9,19 +9,30 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+const DEFAULT_TIMEOUT_MS = 30000; // 30s timeout for all API requests
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const res = await fetch(`${API_BASE}${url}`, {
-    method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
-  });
-
-  await throwIfResNotOk(res);
-  return res;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}${url}`, {
+      method,
+      headers: data ? { "Content-Type": "application/json" } : {},
+      body: data ? JSON.stringify(data) : undefined,
+      signal: controller.signal,
+    });
+    await throwIfResNotOk(res);
+    return res;
+  } catch (err: any) {
+    if (err.name === 'AbortError') throw new Error('Request timed out. Please try again.');
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";

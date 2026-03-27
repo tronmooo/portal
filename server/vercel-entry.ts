@@ -31,13 +31,8 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: 'text/csv', limit: '10mb' }));
 
 // Security headers
-app.use((_req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.anthropic.com; font-src 'self' https://api.fontshare.com; frame-ancestors 'self'");
-  next();
-});
+import { securityHeaders } from "./security-headers";
+app.use(securityHeaders);
 
 // Register auth endpoints (before auth middleware)
 registerAuthRoutes(app);

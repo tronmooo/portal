@@ -103,8 +103,23 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
  * Register auth-related API endpoints
  */
 export function registerAuthRoutes(app: any) {
+  // Per-IP rate limiter for auth endpoints
+  const authRateLimits = new Map<string, { count: number; resetAt: number }>();
+  function checkAuthRateLimit(ip: string, max = 10, windowMs = 60000): boolean {
+    const now = Date.now();
+    const entry = authRateLimits.get(ip);
+    if (!entry || now > entry.resetAt) { authRateLimits.set(ip, { count: 1, resetAt: now + windowMs }); return false; }
+    entry.count++;
+    return entry.count > max;
+  }
+
   // Sign up with email/password
   app.post("/api/auth/signup", async (req: Request, res: Response) => {
+    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    if (checkAuthRateLimit(clientIp, 5, 300000)) { // 5 signups per 5 minutes per IP
+      return res.status(429).json({ error: "Too many signup attempts. Please wait and try again." });
+    }
+
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
@@ -153,6 +168,11 @@ export function registerAuthRoutes(app: any) {
 
   // Sign in with email/password
   app.post("/api/auth/signin", async (req: Request, res: Response) => {
+    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    if (checkAuthRateLimit(clientIp)) {
+      return res.status(429).json({ error: "Too many login attempts. Please wait a minute and try again." });
+    }
+
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
@@ -238,7 +258,8 @@ export function registerAuthRoutes(app: any) {
     }
 
     // Sanitize redirect URL — only allow our known domain
-    const allowedOrigins = ['https://portol.me', 'http://localhost:5000'];
+    const envOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(s => s.trim()) || [];
+    const allowedOrigins = [...envOrigins, 'https://portol.me', 'http://localhost:5000'];
     const origin = String(req.headers.origin || '');
     const safeOrigin = allowedOrigins.includes(origin) ? origin : 'https://portol.me';
 

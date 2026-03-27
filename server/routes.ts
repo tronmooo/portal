@@ -1073,6 +1073,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(await storage.createArtifact(parsed.data));
   }));
   app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
+    if (req.body.title !== undefined) {
+      if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Artifact title must be a non-empty string" });
+      req.body.title = sanitize(req.body.title);
+    }
+    if (req.body.description !== undefined && typeof req.body.description === "string") req.body.description = sanitize(req.body.description);
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
@@ -1101,6 +1106,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(await storage.createJournalEntry(parsed.data));
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
+    if (req.body.content !== undefined) {
+      if (typeof req.body.content !== "string") return res.status(400).json({ error: "Journal content must be a string" });
+      req.body.content = sanitize(req.body.content);
+    }
+    if (req.body.mood !== undefined) {
+      const validMoods = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];
+      if (!validMoods.includes(req.body.mood)) return res.status(400).json({ error: `Invalid mood. Must be one of: ${validMoods.join(", ")}` });
+    }
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
@@ -1129,6 +1142,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     catch { res.status(500).json({ error: "Recall failed" }); }
   }));
   app.patch("/api/memories/:id", asyncHandler(async (req, res) => {
+    if (req.body.key !== undefined && (typeof req.body.key !== "string" || !req.body.key.trim())) {
+      return res.status(400).json({ error: "Memory key must be a non-empty string" });
+    }
+    if (req.body.value !== undefined && req.body.value === null) {
+      return res.status(400).json({ error: "Memory value cannot be null" });
+    }
     try {
       const result = await storage.updateMemory(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Memory not found" });
@@ -1136,6 +1155,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   }));
   app.delete("/api/memories/:id", asyncHandler(async (req, res) => {
+    const memories = await storage.getMemories();
+    if (!memories.find((m: any) => m.id === req.params.id)) return res.status(404).json({ error: "Memory not found" });
     await storage.deleteMemory(req.params.id);
     res.status(204).send();
   }));
@@ -1148,6 +1169,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(await storage.createDomain(parsed.data));
   }));
   app.patch("/api/domains/:id", asyncHandler(async (req, res) => {
+    if (req.body.name !== undefined) {
+      if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Domain name must be a non-empty string" });
+      req.body.name = sanitize(req.body.name);
+    }
     try {
       const result = await storage.updateDomain(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Domain not found" });
@@ -2195,6 +2220,16 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   }));
 
   app.patch("/api/goals/:id", asyncHandler(async (req, res) => {
+    if (req.body.title !== undefined) {
+      if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Goal title must be a non-empty string" });
+      req.body.title = sanitize(req.body.title);
+    }
+    if (req.body.target !== undefined && (typeof req.body.target !== "number" || req.body.target <= 0)) {
+      return res.status(400).json({ error: "Target must be a positive number" });
+    }
+    if (req.body.current !== undefined && (typeof req.body.current !== "number" || req.body.current < 0)) {
+      return res.status(400).json({ error: "Current progress cannot be negative" });
+    }
     try {
       const goal = await storage.updateGoal(req.params.id, req.body);
       if (!goal) return res.status(404).json({ error: "Goal not found" });
