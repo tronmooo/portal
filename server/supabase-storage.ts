@@ -166,12 +166,15 @@ export class SupabaseStorage implements IStorage {
   // JSONB columns are already parsed objects from Supabase.
 
   private rowToProfile(r: any): Profile {
+    const fields = r.fields || {};
     return {
       id: r.id, type: r.type, name: r.name, avatar: r.avatar || undefined,
-      fields: r.fields || {}, tags: r.tags || [], notes: r.notes || "",
+      fields, tags: r.tags || [], notes: r.notes || "",
       documents: r.documents || [], linkedTrackers: r.linked_trackers || [],
       linkedExpenses: r.linked_expenses || [], linkedTasks: r.linked_tasks || [],
-      linkedEvents: r.linked_events || [], createdAt: r.created_at, updatedAt: r.updated_at,
+      linkedEvents: r.linked_events || [],
+      parentProfileId: fields._parentProfileId || undefined,
+      createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
 
@@ -337,10 +340,10 @@ export class SupabaseStorage implements IStorage {
 
   async getProfileDetail(id: string): Promise<ProfileDetail | undefined> {
     // Fetch profile AND all related entities in parallel for speed
-    const [profile, allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs] = await Promise.all([
+    const [profile, allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs, allProfiles] = await Promise.all([
       this.getProfile(id),
       this.getTrackers(), this.getExpenses(), this.getTasks(),
-      this.getEvents(), this.getDocuments(), this.getObligations(),
+      this.getEvents(), this.getDocuments(), this.getObligations(), this.getProfiles(),
     ]);
     if (!profile) return undefined;
 
@@ -350,6 +353,8 @@ export class SupabaseStorage implements IStorage {
     const relatedEvents = allEvents.filter(e => e.linkedProfiles.includes(id) || profile.linkedEvents.includes(e.id));
     const relatedDocuments = allDocs.filter(d => d.linkedProfiles.includes(id) || profile.documents.includes(d.id));
     const relatedObligations = allObs.filter(o => o.linkedProfiles.includes(id));
+    // Child profiles: profiles whose parentProfileId points to this profile
+    const childProfiles = allProfiles.filter(p => p.parentProfileId === id);
 
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
@@ -364,15 +369,20 @@ export class SupabaseStorage implements IStorage {
     for (const o of relatedObligations) timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt });
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, timeline };
+    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, childProfiles, timeline };
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {
     const now = new Date().toISOString();
     const id = randomUUID();
+    // Store parentProfileId in fields JSON (no schema migration needed)
+    const fields = { ...(data.fields || {}) };
+    if (data.parentProfileId) {
+      fields._parentProfileId = data.parentProfileId;
+    }
     const { error } = await this.supabase.from("profiles").insert({
       id, user_id: this.userId, type: data.type, name: data.name,
-      fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "",
+      fields, tags: data.tags || [], notes: data.notes || "",
       documents: [], linked_trackers: [], linked_expenses: [],
       linked_tasks: [], linked_events: [], created_at: now, updated_at: now,
     });

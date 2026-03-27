@@ -158,6 +158,7 @@ export interface Profile {
   linkedExpenses: string[];
   linkedTasks: string[];
   linkedEvents: string[];
+  parentProfileId?: string;  // Nested profile: this profile belongs to another profile
   createdAt: string;
   updatedAt: string;
 }
@@ -168,6 +169,7 @@ export const insertProfileSchema = z.object({
   fields: z.record(z.any()).optional().default({}),
   tags: z.array(z.string()).optional().default([]),
   notes: z.string().optional().default(""),
+  parentProfileId: z.string().optional(),
 });
 
 export type InsertProfile = z.infer<typeof insertProfileSchema>;
@@ -701,6 +703,7 @@ export interface ProfileDetail extends Profile {
   relatedEvents: CalendarEvent[];
   relatedDocuments: Document[];
   relatedObligations: Obligation[];
+  childProfiles: Profile[];  // Nested profiles (assets, subscriptions, loans, etc.)
   timeline: TimelineEntry[];
 }
 

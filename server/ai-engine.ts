@@ -1516,14 +1516,32 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "recall_memory":
       return storage.recallMemory(input.query);
 
-    case "create_profile":
+    case "create_profile": {
+      // Auto-detect parent profile for non-primary profile types
+      let parentProfileId = input.parentProfileId;
+      const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
+      if (!parentProfileId && childTypes.includes(input.type || "")) {
+        const profiles = await storage.getProfiles();
+        // If forProfile is specified, find that profile as parent
+        if (input.forProfile) {
+          const parent = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+          if (parent) parentProfileId = parent.id;
+        }
+        // Default: link to self profile
+        if (!parentProfileId) {
+          const selfProfile = profiles.find(p => p.type === "self");
+          if (selfProfile) parentProfileId = selfProfile.id;
+        }
+      }
       return storage.createProfile({
         type: input.type || "person",
         name: input.name,
         fields: input.fields || {},
         tags: input.tags || [],
         notes: input.notes || "",
+        parentProfileId,
       });
+    }
 
     case "update_profile": {
       const profiles = await storage.getProfiles();
@@ -1725,6 +1743,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         });
         if (!existingProfile && serviceName.length > 0) {
           try {
+            // Auto-link subscription to self profile as parent
+            const selfProfile = profiles.find(p => p.type === "self");
             const newProfile = await storage.createProfile({
               type: "subscription",
               name: serviceName,
@@ -1736,6 +1756,7 @@ async function executeTool(name: string, input: any): Promise<any> {
               },
               tags: ["subscription"],
               notes: `${input.frequency || "monthly"} subscription — $${input.amount}`,
+              parentProfileId: selfProfile?.id,
             });
             // Link the obligation to the new profile
             await autoLinkToProfiles("obligation", newObligation.id, serviceName);

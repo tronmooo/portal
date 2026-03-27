@@ -82,6 +82,9 @@ import {
   FileWarning,
   ArrowUp,
   ArrowDown,
+  ChevronRight,
+  Camera,
+  Image as ImageIcon,
 } from "lucide-react";
 import {
   LineChart,
@@ -786,10 +789,12 @@ function InfoTab({
 function DocumentsTab({
   documents,
   profileId,
+  childProfiles,
   onUploaded,
 }: {
   documents: ProfileDetail["relatedDocuments"];
   profileId: string;
+  childProfiles?: Profile[];
   onUploaded: () => void;
 }) {
   const { toast } = useToast();
@@ -799,6 +804,7 @@ function DocumentsTab({
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
+  const [linkTarget, setLinkTarget] = useState<string>("profile"); // "profile" or a child profile ID
 
   // Get unique doc types for filter
   const docTypes = [...new Set(documents.map(d => d.type))].sort();
@@ -822,16 +828,26 @@ function DocumentsTab({
           reader.readAsDataURL(f);
         });
       const fileData = await toBase64(file);
+      const targetProfileId = linkTarget === "profile" ? profileId : linkTarget;
       const res = await apiRequest("POST", "/api/upload", {
         fileName: file.name,
         mimeType: file.type,
         fileData,
-        profileId,
+        profileId: targetProfileId,
       });
+      // Also link to parent profile if uploaded to a child
+      if (linkTarget !== "profile") {
+        try {
+          const doc = await res.json();
+          await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "document", entityId: doc.document?.id || doc.id });
+          return doc;
+        } catch { /* non-critical */ }
+      }
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Document uploaded", description: "File has been linked to this profile." });
+      const childName = childProfiles?.find(c => c.id === linkTarget)?.name;
+      toast({ title: "Document uploaded", description: childName ? `Linked to ${childName}` : "Linked to this profile." });
       onUploaded();
     },
     onError: (err: Error) => {
@@ -861,25 +877,45 @@ function DocumentsTab({
 
   return (
     <>
-      <div className="flex justify-end mb-3">
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          onChange={handleFileChange}
-          data-testid="input-upload-document"
-          accept="image/*,application/pdf,.doc,.docx,.txt"
-        />
-        <Button
-          size="sm"
-          className="gap-1.5 text-xs h-8"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploadMutation.isPending}
-          data-testid="button-upload-document"
-        >
-          <Upload className="h-3.5 w-3.5" />
-          {uploadMutation.isPending ? "Uploading..." : "Upload Document"}
-        </Button>
+      <div className="flex items-center justify-between mb-3 gap-2">
+        {/* Link target selector: attach photo to profile or a child asset */}
+        {childProfiles && childProfiles.length > 0 && (
+          <Select value={linkTarget} onValueChange={setLinkTarget}>
+            <SelectTrigger className="w-[180px] h-8 text-xs" data-testid="select-photo-target">
+              <SelectValue placeholder="Link to..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="profile">This profile</SelectItem>
+              {childProfiles.map(c => (
+                <SelectItem key={c.id} value={c.id}>
+                  <span className="flex items-center gap-1.5">
+                    {c.name} <span className="text-muted-foreground capitalize">({c.type})</span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <div className="flex gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleFileChange}
+            data-testid="input-upload-document"
+            accept="image/*,application/pdf,.doc,.docx,.txt"
+          />
+          <Button
+            size="sm"
+            className="gap-1.5 text-xs h-8"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadMutation.isPending}
+            data-testid="button-upload-document"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            {uploadMutation.isPending ? "Uploading..." : "Upload Document"}
+          </Button>
+        </div>
       </div>
 
       {/* Search and Filter */}
@@ -2661,7 +2697,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   self: [
@@ -2671,7 +2707,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Pet — health + care focused
@@ -2681,7 +2717,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
@@ -2689,7 +2725,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "trackers", label: "Maintenance", testId: "tab-trackers" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
@@ -2725,14 +2761,14 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "documents", label: "Records", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Property / Home
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "trackers", label: "Utilities", testId: "tab-trackers" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
@@ -2754,7 +2790,7 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "finances", label: "Finance", testId: "tab-finances" },
   { value: "documents", label: "Documents", testId: "tab-documents" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
-  { value: "trackers", label: "Trackers", testId: "tab-trackers" },
+  { value: "trackers", label: "Linked", testId: "tab-trackers" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
 ];
 
@@ -2780,7 +2816,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "health": return (profile.relatedTrackers || []).some((t: any) => 
           ['health','fitness','weight','sleep','wellness','nutrition','blood'].some(c => 
             (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)));
-        case "trackers": return (profile.relatedTrackers || []).length > 0;
+        case "trackers": return (profile.relatedTrackers || []).length > 0 || (profile.childProfiles || []).length > 0;
         case "finances": return (profile.relatedExpenses || []).length > 0;
         case "tasks": return (profile.relatedTasks || []).length > 0;
         case "documents": return (profile.relatedDocuments || []).length > 0;
@@ -2995,7 +3031,7 @@ export default function ProfileDetailPage() {
           const stats: { label: string; value: number }[] = [];
           const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
           if (tabSet.has("health"))    stats.push({ label: "Health",  value: profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
-          if (tabSet.has("trackers"))  stats.push({ label: ptype === 'vehicle' ? "Maint." : "Trackers", value: profile.relatedTrackers.length });
+          if (tabSet.has("trackers"))  stats.push({ label: "Linked", value: profile.relatedTrackers.length + (profile.childProfiles || []).length });
           if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: profile.relatedExpenses.length });
           if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: profile.relatedTasks.length });
           if (tabSet.has("documents")) stats.push({ label: "Docs",     value: profile.relatedDocuments.length });
@@ -3054,6 +3090,37 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("trackers") && (
                 <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
+                  {/* Child profiles (assets, subscriptions, loans nested under this profile) */}
+                  {(profile.childProfiles || []).length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">Linked Profiles</p>
+                      <div className="space-y-2">
+                        {(profile.childProfiles || []).map(child => (
+                          <Link key={child.id} href={`/profiles/${child.id}`}>
+                            <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors cursor-pointer">
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                                  {child.type === 'subscription' && <CreditCard className="h-4 w-4 text-primary" />}
+                                  {child.type === 'vehicle' && <Car className="h-4 w-4 text-primary" />}
+                                  {child.type === 'asset' && <Star className="h-4 w-4 text-primary" />}
+                                  {child.type === 'loan' && <CreditCard className="h-4 w-4 text-orange-500" />}
+                                  {child.type === 'investment' && <TrendingUp className="h-4 w-4 text-green-500" />}
+                                  {child.type === 'property' && <Building2 className="h-4 w-4 text-primary" />}
+                                  {!['subscription','vehicle','asset','loan','investment','property'].includes(child.type) && <Link2 className="h-4 w-4 text-primary" />}
+                                </div>
+                                <div>
+                                  <p className="text-sm font-medium">{child.name}</p>
+                                  <p className="text-[10px] text-muted-foreground capitalize">{child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : ''}{child.fields?.frequency ? `/${child.fields.frequency}` : ''}</p>
+                                </div>
+                              </div>
+                              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Trackers */}
                   <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
                 </TabsContent>
               )}
@@ -3063,6 +3130,7 @@ export default function ProfileDetailPage() {
                   <DocumentsTab
                     documents={profile.relatedDocuments}
                     profileId={profile.id}
+                    childProfiles={profile.childProfiles}
                     onUploaded={handleSaved}
                   />
                 </TabsContent>
