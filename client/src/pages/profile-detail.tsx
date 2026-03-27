@@ -2710,8 +2710,47 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
 ];
 
-function getTabsForType(type: string): TabDef[] {
-  return ENTITY_TABS[type] || DEFAULT_TABS;
+function getTabsForType(type: string, profile?: any): TabDef[] {
+  const baseTabs = ENTITY_TABS[type] || DEFAULT_TABS;
+  
+  // If no profile data provided, return all tabs for this type
+  if (!profile) return baseTabs;
+  
+  // Data-driven filtering: prioritize tabs with data, but still show empty ones (just reorder)
+  // Overview always first
+  const withData: TabDef[] = [];
+  const withoutData: TabDef[] = [];
+  
+  for (const tab of baseTabs) {
+    if (tab.value === "info") {
+      withData.unshift(tab); // Overview always first
+      continue;
+    }
+    
+    const hasData = (() => {
+      switch (tab.value) {
+        case "health": return (profile.relatedTrackers || []).some((t: any) => 
+          ['health','fitness','weight','sleep','wellness','nutrition','blood'].some(c => 
+            (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)));
+        case "trackers": return (profile.relatedTrackers || []).length > 0;
+        case "finances": return (profile.relatedExpenses || []).length > 0;
+        case "tasks": return (profile.relatedTasks || []).length > 0;
+        case "documents": return (profile.relatedDocuments || []).length > 0;
+        case "notes": return !!(profile.notes && profile.notes.trim());
+        case "timeline": return ((profile.relatedEvents || []).length + (profile.relatedTasks || []).length) > 0;
+        default: return false;
+      }
+    })();
+    
+    if (hasData) {
+      withData.push(tab);
+    } else {
+      withoutData.push(tab);
+    }
+  }
+  
+  // Data tabs first, then empty tabs (still accessible but deprioritized)
+  return [...withData, ...withoutData];
 }
 
 // ============================================================
@@ -2896,7 +2935,7 @@ export default function ProfileDetailPage() {
         {(() => {
           const ptype = profile.type;
           const stats: { label: string; value: number }[] = [];
-          const tabSet = new Set(getTabsForType(ptype).map(t => t.value));
+          const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
           if (tabSet.has("health"))    stats.push({ label: "Health",  value: profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
           if (tabSet.has("trackers"))  stats.push({ label: ptype === 'vehicle' ? "Maint." : "Trackers", value: profile.relatedTrackers.length });
           if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: profile.relatedExpenses.length });
@@ -2924,7 +2963,7 @@ export default function ProfileDetailPage() {
       {/* Type-specific Tabs */}
       <div className="px-4 md:px-6 pb-6">
         {(() => {
-          const tabs = getTabsForType(profile.type);
+          const tabs = getTabsForType(profile.type, profile);
           const tabValues = new Set(tabs.map(t => t.value));
           return (
             <Tabs defaultValue="info" className="mt-4">

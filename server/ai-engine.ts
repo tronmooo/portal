@@ -685,7 +685,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker (partial match)" },
-        values: { type: "object", description: "Key-value pairs to log. Include ALL relevant fields. For nutrition: { calories, protein, carbs, fat, description }. For running: { distance, duration, pace, caloriesBurned }. For BP: { systolic, diastolic }. For weight: { weight }. For sleep: { hours, quality }." },
+        values: { type: "object", description: "Key-value pairs to log. Include ALL relevant fields. For nutrition: { calories, protein, carbs, fat, sugar, fiber, item }. For running: { distance, duration, pace, caloriesBurned }. For BP: { systolic, diastolic }. For weight: { weight }. For sleep: { hours, quality }." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
       },
@@ -694,7 +694,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "create_tracker",
-    description: "Create a new tracker. Use smart field definitions: Blood Pressure needs fields [systolic:number, diastolic:number, pulse:number]. Weight needs [weight:number]. Running needs [distance:number, duration:number, pace:number, caloriesBurned:number]. Sleep needs [hours:number, quality:text]. Nutrition needs [calories:number, protein:number, carbs:number, fat:number, item:text]. Medication needs [medication:text, dosage:text, time:text]. Always create compound fields for compound measurements.",
+    description: "Create a new tracker. Use smart field definitions: Blood Pressure needs fields [systolic:number, diastolic:number, pulse:number]. Weight needs [weight:number]. Running needs [distance:number, duration:number, pace:number, caloriesBurned:number]. Sleep needs [hours:number, quality:text]. Nutrition needs [calories:number, protein:number, carbs:number, fat:number, sugar:number, fiber:number, item:text]. Medication needs [medication:text, dosage:text, time:text]. Always create compound fields for compound measurements.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1296,8 +1296,14 @@ BEHAVIOR:
 - Be concise and confirm what you did after each action.
 - Handle multiple actions in one message when appropriate.
 - When the user mentions an existing entity, match it by name (partial matching is fine).
-- CRITICAL: When a user mentions eating food ("ate a sandwich", "had lunch", "ate chicken"), ALWAYS log it as a NUTRITION tracker entry with estimated calories, protein, carbs, fat — NOT as an expense. Only create an expense if the user explicitly mentions a dollar amount ("$12 lunch").
+- CRITICAL NUTRITION DETECTION: When a user mentions ANY food or drink consumption, ALWAYS log it as a NUTRITION tracker entry with estimated calories, protein, carbs, fat, sugar — NOT as an expense. This includes:
+  - Eating: "ate a sandwich", "had lunch", "ate chicken", "had pizza"
+  - Drinking: "drank a Coke", "had coffee", "drank a smoothie", "had a beer", "drank water"
+  - Snacking: "had some chips", "ate candy", "grabbed a donut"
+  Only create an expense if the user explicitly mentions a dollar amount ("$12 lunch").
   Example: "I ate a chicken sandwich and ran 2 miles" → log_tracker_entry for Nutrition (calories, protein, carbs, fat) + log_tracker_entry for Running (distance, estimated calories burned). TWO separate tracker entries.
+  Example: "I drank a Coke" → log_tracker_entry for Nutrition with: calories: ~140, sugar: 39g, carbs: 39g, protein: 0, fat: 0. Include the item name in notes.
+  Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with estimated macros for a 16oz latte.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - RECURRING EXPENSES: When a user mentions a recurring payment ("I pay $X per month for Y", "subscription costs $X"), use create_obligation ONLY (NOT create_expense AND NOT create_event). Obligations automatically appear on the calendar on their due dates — do NOT create a separate calendar event for the same bill, or it will show up twice.
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
@@ -1382,9 +1388,14 @@ After completing actions, confirm EACH one with WHERE to find it:
 - Profile update → "Updated [Profile] → visible in Profiles page"
 This helps the user trust and verify the data.
 
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} (${new Date().toISOString().split('T')[0]}).
-When the user says "next Friday", "this Saturday", "tomorrow", etc., resolve to the actual calendar date and use it.
-When the user says "before May 10", set the due date to May 9 and mention this in your response.`;
+Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' })} (Pacific Time).
+Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Los_Angeles' })}.
+CRITICAL DATE RULES:
+- "tomorrow" = the day AFTER today in Pacific Time. Calculate carefully.
+- "next Friday", "this Saturday", etc. = resolve to the actual calendar date relative to today in Pacific Time.
+- "before May 10" = set the due date to May 9.
+- ALWAYS double-check your date math. If today is Wednesday March 26, then tomorrow is Thursday March 27 — NOT March 28.
+- When creating events or tasks with dates, state the resolved date explicitly in your response so the user can verify.`;
 }
 
 // ============================================================
