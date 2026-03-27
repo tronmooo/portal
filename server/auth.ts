@@ -94,7 +94,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
             fields: {},
             tags: [],
           });
-          console.log(`[auth] Auto-created self profile for ${user.email}`);
+          console.log(`[auth] Auto-created self profile for user ${user.id.slice(0, 8)}...`);
         }
       } catch (e) {
         // Non-fatal — don't block auth

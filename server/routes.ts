@@ -131,7 +131,7 @@ export async function registerRoutes(
       const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined);
       res.json(result);
     } catch (err: any) {
-      console.error("Chat error:", err);
+      console.error("[Chat]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process message" });
     }
   }));
@@ -165,7 +165,7 @@ export async function registerRoutes(
       const result = await processFileUpload(fileName, safeMime, fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
-      console.error("Upload error:", err);
+      console.error("[Upload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process upload" });
     }
   }));
@@ -307,7 +307,7 @@ export async function registerRoutes(
 
       res.json({ results, summary });
     } catch (err: any) {
-      console.error("Batch upload error:", err);
+      console.error("[BatchUpload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process batch upload" });
     }
   }));
@@ -434,7 +434,7 @@ export async function registerRoutes(
         saved,
       });
     } catch (err: any) {
-      console.error("Confirm extraction error:", err);
+      console.error("[ConfirmExtraction]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to confirm extraction" });
     }
   }));
@@ -477,7 +477,7 @@ export async function registerRoutes(
       });
       res.json(insights);
     } catch (err: any) {
-      console.error("Insights error:", err);
+      console.error("[Insights]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate insights" });
     }
   }));
@@ -523,6 +523,22 @@ export async function registerRoutes(
       return res.status(400).json({ error: "Profile type is required" });
     }
     req.body.name = sanitize(req.body.name);
+    // Validate common profile fields if provided
+    if (req.body.fields && typeof req.body.fields === "object") {
+      const f = req.body.fields;
+      if (f.email && typeof f.email === "string" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
+        return res.status(400).json({ error: "Invalid email format" });
+      }
+      if (f.phone && typeof f.phone === "string" && !/^[\d\s()+-]{7,20}$/.test(f.phone)) {
+        return res.status(400).json({ error: "Invalid phone number format" });
+      }
+      if (f.birthday && typeof f.birthday === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(f.birthday)) {
+        return res.status(400).json({ error: "Birthday must be in YYYY-MM-DD format" });
+      }
+      if (f.bloodType && typeof f.bloodType === "string" && !/^(A|B|AB|O)[+-]$/i.test(f.bloodType)) {
+        return res.status(400).json({ error: "Blood type must be A+, A-, B+, B-, AB+, AB-, O+, or O-" });
+      }
+    }
     // Duplicate detection: warn if a profile with the same name and type exists
     const existing = await storage.getProfiles();
     const dup = existing.find(p => p.name.toLowerCase() === req.body.name.toLowerCase() && p.type === req.body.type);
@@ -539,6 +555,22 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
       }
       req.body.name = sanitize(req.body.name);
+    }
+    // Validate common profile fields if provided
+    if (req.body.fields && typeof req.body.fields === "object") {
+      const f = req.body.fields;
+      if (f.email && typeof f.email === "string" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
+        return res.status(400).json({ error: "Invalid email format" });
+      }
+      if (f.phone && typeof f.phone === "string" && !/^[\d\s()+-]{7,20}$/.test(f.phone)) {
+        return res.status(400).json({ error: "Invalid phone number format" });
+      }
+      if (f.birthday && typeof f.birthday === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(f.birthday)) {
+        return res.status(400).json({ error: "Birthday must be in YYYY-MM-DD format" });
+      }
+      if (f.bloodType && typeof f.bloodType === "string" && !/^(A|B|AB|O)[+-]$/i.test(f.bloodType)) {
+        return res.status(400).json({ error: "Blood type must be A+, A-, B+, B-, AB+, AB-, O+, or O-" });
+      }
     }
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
@@ -731,7 +763,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       res.json(result);
     } catch (err: any) {
-      console.error("Profile AI Summary error:", err);
+      console.error("[ProfileSummary]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate AI summary" });
     }
   }));
@@ -1496,7 +1528,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       res.json(notifications);
     } catch (err: any) {
-      console.error("Notifications error:", err);
+      console.error("[Notifications]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to compute notifications" });
     }
   }));
@@ -1534,7 +1566,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${new Date().toISOString().slice(0, 10)}.json"`);
       res.json(data);
     } catch (err: any) {
-      console.error("Export error:", err);
+      console.error("[Export]", err?.message || "unknown error");
       res.status(500).json({ error: "Export failed" });
     }
   }));
@@ -1545,102 +1577,112 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (!data || !data.version) {
         return res.status(400).json({ error: "Invalid import file — missing version field" });
       }
-      let imported = { profiles: 0, trackers: 0, tasks: 0, expenses: 0, events: 0, documents: 0, habits: 0, obligations: 0, artifacts: 0, journalEntries: 0, memories: 0, domains: 0 };
+      const imported: Record<string, number> = {};
+      const failed: Record<string, string[]> = {};
+
+      // Helper: try to import an item, track success/failure
+      async function tryImport(category: string, name: string, fn: () => Promise<any>) {
+        try {
+          await fn();
+          imported[category] = (imported[category] || 0) + 1;
+        } catch (err: any) {
+          if (!failed[category]) failed[category] = [];
+          failed[category].push(`${name}: ${err?.message || "unknown error"}`);
+        }
+      }
 
       // Import profiles
       if (data.profiles && Array.isArray(data.profiles)) {
         for (const p of data.profiles) {
-          try { await storage.createProfile({ type: p.type, name: p.name, fields: p.fields, tags: p.tags, notes: p.notes }); imported.profiles++; } catch {}
+          await tryImport("profiles", p.name || "unnamed", () => storage.createProfile({ type: p.type, name: p.name, fields: p.fields, tags: p.tags, notes: p.notes }));
         }
       }
       // Import trackers + entries
       if (data.trackers && Array.isArray(data.trackers)) {
         for (const t of data.trackers) {
-          try {
+          await tryImport("trackers", t.name || "unnamed", async () => {
             const created = await storage.createTracker({ name: t.name, category: t.category, unit: t.unit, icon: t.icon, fields: t.fields });
             if (t.entries) {
               for (const e of t.entries) {
-                try { await storage.logEntry({ trackerId: created.id, values: e.values, notes: e.notes, mood: e.mood, tags: e.tags }); } catch {}
+                await tryImport("trackerEntries", `${t.name} entry`, () => storage.logEntry({ trackerId: created.id, values: e.values, notes: e.notes, mood: e.mood, tags: e.tags }));
               }
             }
-            imported.trackers++;
-          } catch {}
+          });
         }
       }
       // Import tasks
       if (data.tasks && Array.isArray(data.tasks)) {
         for (const t of data.tasks) {
-          try { await storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags }); imported.tasks++; } catch {}
+          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags }));
         }
       }
       // Import expenses
       if (data.expenses && Array.isArray(data.expenses)) {
         for (const e of data.expenses) {
-          try { await storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags }); imported.expenses++; } catch {}
+          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags }));
         }
       }
       // Import events
       if (data.events && Array.isArray(data.events)) {
         for (const e of data.events) {
-          try { await storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: e.linkedProfiles || [], linkedDocuments: e.linkedDocuments || [] }); imported.events++; } catch {}
+          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: e.linkedProfiles || [], linkedDocuments: e.linkedDocuments || [] }));
         }
       }
       // Import documents
       if (data.documents && Array.isArray(data.documents)) {
         for (const d of data.documents) {
-          try { await storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags }); imported.documents++; } catch {}
+          await tryImport("documents", d.name || "unnamed", () => storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags }));
         }
       }
       // Import habits
       if (data.habits && Array.isArray(data.habits)) {
         for (const h of data.habits) {
-          try {
+          await tryImport("habits", h.name || "unnamed", async () => {
             const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency });
             if (h.checkins) {
               for (const c of h.checkins) {
-                try { await storage.checkinHabit(created.id, c.date, c.value, c.notes); } catch {}
+                await tryImport("habitCheckins", `${h.name} checkin`, () => storage.checkinHabit(created.id, c.date, c.value, c.notes));
               }
             }
-            imported.habits++;
-          } catch {}
+          });
         }
       }
       // Import obligations
       if (data.obligations && Array.isArray(data.obligations)) {
         for (const o of data.obligations) {
-          try {
+          await tryImport("obligations", o.name || "unnamed", async () => {
             const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes });
             if (o.payments) {
               for (const p of o.payments) {
-                try { await storage.payObligation(created.id, p.amount, p.method, p.confirmationNumber); } catch {}
+                await tryImport("obligationPayments", `${o.name} payment`, () => storage.payObligation(created.id, p.amount, p.method, p.confirmationNumber));
               }
             }
-            imported.obligations++;
-          } catch {}
+          });
         }
       }
       // Import artifacts
       if (data.artifacts && Array.isArray(data.artifacts)) {
         for (const a of data.artifacts) {
-          try { await storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned }); imported.artifacts++; } catch {}
+          await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned }));
         }
       }
       // Import journal entries
       if (data.journalEntries && Array.isArray(data.journalEntries)) {
         for (const j of data.journalEntries) {
-          try { await storage.createJournalEntry({ date: j.date, mood: j.mood, content: j.content, tags: j.tags, energy: j.energy, gratitude: j.gratitude, highlights: j.highlights }); imported.journalEntries++; } catch {}
+          await tryImport("journalEntries", j.date || "unnamed", () => storage.createJournalEntry({ date: j.date, mood: j.mood, content: j.content, tags: j.tags, energy: j.energy, gratitude: j.gratitude, highlights: j.highlights }));
         }
       }
       // Import memories
       if (data.memories && Array.isArray(data.memories)) {
         for (const m of data.memories) {
-          try { await storage.saveMemory({ key: m.key, value: m.value, category: m.category }); imported.memories++; } catch {}
+          await tryImport("memories", m.key || "unnamed", () => storage.saveMemory({ key: m.key, value: m.value, category: m.category }));
         }
       }
 
-      res.json({ success: true, imported });
+      const totalFailed = Object.values(failed).reduce((s, arr) => s + arr.length, 0);
+      res.json({ success: totalFailed === 0, imported, failed: totalFailed > 0 ? failed : undefined, totalFailed });
     } catch (err: any) {
-      console.error("Import error:", err);
+      console.error("[Import]", err?.message || "unknown error");
       res.status(500).json({ error: "Import failed" });
     }
   }));
