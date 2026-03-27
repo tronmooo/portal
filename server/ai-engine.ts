@@ -1424,8 +1424,12 @@ ACTION EXAMPLES:
 - "Create a blood pressure tracker for Mom" → create_tracker with forProfile: "Mom"
 - "Log Max's weight at 32 lbs" → log_tracker_entry with forProfile: "Max"
 - "Schedule a vet appointment for Max" → create_event with forProfile: "Max"
+- "Schedule an oil change for my Tesla" → create_event with forProfile: "Tesla" (vehicle profile)
+- "My car needs maintenance next month" → create_event with forProfile matching the vehicle profile name
 - "What are Rex's upcoming events?" → get_summary type: "events" forProfile: "Rex"
 - "Tell me about Luna" → get_profile_data profileName: "Luna"
+
+VEHICLE/ASSET LINKING: When creating events, tasks, or expenses that mention a vehicle, car, or asset, ALWAYS set forProfile to the vehicle's profile name. This ensures the item appears on the vehicle's timeline. Example: "oil change for the Honda" → forProfile: "Honda Civic" (or whatever the vehicle profile is named).
 
 For multi-action messages like "Create a task for Max and log an expense for my car", set the correct forProfile on EACH tool call separately ("Max" for the task, "Tesla" for the expense).
 
@@ -1731,6 +1735,20 @@ async function executeTool(name: string, input: any): Promise<any> {
       const entryValues = { ...input.values };
       if (input.notes) entryValues._notes = input.notes;
       if (tracker) {
+        // Dedup: check if nearly identical entry was logged in the last 2 minutes
+        const twoMinAgo = Date.now() - 120000;
+        const recentDup = tracker.entries.find(e => {
+          if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
+          // Compare primary numeric values
+          const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
+          const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
+          if (existingNums.length === 0 || newNums.length === 0) return false;
+          return newNums.every(([k, v]) => e.values[k] === v);
+        });
+        if (recentDup) {
+          logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
+          return recentDup; // Return existing instead of creating duplicate
+        }
         const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues });
         await autoLinkToProfiles("tracker", tracker.id, tracker.name, input.forProfile);
         // Auto-update any linked goals (e.g., running 1.5 mi updates 5K goal progress)
@@ -1774,6 +1792,18 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_expense": {
+      // Dedup: check if same amount + similar description was created in last 2 minutes
+      const allExpenses = await storage.getExpenses();
+      const twoMinAgoExp = Date.now() - 120000;
+      const dupExpense = allExpenses.find(e => {
+        if (new Date(e.date).getTime() < twoMinAgoExp) return false;
+        return e.amount === (parseFloat(input.amount) || 0) &&
+          e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20));
+      });
+      if (dupExpense) {
+        logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
+        return dupExpense;
+      }
       const newExpense = await storage.createExpense({
         amount: parseFloat(input.amount) || 0,
         category: input.category || "general",

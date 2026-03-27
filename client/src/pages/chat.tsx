@@ -833,6 +833,7 @@ export default function ChatPage() {
 
   function invalidateAll() {
     queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
     queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
     queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
