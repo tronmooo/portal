@@ -1,23 +1,20 @@
-const CACHE_NAME = 'lifeos-v3';
-const STATIC_CACHE = 'lifeos-static-v3';
+const CACHE_NAME = 'portol-v5';
+const STATIC_CACHE = 'portol-static-v5';
 const PRECACHE_URLS = [
   '/#/',
   '/index.html',
   '/offline.html',
 ];
 
-// Static asset extensions — cache-first
-const STATIC_EXT = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot)(\?.*)?$/;
-
 // Install — precache shell + offline page
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
   );
-  self.skipWaiting();
+  self.skipWaiting(); // Activate immediately
 });
 
-// Activate — clean old caches
+// Activate — clean ALL old caches to force fresh content
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -28,14 +25,14 @@ self.addEventListener('activate', (event) => {
       )
     )
   );
-  self.clients.claim();
+  self.clients.claim(); // Take control immediately
 });
 
-// Fetch — different strategies per request type
+// Fetch — network-first for everything to ensure fresh content
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // API calls — network-first, no cache fallback (data must be fresh)
+  // API calls — network only, offline fallback
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(event.request).catch(() =>
@@ -48,48 +45,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets — cache-first, fall back to network
-  if (STATIC_EXT.test(url.pathname)) {
-    event.respondWith(
-      caches.open(STATIC_CACHE).then((cache) =>
-        cache.match(event.request).then((cached) => {
-          if (cached) return cached;
-          return fetch(event.request).then((response) => {
-            if (response.ok) cache.put(event.request, response.clone());
-            return response;
-          });
-        })
-      )
-    );
-    return;
-  }
-
-  // Navigation / HTML — network-first, cache fallback, then offline page
-  if (event.request.mode === 'navigate' || event.request.headers.get('accept')?.includes('text/html')) {
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          return response;
-        })
-        .catch(() =>
-          caches.match(event.request).then((cached) =>
-            cached || caches.match('/offline.html')
-          )
-        )
-    );
-    return;
-  }
-
-  // Everything else — network first, cache fallback
+  // All other requests — network-first, cache fallback
+  // This ensures new deploys are always picked up immediately
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        // Cache successful responses for offline use
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(STATIC_CACHE).then((cache) => cache.put(event.request, clone));
+        }
         return response;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() =>
+        // Offline: serve from cache, or offline page for navigation
+        caches.match(event.request).then((cached) => {
+          if (cached) return cached;
+          if (event.request.mode === 'navigate') {
+            return caches.match('/offline.html');
+          }
+          return new Response('', { status: 503 });
+        })
+      )
   );
 });
