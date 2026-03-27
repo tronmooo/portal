@@ -147,6 +147,66 @@ export interface IStorage {
   setPreference(key: string, value: string): Promise<void>;
 }
 
+// ---- Human-readable tracker value formatting ----
+
+export function formatTrackerValues(trackerName: string, values: Record<string, any>, unit?: string): string {
+  const lower = trackerName.toLowerCase();
+  const parts: string[] = [];
+  
+  // Sleep: show as "7.5 hours" not "hours: 7.5"
+  if (lower.includes('sleep')) {
+    if (values.hours != null) parts.push(`${values.hours} hours`);
+    if (values.quality) parts.push(`${values.quality} quality`);
+    if (values.bedtime) parts.push(`bedtime ${values.bedtime}`);
+    if (values.wakeTime) parts.push(`woke ${values.wakeTime}`);
+    return parts.join(', ') || Object.values(values).join(', ');
+  }
+  
+  // Weight: show as "183 lbs" not "weight: 183"
+  if (lower.includes('weight')) {
+    const w = values.weight ?? values.value;
+    if (w != null) return `${w} ${unit || 'lbs'}`;
+  }
+  
+  // Blood pressure: show as "120/80" not "systolic: 120, diastolic: 80"
+  if (lower.includes('blood pressure') || lower.includes('bp')) {
+    const sys = values.systolic ?? values.sbp;
+    const dia = values.diastolic ?? values.dbp;
+    if (sys != null && dia != null) {
+      const pulse = values.pulse ?? values.heartRate;
+      return `${sys}/${dia}${pulse ? ` pulse ${pulse}` : ''}`;
+    }
+  }
+  
+  // Calories/nutrition: show as "500 kcal" not "calories: 500"
+  if (lower.includes('calori') || lower.includes('nutrition') || lower.includes('meal')) {
+    if (values.calories != null) parts.push(`${values.calories} kcal`);
+    if (values.name || values.meal) parts.push(values.name || values.meal);
+    if (values.protein) parts.push(`${values.protein}g protein`);
+    return parts.join(', ') || Object.values(values).join(', ');
+  }
+  
+  // Running/exercise: show as "3 mi in 25:00" not "distance: 3, duration: 25:00"
+  if (lower.includes('run') || lower.includes('exercise') || lower.includes('workout')) {
+    if (values.distance != null) parts.push(`${values.distance} mi`);
+    if (values.duration) parts.push(`in ${values.duration}`);
+    if (values.calories) parts.push(`${values.calories} cal`);
+    return parts.join(' ') || Object.values(values).join(', ');
+  }
+  
+  // Generic: show primary value with unit, then other fields
+  const primaryValue = values.value ?? Object.values(values).find(v => typeof v === 'number');
+  if (primaryValue != null && Object.keys(values).length === 1) {
+    return `${primaryValue}${unit ? ` ${unit}` : ''}`;
+  }
+  
+  // Fallback: key-value pairs but cleaner
+  return Object.entries(values)
+    .filter(([k, v]) => v != null && v !== '' && k !== '_notes' && k !== 'notes')
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(', ');
+}
+
 // ---- Secondary data computation ----
 
 export function computeSecondaryData(trackerName: string, category: string, values: Record<string, any>): ComputedData {
@@ -595,7 +655,7 @@ export class MemStorage implements IStorage {
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
       for (const e of t.entries) {
-        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: Object.entries(e.values).map(([k, v]) => `${k}: ${v}`).join(", "), data: { ...e.values, computed: e.computed }, timestamp: e.timestamp });
+        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: formatTrackerValues(t.name, e.values, t.unit), data: { ...e.values, computed: e.computed }, timestamp: e.timestamp });
       }
     }
     for (const e of relatedExpenses) { timeline.push({ id: e.id, type: "expense", title: e.description, description: `$${e.amount} - ${e.category}`, timestamp: e.date }); }
@@ -1429,6 +1489,12 @@ export class MemStorage implements IStorage {
       return new Date(t.dueDate) < now;
     }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 
+    // Tasks due today
+    const tasksDueToday = tasks.filter(t => {
+      if (t.status === 'done' || !t.dueDate) return false;
+      return t.dueDate.slice(0, 10) === today;
+    }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
+
     // Today's events
     const events = Array.from(this.events.values());
     const todaysEvents = events.filter(e => e.date === today)
@@ -1446,6 +1512,7 @@ export class MemStorage implements IStorage {
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
       },
       overdueTasks,
+      tasksDueToday,
       todaysEvents,
       totalDocuments: documents.length,
     };

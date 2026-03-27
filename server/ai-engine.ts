@@ -1464,8 +1464,12 @@ Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year:
 Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Los_Angeles' })}.
 CRITICAL DATE RULES:
 - "tomorrow" = the day AFTER today in Pacific Time. Calculate carefully.
-- "next Friday", "this Saturday", etc. = resolve to the actual calendar date relative to today in Pacific Time.
+- "by Friday" or "this Friday" = if today IS Friday, that means TODAY. If today is before Friday, it means the upcoming Friday of this week. NEVER push to next week.
+- "next Friday" = the Friday of NEXT week (7+ days away).
+- "this Saturday", "this Monday", etc. = the nearest upcoming occurrence. If today IS that day, it means TODAY.
 - "before May 10" = set the due date to May 9.
+- ALWAYS double-check: what day of the week is today? Then count forward from there.
+- If today is Friday and the user says "by Friday", the date is TODAY's date, not tomorrow.
 - ALWAYS double-check your date math. If today is Wednesday March 26, then tomorrow is Thursday March 27 — NOT March 28.
 - When creating events or tasks with dates, state the resolved date explicitly in your response so the user can verify.`;
 }

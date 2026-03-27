@@ -270,11 +270,11 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
   const [, navigate] = useLocation();
   const events: any[] = enhanced?.todaysEvents || [];
   const overdueTasks: any[] = enhanced?.overdueTasks || [];
-  const upcomingBills: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil <= 0 || b.daysUntil === 0);
+  const tasksDueToday: any[] = enhanced?.tasksDueToday || [];
   const todayBills: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil === 0);
 
   const hasSchedule = events.length > 0;
-  const hasDue = overdueTasks.length > 0 || todayBills.length > 0 || (stats?.activeTasks ?? 0) > 0;
+  const hasDue = overdueTasks.length > 0 || tasksDueToday.length > 0 || todayBills.length > 0;
 
   if (!hasSchedule && !hasDue) return (
     <CollapsibleSection icon={Calendar} label="Today" testId="section-today">
@@ -317,6 +317,17 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
         {/* Due Items */}
         <div className="space-y-1.5">
           <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Needs Attention</p>
+          {/* Tasks due today */}
+          {tasksDueToday.length > 0 && tasksDueToday.slice(0, 4).map((t: any) => (
+            <div key={`today-${t.id}`}
+              onClick={() => navigate("/dashboard/tasks")}
+              className="flex items-center gap-2 p-2 rounded-lg bg-primary/5 border border-primary/20 cursor-pointer hover:bg-primary/10 transition-colors">
+              <Target className="h-3 w-3 text-primary shrink-0" />
+              <span className="text-xs truncate flex-1">{t.title}</span>
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-primary border-primary/30">Due Today</Badge>
+            </div>
+          ))}
+          {/* Overdue tasks */}
           {overdueTasks.length > 0 && overdueTasks.slice(0, 4).map((t: any) => (
             <div key={t.id}
               onClick={() => navigate("/dashboard/tasks")}
@@ -335,8 +346,8 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
               <span className="text-[10px] font-medium text-amber-600">{formatMoney(b.amount)}</span>
             </div>
           ))}
-          {overdueTasks.length === 0 && todayBills.length === 0 && (
-            <p className="text-xs text-muted-foreground py-2">All clear — nothing overdue</p>
+          {overdueTasks.length === 0 && tasksDueToday.length === 0 && todayBills.length === 0 && (
+            <p className="text-xs text-muted-foreground py-2">All clear — nothing due today</p>
           )}
         </div>
       </div>

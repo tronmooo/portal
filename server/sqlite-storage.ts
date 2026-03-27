@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import { randomUUID } from "crypto";
+import { formatTrackerValues } from "./storage";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -407,7 +408,7 @@ export class SqliteStorage implements IStorage {
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
       for (const e of t.entries) {
-        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: Object.entries(e.values).map(([k, v]) => `${k}: ${v}`).join(", "), data: { ...e.values, computed: e.computed }, timestamp: e.timestamp });
+        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: formatTrackerValues(t.name, e.values, t.unit), data: { ...e.values, computed: e.computed }, timestamp: e.timestamp });
       }
     }
     for (const e of relatedExpenses) timeline.push({ id: e.id, type: "expense", title: e.description, description: `$${e.amount} - ${e.category}`, timestamp: e.date });

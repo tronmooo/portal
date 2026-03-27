@@ -9,15 +9,17 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 30000; // 30s timeout for all API requests
+const DEFAULT_TIMEOUT_MS = 30000; // 30s timeout for most API requests
+const CHAT_TIMEOUT_MS = 90000; // 90s for chat (AI can take longer on complex queries)
 
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  const timeoutMs = url.includes('/api/chat') ? CHAT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${API_BASE}${url}`, {
       method,

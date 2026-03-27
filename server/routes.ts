@@ -1554,6 +1554,61 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
   }));
 
+  // ---- Data Cleanup ----
+  app.post("/api/cleanup/tracker-entries", asyncHandler(async (req, res) => {
+    const trackers = await storage.getTrackers();
+    let cleaned = 0;
+    const details: string[] = [];
+
+    for (const tracker of trackers) {
+      const name = tracker.name.toLowerCase();
+      for (const entry of tracker.entries) {
+        let isGarbage = false;
+        const vals = entry.values;
+
+        // Negative values in health trackers
+        if (Object.values(vals).some((v: any) => typeof v === 'number' && v < 0)) {
+          isGarbage = true;
+        }
+        // Weight over 1000 lbs or under 10 lbs (for humans)
+        if (name.includes('weight') && !name.includes('max') && !name.includes('rex')) {
+          const w = vals.weight ?? vals.value;
+          if (typeof w === 'number' && (w > 1000 || w < 10)) isGarbage = true;
+        }
+        // Calories over 20000
+        if ((name.includes('calori') || name.includes('nutrition')) && vals.calories && typeof vals.calories === 'number' && vals.calories > 20000) {
+          isGarbage = true;
+        }
+        // Sleep over 24 hours
+        if (name.includes('sleep') && vals.hours && typeof vals.hours === 'number' && (vals.hours > 24 || vals.hours < 0)) {
+          isGarbage = true;
+        }
+        // Blood pressure: systolic over 300 or diastolic over 200
+        if (name.includes('blood pressure') || name.includes('bp')) {
+          const sys = vals.systolic ?? vals.sbp;
+          const dia = vals.diastolic ?? vals.dbp;
+          if ((typeof sys === 'number' && sys > 300) || (typeof dia === 'number' && dia > 200)) isGarbage = true;
+          // Partial: only one value present
+          if ((sys == null && dia != null) || (sys != null && dia == null)) isGarbage = true;
+        }
+        // All values empty
+        const hasValue = Object.entries(vals).some(([k, v]) => k !== '_notes' && k !== 'notes' && v != null && v !== '');
+        if (!hasValue) isGarbage = true;
+
+        if (isGarbage) {
+          try {
+            await storage.deleteTrackerEntry(tracker.id, entry.id);
+            cleaned++;
+            details.push(`${tracker.name}: removed entry ${entry.id.slice(0, 8)} (${JSON.stringify(vals).slice(0, 80)})`);
+          } catch { /* skip if can't delete */ }
+        }
+      }
+    }
+
+    bustAllCaches();
+    res.json({ cleaned, details: details.slice(0, 50) });
+  }));
+
   // ---- Export / Import ----
   app.get("/api/export", asyncHandler(async (_req, res) => {
     try {
