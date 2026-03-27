@@ -558,13 +558,25 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         query: { type: "string", description: "Search query" },
+        forProfile: { type: "string", description: "Filter search results to a specific profile. Use when searching for a specific person's data." },
       },
       required: ["query"],
     },
   },
   {
+    name: "get_profile_data",
+    description: "Get ALL data for a specific person or pet profile — their tasks, expenses, trackers, events, documents, obligations, child profiles (assets/subscriptions), and timeline. Use when the user asks about a specific person's data like 'What does Rex have?', 'Show me Mom's stuff', 'What's going on with Luna?'",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        profileName: { type: "string", description: "Name of the profile (person/pet) to get data for. Partial match is fine." },
+      },
+      required: ["profileName"],
+    },
+  },
+  {
     name: "get_summary",
-    description: "Get summary statistics for a specific entity type or all data. Use when the user asks for an overview, stats, totals, or 'how many'.",
+    description: "Get summary statistics for a specific entity type or all data. Use when the user asks for an overview, stats, totals, or 'how many'. Supports filtering by profile — e.g., 'How many tasks does Rex have?' → forProfile: 'Rex'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -577,6 +589,10 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
           type: "string",
           enum: ["today", "week", "month", "all"],
           description: "Time range for the summary",
+        },
+        forProfile: {
+          type: "string",
+          description: "Filter results to a specific profile (person, pet, etc.). Use when the user asks about a specific person's data — e.g., 'Rex's expenses', 'Mom's tasks'. Set to the profile name.",
         },
       },
       required: ["entity_type"],
@@ -1346,15 +1362,31 @@ When logging to an existing tracker, check its field names in the EXISTING DATA 
 - Weight tracker has fields [weight] → send {"weight": 183}, NOT {"value": 183}
 - If you need to store extra data that doesn't match a field, use the "notes" parameter instead
 
-PROFILE LINKING — CRITICAL:
-When the user mentions a specific person, pet, vehicle, account, or any named entity that matches an existing profile, you MUST set the "forProfile" parameter in your tool call to that profile's name. This ensures the created item gets linked to the correct profile.
+MULTI-PROFILE AWARENESS — CRITICAL:
+The system manages data for MULTIPLE people and pets. Each person/pet has their own tasks, expenses, trackers, events, documents, subscriptions, and assets. Data must NEVER cross between profiles.
 
-Examples:
+When the user mentions a specific person, pet, or entity, you MUST:
+1. Set "forProfile" on ALL tool calls involving that person/pet
+2. Use get_profile_data to retrieve a specific person's full data when asked
+3. Use get_summary with forProfile to get stats filtered to that person
+4. Use search with forProfile to search within a person's data
+
+PROFILE RESOLUTION:
+- "Mom's iPhone" → resolve Mom as the profile, iPhone as a child asset under Mom
+- "Rex's vet records" → resolve Rex as the profile, search his documents
+- "Luna's weight" → resolve Luna, query her weight tracker
+- "What does Rex have?" → get_profile_data with profileName: "Rex"
+- "How much have I spent on Luna?" → get_summary type: "expenses" forProfile: "Luna"
+- "Show Mom's calendar" → get_summary type: "events" forProfile: "Mom"
+
+ACTION EXAMPLES:
 - "Create a task for Max to get groomed" → create_task with forProfile: "Max"
 - "Log $50 expense for Tesla oil change" → create_expense with forProfile: "Tesla"
 - "Create a blood pressure tracker for Mom" → create_tracker with forProfile: "Mom"
 - "Log Max's weight at 32 lbs" → log_tracker_entry with forProfile: "Max"
 - "Schedule a vet appointment for Max" → create_event with forProfile: "Max"
+- "What are Rex's upcoming events?" → get_summary type: "events" forProfile: "Rex"
+- "Tell me about Luna" → get_profile_data profileName: "Luna"
 
 For multi-action messages like "Create a task for Max and log an expense for my car", set the correct forProfile on EACH tool call separately ("Max" for the task, "Tesla" for the expense).
 
@@ -1457,36 +1489,82 @@ function summarizeSingleItem(item: any): any {
 
 async function executeTool(name: string, input: any): Promise<any> {
   switch (name) {
-    case "search":
-      return storage.search(input.query);
+    case "search": {
+      const results = await storage.search(input.query);
+      // Filter by profile if specified
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const matchedProfile = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+        if (matchedProfile) {
+          const pid = matchedProfile.id;
+          return results.filter((r: any) => {
+            if (r.linkedProfiles && Array.isArray(r.linkedProfiles)) return r.linkedProfiles.includes(pid);
+            return true; // Keep items without linkedProfiles
+          });
+        }
+      }
+      return results;
+    }
+
+    case "get_profile_data": {
+      const profiles = await storage.getProfiles();
+      const profile = profiles.find(p => p.name.toLowerCase().includes((input.profileName || "").toLowerCase()));
+      if (!profile) return { error: `No profile found matching "${input.profileName}"` };
+      const detail = await storage.getProfileDetail(profile.id);
+      if (!detail) return { error: "Could not load profile data" };
+      return {
+        name: detail.name,
+        type: detail.type,
+        fields: detail.fields,
+        tasks: detail.relatedTasks.map(t => ({ title: t.title, status: t.status, priority: t.priority, dueDate: t.dueDate })),
+        expenses: detail.relatedExpenses.map(e => ({ description: e.description, amount: e.amount, category: e.category, date: e.date })),
+        trackers: detail.relatedTrackers.map(t => ({ name: t.name, category: t.category, entryCount: t.entries.length, latestEntry: t.entries[t.entries.length - 1]?.values })),
+        events: detail.relatedEvents.map(e => ({ title: e.title, date: e.date, time: e.time })),
+        documents: detail.relatedDocuments.map(d => ({ name: d.name, type: d.type })),
+        obligations: detail.relatedObligations.map(o => ({ name: o.name, amount: o.amount, frequency: o.frequency, nextDue: o.nextDueDate })),
+        childProfiles: (detail.childProfiles || []).map(c => ({ name: c.name, type: c.type, fields: c.fields })),
+        recentTimeline: detail.timeline.slice(0, 10).map(t => ({ type: t.type, title: t.title, description: t.description, timestamp: t.timestamp })),
+      };
+    }
 
     case "get_summary": {
       const entityType = input.entity_type;
       const summary: Record<string, any> = {};
+      // Resolve profile filter
+      let filterProfileId: string | undefined;
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const matched = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+        if (matched) filterProfileId = matched.id;
+      }
 
       if (entityType === "all" || entityType === "profiles") {
         const profiles = await storage.getProfiles();
         summary.profiles = { count: profiles.length, items: profiles.map(p => ({ id: p.id, name: p.name, type: p.type })) };
       }
       if (entityType === "all" || entityType === "trackers") {
-        const trackers = await storage.getTrackers();
+        const allTrackers = await storage.getTrackers();
+        const trackers = filterProfileId ? allTrackers.filter(t => t.linkedProfiles.includes(filterProfileId!)) : allTrackers;
         summary.trackers = {
           count: trackers.length,
           items: trackers.map(t => ({ id: t.id, name: t.name, category: t.category, entryCount: t.entries.length })),
         };
       }
       if (entityType === "all" || entityType === "tasks") {
-        const tasks = await storage.getTasks();
+        const allTasks = await storage.getTasks();
+        const tasks = filterProfileId ? allTasks.filter(t => t.linkedProfiles.includes(filterProfileId!)) : allTasks;
         const active = tasks.filter(t => t.status !== "done");
         summary.tasks = { total: tasks.length, active: active.length, done: tasks.length - active.length, items: active.map(t => ({ id: t.id, title: t.title, priority: t.priority, dueDate: t.dueDate })) };
       }
       if (entityType === "all" || entityType === "expenses") {
-        const expenses = await storage.getExpenses();
+        const allExpenses = await storage.getExpenses();
+        const expenses = filterProfileId ? allExpenses.filter(e => e.linkedProfiles.includes(filterProfileId!)) : allExpenses;
         const total = expenses.reduce((s, e) => s + e.amount, 0);
         summary.expenses = { count: expenses.length, totalAmount: total, recent: expenses.slice(-5).map(e => ({ amount: e.amount, description: e.description, date: e.date })) };
       }
       if (entityType === "all" || entityType === "events") {
-        const events = await storage.getEvents();
+        const allEvents = await storage.getEvents();
+        const events = filterProfileId ? allEvents.filter(e => e.linkedProfiles.includes(filterProfileId!)) : allEvents;
         summary.events = { count: events.length, items: events.slice(-5).map(e => ({ id: e.id, title: e.title, date: e.date, time: e.time })) };
       }
       if (entityType === "all" || entityType === "habits") {
@@ -1494,7 +1572,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         summary.habits = { count: habits.length, items: habits.map(h => ({ id: h.id, name: h.name, streak: h.currentStreak, frequency: h.frequency })) };
       }
       if (entityType === "all" || entityType === "obligations") {
-        const obligations = await storage.getObligations();
+        const allObligations = await storage.getObligations();
+        const obligations = filterProfileId ? allObligations.filter(o => o.linkedProfiles.includes(filterProfileId!)) : allObligations;
         const monthlyTotal = obligations.reduce((s, o) => s + o.amount, 0);
         summary.obligations = { count: obligations.length, monthlyTotal, items: obligations.map(o => ({ id: o.id, name: o.name, amount: o.amount, nextDue: o.nextDueDate })) };
       }
@@ -2556,13 +2635,28 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
 
-      const response = await getClient().messages.create({
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
-        max_tokens: 2048,
-        system: systemPrompt,
-        tools: TOOL_DEFINITIONS,
-        messages,
-      });
+      // Retry on overloaded/rate-limit errors
+      let response;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          response = await getClient().messages.create({
+            model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+            max_tokens: 2048,
+            system: systemPrompt,
+            tools: TOOL_DEFINITIONS,
+            messages,
+          });
+          break; // Success
+        } catch (retryErr: any) {
+          const status = retryErr?.status || retryErr?.error?.status || 0;
+          if ((status === 529 || status === 429 || status === 503) && attempt < 2) {
+            await new Promise(r => setTimeout(r, (attempt + 1) * 2000)); // Wait 2s, 4s
+            continue;
+          }
+          throw retryErr;
+        }
+      }
+      if (!response) throw new Error("Failed after retries");
 
       // Extract text blocks for the reply
       for (const block of response.content) {
@@ -2588,7 +2682,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const result = await executeTool(toolUse.name, toolUse.input);
           
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache();
           }
@@ -2602,7 +2696,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const inp = toolUse.input as Record<string, any>;
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
-          const readOnlyTools = ["search", "get_summary", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId);
           }
@@ -2667,6 +2761,7 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
   const mapping: Record<string, ParsedAction["type"]> = {
     search: "retrieve",
     get_summary: "retrieve",
+    get_profile_data: "retrieve",
     recall_memory: "recall_memory",
     create_profile: "create_profile",
     update_profile: "update_profile",
