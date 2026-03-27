@@ -1,10 +1,10 @@
 import { Link, useLocation } from "wouter";
-import { MessageSquare, LayoutDashboard, BarChart3, Users, Calendar } from "lucide-react";
+import { MessageSquare, LayoutDashboard, Link2, Users, Calendar } from "lucide-react";
 
 const TABS = [
   { label: "Chat", href: "/", icon: MessageSquare },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Trackers", href: "/trackers", icon: BarChart3 },
+  { label: "Linked", href: "/trackers", icon: Link2 },
   { label: "Calendar", href: "/calendar", icon: Calendar },
   { label: "Profiles", href: "/profiles", icon: Users },
 ];

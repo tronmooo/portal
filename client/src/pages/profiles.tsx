@@ -1071,24 +1071,22 @@ export default function ProfilesPage() {
     );
   }
 
+  // Only show primary profiles (people, pets, self) on the Profiles page
+  // Everything else (vehicles, subscriptions, assets, loans) lives under Linked tab of the parent profile
+  const primaryTypes = new Set(["person", "pet", "self", "medical"]);
+  const primaryProfiles = (profiles || []).filter(p => primaryTypes.has(p.type));
+  
   // Group by type
-  const grouped = (profiles || []).reduce((acc: Record<string, Profile[]>, p) => {
+  const grouped = primaryProfiles.reduce((acc: Record<string, Profile[]>, p) => {
     (acc[p.type] = acc[p.type] || []).push(p);
     return acc;
   }, {});
 
   const typeOrder = [
+    "self",
     "person",
     "pet",
-    "vehicle",
-    "asset",
-    "loan",
-    "investment",
-    "subscription",
     "medical",
-    "account",
-    "property",
-    "self",
   ];
   const sortedTypes = Object.keys(grouped).sort(
     (a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b)

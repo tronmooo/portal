@@ -2711,7 +2711,7 @@ export default function TrackersPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-xl font-semibold" data-testid="text-trackers-title">Trackers</h1>
+            <h1 className="text-xl font-semibold" data-testid="text-trackers-title">Linked</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
             {filteredTrackers.length === 0
