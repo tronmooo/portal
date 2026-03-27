@@ -13,6 +13,45 @@ function getClient(): Anthropic {
 }
 
 // ============================================================
+// CONTEXT CACHE — short-lived cache for AI context data (avoids repeated DB queries)
+// ============================================================
+
+interface ContextCache {
+  data: any[] | null;
+  timestamp: number;
+}
+
+const contextCache: ContextCache = { data: null, timestamp: 0 };
+const CONTEXT_CACHE_TTL = 5000; // 5 seconds
+
+function invalidateContextCache() {
+  contextCache.data = null;
+  contextCache.timestamp = 0;
+}
+
+async function getCachedContextData(): Promise<any[]> {
+  const now = Date.now();
+  if (contextCache.data && (now - contextCache.timestamp) < CONTEXT_CACHE_TTL) {
+    return contextCache.data;
+  }
+  const data = await Promise.all([
+    storage.getProfiles(),
+    storage.getTrackers(),
+    storage.getTasks(),
+    storage.getExpenses(),
+    storage.getEvents(),
+    storage.getHabits(),
+    storage.getObligations(),
+    storage.getMemories(),
+    storage.getDocuments(),
+    storage.getGoals(),
+  ]);
+  contextCache.data = data;
+  contextCache.timestamp = now;
+  return data;
+}
+
+// ============================================================
 // ACTION LOG — in-memory history of the last 20 CRUD operations
 // ============================================================
 
@@ -2260,8 +2299,15 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
       }
     }
 
+    // If no profile matched at all, link to self (so the item shows up in YOUR profile)
+    if (matchedNonSelfIds.length === 0 && selfProfile) {
+      try {
+        await storage.linkProfileTo(selfProfile.id, entityType, entityId);
+        await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
+      } catch (e) { /* non-critical */ }
+    }
+
     // If a non-self profile was explicitly matched via forProfile, remove the auto self-link
-    // (createTracker auto-links to self, but if it belongs to Max's pet, remove self)
     const hasExplicitNonSelf = explicitProfileName && matchedNonSelfIds.length > 0;
     if (hasExplicitNonSelf && selfProfile) {
       try {
@@ -2273,7 +2319,6 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
             await storage.unlinkProfileFrom(selfProfile.id, "tracker", entityId);
           }
         } else {
-          // For non-tracker entities, just remove the self entity link if it exists
           await storage.unlinkProfileFrom(selfProfile.id, entityType, entityId);
         }
       } catch (e) { console.error("Remove self-link failed:", e); }
@@ -2377,19 +2422,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   const fast = await tryFastPath(userMessage);
   if (fast.matched) return { reply: fast.reply, actions: fast.actions, results: fast.results, documentPreview: (fast as any).documentPreview, documentPreviews: (fast as any).documentPreviews };
 
-  // Build rich context from current data
-  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await Promise.all([
-    storage.getProfiles(),
-    storage.getTrackers(),
-    storage.getTasks(),
-    storage.getExpenses(),
-    storage.getEvents(),
-    storage.getHabits(),
-    storage.getObligations(),
-    storage.getMemories(),
-    storage.getDocuments(),
-    storage.getGoals(),
-  ]);
+  // Build rich context from current data (uses short-lived cache to avoid redundant DB hits)
+  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData();
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = [
@@ -2461,6 +2495,12 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       for (const toolUse of toolUses) {
         try {
           const result = await executeTool(toolUse.name, toolUse.input);
+          
+          // Invalidate context cache after any write operation
+          const readOnlyToolNames = ["search", "get_summary", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
+          if (!readOnlyToolNames.includes(toolUse.name)) {
+            invalidateContextCache();
+          }
 
           // Map tool name to a ParsedAction type for backwards compat
           const actionType = mapToolToActionType(toolUse.name);
@@ -2592,6 +2632,8 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     const desc = message.replace(/\$[\d.]+/, "").replace(/spent|bought|on/gi, "").trim();
     if (amount > 0) {
       const expense = await storage.createExpense({ amount, category: "general", description: desc || "Expense", tags: [] });
+      // Auto-link to self profile so it shows in Finance tab
+      await autoLinkToProfiles("expense", expense.id, desc || "Expense");
       actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc } });
       results.push(expense);
       reply = `Logged expense: $${amount} — ${desc || "Expense"}`;
@@ -2599,6 +2641,8 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
   } else if (lower.startsWith("remind") || lower.startsWith("todo") || lower.startsWith("task")) {
     const title = message.replace(/^(remind me to|remind|todo|task)\s*/i, "").trim();
     const task = await storage.createTask({ title, priority: "medium", tags: [] });
+    // Auto-link to self profile so it shows in Tasks tab
+    await autoLinkToProfiles("task", task.id, title);
     actions.push({ type: "create_task", category: "task", data: { title } });
     results.push(task);
     reply = `Created task: "${title}"`;
