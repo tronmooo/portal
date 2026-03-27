@@ -3095,28 +3095,39 @@ export default function ProfileDetailPage() {
                     <div className="mb-4">
                       <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">Linked Profiles</p>
                       <div className="space-y-2">
-                        {(profile.childProfiles || []).map(child => (
-                          <Link key={child.id} href={`/profiles/${child.id}`}>
-                            <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors cursor-pointer">
-                              <div className="flex items-center gap-3">
-                                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
-                                  {child.type === 'subscription' && <CreditCard className="h-4 w-4 text-primary" />}
-                                  {child.type === 'vehicle' && <Car className="h-4 w-4 text-primary" />}
-                                  {child.type === 'asset' && <Star className="h-4 w-4 text-primary" />}
-                                  {child.type === 'loan' && <CreditCard className="h-4 w-4 text-orange-500" />}
-                                  {child.type === 'investment' && <TrendingUp className="h-4 w-4 text-green-500" />}
-                                  {child.type === 'property' && <Building2 className="h-4 w-4 text-primary" />}
-                                  {!['subscription','vehicle','asset','loan','investment','property'].includes(child.type) && <Link2 className="h-4 w-4 text-primary" />}
+                        {(profile.childProfiles || []).map(child => {
+                          const childFields = Object.entries(child.fields || {}).filter(([k, v]) => v != null && v !== '' && !k.startsWith('_'));
+                          const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2 };
+                          const Icon = iconMap[child.type] || Link2;
+                          return (
+                            <div key={child.id} className="rounded-lg border bg-card overflow-hidden">
+                              <div className="flex items-center gap-3 p-3">
+                                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                                  <Icon className="h-4 w-4 text-primary" />
                                 </div>
-                                <div>
+                                <div className="flex-1 min-w-0">
                                   <p className="text-sm font-medium">{child.name}</p>
                                   <p className="text-[10px] text-muted-foreground capitalize">{child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : ''}{child.fields?.frequency ? `/${child.fields.frequency}` : ''}</p>
                                 </div>
+                                <Link href={`/profiles/${child.id}`}>
+                                  <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0">View</Button>
+                                </Link>
                               </div>
-                              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                              {childFields.length > 0 && (
+                                <div className="px-3 pb-2.5 border-t border-border/50">
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pt-2">
+                                    {childFields.slice(0, 6).map(([k, v]) => (
+                                      <div key={k} className="flex justify-between items-center">
+                                        <span className="text-[10px] text-muted-foreground capitalize">{k.replace(/([A-Z])/g, ' $1').trim()}</span>
+                                        <span className="text-[10px] font-medium">{String(v)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          </Link>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}

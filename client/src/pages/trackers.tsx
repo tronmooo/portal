@@ -2800,9 +2800,12 @@ export default function TrackersPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {childProfiles.map(child => {
                 const Icon = typeIcons[child.type] || Star;
+                const fields = child.fields || {};
+                const displayFields = Object.entries(fields).filter(([k, v]) => v != null && v !== '' && !k.startsWith('_'));
                 return (
-                  <Link key={child.id} href={`/profiles/${child.id}`}>
-                    <div className="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors cursor-pointer">
+                  <div key={child.id} className="rounded-lg border bg-card overflow-hidden">
+                    <div className="flex items-center gap-3 p-3 cursor-pointer hover:bg-muted/30 transition-colors"
+                      onClick={() => setSelectedTrackerId(null)}>
                       <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                         <Icon className="h-4 w-4 text-primary" />
                       </div>
@@ -2810,12 +2813,27 @@ export default function TrackersPage() {
                         <p className="text-sm font-medium truncate">{child.name}</p>
                         <p className="text-[10px] text-muted-foreground capitalize">
                           {child.type}
-                          {child.fields?.cost ? ` · $${child.fields.cost}` : ''}
-                          {child.fields?.frequency ? `/${child.fields.frequency}` : ''}
+                          {fields.cost ? ` · $${fields.cost}` : ''}
+                          {fields.frequency ? `/${fields.frequency}` : ''}
                         </p>
                       </div>
+                      <Link href={`/profiles/${child.id}`}>
+                        <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0">View</Button>
+                      </Link>
                     </div>
-                  </Link>
+                    {displayFields.length > 0 && (
+                      <div className="px-3 pb-2.5 pt-0 border-t border-border/50">
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 pt-2">
+                          {displayFields.slice(0, 6).map(([k, v]) => (
+                            <div key={k} className="flex justify-between items-center">
+                              <span className="text-[10px] text-muted-foreground capitalize">{k.replace(/([A-Z])/g, ' $1').trim()}</span>
+                              <span className="text-[10px] font-medium">{String(v)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
