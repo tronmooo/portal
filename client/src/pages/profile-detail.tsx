@@ -2849,6 +2849,8 @@ export default function ProfileDetailPage() {
       return res.json();
     },
     enabled: !!id,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const deleteMutation = useMutation({
@@ -2857,7 +2859,15 @@ export default function ProfileDetailPage() {
     },
     onSuccess: () => {
       toast({ title: "Profile deleted" });
+      // Cascade: profile delete also removes linked obligations, events, expenses, etc.
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       navigate("/profiles");
     },
     onError: (err: Error) => {

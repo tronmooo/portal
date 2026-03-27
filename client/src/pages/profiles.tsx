@@ -1027,6 +1027,8 @@ export default function ProfilesPage() {
 
   const { data: profiles, isLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
+    staleTime: 0, // Always fetch fresh — profiles change via chat and must be up to date
+    refetchOnMount: "always",
   });
 
   const deleteMutation = useMutation({
@@ -1034,8 +1036,15 @@ export default function ProfilesPage() {
       await apiRequest("DELETE", `/api/profiles/${id}`);
     },
     onSuccess: () => {
+      // Cascade: profile delete also removes linked obligations, events, expenses, etc.
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       toast({ title: "Profile deleted" });
       setDeleteId(null);
     },

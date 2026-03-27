@@ -1696,8 +1696,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       return storage.checkinHabit(habit.id);
     }
 
-    case "create_obligation":
-      return storage.createObligation({
+    case "create_obligation": {
+      const newObligation = await storage.createObligation({
         name: input.name,
         amount: parseFloat(input.amount) || 0,
         frequency: input.frequency || "monthly",
@@ -1705,6 +1705,10 @@ async function executeTool(name: string, input: any): Promise<any> {
         nextDueDate: input.nextDueDate || new Date().toISOString().split("T")[0],
         autopay: input.autopay ?? false,
       });
+      // Auto-link obligation to matching profile
+      await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
+      return newObligation;
+    }
 
     case "pay_obligation": {
       const obligations = await storage.getObligations();
@@ -2412,6 +2416,15 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       if (evt && !evt.linkedProfiles.includes(profileId)) {
         evt.linkedProfiles.push(profileId);
         await storage.updateEvent(entityId, { linkedProfiles: evt.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "obligation": {
+      const obligations = await storage.getObligations();
+      const ob = obligations.find(o => o.id === entityId);
+      if (ob && !ob.linkedProfiles.includes(profileId)) {
+        ob.linkedProfiles.push(profileId);
+        await storage.updateObligation(entityId, { linkedProfiles: ob.linkedProfiles } as any);
       }
       break;
     }

@@ -467,6 +467,65 @@ export class SupabaseStorage implements IStorage {
   async deleteProfile(id: string): Promise<boolean> {
     const profile = await this.getProfile(id);
     if (!profile) return false;
+
+    // ── Cascade delete: remove all linked entities ──
+    // 1. Delete linked obligations (subscriptions, bills tied to this profile)
+    const allObligations = await this.getObligations();
+    const profileNameLower = profile.name.toLowerCase();
+    for (const ob of allObligations) {
+      // Match by linkedProfiles OR by name similarity (for obligations created before linking was added)
+      const nameMatch = ob.name.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ob.name.toLowerCase());
+      if (ob.linkedProfiles.includes(id) || nameMatch) {
+        await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
+      }
+    }
+
+    // 2. Delete linked events that belong ONLY to this profile
+    const allEvents = await this.getEvents();
+    for (const ev of allEvents) {
+      const evNameMatch = ev.title.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ev.title.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim());
+      if (ev.linkedProfiles.includes(id) || evNameMatch) {
+        if (ev.linkedProfiles.length <= 1 || evNameMatch) {
+          await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
+        } else {
+          const newLinked = ev.linkedProfiles.filter(pid => pid !== id);
+          await this.supabase.from("events").update({ linked_profiles: newLinked }).eq("id", ev.id).eq("user_id", this.userId);
+        }
+      }
+    }
+
+    // 3. Delete linked expenses that belong ONLY to this profile
+    const allExpenses = await this.getExpenses();
+    for (const exp of allExpenses) {
+      if (exp.linkedProfiles.includes(id)) {
+        if (exp.linkedProfiles.length <= 1) {
+          await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
+        } else {
+          const newLinked = exp.linkedProfiles.filter(pid => pid !== id);
+          await this.supabase.from("expenses").update({ linked_profiles: newLinked }).eq("id", exp.id).eq("user_id", this.userId);
+        }
+      }
+    }
+
+    // 4. Unlink from tasks (don't delete tasks — they might still be relevant)
+    const allTasks = await this.getTasks();
+    for (const task of allTasks) {
+      if (task.linkedProfiles.includes(id)) {
+        const newLinked = task.linkedProfiles.filter(pid => pid !== id);
+        await this.supabase.from("tasks").update({ linked_profiles: newLinked }).eq("id", task.id).eq("user_id", this.userId);
+      }
+    }
+
+    // 5. Unlink from trackers (don't delete trackers — data is valuable)
+    const allTrackers = await this.getTrackers();
+    for (const tracker of allTrackers) {
+      if (tracker.linkedProfiles.includes(id)) {
+        const newLinked = tracker.linkedProfiles.filter(pid => pid !== id);
+        await this.supabase.from("trackers").update({ linked_profiles: newLinked }).eq("id", tracker.id).eq("user_id", this.userId);
+      }
+    }
+
+    // 6. Unlink from documents
     for (const docId of profile.documents) {
       const doc = await this.getDocument(docId);
       if (doc) {
@@ -474,6 +533,14 @@ export class SupabaseStorage implements IStorage {
         await this.supabase.from("documents").update({ linked_profiles: newLinked }).eq("id", docId).eq("user_id", this.userId);
       }
     }
+
+    // 7. Delete entity_links referencing this profile
+    await this.supabase.from("entity_links")
+      .delete()
+      .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
+      .eq("user_id", this.userId);
+
+    // 8. Finally delete the profile itself
     const { error } = await this.supabase.from("profiles").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -859,7 +926,10 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   async getCalendarTimeline(startDate: string, endDate: string): Promise<CalendarTimelineItem[]> {
     const items: CalendarTimelineItem[] = [];
-    const events = await this.getEvents();
+    // Fetch all data in parallel for speed
+    const [events, tasks, obligations, habits, profiles] = await Promise.all([
+      this.getEvents(), this.getTasks(), this.getObligations(), this.getHabits(), this.getProfiles(),
+    ]);
     for (const ev of events) {
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
       const baseDate = ev.date.slice(0, 10);
@@ -887,7 +957,6 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    const tasks = await this.getTasks();
     for (const task of tasks) {
       if (task.dueDate) {
         const d = task.dueDate.slice(0, 10);
@@ -897,7 +966,6 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    const obligations = await this.getObligations();
     for (const ob of obligations) {
       // Show the next due date
       const baseDate = ob.nextDueDate.slice(0, 10);
@@ -960,7 +1028,6 @@ export class SupabaseStorage implements IStorage {
     items.length = 0;
     items.push(...finalItems);
 
-    const habits = await this.getHabits();
     for (const habit of habits) {
       for (const checkin of habit.checkins) {
         const d = checkin.date;
@@ -971,7 +1038,6 @@ export class SupabaseStorage implements IStorage {
     }
 
     // ── Profile-derived virtual events ──────────────────────────
-    const profiles = await this.getProfiles();
     for (const profile of profiles) {
       const f = profile.fields || {};
 
@@ -1854,10 +1920,9 @@ export class SupabaseStorage implements IStorage {
     const recentJournal = [...journalEntries].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
-    const profiles = await this.getProfiles();
-    const events = await this.getEvents();
-    const artifacts = await this.getArtifacts();
-    const memories = await this.getMemories();
+    const [profiles, events, artifacts, memories] = await Promise.all([
+      this.getProfiles(), this.getEvents(), this.getArtifacts(), this.getMemories(),
+    ]);
 
     return {
       totalProfiles: profiles.length,
