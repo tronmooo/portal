@@ -506,26 +506,15 @@ Example for lab results:
       }
     }
 
-    // === AUTO-SAVE: Write extracted data to profile + create trackers immediately ===
+    // === EXTRACTION: Profile fields are NOT auto-saved here anymore (M-4 fix). ===
+    // The user reviews extracted data in the pending extraction UI and confirms.
+    // Only the /api/chat/confirm-extraction endpoint writes to the profile.
     const savedItems: string[] = [];
 
-    // 1. Save extracted fields to profile automatically
+    // Note what will be available for the user to confirm
     if (existingProfileId && parsed.extractedData && Object.keys(parsed.extractedData).length > 0) {
-      try {
-        const existingProfile = await storage.getProfile(existingProfileId);
-        if (existingProfile) {
-          const fieldUpdates: Record<string, any> = {};
-          for (const [key, value] of Object.entries(parsed.extractedData)) {
-            fieldUpdates[key] = value;
-          }
-          await storage.updateProfile(existingProfileId, {
-            fields: { ...(existingProfile.fields || {}), ...fieldUpdates },
-          });
-          savedItems.push(`Saved ${Object.keys(fieldUpdates).length} fields to ${existingProfile.name}'s profile`);
-        }
-      } catch (err: any) {
-        console.error("Auto-save profile fields failed:", err.message);
-      }
+      const profileName = (await storage.getProfile(existingProfileId))?.name || "profile";
+      savedItems.push(`${Object.keys(parsed.extractedData).length} fields ready for ${profileName} (confirm to save)`);
     }
 
     // 2. Auto-create trackers from extracted health/lab data
@@ -2817,19 +2806,19 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = [
-    `Profiles: ${profiles.map(p => `${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("; ") || "none"}`,
-    `Trackers: ${trackers.map(t => {
+    `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => `${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("; ") || "none"}`,
+    `Trackers (${trackers.length}): ${trackers.slice(0, 25).map(t => {
       const last = t.entries[t.entries.length - 1];
       return `${t.name} (${t.category}, ${t.entries.length} entries${last ? `, latest: ${JSON.stringify(last.values).slice(0,60)}` : ""})`;
     }).join("; ") || "none"}`,
     `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
-    `Recent Expenses (last 5): ${expenses.slice(-5).map(e => `$${e.amount} - ${e.description}`).join("; ") || "none"}`,
-    `Upcoming Events (next 5): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 5).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
-    `Habits: ${habits.map(h => `${h.name} (${h.frequency}, ${h.currentStreak}d streak)`).join("; ") || "none"}`,
-    `Obligations: ${obligations.map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
-    `Memories: ${memories.slice(0, 20).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
-    `Documents: ${documents.map(d => `"${d.name}" (${d.type})`).join("; ") || "none"}`,
-    `Goals: ${goals.filter(g => g.status === "active").map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
+    `Recent Expenses (last 10): ${expenses.slice(-10).map(e => `$${e.amount} - ${e.description} (${e.date?.slice(0,10)})`).join("; ") || "none"}`,
+    `Upcoming Events (next 10): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 10).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
+    `Habits (${habits.length}): ${habits.slice(0, 20).map(h => `${h.name} (${h.frequency}, ${h.currentStreak}d streak)`).join("; ") || "none"}`,
+    `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
+    `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
+    `Documents (${documents.length}): ${documents.slice(0, 30).map(d => `"${d.name}" (${d.type})`).join("; ") || "none"}`,
+    `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
   ].join("\n");
 
   const systemPrompt = buildSystemPrompt(context);
