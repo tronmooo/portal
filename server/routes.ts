@@ -482,9 +482,10 @@ export async function registerRoutes(
   }));
 
   // ---- Insights ----
-  app.get("/api/insights", asyncHandler(async (_req, res) => {
+  app.get("/api/insights", asyncHandler(async (req, res) => {
     try {
-      const [profiles, trackers, tasks, expenses, habits, obligations, journal, documents, goals, events] = await Promise.all([
+      const fp = req.query.profileId as string | undefined;
+      const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] = await Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
         storage.getTasks(),
@@ -496,6 +497,15 @@ export async function registerRoutes(
         storage.getGoals(),
         storage.getEvents(),
       ]);
+      // Filter by profile if specified
+      const isSelf = fp && allProfiles.find(p => p.id === fp)?.type === "self";
+      const mp = (linked: string[]) => !fp || linked.includes(fp) || (isSelf && linked.length === 0);
+      const profiles = allProfiles;
+      const trackers = allTrackers.filter(t => mp(t.linkedProfiles));
+      const tasks = allTasks.filter(t => mp(t.linkedProfiles));
+      const expenses = allExpenses.filter(e => mp(e.linkedProfiles));
+      const obligations = allObligations.filter(o => mp(o.linkedProfiles));
+      const events = allEvents.filter(e => mp(e.linkedProfiles));
       const insights = generateSmartInsights({
         profiles, trackers, tasks, expenses, habits, obligations, journal, documents, goals, events,
       });

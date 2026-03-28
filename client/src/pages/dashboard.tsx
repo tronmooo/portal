@@ -207,11 +207,12 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
 
 // ─── Section: AI Priority Insights ───────────────────────────────────────────
 
-function InsightsSection() {
+function InsightsSection({ profileId }: { profileId?: string }) {
   const [, navigate] = useLocation();
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
   const { data: insights = [], isLoading } = useQuery<Insight[]>({
-    queryKey: ["/api/insights"],
-    queryFn: () => apiRequest("GET", "/api/insights").then(r => r.json()),
+    queryKey: ["/api/insights", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/insights${profileParam}`).then(r => r.json()),
   });
 
   const sorted = useMemo(() => [...insights]
@@ -1214,7 +1215,7 @@ export default function DashboardPage() {
     let content: React.ReactNode = null;
     switch (id) {
       case "insights":
-        content = <InsightsSection />;
+        content = <InsightsSection profileId={resolvedFilterId} />;
         break;
       case "today":
         content = <TodaySection enhanced={enhanced} stats={stats} />;
