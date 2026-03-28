@@ -589,9 +589,31 @@ export class SupabaseStorage implements IStorage {
     return !error;
   }
 
+  // Junction table name mapping for each entity type
+  private static JUNCTION_TABLES: Record<string, { table: string; entityCol: string }> = {
+    tracker: { table: "profile_trackers", entityCol: "tracker_id" },
+    expense: { table: "profile_expenses", entityCol: "expense_id" },
+    task: { table: "profile_tasks", entityCol: "task_id" },
+    event: { table: "profile_events", entityCol: "event_id" },
+    document: { table: "profile_documents", entityCol: "document_id" },
+    obligation: { table: "profile_obligations", entityCol: "obligation_id" },
+    artifact: { table: "profile_artifacts", entityCol: "artifact_id" },
+  };
+
   async linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void> {
     const profile = await this.getProfile(profileId);
     if (!profile) return;
+
+    // Write to junction table (new source of truth)
+    const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
+    if (jt) {
+      await this.supabase.from(jt.table).upsert(
+        { profile_id: profileId, [jt.entityCol]: entityId, user_id: this.userId },
+        { onConflict: `profile_id,${jt.entityCol}` }
+      );
+    }
+
+    // Also write to JSONB arrays (backward compat — will be removed in Phase 6)
     let field: string | undefined;
     let snakeField: string | undefined;
     switch (entityType) {
@@ -619,6 +641,17 @@ export class SupabaseStorage implements IStorage {
   async unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void> {
     const profile = await this.getProfile(profileId);
     if (!profile) return;
+
+    // Remove from junction table (new source of truth)
+    const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
+    if (jt) {
+      await this.supabase.from(jt.table).delete()
+        .eq("profile_id", profileId)
+        .eq(jt.entityCol, entityId)
+        .eq("user_id", this.userId);
+    }
+
+    // Also remove from JSONB arrays (backward compat)
     let field: string | undefined;
     let snakeField: string | undefined;
     switch (entityType) {
@@ -675,15 +708,23 @@ export class SupabaseStorage implements IStorage {
       if (!parentId || visited.has(parentId)) break;
       visited.add(parentId);
 
-      // Link document to parent profile (adds to profile.documents array)
+      // Link document to parent profile via junction table + JSONB (dual-write)
       const parent = await this.getProfile(parentId);
-      if (parent && !parent.documents.includes(documentId)) {
-        parent.documents.push(documentId);
-        await this.supabase.from("profiles").update({ documents: parent.documents }).eq("id", parentId).eq("user_id", this.userId);
+      if (parent) {
+        // Junction table
+        await this.supabase.from("profile_documents").upsert(
+          { profile_id: parentId, document_id: documentId, user_id: this.userId },
+          { onConflict: "profile_id,document_id" }
+        );
+        // JSONB backward compat
+        if (!parent.documents.includes(documentId)) {
+          parent.documents.push(documentId);
+          await this.supabase.from("profiles").update({ documents: parent.documents }).eq("id", parentId).eq("user_id", this.userId);
+        }
         propagated.push(parent.name);
       }
 
-      // Also add parent to document's linkedProfiles
+      // Also add parent to document's linkedProfiles JSONB
       const doc = await this.getDocument(documentId);
       if (doc && !doc.linkedProfiles.includes(parentId)) {
         const updatedLinked = [...doc.linkedProfiles, parentId];
