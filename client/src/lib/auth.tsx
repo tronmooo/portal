@@ -169,16 +169,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Check if token is expired
       const now = Math.floor(Date.now() / 1000);
       if (tokens.expires_at && tokens.expires_at < now) {
-        // Try refresh
-        const refreshRes = await apiRequest("POST", "/api/auth/refresh", {
-          refresh_token: tokens.refresh_token,
-        });
-        const refreshData = await refreshRes.json();
-        if (refreshData.session) {
-          persistTokens(refreshData.session);
-          setUser(refreshData.user);
-          setSession(refreshData.session);
+        // Try refresh — wrap in its own try-catch since apiRequest throws on non-2xx
+        try {
+          const refreshRes = await apiRequest("POST", "/api/auth/refresh", {
+            refresh_token: tokens.refresh_token,
+          });
+          const refreshData = await refreshRes.json();
+          if (refreshData.session) {
+            persistTokens(refreshData.session);
+            setUser(refreshData.user);
+            setSession(refreshData.session);
+          } else {
+            persistTokens(null);
+          }
+        } catch {
+          persistTokens(null);
         }
+        setLoading(false);
       } else {
         // Verify token
         const res = await fetch(`${API_BASE}/api/auth/me`, {
@@ -191,11 +198,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else {
           persistTokens(null);
         }
+        setLoading(false);
       }
     } catch {
       persistTokens(null);
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   const signIn = useCallback(async (email: string, password: string) => {

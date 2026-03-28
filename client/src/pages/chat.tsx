@@ -669,6 +669,9 @@ export default function ChatPage() {
   // Track batch processing progress
   const [batchProcessedCount, setBatchProcessedCount] = useState(0);
 
+  // Ref to hold attachments at batch-send time so onSettled can revoke URLs and clear state
+  const pendingBatchAttachmentsRef = useRef<typeof attachments>([]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -678,10 +681,6 @@ export default function ChatPage() {
   // Fetch profiles for the selector
   const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/profiles");
-      return res.json();
-    },
   });
 
   const chatMutation = useMutation({
@@ -829,6 +828,12 @@ export default function ChatPage() {
         },
       ]);
       setBatchProcessedCount(0);
+    },
+    onSettled: () => {
+      // Revoke object URLs and clear attachments after mutation completes (success or error)
+      pendingBatchAttachmentsRef.current.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+      pendingBatchAttachmentsRef.current = [];
+      setAttachments([]);
     },
   });
 
@@ -985,7 +990,9 @@ export default function ChatPage() {
       message: input.trim() || undefined,
     });
 
-    // Keep attachments visible for progress display; they'll be cleared in onSuccess
+    // Capture attachments in a ref so onSettled can revoke URLs and clear state
+    // (attachments must remain visible during upload to show progress)
+    pendingBatchAttachmentsRef.current = attachments;
     const currentAttachmentCount = attachments.length;
     // Simulate progress updates
     let count = 0;
@@ -997,8 +1004,7 @@ export default function ChatPage() {
       setBatchProcessedCount((prev) => Math.min(prev + 1, currentAttachmentCount));
     }, 2000);
 
-    // Clear after mutation settles (success or error will clear)
-    setAttachments([]);
+    // Clear input immediately; attachments will be cleared in onSettled after mutation completes
     setSelectedProfileId("none");
     setInput("");
   };

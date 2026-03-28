@@ -1,0 +1,11 @@
+{
+  "test7": "PARTIAL - Calories text clicked but no navigation or modal",
+  "test10": "PASS - New Tracker dialog form filled and saved",
+  "test12": "PASS - navigated to profile detail: https://portol.me/#/profiles/dcd036ee-4050-4e4e-a1d4-c507c0e4efbe",
+  "test13": "PASS - tabs: Profile, Health, Finance, Tasks, Linked, Timeline, Notes",
+  "test14": "PARTIAL - edit clicked but no inputs",
+  "test16": "FAIL - calendar month navigation buttons not found/working",
+  "test17": "PARTIAL - clicked \"Call the dentist\" but no detail modal appeared",
+  "test24": "FAIL - no mood selection in journal entry form",
+  "test26": "PARTIAL - clicked New Habit but no dialog appeared"
+}

@@ -1,0 +1,254 @@
+[
+  {
+    "num": 1,
+    "page": "Dashboard",
+    "test": "Verify dashboard loads with sections",
+    "status": "PASS",
+    "notes": "Found: Important, Today, Key Metrics, Coming Up, Trends"
+  },
+  {
+    "num": 2,
+    "page": "Dashboard",
+    "test": "Profile filter — change to Everyone",
+    "status": "PARTIAL",
+    "notes": "Me button clicked, Everyone option not found in dropdown"
+  },
+  {
+    "num": 3,
+    "page": "Dashboard",
+    "test": "Click insight cards — navigate",
+    "status": "PARTIAL",
+    "notes": "Clicked \"Chat\", URL changed: false. From: https://portol.me/#/dashboard To: https://portol.me/#/dashboard"
+  },
+  {
+    "num": 4,
+    "page": "Dashboard",
+    "test": "Customize button — toggle sections",
+    "status": "FAIL",
+    "notes": "Error: elementHandle.click: Timeout 30000ms exceeded.\nCall log:\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <html lang=\"en\">…</html> intercepts pointer events\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <html lang=\"en\">…</html> intercepts pointer events\n    - retrying click action\n      - waiting 100ms\n    56 × waiting for element to be visible, enabled and stable\n       - element is visible, enabled and stable\n       - scrolling into view if needed\n       - done scrolling\n       - <html lang=\"en\">…</html> intercepts pointer events\n     - retrying click action\n       - waiting 500ms\n"
+  },
+  {
+    "num": 5,
+    "page": "Dashboard",
+    "test": "Export button — downloads file",
+    "status": "FAIL",
+    "notes": "Error: elementHandle.click: Timeout 30000ms exceeded.\nCall log:\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <html lang=\"en\">…</html> intercepts pointer events\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <html lang=\"en\">…</html> intercepts pointer events\n    - retrying click action\n      - waiting 100ms\n    56 × waiting for element to be visible, enabled and stable\n       - element is visible, enabled and stable\n       - scrolling into view if needed\n       - done scrolling\n       - <html lang=\"en\">…</html> intercepts pointer events\n     - retrying click action\n       - waiting 500ms\n"
+  },
+  {
+    "num": 6,
+    "page": "Trackers",
+    "test": "Trackers page loads with tracker cards",
+    "status": "PASS",
+    "notes": "37 card elements, page has content"
+  },
+  {
+    "num": 7,
+    "page": "Trackers",
+    "test": "Click tracker — opens detail view",
+    "status": "PARTIAL",
+    "notes": "Clicked card, no nav/modal"
+  },
+  {
+    "num": 8,
+    "page": "Trackers",
+    "test": "Log new entry for tracker",
+    "status": "PASS",
+    "notes": "\"New Tracker\" → form filled → submitted"
+  },
+  {
+    "num": 9,
+    "page": "Trackers",
+    "test": "Entry appears in tracker log",
+    "status": "PASS",
+    "notes": "Entry submitted successfully"
+  },
+  {
+    "num": 10,
+    "page": "Trackers",
+    "test": "Create new tracker via UI",
+    "status": "FAIL",
+    "notes": "Error: elementHandle.click: Timeout 30000ms exceeded.\nCall log:\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <div data-state=\"open\" aria-hidden=\"true\" data-aria-hidden=\"true\" class=\"fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0\"></div> intercepts pointer events\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <div data-state=\"open\" aria-hidden=\"true\" data-aria-hidden=\"true\" class=\"fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0\"></div> intercepts pointer events\n    - retrying click action\n      - waiting 100ms\n    56 × waiting for element to be visible, enabled and stable\n       - element is visible, enabled and stable\n       - scrolling into view if needed\n       - done scrolling\n       - <div data-state=\"open\" aria-hidden=\"true\" data-aria-hidden=\"true\" class=\"fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0\"></div> intercepts pointer events\n     - retrying click action\n       - waiting 500ms\n"
+  },
+  {
+    "num": 11,
+    "page": "Profiles",
+    "test": "Profiles shows people and pets",
+    "status": "PASS",
+    "notes": "People: true, Pets: true. Page has content"
+  },
+  {
+    "num": 12,
+    "page": "Profiles",
+    "test": "Click profile — detail loads with tabs",
+    "status": "PARTIAL",
+    "notes": "Clicked \"Profiles\" no nav/modal"
+  },
+  {
+    "num": 13,
+    "page": "Profiles",
+    "test": "Profile tabs (Overview, Health, Documents)",
+    "status": "FAIL",
+    "notes": "Tabs:  (all tabs: )"
+  },
+  {
+    "num": 14,
+    "page": "Profiles",
+    "test": "Edit a profile field",
+    "status": "FAIL",
+    "notes": "No edit button. Buttons: Toggle Sidebar | Search\n⌘K | 3 | Add | Chat | Dashboard | Linked | Calendar | Profiles"
+  },
+  {
+    "num": 15,
+    "page": "Calendar",
+    "test": "Calendar loads with events",
+    "status": "PASS",
+    "notes": "3 calendar elements"
+  },
+  {
+    "num": 16,
+    "page": "Calendar",
+    "test": "Navigate between months (prev/next)",
+    "status": "FAIL",
+    "notes": "No next month button. Buttons: Toggle Sidebar | Search\n⌘K | 3 | Open calendar | Open settings | Switch to dark mode | Back | Today | Sync GCal | Event | Me | All | Events | Tasks | Bills | Habits | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27\n✓ Walk dog\n15:00 Meeting with Dr. Chan | 28\nCall the dentist | 29 | 30 | 31 | 1\n💳 TestDeleteMe Bill — $99\nNetflix subscription — $15.99\n+1 more | 2 | 3\nCall Dr. Smith (dentist)\n14:00 Call Dr. Smith (dentist) | 4 | 5\n14:00 Dentist Appointment | 6 | 7 | 8\n09:30 Team Standup | 9 | 10 | 11 | Add | Call the dentist\n\nAll day\nTask | Chat | Dashboard | Linked | Calendar | Profiles"
+  },
+  {
+    "num": 17,
+    "page": "Calendar",
+    "test": "Click event — shows details",
+    "status": "PARTIAL",
+    "notes": "Event \"Chat\" clicked. Modal: false"
+  },
+  {
+    "num": 18,
+    "page": "Calendar",
+    "test": "Create new event through calendar UI",
+    "status": "PASS",
+    "notes": "\"Add\" clicked, 7 form fields"
+  },
+  {
+    "num": 19,
+    "page": "Finance",
+    "test": "Finance page loads with expense data",
+    "status": "PASS",
+    "notes": "Financial data found"
+  },
+  {
+    "num": 20,
+    "page": "Finance",
+    "test": "Add new expense through UI",
+    "status": "FAIL",
+    "notes": "No add button. Buttons: Toggle Sidebar | Search\n⌘K | 3 | Open calendar | Open settings | Switch to dark mode | Back | Chat | Dashboard | Linked | Calendar | Profiles"
+  },
+  {
+    "num": 21,
+    "page": "Finance",
+    "test": "Test filters (date range, category)",
+    "status": "FAIL",
+    "notes": "No filter elements found"
+  },
+  {
+    "num": 22,
+    "page": "Journal",
+    "test": "Journal page loads with entries",
+    "status": "PASS",
+    "notes": "Text: Portol\nChat\nDashboard\nLinked\nCalendar\nProfiles\nSettings\nCreated with Perplexity Computer\nToggle Sidebar\nSearch\n⌘K\n3\nJournal\n\n2 entries\n\nNew Entry\nSu\nMo\nTu\nWe\nTh\nFr\nSa\nGood\n\nThu, Mar 26\n\nNeutral\n\nWed, "
+  },
+  {
+    "num": 23,
+    "page": "Journal",
+    "test": "Create new journal entry",
+    "status": "PASS",
+    "notes": "New entry created and saved"
+  },
+  {
+    "num": 24,
+    "page": "Journal",
+    "test": "Mood selection",
+    "status": "FAIL",
+    "notes": "No mood elements"
+  },
+  {
+    "num": 25,
+    "page": "Habits",
+    "test": "Habits page loads",
+    "status": "PASS",
+    "notes": "Text: Portol\nChat\nDashboard\nLinked\nCalendar\nProfiles\nSettings\nCreated with Perplexity Computer\nToggle Sidebar\nSearch\n⌘K\n3\nHabits\n\n0/0 completed today\n\nNew Habit\nNo habits yet\n\nStart building positive routin"
+  },
+  {
+    "num": 26,
+    "page": "Habits",
+    "test": "Check off a habit for today",
+    "status": "FAIL",
+    "notes": "No checkboxes. Buttons: Toggle Sidebar | Search\n⌘K | 3 | Open calendar | Open settings | Switch to dark mode | Back to Dashboard | New Habit | Create Your First Habit | Chat | Dashboard | Linked | Calendar | Profiles"
+  },
+  {
+    "num": 27,
+    "page": "Habits",
+    "test": "Habit check-off persists after reload",
+    "status": "PARTIAL",
+    "notes": "0 checked elements after reload"
+  },
+  {
+    "num": 28,
+    "page": "Tasks",
+    "test": "Tasks page loads with task list",
+    "status": "PASS",
+    "notes": "Text: Portol\nChat\nDashboard\nLinked\nCalendar\nProfiles\nSettings\nCreated with Perplexity Computer\nToggle Sidebar\nSearch\n⌘K\n3\nTasks\n\n16 active, 3 completed\n\nNew Task\nACTIVE (16)\n\nRenew registration\n\nmedium\nMay "
+  },
+  {
+    "num": 29,
+    "page": "Tasks",
+    "test": "Mark task as complete",
+    "status": "PASS",
+    "notes": "19 checkboxes, first clicked"
+  },
+  {
+    "num": 30,
+    "page": "Tasks",
+    "test": "Create new task through UI",
+    "status": "PASS",
+    "notes": "\"${txt}\" → task created and saved"
+  },
+  {
+    "num": 31,
+    "page": "Tasks",
+    "test": "Task status change persists after reload",
+    "status": "PASS",
+    "notes": "QA task present: true, completed: 0"
+  },
+  {
+    "num": 32,
+    "page": "Obligations",
+    "test": "Obligations page loads with bills/subscriptions",
+    "status": "PASS",
+    "notes": "Financial/obligation content found"
+  },
+  {
+    "num": 33,
+    "page": "Obligations",
+    "test": "Obligation details show amount and frequency",
+    "status": "PASS",
+    "notes": "Amount ($): true, Frequency: true"
+  },
+  {
+    "num": 34,
+    "page": "Settings",
+    "test": "Settings page loads",
+    "status": "PASS",
+    "notes": "Text: Portol\nChat\nDashboard\nLinked\nCalendar\nProfiles\nSettings\nCreated with Perplexity Computer\nToggle Sidebar\nSearch\n⌘K\n3\nSettings\n\nManage your account, appearance, and data.\n\nAccount\nYour account informati"
+  },
+  {
+    "num": 35,
+    "page": "Settings",
+    "test": "Dark/light mode toggle works",
+    "status": "PASS",
+    "notes": "Theme button \"\" clicked"
+  },
+  {
+    "num": 36,
+    "page": "Settings",
+    "test": "Export data button",
+    "status": "PASS",
+    "notes": "Downloaded: portol-backup-2026-03-28.json"
+  }
+]

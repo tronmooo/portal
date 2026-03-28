@@ -15,8 +15,24 @@ async function seedStorageIfEmpty(): Promise<void> {
   }
 }
 
-// Track which users have had their self profile checked this session
-const autoProfileCreated = new Set<string>();
+// Track which users have had their self profile checked this session (auto-evict after 1 hour)
+const autoProfileCreated = new Map<string, number>();
+function hasAutoProfile(userId: string): boolean {
+  const ts = autoProfileCreated.get(userId);
+  if (!ts) return false;
+  if (Date.now() - ts > 3600000) { autoProfileCreated.delete(userId); return false; }
+  return true;
+}
+function markAutoProfile(userId: string): void {
+  // Evict old entries if map grows too large
+  if (autoProfileCreated.size > 5000) {
+    const now = Date.now();
+    for (const [k, v] of autoProfileCreated) {
+      if (now - v > 3600000) autoProfileCreated.delete(k);
+    }
+  }
+  autoProfileCreated.set(userId, Date.now());
+}
 
 // Create a Supabase client with the anon key (for verifying user tokens)
 let supabaseAuth: SupabaseClient | null = null;
@@ -94,8 +110,8 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     // blocking the request if it takes too long.
     requestStorageContext.run(scopedStorage, () => {
       // Auto-create "Me" self profile if none exists (runs once per session, cached)
-      if (!autoProfileCreated.has(user.id)) {
-        autoProfileCreated.add(user.id);
+      if (!hasAutoProfile(user.id)) {
+        markAutoProfile(user.id);
         (async () => {
           try {
             const profiles = await storage.getProfiles();

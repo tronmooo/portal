@@ -33,6 +33,14 @@ function rateLimit(key: string, maxRequests: number = 60, windowMs: number = 600
   const now = Date.now();
   const entry = rateLimitMap.get(key);
   if (!entry || now > entry.resetAt) {
+    // Cap map size to prevent unbounded growth under high traffic
+    if (rateLimitMap.size > 10000) {
+      const cutoff = now - windowMs;
+      for (const [k, v] of rateLimitMap) {
+        if (v.resetAt < cutoff) rateLimitMap.delete(k);
+        if (rateLimitMap.size <= 8000) break;
+      }
+    }
     rateLimitMap.set(key, { count: 1, resetAt: now + windowMs });
     return false; // not rate limited
   }
@@ -121,6 +129,7 @@ export async function registerRoutes(
       if (uid) {
         bustCache(`stats:${uid}`);
         bustCache(`profile-detail:`);
+        bustCache(`dashboard-enhanced:`);
       } else {
         bustAllCaches();
       }
@@ -1063,8 +1072,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
-    const deleted = await storage.deleteDocument(req.params.id);
-    if (!deleted) return res.status(404).json({ error: "Not found" });
+    const doc = await storage.getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Not found" });
+    await storage.deleteDocument(req.params.id);
     res.status(204).send();
   }));
   app.get("/api/profiles/:id/documents", asyncHandler(async (req, res) => {

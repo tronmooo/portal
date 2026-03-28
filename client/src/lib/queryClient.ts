@@ -45,7 +45,7 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     // Build URL from queryKey — first element is the path, rest are ignored (used for cache segmentation)
     const url = String(queryKey[0]);
-    const res = await fetch(`${API_BASE}${url}`);
+    const res = await window.fetch(`${API_BASE}${url}`);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

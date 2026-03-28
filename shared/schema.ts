@@ -1,6 +1,15 @@
 import { z } from "zod";
 
 // ============================================================
+// SHARED CONSTANTS
+// ============================================================
+
+/** Unified mood scores used across storage backends. Scale: 1-8. */
+export const MOOD_SCORES: Record<string, number> = {
+  amazing: 8, great: 7, good: 6, okay: 5, neutral: 4, bad: 3, awful: 2, terrible: 1,
+};
+
+// ============================================================
 // STRUCTURED AI ACTIONS — The universal action system
 // ============================================================
 

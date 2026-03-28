@@ -243,7 +243,10 @@ function InsightsSection({ profileId }: { profileId?: string }) {
           return (
             <div
               key={insight.id}
+              role="button"
+              tabIndex={0}
               onClick={() => navigate(insightRoute(insight).replace("#", ""))}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(insightRoute(insight).replace("#", "")); } }}
               className={`flex items-start gap-2.5 p-2.5 rounded-lg border ${sev.border} ${sev.bg} cursor-pointer hover:opacity-80 transition-opacity`}
               data-testid={`insight-${insight.id}`}
             >
@@ -361,6 +364,8 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
 function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any }) {
   const [, navigate] = useLocation();
   const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | null>(null);
+
+  if (!stats) return null;
 
   const finSnap = enhanced?.financeSnapshot;
   const spendTrend: "up" | "down" | "flat" = finSnap?.spendTrend > 0 ? "up" : finSnap?.spendTrend < 0 ? "down" : "flat";

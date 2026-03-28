@@ -1982,7 +1982,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         amount: parseFloat(input.amount) || 0,
         frequency: input.frequency || "monthly",
         category: input.category || "general",
-        nextDueDate: input.nextDueDate || new Date().toISOString().split("T")[0],
+        nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
         autopay: input.autopay ?? false,
       });
 

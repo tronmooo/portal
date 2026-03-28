@@ -1,8 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter } from "lucide-react";
 import { Link } from "wouter";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import {
   BarChart,
@@ -23,9 +31,34 @@ const categoryColors: Record<string, string> = {
   general: "hsl(var(--primary))",
 };
 
+const EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general"];
+
 export default function FinancePage() {
+  const { toast } = useToast();
   const { data: expenses, isLoading } = useQuery<Expense[]>({
     queryKey: ["/api/expenses"],
+  });
+  const [filterCategory, setFilterCategory] = useState<string>("all");
+  const [addOpen, setAddOpen] = useState(false);
+  const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
+
+  const addExpenseMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/expenses", {
+        description: newExpense.description,
+        amount: parseFloat(newExpense.amount),
+        category: newExpense.category,
+        vendor: newExpense.vendor || undefined,
+        date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        tags: [],
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      setAddOpen(false);
+      setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
+      toast({ title: "Expense added" });
+    },
   });
 
   if (isLoading) {
@@ -37,14 +70,16 @@ export default function FinancePage() {
     );
   }
 
-  const total = (expenses || []).reduce((s, e) => s + e.amount, 0);
+  const filtered = filterCategory === "all" ? (expenses || []) : (expenses || []).filter(e => e.category === filterCategory);
+  const total = filtered.reduce((s, e) => s + e.amount, 0);
 
   // Group by category
-  const byCategory = (expenses || []).reduce((acc: Record<string, number>, e) => {
+  const byCategory = filtered.reduce((acc: Record<string, number>, e) => {
     acc[e.category] = (acc[e.category] || 0) + e.amount;
     return acc;
   }, {});
   const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }));
+  const categories = [...new Set((expenses || []).map(e => e.category))];
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
@@ -56,8 +91,54 @@ export default function FinancePage() {
             </button>
           </Link>
           <h1 className="text-xl font-semibold" data-testid="text-finance-title">Finance</h1>
+          <div className="ml-auto flex items-center gap-2">
+            <Select value={filterCategory} onValueChange={setFilterCategory}>
+              <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-category-filter">
+                <Filter className="h-3 w-3 mr-1" />
+                <SelectValue placeholder="All" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                {categories.map(c => (
+                  <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Dialog open={addOpen} onOpenChange={setAddOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" className="h-8 text-xs" data-testid="button-add-expense">
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Add Expense
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Add Expense</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-3">
+                  <div><Label className="text-xs">Description</Label>
+                    <Input placeholder="What was it for?" value={newExpense.description} onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))} data-testid="input-expense-description" /></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><Label className="text-xs">Amount ($)</Label>
+                      <Input type="number" step="0.01" placeholder="0.00" value={newExpense.amount} onChange={e => setNewExpense(p => ({ ...p, amount: e.target.value }))} data-testid="input-expense-amount" /></div>
+                    <div><Label className="text-xs">Category</Label>
+                      <Select value={newExpense.category} onValueChange={v => setNewExpense(p => ({ ...p, category: v }))}>
+                        <SelectTrigger data-testid="select-expense-category"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {EXPENSE_CATEGORIES.map(c => (<SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>))}
+                        </SelectContent>
+                      </Select></div>
+                  </div>
+                  <div><Label className="text-xs">Vendor (optional)</Label>
+                    <Input placeholder="Store or vendor name" value={newExpense.vendor} onChange={e => setNewExpense(p => ({ ...p, vendor: e.target.value }))} data-testid="input-expense-vendor" /></div>
+                  <Button className="w-full" onClick={() => addExpenseMutation.mutate()} disabled={!newExpense.description || !newExpense.amount || addExpenseMutation.isPending} data-testid="button-save-expense">
+                    {addExpenseMutation.isPending ? "Saving..." : "Save Expense"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
-        <p className="text-sm text-muted-foreground mt-0.5">Expense tracking and analysis</p>
+        <p className="text-sm text-muted-foreground mt-0.5">Expense tracking and analysis{filterCategory !== "all" && ` — ${filterCategory}`}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -120,7 +201,7 @@ export default function FinancePage() {
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {expenses.map((expense) => (
+              {filtered.map((expense) => (
                 <div key={expense.id} className="flex items-center gap-3 py-3" data-testid={`expense-${expense.id}`}>
                   <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                     <ShoppingCart className="h-3.5 w-3.5 text-primary" />

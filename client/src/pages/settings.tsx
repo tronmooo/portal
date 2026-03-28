@@ -57,8 +57,6 @@ export default function SettingsPage() {
 
   async function handleExport() {
     setExporting(true);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
       const res = await apiRequest("GET", "/api/export");
       const data = await res.json();
@@ -82,10 +80,8 @@ export default function SettingsPage() {
         .join(", ");
       toast({ title: "Export complete", description: counts ? `Exported ${counts}.` : "Your data has been downloaded." });
     } catch (err: any) {
-      const msg = err.name === "AbortError" ? "Export timed out. Try again." : err.message;
-      toast({ title: "Export failed", description: msg, variant: "destructive" });
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
     } finally {
-      clearTimeout(timeout);
       setExporting(false);
     }
   }
@@ -97,6 +93,10 @@ export default function SettingsPage() {
     try {
       const text = await file.text();
       const data = JSON.parse(text);
+      const validKeys = ["profiles", "trackers", "tasks", "expenses", "events", "documents", "obligations", "habits", "journal", "goals"];
+      if (typeof data !== "object" || data === null || !Object.keys(data).some(k => validKeys.includes(k))) {
+        throw new Error("Invalid backup file. Expected a Portol backup with profiles, trackers, tasks, etc.");
+      }
       const res = await apiRequest("POST", "/api/import", data);
       const result = await res.json();
       if (result.error) throw new Error(result.error);

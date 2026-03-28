@@ -18,32 +18,34 @@ import {
   type MoodLevel,
   type Goal, type InsertGoal,
   type EntityLink, type InsertEntityLink,
+  MOOD_SCORES,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 
-// ---- Streak calculator ----
+// ---- Streak calculator (timezone-aware) ----
 function calculateStreak(checkins: { date: string }[]): { current: number; longest: number } {
   if (checkins.length === 0) return { current: 0, longest: 0 };
   const dates = [...new Set(checkins.map(c => c.date))].sort().reverse();
-  const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  function addDays(dateStr: string, days: number): string {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+  const yesterdayStr = addDays(todayStr, -1);
   let current = 0;
-  const startIdx = dates[0] === today ? 0 : dates[0] === yesterday ? 0 : -1;
-  if (startIdx >= 0) {
+  if (dates[0] === todayStr || dates[0] === yesterdayStr) {
+    let expectedDate = dates[0];
     for (let i = 0; i < dates.length; i++) {
-      const expected = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-      const expected2 = new Date(Date.now() - (i + 1) * 86400000).toISOString().slice(0, 10);
-      if (dates.includes(expected) || (i === 0 && dates.includes(expected2))) { current++; } else { break; }
+      if (dates[i] === expectedDate) { current++; expectedDate = addDays(expectedDate, -1); }
+      else if (dates[i] < expectedDate) { break; }
     }
   }
   const allDates = [...new Set(checkins.map(c => c.date))].sort();
   let tempStreak = 1;
   let longest = 1;
   for (let i = 1; i < allDates.length; i++) {
-    const prev = new Date(allDates[i - 1]);
-    const curr = new Date(allDates[i]);
-    const diff = (curr.getTime() - prev.getTime()) / 86400000;
-    if (diff === 1) { tempStreak++; longest = Math.max(longest, tempStreak); } else { tempStreak = 1; }
+    if (allDates[i] === addDays(allDates[i - 1], 1)) { tempStreak++; longest = Math.max(longest, tempStreak); } else { tempStreak = 1; }
   }
   return { current: Math.max(current, 0), longest: Math.max(longest, current) };
 }
@@ -122,10 +124,9 @@ function generateInsights(
 
   const recentJournal = journal.filter(j => { const d = new Date(j.createdAt); return (now.getTime() - d.getTime()) < 7 * 86400000; });
   if (recentJournal.length >= 3) {
-    const moodScores: Record<string, number> = { amazing: 8, great: 7, good: 6, okay: 5, neutral: 4, bad: 3, awful: 2, terrible: 1 };
-    const avg = recentJournal.reduce((s, j) => s + (moodScores[j.mood] || 3), 0) / recentJournal.length;
-    if (avg <= 2.5) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Mood has been low this week", description: "Your journal entries suggest a tough stretch. Consider reaching out to someone or doing something you enjoy.", severity: "warning", data: { avgMood: avg }, createdAt: now.toISOString() }); }
-    else if (avg >= 4) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Great mood this week", description: "You've been feeling positive. Keep doing what's working!", severity: "positive", data: { avgMood: avg }, createdAt: now.toISOString() }); }
+    const avg = recentJournal.reduce((s, j) => s + (MOOD_SCORES[j.mood] || 4), 0) / recentJournal.length;
+    if (avg <= 3.0) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Mood has been low this week", description: "Your journal entries suggest a tough stretch. Consider reaching out to someone or doing something you enjoy.", severity: "warning", data: { avgMood: avg }, createdAt: now.toISOString() }); }
+    else if (avg >= 6) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Great mood this week", description: "You've been feeling positive. Keep doing what's working!", severity: "positive", data: { avgMood: avg }, createdAt: now.toISOString() }); }
   }
 
   const todayStr = now.toISOString().slice(0, 10);
@@ -364,18 +365,57 @@ export class SupabaseStorage implements IStorage {
     const documentIds = new Set([...(pdRows.data || []).map(r => r.document_id), ...profile.documents]);
     const obligationIds = new Set([...(poRows.data || []).map(r => r.obligation_id)]);
 
-    // Fetch only the related entities (not ALL of them)
-    const [allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs] = await Promise.all([
-      this.getTrackers(), this.getExpenses(), this.getTasks(),
-      this.getEvents(), this.getDocuments(), this.getObligations(),
+    // Fetch only the specific related entities using targeted .in() queries
+    const allIds = {
+      trackers: [...trackerIds],
+      expenses: [...expenseIds],
+      tasks: [...taskIds],
+      events: [...eventIds],
+      documents: [...documentIds],
+      obligations: [...obligationIds],
+    };
+    // Helper: fetch rows by IDs, also include any that have this profile in linkedProfiles JSONB
+    const fetchByIds = async <T>(table: string, ids: string[], rowMapper: (r: any) => T): Promise<T[]> => {
+      if (ids.length === 0) {
+        // Still check for linkedProfiles containment
+        const { data } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", [id]);
+        return (data || []).map(rowMapper);
+      }
+      const { data: byId } = await this.supabase.from(table).select("*").eq("user_id", this.userId).in("id", ids);
+      const { data: byLink } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", [id]);
+      const merged = new Map<string, any>();
+      for (const r of [...(byId || []), ...(byLink || [])]) merged.set(r.id, r);
+      return [...merged.values()].map(rowMapper);
+    };
+    // For trackers and obligations, we need entries/payments — fetch them in bulk
+    const trackerIdsArr = [...new Set([...allIds.trackers])];
+    const obligationIdsArr = [...new Set([...allIds.obligations])];
+    const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
+      trackerIdsArr.length > 0
+        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIdsArr).order("timestamp", { ascending: false }).then(r => r.data || [])
+        : Promise.resolve([]),
+      obligationIdsArr.length > 0
+        ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIdsArr).order("date", { ascending: false }).then(r => r.data || [])
+        : Promise.resolve([]),
     ]);
-
-    const relatedTrackers = allTrackers.filter(t => trackerIds.has(t.id) || t.linkedProfiles.includes(id));
-    const relatedExpenses = allExpenses.filter(e => expenseIds.has(e.id) || e.linkedProfiles.includes(id));
-    const relatedTasks = allTasks.filter(t => taskIds.has(t.id) || t.linkedProfiles.includes(id));
-    const relatedEvents = allEvents.filter(e => eventIds.has(e.id) || e.linkedProfiles.includes(id));
-    const relatedDocuments = allDocs.filter(d => documentIds.has(d.id) || d.linkedProfiles.includes(id));
-    const relatedObligations = allObs.filter(o => obligationIds.has(o.id) || o.linkedProfiles.includes(id));
+    const entriesByTracker = new Map<string, any[]>();
+    for (const e of trackerEntryRows) {
+      if (!entriesByTracker.has(e.tracker_id)) entriesByTracker.set(e.tracker_id, []);
+      entriesByTracker.get(e.tracker_id)!.push(e);
+    }
+    const paymentsByObligation = new Map<string, any[]>();
+    for (const p of obligationPaymentRows) {
+      if (!paymentsByObligation.has(p.obligation_id)) paymentsByObligation.set(p.obligation_id, []);
+      paymentsByObligation.get(p.obligation_id)!.push(p);
+    }
+    const [relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations] = await Promise.all([
+      fetchByIds("trackers", allIds.trackers, (r: any) => this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map((e: any) => this.rowToTrackerEntry(e)))),
+      fetchByIds("expenses", allIds.expenses, (r: any) => this.rowToExpense(r)),
+      fetchByIds("tasks", allIds.tasks, (r: any) => this.rowToTask(r)),
+      fetchByIds("events", allIds.events, (r: any) => this.rowToEvent(r)),
+      fetchByIds("documents", allIds.documents, (r: any) => this.rowToDocument(r)),
+      fetchByIds("obligations", allIds.obligations, (r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p)))),
+    ]);
     // Child profiles: profiles whose parentProfileId points to this profile
     let childProfiles = allProfiles.filter(p => p.parentProfileId === id);
     
@@ -602,10 +642,15 @@ export class SupabaseStorage implements IStorage {
         .eq("user_id", this.userId);
     } catch (e) { errors.push("entity_links"); }
 
-    if (errors.length > 0) console.error(`Cascade delete partial failures for profile ${id}:`, errors);
+    if (errors.length > 0) {
+      console.warn(`[deleteProfile] Cascade delete partial failures for profile ${id}: ${errors.join(", ")}`);
+    }
 
     // 8. Delete the profile itself
     const { error } = await this.supabase.from("profiles").delete().eq("id", id).eq("user_id", this.userId);
+    if (error) {
+      console.warn(`[deleteProfile] Failed to delete profile ${id}:`, error.message);
+    }
     return !error;
   }
 
@@ -1117,7 +1162,7 @@ export class SupabaseStorage implements IStorage {
       }
       if (ev.recurrence !== "none") {
         const base = new Date(ev.date);
-        for (let i = 1; i <= 90; i++) {
+        for (let i = 1; i <= 45; i++) {
           const next = new Date(base);
           switch (ev.recurrence) {
             case "daily": next.setDate(next.getDate() + i); break;
@@ -2426,9 +2471,10 @@ export class SupabaseStorage implements IStorage {
       if (m.key.toLowerCase().includes(q) || m.value.toLowerCase().includes(q)) results.push({ ...m, _type: "memory" });
     }
 
-    // Enhance with entity links
+    // Enhance with entity links — limit to first 10 results to avoid N+1 explosion
+    const enrichSlice = results.slice(0, 10);
     const existingIds = new Set(results.map((r: any) => r.id));
-    for (const result of [...results]) {
+    for (const result of enrichSlice) {
       const type = result._type;
       if (!type || !result.id) continue;
       try {

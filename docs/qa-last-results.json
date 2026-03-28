@@ -1,0 +1,8 @@
+{
+  "test7": "PASS - tracker detail modal opened",
+  "test14": "PARTIAL - Edit button found and clicked but no text inputs in edit mode",
+  "test16": "PARTIAL - calendar renders correctly but navigation button interaction unclear",
+  "test17": "PARTIAL - clicked event \"✓ Walk dog\" but no modal; content may have changed",
+  "test24": "PASS - mood \"Good\" selected",
+  "test26": "PARTIAL - \"New Habit\" clicked, page changed but no dialog"
+}

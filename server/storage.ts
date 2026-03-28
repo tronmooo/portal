@@ -24,6 +24,7 @@ import {
   type MoodLevel,
   type Goal, type InsertGoal,
   type EntityLink, type InsertEntityLink,
+  MOOD_SCORES,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -305,14 +306,7 @@ export function computeSecondaryData(trackerName: string, category: string, valu
     }
   }
 
-  // BMI from weight tracker
-  if (name === "weight" || name.includes("body weight")) {
-    const weight = parseFloat(values.weight) || parseFloat(values.value) || 0;
-    if (weight > 0) {
-      const heightInches = 70;
-      computed.bmi = Math.round((weight / (heightInches * heightInches)) * 703 * 10) / 10;
-    }
-  }
+  // BMI computation removed — height is not known at log time (was hardcoded at 70 inches)
 
   // Sleep
   if (name.includes("sleep")) {
@@ -358,24 +352,30 @@ function parseDuration(val: any): number {
 function calculateStreak(checkins: { date: string }[]): { current: number; longest: number } {
   if (checkins.length === 0) return { current: 0, longest: 0 };
   const dates = [...new Set(checkins.map(c => c.date))].sort().reverse();
-  const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  // Use timezone-aware date math to avoid DST issues
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  function addDays(dateStr: string, days: number): string {
+    const d = new Date(dateStr + 'T12:00:00'); // noon to avoid DST edge
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+  const yesterdayStr = addDays(todayStr, -1);
 
   let current = 0;
   let longest = 0;
   let tempStreak = 0;
 
-  // Check if today or yesterday has a check-in (allow 1-day gap for "current")
-  const startIdx = dates[0] === today ? 0 : dates[0] === yesterday ? 0 : -1;
-
-  if (startIdx >= 0) {
+  // Check if the most recent checkin is today or yesterday (allow 1-day gap for "current")
+  if (dates[0] === todayStr || dates[0] === yesterdayStr) {
+    // Walk backwards from the most recent checkin date
+    let expectedDate = dates[0];
     for (let i = 0; i < dates.length; i++) {
-      const expected = new Date(Date.now() - (i) * 86400000).toISOString().slice(0, 10);
-      // Allow starting from yesterday
-      const expected2 = new Date(Date.now() - (i + 1) * 86400000).toISOString().slice(0, 10);
-      if (dates.includes(expected) || (i === 0 && dates.includes(expected2))) {
+      if (dates[i] === expectedDate) {
         current++;
-      } else {
+        expectedDate = addDays(expectedDate, -1);
+      } else if (dates[i] < expectedDate) {
+        // gap found
         break;
       }
     }
@@ -386,10 +386,8 @@ function calculateStreak(checkins: { date: string }[]): { current: number; longe
   tempStreak = 1;
   longest = 1;
   for (let i = 1; i < allDates.length; i++) {
-    const prev = new Date(allDates[i - 1]);
-    const curr = new Date(allDates[i]);
-    const diff = (curr.getTime() - prev.getTime()) / 86400000;
-    if (diff === 1) {
+    const expected = addDays(allDates[i - 1], 1);
+    if (allDates[i] === expected) {
       tempStreak++;
       longest = Math.max(longest, tempStreak);
     } else {
@@ -544,16 +542,15 @@ function generateInsights(
     const d = new Date(j.createdAt); return (now.getTime() - d.getTime()) < 7 * 86400000;
   });
   if (recentJournal.length >= 3) {
-    const moodScores: Record<string, number> = { amazing: 5, good: 4, neutral: 3, bad: 2, awful: 1 };
-    const avg = recentJournal.reduce((s, j) => s + (moodScores[j.mood] || 3), 0) / recentJournal.length;
-    if (avg <= 2.5) {
+    const avg = recentJournal.reduce((s, j) => s + (MOOD_SCORES[j.mood] || 4), 0) / recentJournal.length;
+    if (avg <= 3.0) {
       insights.push({
         id: randomUUID(), type: "mood_trend",
         title: "Mood has been low this week",
         description: "Your journal entries suggest a tough stretch. Consider reaching out to someone or doing something you enjoy.",
         severity: "warning", data: { avgMood: avg }, createdAt: now.toISOString(),
       });
-    } else if (avg >= 4) {
+    } else if (avg >= 6) {
       insights.push({
         id: randomUUID(), type: "mood_trend",
         title: "Great mood this week",
@@ -1697,11 +1694,9 @@ export function createScopedStorage(userId: string): IStorage {
   if (supabaseUrl && supabaseKey) {
     return new SupabaseStorage(supabaseUrl, supabaseKey, userId);
   }
-  // SQLite fallback — global instance is fine for single-user local dev
-  return getStorage();
+  throw new Error("Supabase env vars required for scoped storage");
 }
 
-// Always true now — SQLite backend has been removed
 export function isSupabaseStorage(): boolean {
-  return true;
+  return !!(process.env.VITE_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
