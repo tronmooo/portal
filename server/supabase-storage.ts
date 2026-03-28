@@ -342,20 +342,40 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getProfileDetail(id: string): Promise<ProfileDetail | undefined> {
-    // Fetch profile AND all related entities in parallel for speed
-    const [profile, allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs, allProfiles] = await Promise.all([
-      this.getProfile(id),
-      this.getTrackers(), this.getExpenses(), this.getTasks(),
-      this.getEvents(), this.getDocuments(), this.getObligations(), this.getProfiles(),
-    ]);
+    const profile = await this.getProfile(id);
     if (!profile) return undefined;
 
-    const relatedTrackers = allTrackers.filter(t => t.linkedProfiles.includes(id));
-    const relatedExpenses = allExpenses.filter(e => e.linkedProfiles.includes(id) || profile.linkedExpenses.includes(e.id));
-    const relatedTasks = allTasks.filter(t => t.linkedProfiles.includes(id) || profile.linkedTasks.includes(t.id));
-    const relatedEvents = allEvents.filter(e => e.linkedProfiles.includes(id) || profile.linkedEvents.includes(e.id));
-    const relatedDocuments = allDocs.filter(d => d.linkedProfiles.includes(id) || profile.documents.includes(d.id));
-    const relatedObligations = allObs.filter(o => o.linkedProfiles.includes(id));
+    // Use junction tables for related entities (much faster than loading all + filtering)
+    const [ptRows, peRows, pkRows, pvRows, pdRows, poRows, allProfiles] = await Promise.all([
+      this.supabase.from("profile_trackers").select("tracker_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_expenses").select("expense_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_tasks").select("task_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_events").select("event_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_documents").select("document_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_obligations").select("obligation_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.getProfiles(),
+    ]);
+
+    // Collect IDs from junction tables + JSONB arrays (union — covers both during transition)
+    const trackerIds = new Set([...(ptRows.data || []).map(r => r.tracker_id), ...profile.linkedTrackers]);
+    const expenseIds = new Set([...(peRows.data || []).map(r => r.expense_id), ...profile.linkedExpenses]);
+    const taskIds = new Set([...(pkRows.data || []).map(r => r.task_id), ...profile.linkedTasks]);
+    const eventIds = new Set([...(pvRows.data || []).map(r => r.event_id), ...profile.linkedEvents]);
+    const documentIds = new Set([...(pdRows.data || []).map(r => r.document_id), ...profile.documents]);
+    const obligationIds = new Set([...(poRows.data || []).map(r => r.obligation_id)]);
+
+    // Fetch only the related entities (not ALL of them)
+    const [allTrackers, allExpenses, allTasks, allEvents, allDocs, allObs] = await Promise.all([
+      this.getTrackers(), this.getExpenses(), this.getTasks(),
+      this.getEvents(), this.getDocuments(), this.getObligations(),
+    ]);
+
+    const relatedTrackers = allTrackers.filter(t => trackerIds.has(t.id) || t.linkedProfiles.includes(id));
+    const relatedExpenses = allExpenses.filter(e => expenseIds.has(e.id) || e.linkedProfiles.includes(id));
+    const relatedTasks = allTasks.filter(t => taskIds.has(t.id) || t.linkedProfiles.includes(id));
+    const relatedEvents = allEvents.filter(e => eventIds.has(e.id) || e.linkedProfiles.includes(id));
+    const relatedDocuments = allDocs.filter(d => documentIds.has(d.id) || d.linkedProfiles.includes(id));
+    const relatedObligations = allObs.filter(o => obligationIds.has(o.id) || o.linkedProfiles.includes(id));
     // Child profiles: profiles whose parentProfileId points to this profile
     let childProfiles = allProfiles.filter(p => p.parentProfileId === id);
     

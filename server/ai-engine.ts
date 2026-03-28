@@ -2798,9 +2798,10 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   documentPreviews?: Array<{ id: string; name: string; mimeType: string; data: string }>;
 }> {
-  // Try fast-path first
-  const fast = await tryFastPath(userMessage);
-  if (fast.matched) return { reply: fast.reply, actions: fast.actions, results: fast.results, documentPreview: (fast as any).documentPreview, documentPreviews: (fast as any).documentPreviews };
+  // Fast-path removed — all messages go through the AI for consistent behavior.
+  // The fast-path gave different behavior (no multi-entity linking, no date sophistication,
+  // no rich context) depending on whether a regex matched. Now every message gets the same
+  // intelligent treatment.
 
   // Build rich context from current data (uses short-lived cache to avoid redundant DB hits)
   const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];

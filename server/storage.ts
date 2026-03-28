@@ -1647,10 +1647,8 @@ export class MemStorage implements IStorage {
 
 // Storage factory — uses Supabase if env vars are set, otherwise falls back to SQLite
 // IMPORTANT: Lazy initialization — dotenv.config() must run before first access.
-// ES module static imports hoist, so we can't eagerly call createStorage() at
-// module load time. Instead, we defer creation until the first property access.
-// SupabaseStorage imported statically — it's always bundled by esbuild.
-// SqliteStorage loaded dynamically to avoid importing better-sqlite3 in serverless environments.
+// SupabaseStorage is the only backend. SQLite was removed to eliminate
+// the maintenance burden of two diverging implementations.
 import { SupabaseStorage } from './supabase-storage';
 
 let _storageInstance: IStorage | null = null;
@@ -1659,19 +1657,11 @@ function getStorage(): IStorage {
   if (!_storageInstance) {
     const supabaseUrl = process.env.VITE_SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (supabaseUrl && supabaseKey) {
-      logger.info("storage", "Using Supabase PostgreSQL storage");
-      _storageInstance = new SupabaseStorage(supabaseUrl, supabaseKey, 'anonymous');
-    } else {
-      // INTENTIONAL: eval('require') prevents esbuild from resolving better-sqlite3
-      // native dependency at bundle time (it's excluded from the Vercel serverless bundle).
-      // This code path is only used for local development with SQLite.
-      const mod = eval('require')("./sqlite-storage");
-      const { SqliteStorage } = mod;
-      logger.info("storage", "Using SQLite local storage (env vars not found)");
-      _storageInstance = new SqliteStorage();
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error("VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required. SQLite backend has been removed.");
     }
+    logger.info("storage", "Using Supabase PostgreSQL storage");
+    _storageInstance = new SupabaseStorage(supabaseUrl, supabaseKey, 'anonymous');
   }
   return _storageInstance!;
 }
@@ -1711,7 +1701,7 @@ export function createScopedStorage(userId: string): IStorage {
   return getStorage();
 }
 
-// Helper to check if we're using Supabase storage
+// Always true now — SQLite backend has been removed
 export function isSupabaseStorage(): boolean {
-  return !!(process.env.VITE_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  return true;
 }

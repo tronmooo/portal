@@ -32,8 +32,30 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-// In-memory token storage (can't use localStorage in sandboxed iframe)
+// Token storage — memory + sessionStorage for persistence across page refreshes.
+// sessionStorage works in most sandboxed iframes (unlike localStorage).
 let memoryTokens: { access_token: string; refresh_token: string; expires_at: number } | null = null;
+
+function persistTokens(tokens: typeof memoryTokens) {
+  memoryTokens = tokens;
+  if (tokens) {
+    try { sessionStorage.setItem('portol_session', JSON.stringify(tokens)); } catch { /* sandboxed */ }
+  } else {
+    try { sessionStorage.removeItem('portol_session'); } catch { /* sandboxed */ }
+  }
+}
+
+function loadPersistedTokens(): typeof memoryTokens {
+  if (memoryTokens) return memoryTokens;
+  try {
+    const stored = sessionStorage.getItem('portol_session');
+    if (stored) {
+      memoryTokens = JSON.parse(stored);
+      return memoryTokens;
+    }
+  } catch { /* sandboxed — no session persistence available */ }
+  return null;
+}
 
 // Supabase config (loaded lazily from /api/auth/config)
 let supabaseConfig: { url: string; anonKey: string } | null = null;
@@ -68,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (refreshRes.ok) {
           const data = await refreshRes.json();
           if (data.session) {
-            memoryTokens = data.session;
+            persistTokens(data.session);
             setSession(data.session);
             setUser(data.user);
           }
@@ -111,11 +133,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
           const callbackData = await callbackRes.json();
           if (!callbackData.error) {
-            memoryTokens = {
+            persistTokens({
               access_token: accessToken,
               refresh_token: refreshToken || "",
               expires_at: callbackData.session?.expires_at || (Math.floor(Date.now() / 1000) + 3600),
-            };
+            });
             setUser(callbackData.user);
             setSession(memoryTokens);
             setLoading(false);
@@ -127,7 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // Try to restore session from memory
-      if (memoryTokens) {
+      if (loadPersistedTokens()) {
         await restoreSession(memoryTokens);
       } else {
         setLoading(false);
@@ -153,7 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const refreshData = await refreshRes.json();
         if (refreshData.session) {
-          memoryTokens = refreshData.session;
+          persistTokens(refreshData.session);
           setUser(refreshData.user);
           setSession(refreshData.session);
         }
@@ -167,11 +189,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(data.user);
           setSession(tokens);
         } else {
-          memoryTokens = null;
+          persistTokens(null);
         }
       }
     } catch {
-      memoryTokens = null;
+      persistTokens(null);
     }
     setLoading(false);
   }
@@ -182,7 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await res.json();
       if (data.error) return { error: data.error };
 
-      memoryTokens = data.session;
+      persistTokens(data.session);
       setUser(data.user);
       setSession(data.session);
       return {};
@@ -197,7 +219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await res.json();
       if (data.error) return { error: data.error };
 
-      memoryTokens = data.session;
+      persistTokens(data.session);
       setUser(data.user);
       setSession(data.session);
       return {};
@@ -234,7 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(() => {
     // 1. Clear the in-memory auth tokens
-    memoryTokens = null;
+    persistTokens(null);
 
     // 2. Clear ALL React Query cache — prevents data leaking between users
     queryClient.clear();
@@ -302,7 +324,7 @@ export function installAuthInterceptor() {
           });
           if (refreshRes.ok) {
             const refreshData = await refreshRes.json();
-            memoryTokens = refreshData.session;
+            persistTokens(refreshData.session);
             // Retry the original request with new token
             const retryHeaders = new Headers(init?.headers);
             retryHeaders.set("Authorization", `Bearer ${memoryTokens!.access_token}`);
@@ -311,7 +333,7 @@ export function installAuthInterceptor() {
         } catch { /* fall through */ }
       }
       // Refresh failed — clear session
-      memoryTokens = null;
+      persistTokens(null);
     }
 
     return response;
