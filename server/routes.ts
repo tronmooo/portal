@@ -2436,7 +2436,24 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   }));
 
   // ---- Entity Links ----
+  // Allowlist for valid entity types — prevents injection via URL params
+  const VALID_ENTITY_TYPES = new Set([
+    "profile", "document", "expense", "task", "tracker",
+    "event", "habit", "obligation", "goal", "artifact",
+    "journal", "memory", "domain",
+  ]);
+  // UUIDs only (v4 format) for entity IDs — prevents injection via URL params
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  function validateEntityParams(type: string, id: string): string | null {
+    if (!VALID_ENTITY_TYPES.has(type)) return "Invalid entity type";
+    if (!UUID_RE.test(id)) return "Invalid entity ID format";
+    return null;
+  }
+
   app.get("/api/entity-links/:type/:id", asyncHandler(async (req, res) => {
+    const err = validateEntityParams(req.params.type, req.params.id);
+    if (err) return res.status(400).json({ error: err });
     try {
       const links = await storage.getEntityLinks(req.params.type, req.params.id);
       res.json(links);
@@ -2447,6 +2464,8 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   }));
 
   app.get("/api/entity-links/:type/:id/related", asyncHandler(async (req, res) => {
+    const err = validateEntityParams(req.params.type, req.params.id);
+    if (err) return res.status(400).json({ error: err });
     try {
       const related = await storage.getRelatedEntities(req.params.type, req.params.id);
       res.json(related);

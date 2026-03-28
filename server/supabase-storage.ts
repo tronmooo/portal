@@ -598,10 +598,13 @@ export class SupabaseStorage implements IStorage {
       }
     } catch (e) { errors.push("documents"); }
 
-    try { // 7. Delete entity_links
-      await this.supabase.from("entity_links").delete()
-        .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
-        .eq("user_id", this.userId);
+    try { // 7. Delete entity_links — use two separate eq() calls to avoid .or() string interpolation
+      await Promise.all([
+        this.supabase.from("entity_links").delete()
+          .eq("user_id", this.userId).eq("source_type", "profile").eq("source_id", id),
+        this.supabase.from("entity_links").delete()
+          .eq("user_id", this.userId).eq("target_type", "profile").eq("target_id", id),
+      ]);
     } catch (e) { errors.push("entity_links"); }
 
     if (errors.length > 0) console.error(`Cascade delete partial failures for profile ${id}:`, errors);
@@ -2108,11 +2111,26 @@ export class SupabaseStorage implements IStorage {
   // ENTITY LINKS
   // ============================================================
   async getEntityLinks(entityType: string, entityId: string): Promise<EntityLink[]> {
-    const { data, error } = await this.supabase.from("entity_links").select("*").eq("user_id", this.userId)
-      .or(`and(source_type.eq.${entityType},source_id.eq.${entityId}),and(target_type.eq.${entityType},target_id.eq.${entityId})`)
-      .order("created_at", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToEntityLink(r));
+    // Use two separate .eq() queries instead of .or() with string interpolation
+    // to avoid PostgREST filter injection via user-controlled entityType/entityId values.
+    const [sourceRes, targetRes] = await Promise.all([
+      this.supabase.from("entity_links").select("*")
+        .eq("user_id", this.userId)
+        .eq("source_type", entityType)
+        .eq("source_id", entityId),
+      this.supabase.from("entity_links").select("*")
+        .eq("user_id", this.userId)
+        .eq("target_type", entityType)
+        .eq("target_id", entityId),
+    ]);
+    if (sourceRes.error) throw sourceRes.error;
+    if (targetRes.error) throw targetRes.error;
+    const combined = [...(sourceRes.data || []), ...(targetRes.data || [])];
+    // Deduplicate by id (a link could theoretically appear in both queries)
+    const unique = [...new Map(combined.map(r => [r.id, r])).values()];
+    return unique
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map(r => this.rowToEntityLink(r));
   }
 
   async createEntityLink(data: InsertEntityLink): Promise<EntityLink> {
