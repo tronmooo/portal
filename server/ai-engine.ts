@@ -1361,15 +1361,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["filter"],
     },
   },
-  {
-    name: "undo_last",
-    description: "Undo the last action. Use when user says 'undo', 'undo that', 'take that back', 'revert'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
+  // undo_last removed — was a fake/placeholder tool that lied to users
   {
     name: "recall_actions",
     description: "Recall recent actions — shows the last N things you did in Portol. Use when user asks 'what did I just do?', 'show recent actions', 'what happened?', or 'my recent activity'.",
@@ -2360,11 +2352,8 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "recall_actions": {
       const count = Math.min(input.count || 10, 20);
-      return { actions: getActionLog(count), total: actionLog.length };
-    }
-
-    case "undo_last": {
-      return { message: "Undo is not yet available for this action. Please manually revert the change." };
+      const recentActions = getActionLog(count);
+      return { actions: recentActions, total: recentActions.length };
     }
 
     case "sync_calendar": {
@@ -2600,7 +2589,7 @@ async function autoUpdateGoalProgress(trackerId: string, values: Record<string, 
       }
       if (increment > 0) {
         const newCurrent = (goal.current || 0) + increment;
-        await storage.updateGoal(goal.id, { current: Math.min(newCurrent, goal.target * 2) }); // cap at 2x target
+        await storage.updateGoal(goal.id, { current: Math.min(newCurrent, goal.target) }); // cap at target (100%)
         logger.info("goal", `Auto-updated "${goal.title}": ${goal.current} → ${newCurrent} ${goal.unit}`);
       }
     }

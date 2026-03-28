@@ -68,15 +68,15 @@ function bustAllCaches(): void {
   responseCache.clear();
 }
 
-// Input sanitizer — encode HTML entities instead of stripping (preserves content like emails, math)
+// Input sanitizer — strip dangerous content but preserve readable text.
+// React handles HTML escaping at render time, so we store raw text in DB.
+// Only strip actual injection vectors, not encode legitimate characters like & < >
 function sanitize(input: string): string {
   return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
     .replace(/javascript:/gi, '')
     .replace(/on\w+\s*=/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '')
     .trim()
     .slice(0, 10000);
 }
@@ -114,10 +114,16 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  // Bust response cache on any write operation
+  // Bust response cache on write — scoped to the requesting user to avoid thrashing other users' caches
   app.use("/api", (req, _res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
-      bustAllCaches();
+      const uid = (req as AuthenticatedRequest).userId;
+      if (uid) {
+        bustCache(`stats:${uid}`);
+        bustCache(`profile-detail:`);
+      } else {
+        bustAllCaches();
+      }
     }
     next();
   });
@@ -506,9 +512,11 @@ export async function registerRoutes(
       const lastSync = await storage.getPreference("gcal_last_sync");
       const events = await storage.getEvents();
       const gcalEvents = events.filter((e: any) => e.tags?.includes("google-calendar"));
+      // Check if Google Calendar is actually configured (not hardcoded)
+      const gcalConfigured = !!(await storage.getPreference("gcal_refresh_token"));
       res.json({
-        connected: true,
-        lastSync,
+        connected: gcalConfigured,
+        lastSync: gcalConfigured ? lastSync : null,
         importedCount: gcalEvents.length,
         totalEvents: events.length,
       });
@@ -2468,9 +2476,26 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   }));
 
   // ---- Onboarding Status ----
-  app.get("/api/onboarding-status", asyncHandler(async (_req, res) => {
-    // Onboarding wizard removed — always return completed
-    res.json({ completed: true, hasProfiles: true, hasTrackers: true, hasTasks: true, profileCount: 0, trackerCount: 0, taskCount: 0 });
+  app.get("/api/onboarding-status", asyncHandler(async (req, res) => {
+    // Check actual user data to determine onboarding status
+    const completed = await storage.getPreference("onboarding_completed");
+    if (completed === "true") {
+      return res.json({ completed: true });
+    }
+    // Check if user has created any data (implicit onboarding)
+    const profiles = await storage.getProfiles();
+    const trackers = await storage.getTrackers();
+    const tasks = await storage.getTasks();
+    const hasData = profiles.length > 1 || trackers.length > 0 || tasks.length > 0; // >1 because self profile is auto-created
+    res.json({
+      completed: hasData, // If they already have data, skip onboarding
+      hasProfiles: profiles.length > 1,
+      hasTrackers: trackers.length > 0,
+      hasTasks: tasks.length > 0,
+      profileCount: profiles.length,
+      trackerCount: trackers.length,
+      taskCount: tasks.length,
+    });
   }));
 
   app.post("/api/onboarding/complete", asyncHandler(async (_req, res) => {
@@ -2690,9 +2715,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const lastSync = await storage.getPreference("gcal_last_sync");
       const events = await storage.getEvents();
       const gcalEvents = events.filter((e: any) => e.tags?.includes("google-calendar"));
+      const gcalConfigured = !!(await storage.getPreference("gcal_refresh_token"));
       res.json({
-        connected: true,
-        lastSync,
+        connected: gcalConfigured,
+        lastSync: gcalConfigured ? lastSync : null,
         importedCount: gcalEvents.length,
       });
     } catch (err: any) {

@@ -49,6 +49,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuthConfig();
   }, []);
 
+  // Background token refresh — renew 5 minutes before expiry to prevent silent 401s
+  useEffect(() => {
+    if (!session || !memoryTokens?.refresh_token) return;
+    const expiresAt = memoryTokens.expires_at || 0;
+    const now = Math.floor(Date.now() / 1000);
+    const ttlSeconds = expiresAt - now;
+    // Refresh 5 minutes before expiry, or immediately if already close
+    const refreshIn = Math.max((ttlSeconds - 300) * 1000, 10000); // at least 10s
+    const timer = setTimeout(async () => {
+      if (!memoryTokens?.refresh_token) return;
+      try {
+        const refreshRes = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: memoryTokens.refresh_token }),
+        });
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          if (data.session) {
+            memoryTokens = data.session;
+            setSession(data.session);
+            setUser(data.user);
+          }
+        }
+      } catch { /* retry will happen on next timer cycle */ }
+    }, refreshIn);
+    return () => clearTimeout(timer);
+  }, [session]);
+
   async function checkAuthConfig() {
     try {
       const res = await fetch(`${API_BASE}/api/auth/config`);

@@ -1341,9 +1341,13 @@ export class SupabaseStorage implements IStorage {
   // DOCUMENTS
   // ============================================================
   async getDocuments(): Promise<Document[]> {
-    const { data, error } = await this.supabase.from("documents").select("*").eq("user_id", this.userId);
+    // PERF: Exclude file_data from list queries — base64 blobs can be 10MB+ each.
+    // Only getDocument(id) returns file_data when specifically needed.
+    const { data, error } = await this.supabase.from("documents")
+      .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
+      .eq("user_id", this.userId);
     if (error) throw error;
-    return (data || []).map(r => this.rowToDocument(r));
+    return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
   }
 
   async getDocument(id: string): Promise<Document | undefined> {
