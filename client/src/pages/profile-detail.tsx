@@ -2637,6 +2637,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   loan: [
     { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Payments", testId: "tab-finances" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
@@ -2644,6 +2645,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   investment: [
     { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Performance", testId: "tab-finances" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
@@ -2651,7 +2653,9 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   subscription: [
     { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Billing", testId: "tab-finances" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Medical provider
   medical: [
@@ -2675,7 +2679,9 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   asset: [
     { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
 };
@@ -3028,17 +3034,15 @@ export default function ProfileDetailPage() {
                   )}
                   {/* Trackers */}
                   <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
-                  {/* Documents — now part of the Linked tab */}
-                  {profile.relatedDocuments.length > 0 && (
-                    <div className="mt-4">
-                      <DocumentsTab
-                        documents={profile.relatedDocuments}
-                        profileId={profile.id}
-                        childProfiles={profile.childProfiles}
-                        onUploaded={handleSaved}
-                      />
-                    </div>
-                  )}
+                  {/* Documents — always show with upload capability */}
+                  <div className="mt-4">
+                    <DocumentsTab
+                      documents={profile.relatedDocuments}
+                      profileId={profile.id}
+                      childProfiles={profile.childProfiles}
+                      onUploaded={handleSaved}
+                    />
+                  </div>
                 </TabsContent>
               )}
 

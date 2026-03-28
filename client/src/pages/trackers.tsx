@@ -2790,13 +2790,13 @@ export default function TrackersPage() {
       {/* Linked Profiles (child assets, subscriptions, etc.) */}
       {(() => {
         const childTypeSet = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
-        // Show child profiles: when filtering by person, show their children; when "all", show all child profiles
-        const parentId = resolvedFilter === "all" ? null : resolvedFilter;
+        // Show child profiles: when filtering by person, show their children; when "all" or "me", show all child profiles
+        const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
-          if (!parentId) return true; // Show all child-type profiles when "all" selected
+          if (isShowAll) return true; // Show all child-type profiles (including orphans without parent)
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          return pParent === parentId;
+          return pParent === resolvedFilter;
         });
         if (childProfiles.length === 0) return null;
         const typeIcons: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: CreditCard };
@@ -2864,8 +2864,8 @@ export default function TrackersPage() {
                         {daysUntil <= 0 ? ' (overdue)' : daysUntil <= 7 ? ` (in ${daysUntil}d)` : ''}
                       </p>
                     </div>
-                    <Link href="/dashboard/obligations">
-                      <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0">Manage</Button>
+                    <Link href={`/dashboard/obligations`}>
+                      <Button variant="outline" size="sm" className="h-7 text-xs shrink-0">${ob.amount}</Button>
                     </Link>
                   </div>
                 </div>
