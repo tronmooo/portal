@@ -122,7 +122,7 @@ function generateInsights(
 
   const recentJournal = journal.filter(j => { const d = new Date(j.createdAt); return (now.getTime() - d.getTime()) < 7 * 86400000; });
   if (recentJournal.length >= 3) {
-    const moodScores: Record<string, number> = { amazing: 5, good: 4, neutral: 3, bad: 2, awful: 1 };
+    const moodScores: Record<string, number> = { amazing: 8, great: 7, good: 6, okay: 5, neutral: 4, bad: 3, awful: 2, terrible: 1 };
     const avg = recentJournal.reduce((s, j) => s + (moodScores[j.mood] || 3), 0) / recentJournal.length;
     if (avg <= 2.5) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Mood has been low this week", description: "Your journal entries suggest a tough stretch. Consider reaching out to someone or doing something you enjoy.", severity: "warning", data: { avgMood: avg }, createdAt: now.toISOString() }); }
     else if (avg >= 4) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Great mood this week", description: "You've been feeling positive. Keep doing what's working!", severity: "positive", data: { avgMood: avg }, createdAt: now.toISOString() }); }
@@ -357,17 +357,14 @@ export class SupabaseStorage implements IStorage {
     // Child profiles: profiles whose parentProfileId points to this profile
     let childProfiles = allProfiles.filter(p => p.parentProfileId === id);
     
-    // Auto-adopt: if this is a "self" profile, also claim orphaned child-type profiles
+    // Include orphaned child-type profiles under the "self" profile in the response,
+    // but do NOT silently mutate the database here — mutations during reads cause
+    // inconsistent state in concurrent requests and obscure data provenance.
+    // Use the dedicated /api/trackers/migrate-to-self endpoint for backfill operations.
     if (profile.type === "self") {
       const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
       const orphans = allProfiles.filter(p => childTypes.has(p.type) && !p.parentProfileId);
       if (orphans.length > 0) {
-        // Auto-fix: set parentProfileId on orphans (non-blocking)
-        for (const orphan of orphans) {
-          const updatedFields = { ...(orphan.fields || {}), _parentProfileId: id };
-          this.supabase.from("profiles").update({ fields: updatedFields, parent_profile_id: id }).eq("id", orphan.id).eq("user_id", this.userId).then(() => {});
-          orphan.parentProfileId = id;
-        }
         childProfiles = [...childProfiles, ...orphans];
       }
     }
@@ -945,7 +942,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("tasks").insert({
       id, user_id: this.userId, title: data.title, description: data.description || null,
       status: "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
-      linked_profiles: [], tags: data.tags || [], created_at: now,
+      linked_profiles: (data as any).linkedProfiles || [], tags: data.tags || [], created_at: now,
     });
     if (error) throw error;
     this.logActivity("task", `Created task: ${data.title}`);
@@ -1197,6 +1194,25 @@ export class SupabaseStorage implements IStorage {
     }
 
     // ── Profile-derived virtual events ──────────────────────────
+    // Build a fingerprint set of stored events that were auto-generated from profile fields
+    // (source="ai", tag "auto-generated"). Virtual events below are only emitted when no
+    // stored event already covers the same profile+date combination, preventing duplicates
+    // for users whose profiles were created after autoGenerateProfileEvents was introduced.
+    const storedAutoEventFingerprints = new Set<string>();
+    for (const ev of events) {
+      if ((ev.source === "ai" || ev.source === "chat") && Array.isArray(ev.tags) && ev.tags.includes("auto-generated")) {
+        for (const pid of ev.linkedProfiles) {
+          // Fingerprint: profileId::YYYY-MM (month granularity handles yearly recurrence)
+          storedAutoEventFingerprints.add(`${pid}::${ev.date.slice(0, 7)}`);
+          // Also fingerprint by exact date for non-recurring events
+          storedAutoEventFingerprints.add(`${pid}::${ev.date.slice(0, 10)}`);
+        }
+      }
+    }
+    const virtualEventCovered = (profileId: string, date: string): boolean =>
+      storedAutoEventFingerprints.has(`${profileId}::${date.slice(0, 10)}`) ||
+      storedAutoEventFingerprints.has(`${profileId}::${date.slice(0, 7)}`);
+
     for (const profile of profiles) {
       const f = profile.fields || {};
 
@@ -1208,7 +1224,7 @@ export class SupabaseStorage implements IStorage {
         const endY = parseInt(endDate.slice(0, 4), 10);
         for (let y = startY; y <= endY; y++) {
           const d = `${y}-${bday.slice(5, 10)}`;
-          if (d >= startDate && d <= endDate) {
+          if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
             items.push({ id: `profile-birthday-${profile.id}-${d}`, type: "event", title: `🎂 ${profile.name}'s Birthday`, date: d, allDay: true, color: "#A86FDF", category: "family", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: profile.type } });
           }
         }
@@ -1217,7 +1233,7 @@ export class SupabaseStorage implements IStorage {
       // Medical → nextVisit
       if (profile.type === "medical" && f.nextVisit) {
         const d = f.nextVisit.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           items.push({ id: `profile-medical-${profile.id}-${d}`, type: "event", title: `🏥 ${profile.name} — Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "medical" } });
         }
       }
@@ -1225,7 +1241,7 @@ export class SupabaseStorage implements IStorage {
       // Vehicle → nextService
       if (profile.type === "vehicle" && f.nextService) {
         const d = f.nextService.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           items.push({ id: `profile-vehicle-${profile.id}-${d}`, type: "event", title: `🚗 ${profile.name} — Service`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "vehicle" } });
         }
       }
@@ -1233,7 +1249,7 @@ export class SupabaseStorage implements IStorage {
       // Subscription → renewalDate
       if (profile.type === "subscription" && f.renewalDate) {
         const d = f.renewalDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           items.push({ id: `profile-subscription-${profile.id}-${d}`, type: "event", title: `🔄 ${profile.name} — Renewal`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "subscription" } });
         }
       }
@@ -1241,7 +1257,7 @@ export class SupabaseStorage implements IStorage {
       // Loan → startDate or nextPayment
       if (profile.type === "loan" && (f.nextPayment || f.startDate)) {
         const d = (f.nextPayment || f.startDate).slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           const label = f.nextPayment ? "Payment Due" : "Start Date";
           items.push({ id: `profile-loan-${profile.id}-${d}`, type: "event", title: `💰 ${profile.name} — ${label}`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "loan" } });
         }
@@ -1250,7 +1266,7 @@ export class SupabaseStorage implements IStorage {
       // Pet → nextVetVisit
       if (profile.type === "pet" && f.nextVetVisit) {
         const d = f.nextVetVisit.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           items.push({ id: `profile-pet-${profile.id}-${d}`, type: "event", title: `🐾 ${profile.name} — Vet Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "pet" } });
         }
       }
@@ -1259,13 +1275,13 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "property") {
         if (f.insuranceExpiry) {
           const d = f.insuranceExpiry.slice(0, 10);
-          if (d >= startDate && d <= endDate) {
+          if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
             items.push({ id: `profile-property-ins-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Insurance Expiry`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
           }
         }
         if (f.leaseEnd) {
           const d = f.leaseEnd.slice(0, 10);
-          if (d >= startDate && d <= endDate) {
+          if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
             items.push({ id: `profile-property-lease-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Lease End`, date: d, allDay: true, color: "#A13544", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
           }
         }
@@ -1274,7 +1290,7 @@ export class SupabaseStorage implements IStorage {
       // Investment → maturityDate
       if (profile.type === "investment" && f.maturityDate) {
         const d = f.maturityDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           items.push({ id: `profile-investment-${profile.id}-${d}`, type: "event", title: `📈 ${profile.name} — Maturity`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "investment" } });
         }
       }
@@ -1282,7 +1298,7 @@ export class SupabaseStorage implements IStorage {
       // Account → expirationDate
       if (profile.type === "account" && f.expirationDate) {
         const d = f.expirationDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           items.push({ id: `profile-account-${profile.id}-${d}`, type: "event", title: `⚠️ ${profile.name} — Expires`, date: d, allDay: true, color: "#A13544", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "account" } });
         }
       }
@@ -1290,7 +1306,7 @@ export class SupabaseStorage implements IStorage {
       // Asset → warrantyExpiry
       if (profile.type === "asset" && f.warrantyExpiry) {
         const d = f.warrantyExpiry.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
+        if (d >= startDate && d <= endDate && !virtualEventCovered(profile.id, d)) {
           items.push({ id: `profile-asset-${profile.id}-${d}`, type: "event", title: `🛡️ ${profile.name} — Warranty Expiry`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "asset" } });
         }
       }
@@ -1546,7 +1562,7 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, amount: data.amount,
       frequency: data.frequency || "monthly", category: data.category || "general",
       next_due_date: data.nextDueDate, autopay: data.autopay || false,
-      linked_profiles: [], notes: data.notes || null, created_at: now,
+      linked_profiles: (data as any).linkedProfiles || [], notes: data.notes || null, created_at: now,
     });
     if (error) throw error;
     this.logActivity("obligation", `Created obligation: ${data.name}`);
@@ -1597,7 +1613,7 @@ export class SupabaseStorage implements IStorage {
     const id = randomUUID();
     const now = new Date().toISOString();
     const { error } = await this.supabase.from("obligation_payments").insert({
-      id, user_id: this.userId, obligation_id: obligationId, amount, date: now,
+      id, user_id: this.userId, obligation_id: obligationId, amount, date: now.slice(0, 10),
       method: method || null, confirmation_number: confirmationNumber || null,
     });
     if (error) throw error;

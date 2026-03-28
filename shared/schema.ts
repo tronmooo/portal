@@ -328,6 +328,7 @@ export const insertObligationSchema = z.object({
   nextDueDate: z.string(),
   autopay: z.boolean().default(false),
   notes: z.string().optional(),
+  linkedProfiles: z.array(z.string()).optional().default([]),
 });
 
 export type InsertObligation = z.infer<typeof insertObligationSchema>;
@@ -445,6 +446,7 @@ export const insertTaskSchema = z.object({
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   dueDate: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),
+  linkedProfiles: z.array(z.string()).optional().default([]),
 });
 
 export type InsertTask = z.infer<typeof insertTaskSchema>;

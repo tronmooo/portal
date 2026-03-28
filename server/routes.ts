@@ -935,6 +935,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Expenses ----
   app.get("/api/expenses", asyncHandler(async (req, res) => { const items = await storage.getExpenses(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/expenses/:id", asyncHandler(async (req, res) => {
+    const expenses = await storage.getExpenses();
+    const expense = expenses.find(e => e.id === req.params.id);
+    if (!expense) return res.status(404).json({ error: "Expense not found" });
+    res.json(expense);
+  }));
   app.post("/api/expenses", asyncHandler(async (req, res) => {
     if (!req.body.amount || typeof req.body.amount !== "number" || req.body.amount <= 0) {
       return res.status(400).json({ error: "Positive amount required" });
