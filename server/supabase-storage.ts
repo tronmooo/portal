@@ -174,6 +174,7 @@ export class SupabaseStorage implements IStorage {
       linkedExpenses: r.linked_expenses || [], linkedTasks: r.linked_tasks || [],
       linkedEvents: r.linked_events || [],
       parentProfileId: r.parent_profile_id || fields._parentProfileId || undefined,
+      linkedObligationId: r.linked_obligation_id || undefined,
       createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -227,7 +228,8 @@ export class SupabaseStorage implements IStorage {
   private rowToDocument(r: any): Document {
     return {
       id: r.id, name: r.name, type: r.type, mimeType: r.mime_type,
-      fileData: r.file_data || "", extractedData: r.extracted_data || {},
+      fileData: r.file_data || "", storagePath: r.storage_path || undefined,
+      extractedData: r.extracted_data || {},
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
       createdAt: r.created_at,
     };
@@ -493,13 +495,17 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     const merged = { ...existing, ...data };
     const now = new Date().toISOString();
-    const { error } = await this.supabase.from("profiles").update({
+    const updateData: any = {
       type: merged.type, name: merged.name, avatar: merged.avatar || null,
       fields: merged.fields, tags: merged.tags, notes: merged.notes,
       documents: merged.documents, linked_trackers: merged.linkedTrackers,
       linked_expenses: merged.linkedExpenses, linked_tasks: merged.linkedTasks,
       linked_events: merged.linkedEvents, updated_at: now,
-    }).eq("id", id).eq("user_id", this.userId);
+    };
+    // Optional FK fields
+    if (data.linkedObligationId !== undefined) updateData.linked_obligation_id = data.linkedObligationId || null;
+    if (data.parentProfileId !== undefined) updateData.parent_profile_id = data.parentProfileId || null;
+    const { error } = await this.supabase.from("profiles").update(updateData).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     return this.getProfile(id);
   }
@@ -1353,15 +1359,58 @@ export class SupabaseStorage implements IStorage {
   async getDocument(id: string): Promise<Document | undefined> {
     const { data, error } = await this.supabase.from("documents").select("*").eq("id", id).eq("user_id", this.userId).single();
     if (error || !data) return undefined;
-    return this.rowToDocument(data);
+    const doc = this.rowToDocument(data);
+
+    // If file is in Supabase Storage (not base64 in DB), download it on demand
+    if (doc.storagePath && !doc.fileData) {
+      try {
+        const { data: blob, error: dlErr } = await this.supabase.storage
+          .from('documents')
+          .download(doc.storagePath);
+        if (!dlErr && blob) {
+          const buffer = Buffer.from(await blob.arrayBuffer());
+          doc.fileData = buffer.toString('base64');
+        }
+      } catch { /* non-critical — fileData stays empty */ }
+    }
+    return doc;
   }
 
   async createDocument(data: any): Promise<Document> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    let storagePath: string | null = null;
+    let fileDataForDB: string = data.fileData || "";
+
+    // Upload to Supabase Storage if we have base64 file data
+    if (data.fileData && data.fileData.length > 0) {
+      try {
+        const safeName = (data.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+        const path = `${this.userId}/${id}/${safeName}`;
+        const buffer = Buffer.from(data.fileData, 'base64');
+        const { error: uploadError } = await this.supabase.storage
+          .from('documents')
+          .upload(path, buffer, {
+            contentType: data.mimeType || 'application/octet-stream',
+            upsert: false,
+          });
+        if (!uploadError) {
+          storagePath = path;
+          fileDataForDB = ""; // Don't store base64 in DB row since it's in Storage now
+        } else {
+          console.error(`[Storage] Upload failed for ${id}, falling back to DB:`, uploadError.message);
+          // Fall back to storing base64 in DB
+        }
+      } catch (err: any) {
+        console.error(`[Storage] Upload exception for ${id}:`, err.message);
+        // Fall back to storing base64 in DB
+      }
+    }
+
     const { error } = await this.supabase.from("documents").insert({
       id, user_id: this.userId, name: data.name, type: data.type || "other",
-      mime_type: data.mimeType || "image/jpeg", file_data: data.fileData || "",
+      mime_type: data.mimeType || "image/jpeg", file_data: fileDataForDB,
+      storage_path: storagePath,
       extracted_data: data.extractedData || {}, linked_profiles: data.linkedProfiles || [],
       tags: data.tags || [], created_at: now,
     });
@@ -1430,6 +1479,44 @@ export class SupabaseStorage implements IStorage {
   async getDocumentsForProfile(profileId: string): Promise<Document[]> {
     const allDocs = await this.getDocuments();
     return allDocs.filter(d => d.linkedProfiles.includes(profileId));
+  }
+
+  /**
+   * Backfill: migrate existing base64 file_data from DB rows to Supabase Storage.
+   * Sets storage_path and clears file_data for each migrated document.
+   * Returns count of documents migrated.
+   */
+  async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> {
+    const { data: docs, error } = await this.supabase.from("documents")
+      .select("id, name, mime_type, file_data, storage_path")
+      .eq("user_id", this.userId)
+      .is("storage_path", null)
+      .not("file_data", "eq", "")
+      .not("file_data", "is", null);
+    if (error || !docs) return { migrated: 0, errors: [error?.message || "No docs"] };
+    let migrated = 0;
+    const errors: string[] = [];
+    for (const doc of docs) {
+      if (!doc.file_data || doc.file_data.length < 10) continue; // skip empty/tiny
+      try {
+        const safeName = (doc.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+        const path = `${this.userId}/${doc.id}/${safeName}`;
+        const buffer = Buffer.from(doc.file_data, 'base64');
+        const { error: uploadErr } = await this.supabase.storage
+          .from('documents')
+          .upload(path, buffer, { contentType: doc.mime_type || 'application/octet-stream', upsert: true });
+        if (uploadErr) {
+          errors.push(`${doc.id}: ${uploadErr.message}`);
+          continue;
+        }
+        // Update DB: set storage_path, clear file_data
+        await this.supabase.from("documents").update({ storage_path: path, file_data: "" }).eq("id", doc.id).eq("user_id", this.userId);
+        migrated++;
+      } catch (e: any) {
+        errors.push(`${doc.id}: ${e.message}`);
+      }
+    }
+    return { migrated, errors };
   }
 
   // ============================================================

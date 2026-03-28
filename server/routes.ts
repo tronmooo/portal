@@ -1582,6 +1582,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Data Cleanup ----
+  // Migrate base64 documents from DB to Supabase Storage
+  app.post("/api/cleanup/migrate-documents-to-storage", asyncHandler(async (_req, res) => {
+    if (typeof (storage as any).migrateDocumentsToStorage === 'function') {
+      const result = await (storage as any).migrateDocumentsToStorage();
+      res.json(result);
+    } else {
+      res.json({ migrated: 0, errors: ["Not using Supabase storage"] });
+    }
+  }));
+
   app.post("/api/cleanup/tracker-entries", asyncHandler(async (req, res) => {
     const trackers = await storage.getTrackers();
     let cleaned = 0;

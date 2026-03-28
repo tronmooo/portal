@@ -2019,11 +2019,12 @@ async function executeTool(name: string, input: any): Promise<any> {
               notes: `${input.frequency || "monthly"} subscription — $${input.amount}`,
               parentProfileId: parentId,
             });
-            // Link the obligation to the new profile
+            // Link the obligation to the new profile + set the FK for dedup
             await autoLinkToProfiles("obligation", newObligation.id, serviceName);
-            // Also link obligation directly to the new profile
             try { await storage.linkProfileTo(newProfile.id, "obligation", newObligation.id); } catch { /* non-critical */ }
             try { await updateEntityLinkedProfiles("obligation", newObligation.id, newProfile.id); } catch { /* non-critical */ }
+            // Set linked_obligation_id for subscription/loan dedup (Phase 7)
+            try { await storage.updateProfile(newProfile.id, { linkedObligationId: newObligation.id } as any); } catch { /* non-critical */ }
           } catch (e) {
             console.error("Auto-create subscription profile failed:", e);
           }

@@ -159,6 +159,7 @@ export interface Profile {
   linkedTasks: string[];
   linkedEvents: string[];
   parentProfileId?: string;  // Nested profile: this profile belongs to another profile
+  linkedObligationId?: string; // Links subscription/loan profile to its obligation record
   createdAt: string;
   updatedAt: string;
 }
@@ -575,7 +576,8 @@ export interface Document {
   name: string;
   type: string; // "drivers_license", "medical_report", "receipt", "insurance", "passport", "other"
   mimeType: string; // "image/jpeg", "application/pdf", etc.
-  fileData: string; // base64 encoded file data
+  fileData: string; // base64 encoded file data (legacy — new docs use storagePath)
+  storagePath?: string; // Supabase Storage path (new docs)
   extractedData: Record<string, any>;
   linkedProfiles: string[];
   tags: string[];
