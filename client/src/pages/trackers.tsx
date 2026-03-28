@@ -2656,7 +2656,7 @@ export default function TrackersPage() {
 
   // Auto-resolve "me" to the actual self profile ID once profiles load
   const selfProfile = (profiles || []).find(p => p.type === "self");
-  const resolvedFilter = profileFilter === "me" ? (selfProfile?.id || "me") : profileFilter;
+  const resolvedFilter = profileFilter === "everyone" ? "all" : profileFilter === "me" ? (selfProfile?.id || "me") : profileFilter;
 
   // On mount, migrate any unlinked trackers to the "self" profile
   const migrationDone = useRef(false);
@@ -2856,15 +2856,24 @@ export default function TrackersPage() {
                 <SelectValue placeholder="All profiles" />
               </SelectTrigger>
               <SelectContent>
-                {sortedFilterProfiles.map(p => {
+                <SelectItem value="me" data-testid="filter-profile-me">
+                  <span className="flex items-center gap-2">
+                    <User className="h-3.5 w-3.5" /> Me
+                  </span>
+                </SelectItem>
+                <SelectItem value="everyone" data-testid="filter-profile-everyone">
+                  <span className="flex items-center gap-2">
+                    <Users className="h-3.5 w-3.5" /> Everyone
+                  </span>
+                </SelectItem>
+                {sortedFilterProfiles.filter(p => p.type !== "self").map(p => {
                   const Icon = PROFILE_TYPE_ICONS[p.type] || User;
                   const count = countForProfile(p.id);
-                  const val = p.type === "self" ? "me" : p.id;
                   return (
-                    <SelectItem key={p.id} value={val} data-testid={`filter-profile-${p.id}`}>
+                    <SelectItem key={p.id} value={p.id} data-testid={`filter-profile-${p.id}`}>
                       <span className="flex items-center gap-2">
                         <Icon className="h-3.5 w-3.5" />
-                        {p.type === "self" ? "Me" : p.name}
+                        {p.name}
                         <span className="text-muted-foreground text-xs">({count})</span>
                       </span>
                     </SelectItem>

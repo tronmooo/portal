@@ -1120,11 +1120,19 @@ export default function DashboardPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
   const primaryProfiles = useMemo(() => allProfiles.filter((p: any) => ["self", "person", "pet"].includes(p.type)), [allProfiles]);
-  const selectedProfileName = useMemo(() => profileFilter === "me" ? "Me" : allProfiles.find((p: any) => p.id === profileFilter)?.name || "Me", [profileFilter, allProfiles]);
+  const selectedProfileName = useMemo(() => {
+    if (profileFilter === "me") return "Me";
+    if (profileFilter === "everyone") return "Everyone";
+    return allProfiles.find((p: any) => p.id === profileFilter)?.name || "Me";
+  }, [profileFilter, allProfiles]);
 
   // Resolve the actual profile ID for API calls
   const selfProfileObj = useMemo(() => allProfiles.find((p: any) => p.type === "self"), [allProfiles]);
-  const resolvedFilterId = useMemo(() => profileFilter === "me" ? selfProfileObj?.id : profileFilter, [profileFilter, selfProfileObj]);
+  const resolvedFilterId = useMemo(() => {
+    if (profileFilter === "everyone") return undefined; // no filter = all data
+    if (profileFilter === "me") return selfProfileObj?.id;
+    return profileFilter;
+  }, [profileFilter, selfProfileObj]);
   const statsProfileParam = useMemo(() => resolvedFilterId ? `?profileId=${resolvedFilterId}` : "", [resolvedFilterId]);
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
@@ -1261,9 +1269,11 @@ export default function DashboardPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {primaryProfiles.sort((a: any, b: any) => a.type === "self" ? -1 : b.type === "self" ? 1 : a.name.localeCompare(b.name)).map((p: any) => (
-                  <SelectItem key={p.id} value={p.type === "self" ? "me" : p.id}>
-                    {p.type === "self" ? "Me" : p.name}
+                <SelectItem value="me">Me</SelectItem>
+                <SelectItem value="everyone">Everyone</SelectItem>
+                {primaryProfiles.filter((p: any) => p.type !== "self").sort((a: any, b: any) => a.name.localeCompare(b.name)).map((p: any) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
                   </SelectItem>
                 ))}
               </SelectContent>
