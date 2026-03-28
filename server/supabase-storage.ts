@@ -122,7 +122,7 @@ function generateInsights(
 
   const recentJournal = journal.filter(j => { const d = new Date(j.createdAt); return (now.getTime() - d.getTime()) < 7 * 86400000; });
   if (recentJournal.length >= 3) {
-    const moodScores: Record<string, number> = { amazing: 5, good: 4, neutral: 3, bad: 2, awful: 1 };
+    const moodScores: Record<string, number> = { amazing: 8, great: 7, good: 6, okay: 5, neutral: 4, bad: 3, awful: 2, terrible: 1 };
     const avg = recentJournal.reduce((s, j) => s + (moodScores[j.mood] || 3), 0) / recentJournal.length;
     if (avg <= 2.5) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Mood has been low this week", description: "Your journal entries suggest a tough stretch. Consider reaching out to someone or doing something you enjoy.", severity: "warning", data: { avgMood: avg }, createdAt: now.toISOString() }); }
     else if (avg >= 4) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Great mood this week", description: "You've been feeling positive. Keep doing what's working!", severity: "positive", data: { avgMood: avg }, createdAt: now.toISOString() }); }
@@ -359,17 +359,13 @@ export class SupabaseStorage implements IStorage {
     // Child profiles: profiles whose parentProfileId points to this profile
     let childProfiles = allProfiles.filter(p => p.parentProfileId === id);
     
-    // Auto-adopt: if this is a "self" profile, also claim orphaned child-type profiles
+    // Include orphaned child-type profiles for "self" profile (read-only — no DB writes on GET)
     if (profile.type === "self") {
       const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
       const orphans = allProfiles.filter(p => childTypes.has(p.type) && !p.parentProfileId);
       if (orphans.length > 0) {
-        // Auto-fix: set parentProfileId on orphans (non-blocking)
-        for (const orphan of orphans) {
-          const updatedFields = { ...(orphan.fields || {}), _parentProfileId: id };
-          this.supabase.from("profiles").update({ fields: updatedFields, parent_profile_id: id }).eq("id", orphan.id).eq("user_id", this.userId).then(() => {});
-          orphan.parentProfileId = id;
-        }
+        // Show orphans as children in UI without mutating the DB on reads
+        for (const orphan of orphans) orphan.parentProfileId = id;
         childProfiles = [...childProfiles, ...orphans];
       }
     }
@@ -951,7 +947,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("tasks").insert({
       id, user_id: this.userId, title: data.title, description: data.description || null,
       status: "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
-      linked_profiles: [], tags: data.tags || [], created_at: now,
+      linked_profiles: data.linkedProfiles || [], tags: data.tags || [], created_at: now,
     });
     if (error) throw error;
     this.logActivity("task", `Created task: ${data.title}`);
@@ -989,7 +985,7 @@ export class SupabaseStorage implements IStorage {
     return (data || []).map(r => this.rowToExpense(r));
   }
 
-  private async getExpense(id: string): Promise<Expense | undefined> {
+  async getExpense(id: string): Promise<Expense | undefined> {
     const { data, error } = await this.supabase.from("expenses").select("*").eq("id", id).eq("user_id", this.userId).single();
     if (error || !data) return undefined;
     return this.rowToExpense(data);
@@ -1203,6 +1199,15 @@ export class SupabaseStorage implements IStorage {
     }
 
     // ── Profile-derived virtual events ──────────────────────────
+    // Build fingerprint set from existing stored events to prevent duplicates
+    const storedEventFPs = new Set<string>();
+    for (const item of items) {
+      if (item.type === "event") storedEventFPs.add(`${item.title.toLowerCase().trim()}::${item.date}`);
+    }
+    const addVirtualEvent = (item: CalendarTimelineItem) => {
+      const fp = `${item.title.toLowerCase().trim()}::${item.date}`;
+      if (!storedEventFPs.has(fp)) items.push(item);
+    };
     for (const profile of profiles) {
       const f = profile.fields || {};
 
@@ -1215,7 +1220,7 @@ export class SupabaseStorage implements IStorage {
         for (let y = startY; y <= endY; y++) {
           const d = `${y}-${bday.slice(5, 10)}`;
           if (d >= startDate && d <= endDate) {
-            items.push({ id: `profile-birthday-${profile.id}-${d}`, type: "event", title: `🎂 ${profile.name}'s Birthday`, date: d, allDay: true, color: "#A86FDF", category: "family", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: profile.type } });
+            addVirtualEvent({ id: `profile-birthday-${profile.id}-${d}`, type: "event", title: `🎂 ${profile.name}'s Birthday`, date: d, allDay: true, color: "#A86FDF", category: "family", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: profile.type } });
           }
         }
       }
@@ -1224,7 +1229,7 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "medical" && f.nextVisit) {
         const d = f.nextVisit.slice(0, 10);
         if (d >= startDate && d <= endDate) {
-          items.push({ id: `profile-medical-${profile.id}-${d}`, type: "event", title: `🏥 ${profile.name} — Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "medical" } });
+          addVirtualEvent({ id: `profile-medical-${profile.id}-${d}`, type: "event", title: `🏥 ${profile.name} — Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "medical" } });
         }
       }
 
@@ -1232,7 +1237,7 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "vehicle" && f.nextService) {
         const d = f.nextService.slice(0, 10);
         if (d >= startDate && d <= endDate) {
-          items.push({ id: `profile-vehicle-${profile.id}-${d}`, type: "event", title: `🚗 ${profile.name} — Service`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "vehicle" } });
+          addVirtualEvent({ id: `profile-vehicle-${profile.id}-${d}`, type: "event", title: `🚗 ${profile.name} — Service`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "vehicle" } });
         }
       }
 
@@ -1240,7 +1245,7 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "subscription" && f.renewalDate) {
         const d = f.renewalDate.slice(0, 10);
         if (d >= startDate && d <= endDate) {
-          items.push({ id: `profile-subscription-${profile.id}-${d}`, type: "event", title: `🔄 ${profile.name} — Renewal`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "subscription" } });
+          addVirtualEvent({ id: `profile-subscription-${profile.id}-${d}`, type: "event", title: `🔄 ${profile.name} — Renewal`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "subscription" } });
         }
       }
 
@@ -1249,7 +1254,7 @@ export class SupabaseStorage implements IStorage {
         const d = (f.nextPayment || f.startDate).slice(0, 10);
         if (d >= startDate && d <= endDate) {
           const label = f.nextPayment ? "Payment Due" : "Start Date";
-          items.push({ id: `profile-loan-${profile.id}-${d}`, type: "event", title: `💰 ${profile.name} — ${label}`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "loan" } });
+          addVirtualEvent({ id: `profile-loan-${profile.id}-${d}`, type: "event", title: `💰 ${profile.name} — ${label}`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "loan" } });
         }
       }
 
@@ -1257,7 +1262,7 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "pet" && f.nextVetVisit) {
         const d = f.nextVetVisit.slice(0, 10);
         if (d >= startDate && d <= endDate) {
-          items.push({ id: `profile-pet-${profile.id}-${d}`, type: "event", title: `🐾 ${profile.name} — Vet Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "pet" } });
+          addVirtualEvent({ id: `profile-pet-${profile.id}-${d}`, type: "event", title: `🐾 ${profile.name} — Vet Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "pet" } });
         }
       }
 
@@ -1266,13 +1271,13 @@ export class SupabaseStorage implements IStorage {
         if (f.insuranceExpiry) {
           const d = f.insuranceExpiry.slice(0, 10);
           if (d >= startDate && d <= endDate) {
-            items.push({ id: `profile-property-ins-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Insurance Expiry`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
+            addVirtualEvent({ id: `profile-property-ins-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Insurance Expiry`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
           }
         }
         if (f.leaseEnd) {
           const d = f.leaseEnd.slice(0, 10);
           if (d >= startDate && d <= endDate) {
-            items.push({ id: `profile-property-lease-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Lease End`, date: d, allDay: true, color: "#A13544", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
+            addVirtualEvent({ id: `profile-property-lease-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Lease End`, date: d, allDay: true, color: "#A13544", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
           }
         }
       }
@@ -1281,7 +1286,7 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "investment" && f.maturityDate) {
         const d = f.maturityDate.slice(0, 10);
         if (d >= startDate && d <= endDate) {
-          items.push({ id: `profile-investment-${profile.id}-${d}`, type: "event", title: `📈 ${profile.name} — Maturity`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "investment" } });
+          addVirtualEvent({ id: `profile-investment-${profile.id}-${d}`, type: "event", title: `📈 ${profile.name} — Maturity`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "investment" } });
         }
       }
 
@@ -1289,7 +1294,7 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "account" && f.expirationDate) {
         const d = f.expirationDate.slice(0, 10);
         if (d >= startDate && d <= endDate) {
-          items.push({ id: `profile-account-${profile.id}-${d}`, type: "event", title: `⚠️ ${profile.name} — Expires`, date: d, allDay: true, color: "#A13544", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "account" } });
+          addVirtualEvent({ id: `profile-account-${profile.id}-${d}`, type: "event", title: `⚠️ ${profile.name} — Expires`, date: d, allDay: true, color: "#A13544", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "account" } });
         }
       }
 
@@ -1297,7 +1302,7 @@ export class SupabaseStorage implements IStorage {
       if (profile.type === "asset" && f.warrantyExpiry) {
         const d = f.warrantyExpiry.slice(0, 10);
         if (d >= startDate && d <= endDate) {
-          items.push({ id: `profile-asset-${profile.id}-${d}`, type: "event", title: `🛡️ ${profile.name} — Warranty Expiry`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "asset" } });
+          addVirtualEvent({ id: `profile-asset-${profile.id}-${d}`, type: "event", title: `🛡️ ${profile.name} — Warranty Expiry`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "asset" } });
         }
       }
     }
@@ -1637,7 +1642,7 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, amount: data.amount,
       frequency: data.frequency || "monthly", category: data.category || "general",
       next_due_date: data.nextDueDate, autopay: data.autopay || false,
-      linked_profiles: [], notes: data.notes || null, created_at: now,
+      linked_profiles: (data as any).linkedProfiles || [], notes: data.notes || null, created_at: now,
     });
     if (error) throw error;
     this.logActivity("obligation", `Created obligation: ${data.name}`);
@@ -1686,9 +1691,9 @@ export class SupabaseStorage implements IStorage {
     const ob = await this.getObligation(obligationId);
     if (!ob) return undefined;
     const id = randomUUID();
-    const now = new Date().toISOString();
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD only — no timestamps
     const { error } = await this.supabase.from("obligation_payments").insert({
-      id, user_id: this.userId, obligation_id: obligationId, amount, date: now,
+      id, user_id: this.userId, obligation_id: obligationId, amount, date: today,
       method: method || null, confirmation_number: confirmationNumber || null,
     });
     if (error) throw error;
@@ -1703,7 +1708,7 @@ export class SupabaseStorage implements IStorage {
     }
     await this.supabase.from("obligations").update({ next_due_date: nextDue.toISOString().slice(0, 10) }).eq("id", obligationId).eq("user_id", this.userId);
     this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);
-    return { id, amount, date: now, method, confirmationNumber };
+    return { id, amount, date: today, method, confirmationNumber };
   }
 
   async deleteObligation(id: string): Promise<boolean> {

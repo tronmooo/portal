@@ -329,6 +329,7 @@ export const insertObligationSchema = z.object({
   nextDueDate: z.string(),
   autopay: z.boolean().default(false),
   notes: z.string().optional(),
+  linkedProfiles: z.array(z.string()).optional().default([]),
 });
 
 export type InsertObligation = z.infer<typeof insertObligationSchema>;

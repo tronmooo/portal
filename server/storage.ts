@@ -58,6 +58,7 @@ export interface IStorage {
 
   // Expenses
   getExpenses(): Promise<Expense[]>;
+  getExpense(id: string): Promise<Expense | undefined>;
   createExpense(data: InsertExpense): Promise<Expense>;
   updateExpense(id: string, data: Partial<Expense>): Promise<Expense | undefined>;
   deleteExpense(id: string): Promise<boolean>;
