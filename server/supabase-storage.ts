@@ -173,7 +173,7 @@ export class SupabaseStorage implements IStorage {
       documents: r.documents || [], linkedTrackers: r.linked_trackers || [],
       linkedExpenses: r.linked_expenses || [], linkedTasks: r.linked_tasks || [],
       linkedEvents: r.linked_events || [],
-      parentProfileId: fields._parentProfileId || undefined,
+      parentProfileId: r.parent_profile_id || fields._parentProfileId || undefined,
       createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -260,8 +260,9 @@ export class SupabaseStorage implements IStorage {
     return {
       id: r.id, name: r.name, amount: r.amount, frequency: r.frequency,
       category: r.category, nextDueDate: r.next_due_date, autopay: r.autopay || false,
+      status: r.status || "active",
       linkedProfiles: r.linked_profiles || [], payments,
-      notes: r.notes || undefined, createdAt: r.created_at,
+      notes: r.notes || undefined, createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
 
@@ -364,7 +365,7 @@ export class SupabaseStorage implements IStorage {
         // Auto-fix: set parentProfileId on orphans (non-blocking)
         for (const orphan of orphans) {
           const updatedFields = { ...(orphan.fields || {}), _parentProfileId: id };
-          this.supabase.from("profiles").update({ fields: updatedFields }).eq("id", orphan.id).eq("user_id", this.userId).then(() => {});
+          this.supabase.from("profiles").update({ fields: updatedFields, parent_profile_id: id }).eq("id", orphan.id).eq("user_id", this.userId).then(() => {});
           orphan.parentProfileId = id;
         }
         childProfiles = [...childProfiles, ...orphans];
@@ -390,17 +391,22 @@ export class SupabaseStorage implements IStorage {
   async createProfile(data: InsertProfile): Promise<Profile> {
     const now = new Date().toISOString();
     const id = randomUUID();
-    // Store parentProfileId in fields JSON (no schema migration needed)
+    // Store parentProfileId both in the real column AND in fields JSON (backward compat)
     const fields = { ...(data.fields || {}) };
     if (data.parentProfileId) {
       fields._parentProfileId = data.parentProfileId;
     }
-    const { error } = await this.supabase.from("profiles").insert({
+    const insertData: any = {
       id, user_id: this.userId, type: data.type, name: data.name,
       fields, tags: data.tags || [], notes: data.notes || "",
       documents: [], linked_trackers: [], linked_expenses: [],
       linked_tasks: [], linked_events: [], created_at: now, updated_at: now,
-    });
+    };
+    // Write to the real column if it exists (Phase 1 migration adds it)
+    if (data.parentProfileId) {
+      insertData.parent_profile_id = data.parentProfileId;
+    }
+    const { error } = await this.supabase.from("profiles").insert(insertData);
     if (error) throw error;
     this.logActivity("profile", `Created profile: ${data.name}`);
 

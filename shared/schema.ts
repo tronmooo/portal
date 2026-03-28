@@ -293,6 +293,8 @@ export type InsertHabit = z.infer<typeof insertHabitSchema>;
 
 export type ObligationFrequency = "weekly" | "biweekly" | "monthly" | "quarterly" | "yearly" | "once";
 
+export type ObligationStatus = "active" | "paused" | "cancelled";
+
 export interface Obligation {
   id: string;
   name: string;
@@ -301,10 +303,12 @@ export interface Obligation {
   category: string; // rent, utilities, insurance, subscription, loan, etc.
   nextDueDate: string;
   autopay: boolean;
+  status: ObligationStatus;
   linkedProfiles: string[];
   payments: ObligationPayment[];
   notes?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ObligationPayment {
@@ -313,6 +317,7 @@ export interface ObligationPayment {
   date: string;
   method?: string;
   confirmationNumber?: string;
+  createdAt?: string;
 }
 
 export const insertObligationSchema = z.object({
