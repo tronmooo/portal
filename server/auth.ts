@@ -1,7 +1,7 @@
 import { logger } from "./logger";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { Request, Response, NextFunction, Express } from "express";
-import { storage, isSupabaseStorage } from "./storage";
+import { storage, isSupabaseStorage, createScopedStorage, requestStorageContext } from "./storage";
 
 // Type-safe helpers for storage methods that only exist on Supabase implementation
 function setStorageUserId(userId: string): void {
@@ -77,33 +77,42 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     req.userId = user.id;
     req.userEmail = user.email;
 
-    // Set the user ID on the storage adapter so queries are scoped
-      setStorageUserId(user.id);
+    // Create a per-request storage instance scoped to this user's ID.
+    // This eliminates the global singleton race condition (C-1 security fix).
+    // The legacy setUserId is kept as a fallback for any code paths that
+    // don't go through the AsyncLocalStorage context.
+    const scopedStorage = createScopedStorage(user.id);
+    setStorageUserId(user.id); // backward compat fallback
 
-    // Auto-create "Me" self profile if none exists (runs once per session, cached)
-    if (!autoProfileCreated.has(user.id)) {
-      autoProfileCreated.add(user.id);
-      try {
-        const profiles = await storage.getProfiles();
-        const hasSelf = profiles.some(p => p.type === 'self');
-        if (!hasSelf) {
-          const displayName = user.email?.split('@')[0] || 'Me';
-          await storage.createProfile({
-            name: displayName.charAt(0).toUpperCase() + displayName.slice(1),
-            type: 'self',
-            notes: '',
-            fields: {},
-            tags: [],
-          });
-          logger.info("auth", `Auto-created self profile for user ${user.id.slice(0, 8)}`);
+    // Run the rest of the request within the scoped storage context.
+    // All code that reads `storage` via the proxy will automatically
+    // get this user-scoped instance instead of the global singleton.
+    requestStorageContext.run(scopedStorage, async () => {
+      // Auto-create "Me" self profile if none exists (runs once per session, cached)
+      if (!autoProfileCreated.has(user.id)) {
+        autoProfileCreated.add(user.id);
+        try {
+          const profiles = await storage.getProfiles();
+          const hasSelf = profiles.some(p => p.type === 'self');
+          if (!hasSelf) {
+            const displayName = user.email?.split('@')[0] || 'Me';
+            await storage.createProfile({
+              name: displayName.charAt(0).toUpperCase() + displayName.slice(1),
+              type: 'self',
+              notes: '',
+              fields: {},
+              tags: [],
+            });
+            logger.info("auth", `Auto-created self profile for user ${user.id.slice(0, 8)}`);
+          }
+        } catch (e) {
+          // Non-fatal — don't block auth
+          console.error('[auth] Auto-profile creation failed:', e);
         }
-      } catch (e) {
-        // Non-fatal — don't block auth
-        console.error('[auth] Auto-profile creation failed:', e);
       }
-    }
 
-    next();
+      next();
+    });
   } catch (err: any) {
     console.error("Auth middleware error:", err);
     return res.status(401).json({ error: "Authentication failed", code: "AUTH_ERROR" });

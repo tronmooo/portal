@@ -133,7 +133,7 @@ export async function registerRoutes(
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Message required" });
       }
-      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined);
+      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
@@ -154,9 +154,10 @@ export async function registerRoutes(
   }));
 
   // ---- Activity Feed ----
-  app.get("/api/activity", asyncHandler(async (_req, res) => {
+  app.get("/api/activity", asyncHandler(async (req, res) => {
+    const actUserId = (req as AuthenticatedRequest).userId || undefined;
     const count = 10;
-    res.json(getActionLog(count));
+    res.json(getActionLog(count, actUserId));
   }));
 
   // ---- File Upload + AI Extraction ----

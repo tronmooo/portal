@@ -22,18 +22,25 @@ interface ContextCache {
   timestamp: number;
 }
 
-const contextCache: ContextCache = { data: null, timestamp: 0 };
+// Per-user context cache — prevents cross-user data leakage (C-2 security fix)
+// Each userId gets its own cache entry with independent TTL.
+const contextCacheMap = new Map<string, ContextCache>();
 const CONTEXT_CACHE_TTL = 5000; // 5 seconds
 
-function invalidateContextCache() {
-  contextCache.data = null;
-  contextCache.timestamp = 0;
+function invalidateContextCache(userId?: string) {
+  if (userId) {
+    contextCacheMap.delete(userId);
+  } else {
+    contextCacheMap.clear();
+  }
 }
 
-async function getCachedContextData(): Promise<any[]> {
+async function getCachedContextData(userId?: string): Promise<any[]> {
+  const cacheKey = userId || '_global';
   const now = Date.now();
-  if (contextCache.data && (now - contextCache.timestamp) < CONTEXT_CACHE_TTL) {
-    return contextCache.data;
+  const cached = contextCacheMap.get(cacheKey);
+  if (cached?.data && (now - cached.timestamp) < CONTEXT_CACHE_TTL) {
+    return cached.data;
   }
   const data = await Promise.all([
     storage.getProfiles(),
@@ -47,8 +54,12 @@ async function getCachedContextData(): Promise<any[]> {
     storage.getDocuments(),
     storage.getGoals(),
   ]);
-  contextCache.data = data;
-  contextCache.timestamp = now;
+  contextCacheMap.set(cacheKey, { data, timestamp: now });
+  // Evict old entries to prevent memory leak
+  if (contextCacheMap.size > 100) {
+    const oldest = [...contextCacheMap.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (let i = 0; i < 50; i++) contextCacheMap.delete(oldest[i][0]);
+  }
   return data;
 }
 
@@ -64,15 +75,20 @@ interface ActionLogEntry {
   entityId?: string;
 }
 
-const actionLog: ActionLogEntry[] = [];
+// Per-user action log — prevents cross-user activity leakage (C-3 security fix)
+const actionLogMap = new Map<string, ActionLogEntry[]>();
 
-function logAction(action: string, type: string, entityName: string, entityId?: string) {
-  actionLog.push({ timestamp: new Date().toISOString(), action, type, entityName, entityId });
-  if (actionLog.length > 20) actionLog.shift();
+function logAction(action: string, type: string, entityName: string, entityId?: string, userId?: string) {
+  const key = userId || '_global';
+  if (!actionLogMap.has(key)) actionLogMap.set(key, []);
+  const log = actionLogMap.get(key)!;
+  log.push({ timestamp: new Date().toISOString(), action, type, entityName, entityId });
+  if (log.length > 20) log.shift();
 }
 
-export function getActionLog(count = 10): ActionLogEntry[] {
-  return actionLog.slice(-count);
+export function getActionLog(count = 10, userId?: string): ActionLogEntry[] {
+  const key = userId || '_global';
+  return (actionLogMap.get(key) || []).slice(-count);
 }
 
 // ============================================================
@@ -2796,7 +2812,7 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
-export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>): Promise<{
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
@@ -2808,7 +2824,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   if (fast.matched) return { reply: fast.reply, actions: fast.actions, results: fast.results, documentPreview: (fast as any).documentPreview, documentPreviews: (fast as any).documentPreviews };
 
   // Build rich context from current data (uses short-lived cache to avoid redundant DB hits)
-  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData() as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
+  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = [

@@ -1,4 +1,10 @@
 import { logger } from "./logger";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+// Per-request storage context — eliminates the global userId race condition (C-1)
+// Auth middleware runs storage within this context so all downstream code
+// automatically gets the request-scoped storage instance.
+export const requestStorageContext = new AsyncLocalStorage<IStorage>();
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -1669,10 +1675,13 @@ function getStorage(): IStorage {
   return _storageInstance!;
 }
 
-// Proxy that lazily initializes storage on first property access
+// Proxy that returns the per-request storage instance if available,
+// otherwise falls back to the global singleton (for auth routes, startup, etc.)
 export const storage: IStorage = new Proxy({} as IStorage, {
-  get(_target, prop, receiver) {
-    const instance = getStorage();
+  get(_target, prop, _receiver) {
+    // Prefer per-request scoped instance from AsyncLocalStorage
+    const requestScoped = requestStorageContext.getStore();
+    const instance = requestScoped || getStorage();
     const value = (instance as any)[prop];
     if (typeof value === 'function') {
       return value.bind(instance);
@@ -1680,11 +1689,26 @@ export const storage: IStorage = new Proxy({} as IStorage, {
     return value;
   },
   set(_target, prop, value) {
-    const instance = getStorage();
+    const requestScoped = requestStorageContext.getStore();
+    const instance = requestScoped || getStorage();
     (instance as any)[prop] = value;
     return true;
   },
 });
+
+/**
+ * Create a new storage instance scoped to a specific userId.
+ * Used by auth middleware to eliminate the global userId race condition.
+ */
+export function createScopedStorage(userId: string): IStorage {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (supabaseUrl && supabaseKey) {
+    return new SupabaseStorage(supabaseUrl, supabaseKey, userId);
+  }
+  // SQLite fallback — global instance is fine for single-user local dev
+  return getStorage();
+}
 
 // Helper to check if we're using Supabase storage
 export function isSupabaseStorage(): boolean {
