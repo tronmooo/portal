@@ -524,71 +524,6 @@ function InfoTab({
 
   const fields = Object.entries(profile.fields).filter(([_, v]) => v != null && v !== "" && typeof v !== "object");
 
-  // ── Computed stats ──
-  const trackers = profile.relatedTrackers || [];
-  const docs = profile.relatedDocuments || [];
-  const expenses = profile.relatedExpenses || [];
-  const tasks = profile.relatedTasks || [];
-  const events = profile.relatedEvents || [];
-  const timeline = profile.timeline || [];
-  const openTasks = tasks.filter(t => t.status !== "done");
-  const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
-
-  // ── Alerts ──
-  const now = new Date();
-  const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
-
-  const expiringDocs: { name: string; field: string; date: string; daysUntil: number }[] = [];
-  const dateFields = ["expiration_date", "expirationdate", "expiry", "expires", "expdate", "expiration", "validuntil", "enddate", "renewaldate"];
-  for (const doc of docs) {
-    const ed = doc.extractedData || {};
-    for (const [key, val] of Object.entries(ed)) {
-      if (!val || typeof val !== "string") continue;
-      const lk = key.toLowerCase().replace(/[\s_-]+/g, "");
-      if (!dateFields.some(df => lk.includes(df.replace(/[\s_-]+/g, "")))) continue;
-      const parsed = new Date(val);
-      if (isNaN(parsed.getTime())) continue;
-      const days = Math.ceil((parsed.getTime() - now.getTime()) / 86400000);
-      if (days <= 90) expiringDocs.push({ name: doc.name, field: key, date: val, daysUntil: days });
-    }
-  }
-  expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
-
-  const overdueTasks = openTasks.filter(t => t.dueDate && new Date(t.dueDate) < now);
-  const upcomingEvents = events.filter(e => { const d = new Date(e.date); return d >= now && d <= sevenDaysOut; });
-  const hasAlerts = expiringDocs.length > 0 || overdueTasks.length > 0 || upcomingEvents.length > 0;
-
-  // ── Top trackers ──
-  const topTrackers = trackers.slice(0, 3).map(t => {
-    const primaryField = t.fields?.find((f: any) => f.isPrimary) || t.fields?.[0];
-    const fieldName = primaryField?.name || "value";
-    const sorted = [...(t.entries || [])].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    const latest = sorted[0]?.values?.[fieldName];
-    const prev = sorted[1]?.values?.[fieldName];
-    const trend: "up" | "down" | "flat" = typeof latest === "number" && typeof prev === "number"
-      ? latest > prev ? "up" : latest < prev ? "down" : "flat"
-      : "flat";
-    return { id: t.id, name: t.name, unit: primaryField?.unit || t.unit || "", latest, trend, entryCount: t.entries.length };
-  });
-
-  // ── Timeline icons ──
-  const timelineIcons: Record<string, any> = {
-    tracker: HeartPulse, expense: DollarSign, task: ListTodo,
-    event: Calendar, document: FileText, note: FileText,
-    habit: Activity, obligation: CreditCard, journal: FileText,
-  };
-
-  function timeAgo(ts: string): string {
-    const diff = Date.now() - new Date(ts).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return `${days}d ago`;
-  }
-
   // Separate identity fields from internal/system fields
   const identityFieldKeys = new Set(['phone', 'email', 'birthday', 'relationship', 'bloodType', 'allergies', 'height', 'weight', 'breed', 'species', 'color', 'microchipId', 'make', 'model', 'year', 'vin', 'mileage', 'licensePlate', 'address', 'website', 'social', 'employer', 'title', 'gender', 'age']);
   const identityFields = fields.filter(([k]) => identityFieldKeys.has(k));
@@ -2717,7 +2652,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "health": return (profile.relatedTrackers || []).some((t: any) => 
           ['health','fitness','weight','sleep','wellness','nutrition','blood'].some(c => 
             (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)));
-        case "trackers": return (profile.relatedTrackers || []).length > 0 || (profile.childProfiles || []).length > 0;
+        case "trackers": return true; // Linked tab always prominent — it's the hub for docs, trackers, and child profiles
         case "finances": return (profile.relatedExpenses || []).length > 0;
         case "tasks": return (profile.relatedTasks || []).length > 0;
         case "documents": return (profile.relatedDocuments || []).length > 0;

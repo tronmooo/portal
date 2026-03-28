@@ -81,11 +81,16 @@ import {
   ListChecks,
   PieChart as PieChartIcon,
   Lightbulb,
+  FileText,
+  Upload,
+  Eye,
+  AlertCircle,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Link } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile } from "@shared/schema";
+import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document } from "@shared/schema";
+import { ShareButton, DocumentViewerDialog } from "@/components/DocumentViewer";
 import {
   LineChart,
   Line,
@@ -2619,6 +2624,11 @@ export default function TrackersPage() {
     queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
   });
 
+  const { data: allDocuments = [] } = useQuery<Document[]>({
+    queryKey: ["/api/documents"],
+    queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
+  });
+
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
@@ -2627,6 +2637,9 @@ export default function TrackersPage() {
   // Default to "me" — only show your personal trackers
   const [profileFilter, setProfileFilter] = useState<string>("me");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
+  const [docSearch, setDocSearch] = useState("");
+  const docFileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-resolve "me" to the actual self profile ID once profiles load
   const selfProfile = (profiles || []).find(p => p.type === "self");
@@ -2650,6 +2663,54 @@ export default function TrackersPage() {
   const deleteTarget = deleteTargetId
     ? (trackers || []).find((t) => t.id === deleteTargetId)
     : null;
+
+  const { toast } = useToast();
+
+  const docUploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const toBase64 = (f: File): Promise<string> =>
+        new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res((reader.result as string).split(",")[1]);
+          reader.onerror = rej;
+          reader.readAsDataURL(f);
+        });
+      const fileData = await toBase64(file);
+      const res = await apiRequest("POST", "/api/upload", {
+        fileName: file.name,
+        mimeType: file.type,
+        fileData,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Document uploaded" });
+      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const docDeleteMutation = useMutation({
+    mutationFn: async (docId: string) => {
+      await apiRequest("DELETE", `/api/documents/${docId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Document deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Filter documents by search
+  const filteredDocuments = allDocuments.filter(d => {
+    if (!docSearch) return true;
+    const s = docSearch.toLowerCase();
+    return d.name.toLowerCase().includes(s) || d.type?.toLowerCase().includes(s);
+  });
 
   if (isLoading) {
     return (
@@ -2875,6 +2936,96 @@ export default function TrackersPage() {
         </div>
       )}
 
+      {/* Documents Section */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({allDocuments.length})</h2>
+          <div className="flex gap-2">
+            <input
+              ref={docFileInputRef}
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) docUploadMutation.mutate(file);
+                e.target.value = "";
+              }}
+              data-testid="input-upload-document-global"
+              accept="image/*,application/pdf,.doc,.docx,.txt"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 text-xs h-7"
+              onClick={() => docFileInputRef.current?.click()}
+              disabled={docUploadMutation.isPending}
+              data-testid="button-upload-document-global"
+            >
+              <Upload className="h-3 w-3" />
+              {docUploadMutation.isPending ? "Uploading..." : "Upload"}
+            </Button>
+          </div>
+        </div>
+        {allDocuments.length > 3 && (
+          <input
+            type="text"
+            placeholder="Search documents..."
+            value={docSearch}
+            onChange={e => setDocSearch(e.target.value)}
+            className="w-full h-8 px-3 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            data-testid="input-search-documents-global"
+          />
+        )}
+        {filteredDocuments.length === 0 ? (
+          <div className="rounded-lg border bg-card p-6 text-center">
+            <FileText className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">{allDocuments.length === 0 ? "No documents yet" : "No documents match your search"}</p>
+            <p className="text-xs text-muted-foreground mt-1">Upload files or ask Portol to save documents</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {filteredDocuments.map(doc => {
+              const DOC_TYPE_COLORS: Record<string, string> = {
+                medical: "bg-red-500/10 text-red-500",
+                insurance: "bg-blue-500/10 text-blue-500",
+                legal: "bg-purple-500/10 text-purple-500",
+                financial: "bg-green-500/10 text-green-500",
+                identity: "bg-amber-500/10 text-amber-500",
+                warranty: "bg-orange-500/10 text-orange-500",
+                receipt: "bg-emerald-500/10 text-emerald-500",
+              };
+              const colorClass = DOC_TYPE_COLORS[doc.type] || "bg-slate-500/10 text-slate-500";
+              return (
+                <div key={doc.id} className="rounded-lg border bg-card overflow-hidden" data-testid={`global-doc-${doc.id}`}>
+                  <div className="flex items-center gap-3 p-3">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${colorClass}`}>
+                      {doc.mimeType?.startsWith("image/") ? <Eye className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
+                    </div>
+                    <button className="flex-1 min-w-0 text-left" onClick={() => setViewingDoc(doc)}>
+                      <p className="text-sm font-medium truncate text-primary hover:underline">{doc.name}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
+                        <span className="text-[10px] text-muted-foreground">
+                          {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                        </span>
+                      </div>
+                    </button>
+                    <div className="flex gap-1 shrink-0">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setViewingDoc(doc)} data-testid={`button-view-doc-global-${doc.id}`}>
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => docDeleteMutation.mutate(doc.id)} data-testid={`button-delete-doc-global-${doc.id}`}>
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {(!trackers || trackers.length === 0) ? (
         <div className="text-center py-16">
           <Activity className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
@@ -3004,6 +3155,18 @@ export default function TrackersPage() {
         open={!!selectedTracker}
         onClose={() => setSelectedTrackerId(null)}
       />
+
+      {/* Document viewer dialog */}
+      {viewingDoc && (
+        <DocumentViewerDialog
+          id={viewingDoc.id}
+          name={viewingDoc.name}
+          mimeType={viewingDoc.mimeType}
+          data={viewingDoc.fileData}
+          open={!!viewingDoc}
+          onOpenChange={(open) => { if (!open) setViewingDoc(null); }}
+        />
+      )}
     </div>
   );
 }
