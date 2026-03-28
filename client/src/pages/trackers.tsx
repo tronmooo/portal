@@ -2712,6 +2712,7 @@ export default function TrackersPage() {
     onSuccess: () => {
       toast({ title: "Document deleted" });
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
     },
     onError: (err: Error) => {
       toast({ title: "Delete failed", description: err.message, variant: "destructive" });

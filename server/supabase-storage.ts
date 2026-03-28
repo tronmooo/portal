@@ -1352,17 +1352,28 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteDocument(id: string): Promise<boolean> {
-    const doc = await this.getDocument(id);
-    if (!doc) return false;
-    for (const pid of doc.linkedProfiles) {
-      const profile = await this.getProfile(pid);
-      if (profile) {
-        const newDocs = profile.documents.filter(did => did !== id);
-        await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+    // Clean up profile links first (non-blocking)
+    try {
+      const doc = await this.getDocument(id);
+      if (doc) {
+        for (const pid of doc.linkedProfiles) {
+          const profile = await this.getProfile(pid);
+          if (profile) {
+            const newDocs = profile.documents.filter(did => did !== id);
+            await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+          }
+        }
       }
+    } catch (e: any) {
+      console.error(`[deleteDocument] Profile cleanup error for ${id}:`, e.message);
     }
+    // Delete the document itself
     const { error } = await this.supabase.from("documents").delete().eq("id", id).eq("user_id", this.userId);
-    return !error;
+    if (error) {
+      console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
+      return false;
+    }
+    return true; // Supabase delete succeeds even if 0 rows matched — that's fine, doc is gone
   }
 
   async getDocumentsForProfile(profileId: string): Promise<Document[]> {

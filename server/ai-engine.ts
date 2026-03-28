@@ -327,25 +327,60 @@ export async function processFileUpload(
   const results: any[] = [];
 
   // Use Claude vision to analyze the image/document
-  const extractionPrompt = `You are Portol AI — analyzing an uploaded file. Extract ONLY key, useful data. Be minimal and focused.
+  const extractionPrompt = `You are Portol AI — analyzing an uploaded file. Extract ALL important data thoroughly.
 
 Rules:
 1. DOCUMENT TYPE: (drivers_license, medical_report, receipt, insurance_card, passport, vehicle_registration, prescription, lab_results, utility_bill, bank_statement, warranty, pet_record, school_record, tax_document, other)
-2. EXTRACTED DATA (identity/static only): ONLY include essential identity fields. Examples: name, date of birth, policy number, VIN, license number, visit date.
-   DO NOT include: units (mg/dL, K/uL), reference ranges, interpretations, metadata, lab method, facility info, or any field that is a measurement/reading.
-   Keep it to 3-6 fields MAX. Less is better.
-3. TARGET PROFILE: Who does this belong to? Match to an existing profile by name.
-4. TRACKER ENTRIES: Every numeric reading/measurement goes here as a tracker entry. Use human-readable names.
-   - If a tracker already exists (e.g., "Weight", "LDL Cholesterol"), reuse the SAME name — don't create duplicates.
-   - Include the unit in the tracker entry, NOT as a separate extracted field.
-   - One entry per metric. Only include the actual measured value, not reference ranges.
-5. LABEL: Short, clean label like "Luna's Blood Work - Mar 2026"
+
+2. EXTRACTED DATA: Extract ALL essential fields for the document type. Be thorough — missing data is worse than extra data.
+   ALWAYS extract these when present:
+   - Names (owner, patient, policyholder)
+   - All dates: expiration dates, issue dates, valid-from/to dates, renewal dates, due dates
+   - ID numbers: VIN, license number, policy number, plate number, account number
+   - Financial: amounts paid, amounts due, premiums
+   - For vehicles: make, model, year, VIN, license plate, registration expiration
+   - For insurance: policy number, coverage dates, provider, premium
+   - For licenses/IDs: license number, expiration date, date of birth, class
+   - For medical: patient name, visit date, provider, diagnosis
+   - For warranties: item covered, warranty expiration, coverage details
+
+   DO NOT include: units for lab values (put those in trackerEntries), reference ranges, lab methods, facility metadata.
+   Use camelCase keys. Use ISO date format (YYYY-MM-DD) for all dates.
+
+3. TARGET PROFILE: Who does this belong to? Match to an existing profile by name. For vehicle docs, match the vehicle profile if one exists.
+
+4. TRACKER ENTRIES: Lab/health readings go here as tracker entries. Use human-readable names.
+   - Reuse existing tracker names if they exist (e.g., "Weight", "LDL Cholesterol").
+   - Include the unit in the tracker entry. One entry per metric.
+
+5. LABEL: Short, clean label like "Honda Registration - Oct 2026" or "Luna's Blood Work - Mar 2026"
 
 ${userMessage ? `User context: "${userMessage}"` : ""}
 
-Prioritize clarity over completeness. Only store what is actually useful. No noise.
+Be thorough. Extract every useful field. Dates are critical — never skip expiration or validity dates.
 
-Respond with JSON:
+Example for vehicle registration:
+{
+  "documentType": "vehicle_registration",
+  "label": "Honda CR-V Registration - Oct 2026",
+  "extractedData": {
+    "ownerName": "John Smith",
+    "make": "Honda",
+    "model": "CR-V",
+    "year": 2021,
+    "vin": "1HGRV2F34MA000123",
+    "licensePlate": "ABC1234",
+    "registrationValidFrom": "2024-10-22",
+    "registrationExpiration": "2026-10-22",
+    "amountPaid": 2105,
+    "dateIssued": "2025-11-12"
+  },
+  "targetProfile": { "name": "Honda CR-V", "type": "vehicle", "matchExisting": true },
+  "trackerEntries": [],
+  "summary": "Vehicle registration for Honda CR-V — expires Oct 2026."
+}
+
+Example for lab results:
 {
   "documentType": "lab_results",
   "label": "Luna's Blood Work - Mar 2026",
@@ -353,10 +388,9 @@ Respond with JSON:
   "targetProfile": { "name": "Luna", "type": "pet", "matchExisting": true },
   "trackerEntries": [
     { "trackerName": "White Blood Cells", "values": { "value": 12.5 }, "unit": "K/uL", "category": "health" },
-    { "trackerName": "Hemoglobin", "values": { "value": 14.2 }, "unit": "g/dL", "category": "health" },
-    { "trackerName": "Platelets", "values": { "value": 250 }, "unit": "K/uL", "category": "health" }
+    { "trackerName": "Hemoglobin", "values": { "value": 14.2 }, "unit": "g/dL", "category": "health" }
   ],
-  "summary": "Luna's blood work — 3 health metrics extracted."
+  "summary": "Luna's blood work — 2 health metrics extracted."
 }`;
 
   try {
@@ -507,6 +541,52 @@ Respond with JSON:
           savedItems.push(`Logged ${humanName}: ${Object.values(entryValues).join(", ")} ${entry.unit || ""}`);
         } catch (err: any) {
           console.error("Auto-create tracker failed:", err.message);
+        }
+      }
+    }
+
+    // 3. Auto-create calendar events for important dates (expiration, renewal, due dates)
+    if (parsed.extractedData) {
+      const DATE_PATTERNS_CHECK = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/;
+      const EXPIRY_KEYS = /expir|renew|due|validto|validthrough|registrationexpir|coverageend/i;
+      for (const [key, value] of Object.entries(parsed.extractedData)) {
+        const strVal = String(value);
+        if (!DATE_PATTERNS_CHECK.test(strVal) && !/^\d{4}-\d{2}-\d{2}/.test(strVal)) continue;
+        DATE_PATTERNS_CHECK.lastIndex = 0;
+        // Only auto-create events for expiration/renewal/due dates
+        if (!EXPIRY_KEYS.test(key)) continue;
+        const parsedDate = new Date(strVal);
+        if (isNaN(parsedDate.getTime())) continue;
+        const dateStr = parsedDate.toISOString().split("T")[0];
+        // Determine event title
+        const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
+        let eventTitle = `\u26a0\ufe0f ${parsed.label || fileName}`;
+        if (/expir/i.test(key)) eventTitle += " — Expires";
+        else if (/renew/i.test(key)) eventTitle += " — Renewal Due";
+        else if (/due/i.test(key)) eventTitle += " — Due";
+        else eventTitle += ` — ${label}`;
+        try {
+          // Check for duplicate before creating
+          const existingEvents = await storage.getEvents();
+          const isDuplicate = existingEvents.some((e: any) =>
+            e.title === eventTitle && e.date === dateStr
+          );
+          if (!isDuplicate) {
+            await storage.createEvent({
+              title: eventTitle,
+              date: dateStr,
+              allDay: true,
+              color: /expir/i.test(key) ? "#ef4444" : "#f59e0b", // red for expiry, amber for renewal
+              category: "finance",
+              description: `Auto-created from document: ${parsed.label || fileName}`,
+              linkedProfiles: linkedProfiles,
+              linkedDocuments: [document.id],
+              source: "ai",
+            });
+            savedItems.push(`Calendar event: ${eventTitle} on ${dateStr}`);
+          }
+        } catch (err: any) {
+          console.error("Auto-create calendar event failed:", err.message);
         }
       }
     }
@@ -1999,12 +2079,31 @@ async function executeTool(name: string, input: any): Promise<any> {
       const searchTerm = (input.query || "").toLowerCase();
       if (!searchTerm) return null;
       const allDocs = await storage.getDocuments();
-      const found = allDocs.find(doc => {
+      const searchWords = searchTerm.split(/\s+/).filter(Boolean);
+      // Score each doc by match quality
+      let bestDoc: any = null;
+      let bestScore = 0;
+      for (const doc of allDocs) {
         const dName = doc.name.toLowerCase();
-        return dName.includes(searchTerm) || searchTerm.split(/\s+/).every((w: string) => dName.includes(w));
-      });
-      if (!found) return null;
-      return storage.getDocument(found.id);
+        const dType = (doc.type || "").toLowerCase().replace(/_/g, " ");
+        const dTags = (doc.tags || []).join(" ").toLowerCase();
+        const searchable = `${dName} ${dType} ${dTags}`;
+        let score = 0;
+        // Exact name match
+        if (dName.includes(searchTerm)) score += 10;
+        // Type match (e.g., "drivers license" matches type "drivers_license")
+        if (dType.includes(searchTerm.replace(/[_\s]+/g, " "))) score += 8;
+        // Word-level fuzzy matching
+        for (const w of searchWords) {
+          if (searchable.includes(w)) score += 2;
+          // Stem matching: "drivers" matches "driver", "license" matches "licence"
+          const stem = w.replace(/s$|'s$/i, "");
+          if (stem.length >= 3 && searchable.includes(stem)) score += 1.5;
+        }
+        if (score > bestScore) { bestScore = score; bestDoc = doc; }
+      }
+      if (!bestDoc || bestScore < 2) return null;
+      return storage.getDocument(bestDoc.id);
     }
 
     case "create_document": {
@@ -2404,17 +2503,27 @@ async function executeTool(name: string, input: any): Promise<any> {
         });
       }
 
-      // Text search across name, type, tags, extracted data
+      // Text search across name, type, tags, extracted data — with fuzzy stemming
       if (input.query) {
         const q = input.query.toLowerCase();
-        candidates = candidates.filter((d: any) => {
+        const qWords = q.split(/\s+/).filter(Boolean);
+        // Score and sort rather than hard-filter
+        const scored = candidates.map((d: any) => {
           const searchable = [
-            d.name, d.type, ...(d.tags || []),
+            d.name, (d.type || "").replace(/_/g, " "), ...(d.tags || []),
             ...Object.keys(d.extractedData || {}),
             ...Object.values(d.extractedData || {}).map((v: any) => String(v)),
           ].join(" ").toLowerCase();
-          return q.split(/\s+/).some((word: string) => searchable.includes(word));
-        });
+          let score = 0;
+          if (searchable.includes(q)) score += 10;
+          for (const w of qWords) {
+            if (searchable.includes(w)) score += 2;
+            const stem = w.replace(/s$|'s$/i, "");
+            if (stem.length >= 3 && searchable.includes(stem)) score += 1.5;
+          }
+          return { doc: d, score };
+        }).filter(s => s.score >= 2).sort((a, b) => b.score - a.score);
+        candidates = scored.map(s => s.doc);
       }
 
       if (candidates.length === 0) return { found: false, message: "No matching documents found." };
