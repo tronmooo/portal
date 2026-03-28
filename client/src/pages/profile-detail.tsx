@@ -589,112 +589,75 @@ function InfoTab({
     return `${days}d ago`;
   }
 
+  // Separate identity fields from internal/system fields
+  const identityFieldKeys = new Set(['phone', 'email', 'birthday', 'relationship', 'bloodType', 'allergies', 'height', 'weight', 'breed', 'species', 'color', 'microchipId', 'make', 'model', 'year', 'vin', 'mileage', 'licensePlate', 'address', 'website', 'social', 'employer', 'title', 'gender', 'age']);
+  const identityFields = fields.filter(([k]) => identityFieldKeys.has(k));
+  const otherFields = fields.filter(([k]) => !identityFieldKeys.has(k) && !k.startsWith('_'));
+
   return (
     <div className="space-y-3">
-      {/* ── 1. Quick Stats Row ── */}
-      <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
-        {[
-          { icon: HeartPulse, label: "Trackers", value: trackers.length },
-          { icon: FileText, label: "Documents", value: docs.length },
-          { icon: DollarSign, label: "Expenses", value: totalExpenses > 0 ? formatCurrency(totalExpenses) : "$0" },
-          { icon: ListTodo, label: "Open Tasks", value: openTasks.length },
-          { icon: Calendar, label: "Events", value: events.length },
-        ].map(s => {
-          const SI = s.icon;
-          return (
-            <div key={s.label} className="flex items-center gap-2 p-2 rounded-lg border border-border/50">
-              <div className="w-7 h-7 rounded-md flex items-center justify-center shrink-0 bg-primary/8">
-                <SI className="h-3 w-3 text-primary" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[9px] text-muted-foreground leading-none">{s.label}</p>
-                <p className="text-sm font-bold tabular-nums leading-tight">{s.value}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── 2. Alerts ── */}
-      {hasAlerts && (
-        <Card>
-          <CardHeader className="py-2 px-3">
-            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
-              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Alerts
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-2.5 pt-0 space-y-1">
-            {expiringDocs.map((d, i) => (
-              <div key={`doc-${i}`} className={`flex items-center gap-2 p-2 rounded-lg border ${d.daysUntil <= 0 ? "border-red-500/30 bg-red-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
-                <FileWarning className={`h-3 w-3 shrink-0 ${d.daysUntil <= 0 ? "text-red-500" : "text-amber-500"}`} />
-                <span className="text-xs truncate flex-1">{d.name}</span>
-                <Badge variant="outline" className={`text-[9px] px-1.5 py-0 h-4 ${d.daysUntil <= 0 ? "text-red-500 border-red-500/30" : "text-amber-500 border-amber-500/30"}`}>
-                  {d.daysUntil <= 0 ? "Expired" : `${d.daysUntil}d left`}
-                </Badge>
-              </div>
-            ))}
-            {overdueTasks.map(t => (
-              <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg border border-red-500/30 bg-red-500/5">
-                <ListTodo className="h-3 w-3 text-red-500 shrink-0" />
-                <span className="text-xs truncate flex-1">{t.title}</span>
-                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-red-500 border-red-500/30">Overdue</Badge>
-              </div>
-            ))}
-            {upcomingEvents.slice(0, 3).map(ev => (
-              <div key={ev.id} className="flex items-center gap-2 p-2 rounded-lg border border-blue-500/30 bg-blue-500/5">
-                <Calendar className="h-3 w-3 text-blue-500 shrink-0" />
-                <span className="text-xs truncate flex-1">{ev.title}</span>
-                <span className="text-[10px] text-blue-500 shrink-0">
-                  {new Date(ev.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                </span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── 3. Details Card ── */}
+      {/* ── 1. Core Identity Card ── */}
       <Card>
         <CardHeader className="pb-2 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-semibold">Details</CardTitle>
+          <CardTitle className="text-sm font-semibold">Identity</CardTitle>
           <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onEdit} data-testid="button-edit-profile">
             <Edit className="h-3 w-3" /> Edit
           </Button>
         </CardHeader>
         <CardContent>
-          {fields.length > 0 ? (
+          {identityFields.length > 0 ? (
             <div className="space-y-0">
-              {fields.map(([key, val]) => (
+              {identityFields.map(([key, val]) => (
                 <InlineEditField key={key} profileId={profile.id} fieldKey={key} fieldValue={String(val)} allFields={profile.fields} />
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground py-3 text-center">No details yet. Add info via chat.</p>
-          )}
-          {addingField ? (
-            <div className="mt-3 pt-3 border-t border-border space-y-2">
-              <div className="flex gap-2">
-                <Input placeholder="Field name" value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-key" />
-                <Input placeholder="Value" value={newFieldValue} onChange={e => setNewFieldValue(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-value" />
-              </div>
-              <div className="flex gap-2 justify-end">
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setAddingField(false); setNewFieldKey(""); setNewFieldValue(""); }} data-testid="button-cancel-add-field">Cancel</Button>
-                <Button size="sm" className="h-7 text-xs" disabled={!newFieldKey.trim() || saveCustomFieldMutation.isPending}
-                  onClick={() => saveCustomFieldMutation.mutate({ key: newFieldKey.trim(), value: newFieldValue })} data-testid="button-save-new-field">
-                  {saveCustomFieldMutation.isPending ? "Saving..." : "Add"}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <Button variant="ghost" size="sm" className="mt-2 h-7 text-xs gap-1 text-muted-foreground hover:text-foreground w-full"
-              onClick={() => setAddingField(true)} data-testid="button-add-custom-field">
-              <Plus className="h-3 w-3" /> Add Field
-            </Button>
+            <p className="text-sm text-muted-foreground py-3 text-center">No identity details yet. Add info via chat or the edit button.</p>
           )}
         </CardContent>
       </Card>
 
-      {/* Notes */}
+      {/* ── 2. Additional Details (non-identity fields) ── */}
+      {otherFields.length > 0 && (
+        <Card>
+          <CardHeader className="py-2 px-3">
+            <CardTitle className="text-xs font-semibold">Other Details</CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-2.5 pt-0">
+            <div className="space-y-0">
+              {otherFields.map(([key, val]) => (
+                <InlineEditField key={key} profileId={profile.id} fieldKey={key} fieldValue={String(val)} allFields={profile.fields} />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── 3. Add Custom Field ── */}
+      {addingField ? (
+        <Card>
+          <CardContent className="p-3 space-y-2">
+            <div className="flex gap-2">
+              <Input placeholder="Field name" value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-key" />
+              <Input placeholder="Value" value={newFieldValue} onChange={e => setNewFieldValue(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-value" />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setAddingField(false); setNewFieldKey(""); setNewFieldValue(""); }}>Cancel</Button>
+              <Button size="sm" className="h-7 text-xs" disabled={!newFieldKey.trim() || saveCustomFieldMutation.isPending}
+                onClick={() => saveCustomFieldMutation.mutate({ key: newFieldKey.trim(), value: newFieldValue })}>
+                {saveCustomFieldMutation.isPending ? "Saving..." : "Add"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground w-full"
+          onClick={() => setAddingField(true)} data-testid="button-add-custom-field">
+          <Plus className="h-3 w-3" /> Add Field
+        </Button>
+      )}
+
+      {/* ── 4. Notes ── */}
       {profile.notes && (
         <Card>
           <CardHeader className="py-2 px-3">
@@ -708,7 +671,7 @@ function InfoTab({
         </Card>
       )}
 
-      {/* Tags */}
+      {/* ── 5. Tags ── */}
       {profile.tags.length > 0 && (
         <Card>
           <CardContent className="p-3">
@@ -716,64 +679,6 @@ function InfoTab({
               <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
               {profile.tags.map(tag => (
                 <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── 4. Recent Activity ── */}
-      {timeline.length > 0 && (
-        <Card>
-          <CardHeader className="py-2 px-3">
-            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
-              <Activity className="h-3.5 w-3.5 text-primary" /> Recent Activity
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-2.5 pt-0">
-            <div className="space-y-0">
-              {timeline.slice(0, 5).map(entry => {
-                const TIcon = timelineIcons[entry.type] || Activity;
-                return (
-                  <div key={entry.id} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
-                    <TIcon className="h-3 w-3 text-muted-foreground shrink-0" />
-                    <span className="text-xs truncate flex-1">{entry.title}</span>
-                    <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{timeAgo(entry.timestamp)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── 5. Linked Trackers Summary ── */}
-      {topTrackers.length > 0 && (
-        <Card>
-          <CardHeader className="py-2 px-3">
-            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
-              <HeartPulse className="h-3.5 w-3.5 text-primary" /> Trackers
-              <Badge variant="secondary" className="text-[9px] h-4 px-1.5 ml-auto">{trackers.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-2.5 pt-0">
-            <div className="space-y-1">
-              {topTrackers.map(t => (
-                <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg bg-muted/40">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate">{t.name}</p>
-                    <div className="flex items-center gap-1">
-                      <span className="text-sm font-bold tabular-nums">
-                        {t.latest != null ? String(t.latest) : "—"}
-                      </span>
-                      {t.unit && <span className="text-[10px] text-muted-foreground">{t.unit}</span>}
-                      {t.trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
-                      {t.trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
-                      {t.trend === "flat" && <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
-                    </div>
-                  </div>
-                  <span className="text-[9px] text-muted-foreground">{t.entryCount} entries</span>
-                </div>
               ))}
             </div>
           </CardContent>
@@ -2692,20 +2597,18 @@ type TabDef = { value: string; label: string; testId: string };
 const ENTITY_TABS: Record<string, TabDef[]> = {
   // Person / Self — full life hub
   person: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   self: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "trackers", label: "Linked", testId: "tab-trackers" },
@@ -2713,10 +2616,9 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   ],
   // Pet — health + care focused
   pet: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
@@ -2724,62 +2626,55 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   ],
   // Vehicle — maintenance + cost focused
   vehicle: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Loan — payment focused
   loan: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Payments", testId: "tab-finances" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Investment
   investment: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Performance", testId: "tab-finances" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Subscription
   subscription: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Billing", testId: "tab-finances" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
   // Medical provider
   medical: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "documents", label: "Records", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "trackers", label: "Linked", testId: "tab-trackers" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Property / Home
   property: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "tasks", label: "Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Asset (laptop, device, etc.)
   asset: [
-    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "info", label: "Profile", testId: "tab-info" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "documents", label: "Documents", testId: "tab-documents" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
@@ -2787,9 +2682,8 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
 
 // Fallback for any type not explicitly defined
 const DEFAULT_TABS: TabDef[] = [
-  { value: "info", label: "Overview", testId: "tab-info" },
+  { value: "info", label: "Profile", testId: "tab-info" },
   { value: "finances", label: "Finance", testId: "tab-finances" },
-  { value: "documents", label: "Documents", testId: "tab-documents" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
   { value: "trackers", label: "Linked", testId: "tab-trackers" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
@@ -3134,17 +3028,17 @@ export default function ProfileDetailPage() {
                   )}
                   {/* Trackers */}
                   <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
-                </TabsContent>
-              )}
-
-              {tabValues.has("documents") && (
-                <TabsContent value="documents" className="mt-4 px-1 sm:px-0">
-                  <DocumentsTab
-                    documents={profile.relatedDocuments}
-                    profileId={profile.id}
-                    childProfiles={profile.childProfiles}
-                    onUploaded={handleSaved}
-                  />
+                  {/* Documents — now part of the Linked tab */}
+                  {profile.relatedDocuments.length > 0 && (
+                    <div className="mt-4">
+                      <DocumentsTab
+                        documents={profile.relatedDocuments}
+                        profileId={profile.id}
+                        childProfiles={profile.childProfiles}
+                        onUploaded={handleSaved}
+                      />
+                    </div>
+                  )}
                 </TabsContent>
               )}
 
