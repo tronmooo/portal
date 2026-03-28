@@ -434,7 +434,7 @@ Example for lab results:
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+      model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
       max_tokens: 2048,
       messages: [{
         role: "user",
@@ -2811,10 +2811,50 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   documentPreviews?: Array<{ id: string; name: string; mimeType: string; data: string }>;
 }> {
-  // Fast-path removed — all messages go through the AI for consistent behavior.
-  // The fast-path gave different behavior (no multi-entity linking, no date sophistication,
-  // no rich context) depending on whether a regex matched. Now every message gets the same
-  // intelligent treatment.
+  // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
+  // These run instantly without calling Anthropic, making the app snappy even when the API is down.
+  const lower = userMessage.toLowerCase().trim();
+
+  // FAST-PATH: "open [document name]" — direct DB lookup, no AI needed
+  if (lower.match(/^(?:open|show|view|pull up|find|get)\s+(?:my\s+)?(.+)/)) {
+    const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:my\s+)?/, "").trim();
+    try {
+      const allDocs = await storage.getDocuments();
+      // Fuzzy match: search in document name, type, and extracted data
+      const matches = allDocs.filter(d => {
+        const nameLC = d.name.toLowerCase();
+        const typeLC = (d.type || "").toLowerCase();
+        // Normalize search terms: "drivers license" matches "driver's license", "drivers_license", etc.
+        const normalized = searchTerm.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
+        const nameNorm = nameLC.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
+        return nameNorm.includes(normalized) || normalized.includes(nameNorm) ||
+               typeLC.includes(searchTerm) ||
+               nameLC.includes(searchTerm.replace(/'/g, ""));
+      });
+      if (matches.length > 0) {
+        const doc = matches[0];
+        const preview = doc.fileData ? {
+          id: doc.id, name: doc.name, mimeType: doc.mimeType, data: doc.fileData,
+        } : undefined;
+        return {
+          reply: `Here's your ${doc.name}.${matches.length > 1 ? ` (Found ${matches.length} matches — showing the first one.)` : ""}`,
+          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],
+          results: [doc],
+          documentPreview: preview,
+        };
+      }
+      // No match found — fall through to AI to try harder
+    } catch { /* fall through to AI */ }
+  }
+
+  // FAST-PATH: Quick logging (weight, BP, sleep, mood, run, expense)
+  // These bypass the AI entirely for instant response times.
+  try {
+    const fp = await tryFastPath(userMessage);
+    if (fp.matched) {
+      return { reply: fp.reply, actions: fp.actions, results: fp.results };
+    }
+  } catch { /* fall through to AI */ }
 
   // Build rich context from current data (uses short-lived cache to avoid redundant DB hits)
   const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
@@ -2866,8 +2906,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           response = await getClient().messages.create({
-            model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
-            max_tokens: 2048,
+            model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+            max_tokens: 1536,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
             messages,
@@ -3036,11 +3076,43 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
 }
 
 // Fallback rule-based parsing when AI is unavailable
-async function fallbackParse(message: string): Promise<{ reply: string; actions: ParsedAction[]; results: any[] }> {
+async function fallbackParse(message: string): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; documentPreview?: { id: string; name: string; mimeType: string; data: string } }> {
   const lower = message.toLowerCase();
   const actions: ParsedAction[] = [];
   const results: any[] = [];
   let reply = "";
+
+  // Document retrieval — works even when AI is completely down
+  if (lower.match(/^(?:open|show|view|pull up|find|get)\s+(?:my\s+)?(.+)/)) {
+    const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:my\s+)?/, "").trim();
+    try {
+      const allDocs = await storage.getDocuments();
+      const normalized = searchTerm.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
+      const matches = allDocs.filter(d => {
+        const nameNorm = d.name.toLowerCase().replace(/[''\-_]/g, "").replace(/s\s/g, " ");
+        return nameNorm.includes(normalized) || normalized.includes(nameNorm) || d.name.toLowerCase().includes(searchTerm);
+      });
+      if (matches.length > 0) {
+        const doc = matches[0];
+        return {
+          reply: `Here's your ${doc.name}.`,
+          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],
+          results: [doc],
+          documentPreview: doc.fileData ? { id: doc.id, name: doc.name, mimeType: doc.mimeType, data: doc.fileData } : undefined,
+        };
+      }
+    } catch { /* continue to other handlers */ }
+  }
+
+  // Quick mood logging
+  const moodMatch = lower.match(/^(?:mood|feeling|i feel|i'm feeling)\s+(amazing|great|good|okay|neutral|bad|awful|terrible)/);
+  if (moodMatch) {
+    try {
+      const mood = moodMatch[1] as any;
+      const entry = await storage.createJournalEntry({ mood, content: "", tags: [] });
+      return { reply: `Logged mood: ${mood}`, actions: [{ type: "journal_entry" as const, category: "journal" as const, data: { mood } }], results: [entry] };
+    } catch { /* continue */ }
+  }
 
   if (lower.startsWith("track ") || lower.startsWith("create tracker ")) {
     const name = message.replace(/^(track|create tracker)\s+/i, "").replace(/^my\s+/i, "");
