@@ -443,6 +443,19 @@ Respond with JSON:
     });
     results.push(document);
 
+    // === AUTO-PROPAGATE: Link document to parent profiles up the chain ===
+    // e.g., warranty uploaded to "Tesla Model S" also shows under "Me" profile
+    if (existingProfileId && document?.id) {
+      try {
+        const propagated = await storage.propagateDocumentToAncestors(document.id, existingProfileId);
+        if (propagated.length > 0) {
+          console.log(`[Upload] Document auto-propagated to: ${propagated.join(', ')}`);
+        }
+      } catch (err: any) {
+        console.error("Document propagation failed:", err.message);
+      }
+    }
+
     // === AUTO-SAVE: Write extracted data to profile + create trackers immediately ===
     const savedItems: string[] = [];
 

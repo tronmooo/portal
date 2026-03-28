@@ -609,6 +609,12 @@ export async function registerRoutes(
     if (!profile) return res.status(404).json({ error: "Profile not found" });
     try {
       await storage.linkProfileTo(req.params.id, entityType, entityId);
+      // Auto-propagate document links up the profile chain
+      if (entityType === "document") {
+        try {
+          await storage.propagateDocumentToAncestors(entityId, req.params.id);
+        } catch { /* non-critical */ }
+      }
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Link failed" });

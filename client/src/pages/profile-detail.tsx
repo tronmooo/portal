@@ -2761,6 +2761,7 @@ export default function ProfileDetailPage() {
 
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
 
   const { data: profile, isLoading, refetch } = useQuery<ProfileDetail>({
     queryKey: ["/api/profiles", id, "detail"],
@@ -2926,8 +2927,26 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("trackers") && (
                 <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
+                  {/* Filter pills for Linked tab */}
+                  {(() => {
+                    const childCount = (profile.childProfiles || []).length;
+                    const trackerCount = profile.relatedTrackers.length;
+                    const docCount = profile.relatedDocuments.length;
+                    const total = childCount + trackerCount + docCount;
+                    // Only show filter pills if there are items in multiple sections
+                    const nonEmptySections = [childCount > 0, trackerCount > 0, docCount > 0].filter(Boolean).length;
+                    if (nonEmptySections <= 1) return null;
+                    return (
+                      <div className="flex items-center gap-1 mb-3 flex-wrap" data-testid="linked-tab-filters">
+                        <button onClick={() => setLinkedFilter("all")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({total})</button>
+                        {childCount > 0 && <button onClick={() => setLinkedFilter("profiles")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "profiles" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Assets ({childCount})</button>}
+                        {trackerCount > 0 && <button onClick={() => setLinkedFilter("trackers")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "trackers" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Trackers ({trackerCount})</button>}
+                        {docCount > 0 && <button onClick={() => setLinkedFilter("documents")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "documents" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Documents ({docCount})</button>}
+                      </div>
+                    );
+                  })()}
                   {/* Child profiles (assets, subscriptions, loans nested under this profile) */}
-                  {(profile.childProfiles || []).length > 0 && (
+                  {(linkedFilter === "all" || linkedFilter === "profiles") && (profile.childProfiles || []).length > 0 && (
                     <div className="mb-4">
                       <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">Linked Profiles</p>
                       <div className="space-y-2">
@@ -2968,16 +2987,20 @@ export default function ProfileDetailPage() {
                     </div>
                   )}
                   {/* Trackers */}
-                  <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                  {(linkedFilter === "all" || linkedFilter === "trackers") && (
+                    <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                  )}
                   {/* Documents — always show with upload capability */}
-                  <div className="mt-4">
-                    <DocumentsTab
-                      documents={profile.relatedDocuments}
-                      profileId={profile.id}
-                      childProfiles={profile.childProfiles}
-                      onUploaded={handleSaved}
-                    />
-                  </div>
+                  {(linkedFilter === "all" || linkedFilter === "documents") && (
+                    <div className="mt-4">
+                      <DocumentsTab
+                        documents={profile.relatedDocuments}
+                        profileId={profile.id}
+                        childProfiles={profile.childProfiles}
+                        onUploaded={handleSaved}
+                      />
+                    </div>
+                  )}
                 </TabsContent>
               )}
 

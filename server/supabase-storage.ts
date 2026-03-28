@@ -649,6 +649,72 @@ export class SupabaseStorage implements IStorage {
     }
   }
 
+  /**
+   * Auto-propagate a document link up the profile chain.
+   * When a document is linked to a child profile (e.g., Tesla Model S),
+   * also link it to the parent profile (e.g., Me/self) so documents
+   * appear in all relevant places without duplication.
+   * Also adds the document's linkedProfiles array to include parent IDs.
+   */
+  async propagateDocumentToAncestors(documentId: string, profileId: string): Promise<string[]> {
+    const propagated: string[] = [];
+    const visited = new Set<string>([profileId]);
+    let currentId: string | undefined = profileId;
+
+    while (currentId) {
+      const profile = await this.getProfile(currentId);
+      if (!profile) break;
+
+      const parentId = profile.parentProfileId || profile.fields?._parentProfileId;
+      if (!parentId || visited.has(parentId)) break;
+      visited.add(parentId);
+
+      // Link document to parent profile (adds to profile.documents array)
+      const parent = await this.getProfile(parentId);
+      if (parent && !parent.documents.includes(documentId)) {
+        parent.documents.push(documentId);
+        await this.supabase.from("profiles").update({ documents: parent.documents }).eq("id", parentId).eq("user_id", this.userId);
+        propagated.push(parent.name);
+      }
+
+      // Also add parent to document's linkedProfiles
+      const doc = await this.getDocument(documentId);
+      if (doc && !doc.linkedProfiles.includes(parentId)) {
+        const updatedLinked = [...doc.linkedProfiles, parentId];
+        await this.supabase.from("documents").update({ linked_profiles: updatedLinked }).eq("id", documentId).eq("user_id", this.userId);
+      }
+
+      currentId = parentId;
+    }
+    return propagated;
+  }
+
+  /**
+   * Propagate any entity link up to parent profiles.
+   * Generic version — works for trackers, expenses, tasks, etc.
+   */
+  async propagateEntityToAncestors(entityType: string, entityId: string, profileId: string): Promise<string[]> {
+    const propagated: string[] = [];
+    const visited = new Set<string>([profileId]);
+    let currentId: string | undefined = profileId;
+
+    while (currentId) {
+      const profile = await this.getProfile(currentId);
+      if (!profile) break;
+
+      const parentId = profile.parentProfileId || profile.fields?._parentProfileId;
+      if (!parentId || visited.has(parentId)) break;
+      visited.add(parentId);
+
+      await this.linkProfileTo(parentId, entityType, entityId);
+      const parent = await this.getProfile(parentId);
+      if (parent) propagated.push(parent.name);
+
+      currentId = parentId;
+    }
+    return propagated;
+  }
+
   // Get the "self" profile (type="self") for this user — used for auto-linking
   async getSelfProfile(): Promise<Profile | undefined> {
     const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).eq("type", "self").limit(1).single();

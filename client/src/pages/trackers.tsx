@@ -2640,6 +2640,19 @@ export default function TrackersPage() {
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const docFileInputRef = useRef<HTMLInputElement>(null);
+  // Unified section filter: which sections to show
+  const [sectionFilter, setSectionFilter] = useState<"all" | "profiles" | "documents" | "trackers" | "obligations">("all");
+  // Document type filter
+  const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
+  // Tracker category filter
+  const [trackerCatFilter, setTrackerCatFilter] = useState<string>("all");
+  // Collapsible sections
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const toggleSection = (key: string) => setCollapsedSections(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
 
   // Auto-resolve "me" to the actual self profile ID once profiles load
   const selfProfile = (profiles || []).find(p => p.type === "self");
@@ -2705,12 +2718,27 @@ export default function TrackersPage() {
     },
   });
 
-  // Filter documents by search
+  // Filter documents by search + type filter + profile filter
   const filteredDocuments = allDocuments.filter(d => {
-    if (!docSearch) return true;
-    const s = docSearch.toLowerCase();
-    return d.name.toLowerCase().includes(s) || d.type?.toLowerCase().includes(s);
+    // Profile filter: if filtering by a specific profile, only show their docs
+    if (resolvedFilter !== "all" && profileFilter !== "me") {
+      if (!d.linkedProfiles?.includes(resolvedFilter)) return false;
+    }
+    // Doc type filter
+    if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
+    // Search
+    if (docSearch) {
+      const s = docSearch.toLowerCase();
+      return d.name.toLowerCase().includes(s) || d.type?.toLowerCase().includes(s);
+    }
+    return true;
   });
+
+  // Unique doc types for filter chips
+  const docTypes = [...new Set(allDocuments.map(d => d.type).filter(Boolean))].sort();
+
+  // Unique tracker categories for filter chips
+  const allTrackerCats = [...new Set((trackers || []).map(t => t.category).filter(Boolean))].sort();
 
   if (isLoading) {
     return (
@@ -2744,11 +2772,15 @@ export default function TrackersPage() {
 
   // Apply profile filter — for "me", also include orphaned trackers (no linked profiles)
   const filteredTrackers = (trackers || []).filter(t => {
-    if (resolvedFilter === "all") return true;
-    if (t.linkedProfiles?.includes(resolvedFilter)) return true;
-    // If filtering by self and tracker has no linked profiles, it's mine
-    if (profileFilter === "me" && (!t.linkedProfiles || t.linkedProfiles.length === 0)) return true;
-    return false;
+    // Profile filter
+    if (resolvedFilter !== "all") {
+      const matchesProfile = t.linkedProfiles?.includes(resolvedFilter);
+      const isMineOrphan = profileFilter === "me" && (!t.linkedProfiles || t.linkedProfiles.length === 0);
+      if (!matchesProfile && !isMineOrphan) return false;
+    }
+    // Category filter
+    if (trackerCatFilter !== "all" && t.category !== trackerCatFilter) return false;
+    return true;
   });
 
   // Group by category
@@ -2813,49 +2845,95 @@ export default function TrackersPage() {
         </div>
       </div>
 
-      {/* Profile dropdown selector */}
-      {sortedFilterProfiles.length > 0 && (
-        <div data-testid="profile-filter-bar">
-          <Select
-            value={profileFilter}
-            onValueChange={(val) => setProfileFilter(val)}
-          >
-            <SelectTrigger className="w-[220px] h-9" data-testid="select-profile-filter">
-              <SelectValue placeholder="Select profile" />
-            </SelectTrigger>
-            <SelectContent>
-              {sortedFilterProfiles.map(p => {
-                const Icon = PROFILE_TYPE_ICONS[p.type] || User;
-                const count = countForProfile(p.id);
-                const val = p.type === "self" ? "me" : p.id;
-              return (
-                <SelectItem key={p.id} value={val} data-testid={`filter-profile-${p.id}`}>
-                  <span className="flex items-center gap-2">
-                    <Icon className="h-3.5 w-3.5" />
-                    {p.type === "self" ? "My Trackers" : p.name}
-                    <span className="text-muted-foreground text-xs">({count})</span>
-                  </span>
-                </SelectItem>
-              );
-            })}
-            </SelectContent>
-          </Select>
+      {/* ── Filter Bar ── */}
+      <div className="space-y-2" data-testid="filter-bar">
+        {/* Row 1: Owner filter + section pills */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {sortedFilterProfiles.length > 0 && (
+            <Select value={profileFilter} onValueChange={setProfileFilter}>
+              <SelectTrigger className="w-[180px] h-8 text-xs" data-testid="select-profile-filter">
+                <SelectValue placeholder="All profiles" />
+              </SelectTrigger>
+              <SelectContent>
+                {sortedFilterProfiles.map(p => {
+                  const Icon = PROFILE_TYPE_ICONS[p.type] || User;
+                  const count = countForProfile(p.id);
+                  const val = p.type === "self" ? "me" : p.id;
+                  return (
+                    <SelectItem key={p.id} value={val} data-testid={`filter-profile-${p.id}`}>
+                      <span className="flex items-center gap-2">
+                        <Icon className="h-3.5 w-3.5" />
+                        {p.type === "self" ? "Me" : p.name}
+                        <span className="text-muted-foreground text-xs">({count})</span>
+                      </span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          )}
+          <div className="h-5 w-px bg-border" />
+          {/* Section filter pills */}
+          {(["all", "trackers", "documents", "profiles", "obligations"] as const).map(s => {
+            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", obligations: "Obligations" };
+            const counts: Record<string, number> = {
+              all: filteredTrackers.length + filteredDocuments.length + obligations.length,
+              trackers: filteredTrackers.length,
+              documents: filteredDocuments.length,
+              profiles: 0, // computed below
+              obligations: obligations.length,
+            };
+            return (
+              <button
+                key={s}
+                onClick={() => setSectionFilter(s)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${sectionFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                data-testid={`filter-section-${s}`}
+              >
+                {labels[s]}
+                {s !== "all" && <span className="ml-1 opacity-70">{counts[s]}</span>}
+              </button>
+            );
+          })}
         </div>
-      )}
+
+        {/* Row 2: Contextual sub-filters (shown based on section) */}
+        {(sectionFilter === "all" || sectionFilter === "documents") && docTypes.length > 1 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mr-1">Doc Type:</span>
+            <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid="filter-doctype-all">All</button>
+            {docTypes.map(t => (
+              <button key={t} onClick={() => setDocTypeFilter(t)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid={`filter-doctype-${t}`}>
+                {t.replace(/_/g, " ")}
+              </button>
+            ))}
+          </div>
+        )}
+        {(sectionFilter === "all" || sectionFilter === "trackers") && allTrackerCats.length > 1 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mr-1">Category:</span>
+            <button onClick={() => setTrackerCatFilter("all")} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${trackerCatFilter === "all" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid="filter-trackercat-all">All</button>
+            {allTrackerCats.map(c => (
+              <button key={c} onClick={() => setTrackerCatFilter(c)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${trackerCatFilter === c ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid={`filter-trackercat-${c}`}>
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Summary cards */}
-      {filteredTrackers.length > 0 && (
+      {(sectionFilter === "all" || sectionFilter === "trackers") && filteredTrackers.length > 0 && (
         <TrackerSummary trackers={filteredTrackers} />
       )}
 
       {/* Linked Profiles (child assets, subscriptions, etc.) */}
-      {(() => {
+      {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
         const childTypeSet = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
-        // Show child profiles: when filtering by person, show their children; when "all" or "me", show all child profiles
         const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
-          if (isShowAll) return true; // Show all child-type profiles (including orphans without parent)
+          if (isShowAll) return true;
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
           return pParent === resolvedFilter;
         });
@@ -2863,8 +2941,11 @@ export default function TrackersPage() {
         const typeIcons: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: CreditCard };
         return (
           <div className="space-y-2">
-            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Linked Profiles ({childProfiles.length})</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <button onClick={() => toggleSection("profiles")} className="flex items-center gap-1.5 w-full group" data-testid="section-toggle-profiles">
+              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Assets & Linked Profiles ({childProfiles.length})</h2>
+              {collapsedSections.has("profiles") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+            </button>
+            {!collapsedSections.has("profiles") && <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {childProfiles.map(child => {
                 const Icon = typeIcons[child.type] || Star;
                 const fields = child.fields || {};
@@ -2902,16 +2983,19 @@ export default function TrackersPage() {
                   </div>
                 );
               })}
-            </div>
+            </div>}
           </div>
         );
       })()}
 
       {/* Active Obligations / Subscriptions */}
-      {obligations.length > 0 && (
+      {(sectionFilter === "all" || sectionFilter === "obligations") && obligations.length > 0 && (
         <div className="space-y-2">
-          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations & Subscriptions ({obligations.length})</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <button onClick={() => toggleSection("obligations")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-obligations">
+            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations & Subscriptions ({obligations.length})</h2>
+            {collapsedSections.has("obligations") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+          </button>
+          {!collapsedSections.has("obligations") && <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {obligations.map((ob: any) => {
               const dueDate = new Date(ob.nextDueDate);
               const daysUntil = Math.ceil((dueDate.getTime() - Date.now()) / 86400000);
@@ -2932,14 +3016,17 @@ export default function TrackersPage() {
                 </div>
               );
             })}
-          </div>
+          </div>}
         </div>
       )}
 
       {/* Documents Section */}
-      <div className="space-y-2">
+      {(sectionFilter === "all" || sectionFilter === "documents") && <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({allDocuments.length})</h2>
+          <button onClick={() => toggleSection("documents")} className="flex items-center gap-1.5" data-testid="section-toggle-documents">
+            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({filteredDocuments.length})</h2>
+            {collapsedSections.has("documents") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+          </button>
           <div className="flex gap-2">
             <input
               ref={docFileInputRef}
@@ -2966,7 +3053,7 @@ export default function TrackersPage() {
             </Button>
           </div>
         </div>
-        {allDocuments.length > 3 && (
+        {!collapsedSections.has("documents") && allDocuments.length > 3 && (
           <input
             type="text"
             placeholder="Search documents..."
@@ -2976,7 +3063,7 @@ export default function TrackersPage() {
             data-testid="input-search-documents-global"
           />
         )}
-        {filteredDocuments.length === 0 ? (
+        {!collapsedSections.has("documents") && (filteredDocuments.length === 0 ? (
           <div className="rounded-lg border bg-card p-6 text-center">
             <FileText className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">{allDocuments.length === 0 ? "No documents yet" : "No documents match your search"}</p>
@@ -3003,11 +3090,19 @@ export default function TrackersPage() {
                     </div>
                     <button className="flex-1 min-w-0 text-left" onClick={() => setViewingDoc(doc)}>
                       <p className="text-sm font-medium truncate text-primary hover:underline">{doc.name}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <Badge variant="secondary" className="text-[10px] capitalize">{doc.type?.replace(/_/g, " ")}</Badge>
                         <span className="text-[10px] text-muted-foreground">
                           {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                         </span>
+                        {doc.linkedProfiles?.length > 0 && (() => {
+                          const linkedNames = doc.linkedProfiles.map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
+                          return linkedNames.length > 0 ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                              {linkedNames.join(", ")}
+                            </span>
+                          ) : null;
+                        })()}
                       </div>
                     </button>
                     <div className="flex gap-1 shrink-0">
@@ -3023,10 +3118,11 @@ export default function TrackersPage() {
               );
             })}
           </div>
-        )}
-      </div>
+        ))}
+      </div>}
 
-      {(!trackers || trackers.length === 0) ? (
+      {/* Trackers Section */}
+      {(sectionFilter === "all" || sectionFilter === "trackers") && ((!trackers || trackers.length === 0) ? (
         <div className="text-center py-16">
           <Activity className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">No trackers yet.</p>
@@ -3134,7 +3230,7 @@ export default function TrackersPage() {
             </div>
           </div>
         ))
-      )}
+      ))}
 
       {/* Create tracker dialog */}
       <CreateTrackerDialog open={createOpen} onOpenChange={setCreateOpen} />
