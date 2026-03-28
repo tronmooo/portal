@@ -385,8 +385,8 @@ export class SupabaseStorage implements IStorage {
       const orphans = allProfiles.filter(p => childTypes.has(p.type) && !p.parentProfileId);
       if (orphans.length > 0) {
         // Show orphans as children in UI without mutating the DB on reads
-        for (const orphan of orphans) orphan.parentProfileId = id;
-        childProfiles = [...childProfiles, ...orphans];
+        // Use spread to create new objects instead of mutating the fetched ones
+        childProfiles = [...childProfiles, ...orphans.map(o => ({ ...o, parentProfileId: id }))];
       }
     }
 
@@ -534,22 +534,20 @@ export class SupabaseStorage implements IStorage {
     const profileNameLower = profile.name.toLowerCase();
     const errors: string[] = [];
 
-    try { // 1. Delete linked obligations
+    try { // 1. Delete linked obligations (only by explicit profile link, not by name matching)
       const allObligations = await this.getObligations();
       for (const ob of allObligations) {
-        const nameMatch = ob.name.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ob.name.toLowerCase());
-        if (ob.linkedProfiles.includes(id) || nameMatch) {
+        if (ob.linkedProfiles.includes(id)) {
           await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("obligations"); }
 
-    try { // 2. Delete/unlink events
+    try { // 2. Delete/unlink events (only by explicit profile link, not by name matching)
       const allEvents = await this.getEvents();
       for (const ev of allEvents) {
-        const evNameMatch = ev.title.toLowerCase().includes(profileNameLower) || profileNameLower.includes(ev.title.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim());
-        if (ev.linkedProfiles.includes(id) || evNameMatch) {
-          if (ev.linkedProfiles.length <= 1 || evNameMatch) {
+        if (ev.linkedProfiles.includes(id)) {
+          if (ev.linkedProfiles.length <= 1) {
             await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
           } else {
             await this.supabase.from("events").update({ linked_profiles: ev.linkedProfiles.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
@@ -1667,28 +1665,9 @@ export class SupabaseStorage implements IStorage {
     if (error) throw error;
     this.logActivity("obligation", `Created obligation: ${data.name}`);
 
-    // Auto-generate calendar event for obligation due date
-    if (data.nextDueDate) {
-      try {
-        const freqMap: Record<string, string> = { weekly: "weekly", biweekly: "biweekly", monthly: "monthly", quarterly: "monthly", yearly: "yearly" };
-        const recurrence = freqMap[data.frequency || "monthly"] || "monthly";
-        await this.createEvent({
-          title: `\u{1F4B3} ${data.name} \u2014 $${data.amount}`,
-          date: data.nextDueDate.slice(0, 10),
-          allDay: true,
-          category: "finance",
-          color: "#BB653B",
-          recurrence: recurrence as any,
-          linkedProfiles: [],
-          linkedDocuments: [],
-          tags: ["auto-generated", "obligation"],
-          source: "ai",
-          description: data.autopay ? "Autopay enabled" : `$${data.amount} due`,
-        });
-      } catch (e) {
-        console.error(`Auto-event generation failed for obligation: ${data.name}`, e);
-      }
-    }
+    // NOTE: Calendar events for obligations are generated dynamically by
+    // getCalendarTimeline() — no need to create a stored event here.
+    // This avoids duplicate entries on the calendar view.
 
     return (await this.getObligation(id))!;
   }

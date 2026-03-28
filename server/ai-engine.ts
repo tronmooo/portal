@@ -632,7 +632,7 @@ Example for lab results:
         isNew: !existingProfileId,
       } : undefined,
       trackerEntries: parsed.trackerEntries || [],
-      documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType, data: document.fileData },
+      documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
     };
 
     let reply = parsed.summary || `Processed "${fileName}"`;
@@ -999,7 +999,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     input_schema: {
       type: "object" as const,
       properties: {
-        mood: { type: "string", enum: ["amazing", "great", "good", "neutral", "bad", "awful"], description: "Mood level. Map user's words: 'amazing/incredible/fantastic' → amazing, 'great/wonderful/excellent' → great, 'good/fine/okay' → good, 'meh/so-so/alright' → neutral, 'bad/rough/down' → bad, 'awful/terrible/horrible' → awful" },
+        mood: { type: "string", enum: ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"], description: "Mood level. Map user's words: 'amazing/incredible/fantastic' → amazing, 'great/wonderful/excellent' → great, 'good/fine/pretty good' → good, 'okay/alright/decent' → okay, 'meh/so-so/indifferent' → neutral, 'bad/rough/down' → bad, 'awful/horrible/dreadful' → awful, 'terrible/miserable/worst' → terrible" },
         content: { type: "string", description: "Journal content" },
         energy: { type: "number", description: "Energy level 1-5" },
         gratitude: { type: "array", items: { type: "string" }, description: "Things grateful for" },
@@ -1888,12 +1888,17 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_expense": {
+      // Validate amount — reject invalid/zero amounts instead of silently logging $0
+      const parsedAmount = typeof input.amount === 'number' && isFinite(input.amount) ? input.amount : parseFloat(input.amount);
+      if (!parsedAmount || parsedAmount <= 0) {
+        return { error: `Invalid expense amount: ${input.amount}. Please provide a positive number.` };
+      }
       // Dedup: check if same amount + similar description was created in last 2 minutes
       const allExpenses = await storage.getExpenses();
       const twoMinAgoExp = Date.now() - 120000;
       const dupExpense = allExpenses.find(e => {
         if (new Date(e.date).getTime() < twoMinAgoExp) return false;
-        return e.amount === (parseFloat(input.amount) || 0) &&
+        return e.amount === parsedAmount &&
           e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20));
       });
       if (dupExpense) {
@@ -1901,7 +1906,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         return dupExpense;
       }
       const newExpense = await storage.createExpense({
-        amount: parseFloat(input.amount) || 0,
+        amount: parsedAmount,
         category: input.category || "general",
         description: input.description || "Expense",
         date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), // YYYY-MM-DD in Pacific
@@ -2348,7 +2353,9 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "sync_calendar": {
       try {
-        const { execSync } = require("child_process");
+        const { execFile } = require("child_process");
+        const { promisify } = require("util");
+        const execFileAsync = promisify(execFile);
         const now = new Date();
         const startDate = new Date(now);
         startDate.setMonth(startDate.getMonth() - 1);
@@ -2365,7 +2372,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           },
         });
 
-        const stdout = execSync(`external-tool call '${params.replace(/'/g, "'\\''")}'`, {
+        const { stdout } = await execFileAsync("external-tool", ["call", params], {
           timeout: 30000,
           encoding: "utf-8",
         });
@@ -2579,8 +2586,14 @@ async function autoUpdateGoalProgress(trackerId: string, values: Record<string, 
       }
       if (increment > 0) {
         const newCurrent = (goal.current || 0) + increment;
-        await storage.updateGoal(goal.id, { current: Math.min(newCurrent, goal.target) }); // cap at target (100%)
-        logger.info("goal", `Auto-updated "${goal.title}": ${goal.current} → ${newCurrent} ${goal.unit}`);
+        const cappedCurrent = Math.min(newCurrent, goal.target);
+        const update: Record<string, any> = { current: cappedCurrent };
+        // Auto-complete the goal when target is reached
+        if (newCurrent >= goal.target) {
+          update.status = "completed";
+        }
+        await storage.updateGoal(goal.id, update);
+        logger.info("goal", `Auto-updated "${goal.title}": ${goal.current} → ${cappedCurrent} ${goal.unit}${newCurrent >= goal.target ? ' (COMPLETED!)' : ''}`);
       }
     }
   } catch (e) {
@@ -2829,9 +2842,11 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     // Build the tool_use conversation loop — prepend up to 5 history pairs for multi-step context
     let messages: Anthropic.Messages.MessageParam[] = [];
     if (conversationHistory && conversationHistory.length > 0) {
-      const recent = conversationHistory.slice(-10); // last 10 messages (up to 5 pairs)
+      const recent = conversationHistory.slice(-6); // last 6 messages (3 pairs) to control token usage
       for (const msg of recent) {
-        messages.push({ role: msg.role, content: msg.content });
+        // Truncate long messages to avoid blowing up the context window
+        const content = msg.content.length > 1500 ? msg.content.slice(0, 1500) + "\n[...truncated]" : msg.content;
+        messages.push({ role: msg.role, content });
       }
     }
     messages.push({ role: "user", content: userMessage });
@@ -2910,7 +2925,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           // Invalidate context cache after any write operation
           const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
-            invalidateContextCache();
+            invalidateContextCache(userId);
           }
 
           // Map tool name to a ParsedAction type for backwards compat
@@ -2924,7 +2939,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
           const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
-            logAction(toolUse.name, actionType, String(entityName), entityId);
+            logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
 
           // Handle document previews

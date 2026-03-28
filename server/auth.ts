@@ -87,28 +87,35 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     // Run the rest of the request within the scoped storage context.
     // All code that reads `storage` via the proxy will automatically
     // get this user-scoped instance instead of the global singleton.
-    requestStorageContext.run(scopedStorage, async () => {
+    // 
+    // IMPORTANT: We call next() synchronously inside run() so that
+    // Express's middleware chain executes within the AsyncLocalStorage
+    // context. The auto-profile check is fire-and-forget to avoid
+    // blocking the request if it takes too long.
+    requestStorageContext.run(scopedStorage, () => {
       // Auto-create "Me" self profile if none exists (runs once per session, cached)
       if (!autoProfileCreated.has(user.id)) {
         autoProfileCreated.add(user.id);
-        try {
-          const profiles = await storage.getProfiles();
-          const hasSelf = profiles.some(p => p.type === 'self');
-          if (!hasSelf) {
-            const displayName = user.email?.split('@')[0] || 'Me';
-            await storage.createProfile({
-              name: displayName.charAt(0).toUpperCase() + displayName.slice(1),
-              type: 'self',
-              notes: '',
-              fields: {},
-              tags: [],
-            });
-            logger.info("auth", `Auto-created self profile for user ${user.id.slice(0, 8)}`);
+        (async () => {
+          try {
+            const profiles = await storage.getProfiles();
+            const hasSelf = profiles.some(p => p.type === 'self');
+            if (!hasSelf) {
+              const displayName = user.email?.split('@')[0] || 'Me';
+              await storage.createProfile({
+                name: displayName.charAt(0).toUpperCase() + displayName.slice(1),
+                type: 'self',
+                notes: '',
+                fields: {},
+                tags: [],
+              });
+              logger.info("auth", `Auto-created self profile for user ${user.id.slice(0, 8)}`);
+            }
+          } catch (e) {
+            // Non-fatal — don't block auth
+            console.error('[auth] Auto-profile creation failed:', e);
           }
-        } catch (e) {
-          // Non-fatal — don't block auth
-          console.error('[auth] Auto-profile creation failed:', e);
-        }
+        })();
       }
 
       next();

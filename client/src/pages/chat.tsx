@@ -157,7 +157,7 @@ function ExtractionConfirmation({
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
     trackerEntries: any[];
-  }) => void;
+  }) => Promise<boolean>;
   onSkip: () => void;
 }) {
   const [fields, setFields] = useState(
@@ -170,7 +170,7 @@ function ExtractionConfirmation({
     setFields((prev) => prev.map((f, i) => i === idx ? { ...f, selected: !f.selected } : f));
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     setConfirming(true);
     const confirmedFields = fields.filter((f) => f.selected && !f.isDate).map((f) => ({ key: f.key, value: f.value }));
     const createCalendarEvents = fields
@@ -181,13 +181,17 @@ function ExtractionConfirmation({
         title: f.suggestedEvent!,
         category: /expir|renew/i.test(f.key) ? "finance" : /appoint|visit/i.test(f.key) ? "health" : "other",
       }));
-    onConfirm({
+    const success = await onConfirm({
       extractionId: extraction.extractionId,
       confirmedFields,
       targetProfileId: extraction.targetProfile?.id,
       createCalendarEvents,
       trackerEntries: extraction.trackerEntries || [],
     });
+    if (success) {
+      setConfirmed(true);
+    }
+    setConfirming(false);
   };
 
   if (confirmed) {
@@ -262,10 +266,7 @@ function ExtractionConfirmation({
         <Button
           size="sm"
           className="h-7 text-xs"
-          onClick={() => {
-            handleConfirm();
-            setConfirmed(true);
-          }}
+          onClick={() => handleConfirm()}
           disabled={confirming || fields.every((f) => !f.selected)}
         >
           {confirming ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
@@ -856,7 +857,7 @@ export default function ChatPage() {
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
     trackerEntries: any[];
-  }) => {
+  }): Promise<boolean> => {
     try {
       const res = await apiRequest("POST", "/api/chat/confirm-extraction", data);
       const result = await res.json();
@@ -870,9 +871,12 @@ export default function ChatPage() {
               : m
           )
         );
+        return true;
       }
+      return false;
     } catch (err) {
       console.error("Confirm extraction failed:", err);
+      return false;
     }
   };
 
