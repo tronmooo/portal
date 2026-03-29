@@ -355,7 +355,24 @@ export async function registerRoutes(
 
       const saved: string[] = [];
 
-      // 1. Update profile with confirmed fields
+      // 0. ALWAYS save confirmed fields to the document's extractedData
+      if (confirmedFields && confirmedFields.length > 0) {
+        try {
+          const doc = await storage.getDocument(extractionId);
+          if (doc) {
+            const updatedData: Record<string, any> = { ...(doc.extractedData || {}) };
+            for (const field of confirmedFields) {
+              updatedData[field.key] = field.value;
+            }
+            await storage.updateDocument(extractionId, { extractedData: updatedData });
+            saved.push(`Saved ${confirmedFields.length} fields to document`);
+          }
+        } catch (e: any) {
+          console.error("Failed to save fields to document:", e.message);
+        }
+      }
+
+      // 1. If a profile was selected, ALSO save fields to that profile AND link the document
       if (targetProfileId && confirmedFields && confirmedFields.length > 0) {
         const profile = await storage.getProfile(targetProfileId);
         if (profile) {
@@ -367,6 +384,13 @@ export async function registerRoutes(
             fields: { ...(profile.fields || {}), ...fieldUpdates },
           });
           saved.push(`Updated ${confirmedFields.length} fields on ${profile.name}`);
+
+          // Link the document to the selected profile
+          try {
+            await storage.linkProfileTo(targetProfileId, "document", extractionId);
+            // Also propagate up to parent/self profile
+            await storage.propagateDocumentToAncestors(extractionId, targetProfileId);
+          } catch { /* may already be linked */ }
         }
       }
 
