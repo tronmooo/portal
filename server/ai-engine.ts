@@ -444,7 +444,7 @@ FINAL ENFORCEMENT: If the document does not explicitly show a value, return null
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+      model: process.env.ANTHROPIC_EXTRACTION_MODEL || "claude-sonnet-4-20250514", // Use Sonnet for document extraction — better vision accuracy on rotated/complex documents
       max_tokens: 2048,
       messages: [{
         role: "user",
@@ -527,33 +527,71 @@ FINAL ENFORCEMENT: If the document does not explicitly show a value, return null
       savedItems.push(`${Object.keys(parsed.extractedData).length} fields ready for ${profileName} (confirm to save)`);
     }
 
-    // Auto-create expense if the document has a totalAmount (receipts, citations, bills, invoices)
-    const totalAmount = parsed.extractedData?.totalAmount || parsed.extractedData?.totalAmountDue || parsed.extractedData?.totalDue || parsed.extractedData?.amountDue || parsed.extractedData?.amountPaid || parsed.extractedData?.balance;
-    if (totalAmount && typeof totalAmount === 'number' && totalAmount > 0) {
+    // Auto-create expense if the document has any dollar amount
+    const rawAmount = parsed.extractedData?.totalAmount || parsed.extractedData?.totalAmountDue || parsed.extractedData?.totalDue || parsed.extractedData?.amountDue || parsed.extractedData?.amountPaid || parsed.extractedData?.balance || parsed.extractedData?.total_amount || parsed.extractedData?.amount_due;
+    const numAmount = typeof rawAmount === 'number' ? rawAmount : parseFloat(String(rawAmount));
+    if (numAmount && isFinite(numAmount) && numAmount > 0) {
       try {
-        const docType = parsed.documentType || "receipt";
-        const category = ["vehicle_registration", "citation", "parking_ticket", "toll"].some(t => docType.includes(t)) ? "vehicle"
-          : ["medical", "prescription", "lab"].some(t => docType.includes(t)) ? "health"
-          : ["utility", "bill"].some(t => docType.includes(t)) ? "utilities"
+        const docType = (parsed.documentType || "receipt").toLowerCase();
+        const category = ["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
+          : ["medical", "prescription", "lab", "health", "doctor", "hospital"].some(t => docType.includes(t)) ? "health"
+          : ["utility", "bill", "electric", "water", "gas"].some(t => docType.includes(t)) ? "utilities"
           : ["insurance"].some(t => docType.includes(t)) ? "insurance"
+          : ["bank", "loan", "statement"].some(t => docType.includes(t)) ? "general"
           : "general";
         const desc = parsed.label || parsed.summary || fileName;
+        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
         const expense = await storage.createExpense({
-          amount: totalAmount,
+          amount: numAmount,
           category,
           description: desc,
-          date: parsed.extractedData?.dateIssued || parsed.extractedData?.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
           tags: ["from-document"],
         });
-        // Link expense to the same profile as the document
         if (existingProfileId) {
           await autoLinkToProfiles("expense", expense.id, desc, (await storage.getProfile(existingProfileId))?.name);
         }
-        savedItems.push(`$${totalAmount} expense auto-saved to Finance`);
-        actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: totalAmount, description: desc } });
+        savedItems.push(`$${numAmount} expense saved to Finance`);
+        actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: numAmount, description: desc } });
         results.push(expense);
       } catch (e) {
         console.error("Auto-expense from document failed:", e);
+      }
+    }
+
+    // Auto-create calendar events/alerts for expiration dates found in the document
+    const dateFields: Array<{key: string, label: string}> = [
+      {key: 'expirationDate', label: 'Expiration'},
+      {key: 'registrationExpiration', label: 'Registration Expires'},
+      {key: 'warrantyExpiration', label: 'Warranty Expires'},
+      {key: 'policyExpiration', label: 'Policy Expires'},
+      {key: 'newExpDate', label: 'New Expiration'},
+      {key: 'dueDate', label: 'Due Date'},
+      {key: 'paymentDueDate', label: 'Payment Due'},
+      {key: 'followUpDate', label: 'Follow-Up'},
+      {key: 'nextAppointmentDate', label: 'Next Appointment'},
+      {key: 'vaccineDueDate', label: 'Vaccine Due'},
+      {key: 'renewalDate', label: 'Renewal'},
+    ];
+    for (const {key, label} of dateFields) {
+      const dateVal = parsed.extractedData?.[key];
+      // Only create alerts for real dates (year 2020-2035, not dollar amounts misread as dates)
+      if (dateVal && typeof dateVal === 'string' && dateVal.match(/^20[2-3]\d-\d{2}-\d{2}/)) {
+        try {
+          const docLabel = parsed.label || fileName;
+          const eventTitle = `${label}: ${docLabel}`;
+          await storage.createEvent({
+            title: eventTitle,
+            date: dateVal.slice(0, 10),
+            allDay: true,
+            category: 'other',
+            description: `Auto-created from document: ${docLabel}`,
+            tags: ['from-document', 'expiration-alert'],
+            linkedProfiles: existingProfileId ? [existingProfileId] : [],
+            linkedDocuments: [document.id],
+          });
+          savedItems.push(`📅 ${label} alert: ${dateVal.slice(0,10)}`);
+        } catch { /* non-critical */ }
       }
     }
 
