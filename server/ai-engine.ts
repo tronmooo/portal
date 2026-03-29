@@ -375,8 +375,31 @@ IMPORTANT FIELDS to look for by document type:
 - Medical: patientName, providerName, visitDate, diagnosis, followUpDate, nextAppointmentDate
 - Lab results: individual test results as trackerEntries (name, value, unit)
 - Insurance: policyNumber, coverageDates, premium, provider
-- IDs/licenses: licenseNumber, expirationDate, dateOfBirth, name, address
+- IDs/licenses: licenseNumber, expirationDate, dateOfBirth, name, address, issueDate, class, sex, height, weight, donor, restrictions
+  CRITICAL FOR DRIVER'S LICENSES: The expiration date is labeled "EXP" or on the line with "RES" (e.g., "12 RES 03/12/2034" means expiration 2034-03-12). The issue date is labeled "ISS" (e.g., "ISS 02/01/2026"). Do NOT confuse the issue date with the expiration date. The expiration is typically 8-12 years after issue. If you see both ISS and RES/EXP, use the RES/EXP date as the expiration.
+- Medical docs: patientName, providerName, visitDate, diagnosis, followUpDate, nextAppointmentDate, bloodPressure, heartRate, weight, height, temperature, oxygenSaturation, medications, allergies
+  For medical/lab documents: create trackerEntries for ALL measurable values (blood pressure, glucose, cholesterol, white blood cells, hemoglobin, platelets, weight, heart rate, temperature, BMI, etc.). Each measurable result should become a tracker entry with name, value, unit.
 - Pet docs: petName, species, breed, weight, vaccineNames, vaccineDueDates, vetName
+  For pet medical records: create trackerEntries for weight, temperature, and any lab values.
+
+EXPIRATION DATE EXTRACTION — THE MOST IMPORTANT FIELD FOR ANY DOCUMENT:
+Every document that has ANY kind of end date, expiration, or renewal MUST have expirationDate extracted. This is critical.
+
+Common labels for expiration across document types:
+- Driver's license: "EXP", "RES" (e.g., "12 RES 03/12/2034" = expires 2034-03-12). NOT the "ISS" date (that's issue date).
+- Vehicle registration: "EXP", "EXPIRES", "VALID THROUGH", "REGISTRATION EXPIRATION"
+- Insurance: "EXP", "POLICY END", "COVERAGE END", "EFFECTIVE THROUGH", "TERM END"
+- Passport: "DATE OF EXPIRATION", "EXPIRY DATE"
+- Warranty: "WARRANTY EXPIRES", "COVERAGE ENDS", "VALID UNTIL"
+- Prescriptions: "REFILLS UNTIL", "EXPIRES", "DISCARD AFTER"
+- Certificates/licenses: "VALID THROUGH", "EXPIRES", "RENEWAL DATE"
+- Subscriptions/memberships: "RENEWS", "NEXT BILLING", "MEMBERSHIP EXPIRES"
+- Lease/contracts: "LEASE END", "TERM ENDS", "CONTRACT EXPIRES"
+- Food/products: "BEST BY", "USE BY", "EXP"
+- Credit cards: "VALID THRU", "EXP"
+- Coupons/vouchers: "VALID UNTIL", "EXPIRES", "REDEEMABLE THROUGH"
+
+RULE: If you see ANY of these, extract it as expirationDate in YYYY-MM-DD format. If there's also an issue/start date, extract that separately as issueDate. NEVER confuse the two — the expiration is ALWAYS the LATER date.
 
 DATE ALERTS — Always extract these dates for dashboard alerts:
 - expirationDate, registrationExpiration, warrantyExpiration, policyExpiration
