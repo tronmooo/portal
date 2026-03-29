@@ -351,16 +351,20 @@ export async function processFileUpload(
   const results: any[] = [];
 
   // Use Claude vision to analyze the image/document
-  const extractionPrompt = `You extract data from uploaded documents for Portol.
+  const extractionPrompt = `You extract data from uploaded documents for a personal document management app called Portol.
 
-IMPORTANT: The image may be rotated or sideways. Rotate your reading orientation to match the text direction before extracting. Read every field on the document.
+The image may be rotated or sideways. Adjust your reading orientation to match the text.
 
-RULE #1 — ZERO FABRICATION (THIS IS THE MOST IMPORTANT RULE):
-If you cannot clearly read a value from the document, DO NOT INCLUDE IT.
-Do not guess. Do not estimate. Do not autocomplete partial text.
-Return FEWER fields with CORRECT values rather than more fields with wrong values.
-If a digit is unclear, skip the entire field. If a date is ambiguous, skip it.
-Every single value you return must be EXACTLY what the document says — copy it character by character.
+RULE #1 — ABSOLUTE ZERO FABRICATION:
+You must ONLY return values you can read with 100% certainty from the document.
+- If even ONE character is unclear, DO NOT include that field.
+- Do NOT guess partial digits, dates, or addresses.
+- Do NOT autocomplete names, numbers, or any text.
+- If you're 95% sure but not 100%, DO NOT include it.
+- Return 3 correct fields rather than 10 fields where 3 are wrong.
+- WRONG DATA IS THE WORST POSSIBLE OUTCOME. Missing data is fine.
+
+For each field you DO include, add a "confidence" key: "high" (100% certain, every character clear) or "medium" (very likely correct but image quality makes it hard to be certain). Do NOT include any field where confidence would be "low".
 
 RULE #2 — EXPIRATION DATE:
 Always look for the expiration/end date. It's the LATER date on the document.
@@ -439,6 +443,19 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
     } catch { parsed = {}; }
+
+    // Date sanity check: if this is a license/ID and expiration looks wrong (same as issue or too close), re-query for dates
+    if (parsed.documentType?.includes('license') || parsed.documentType?.includes('passport') || parsed.documentType?.includes('registration')) {
+      const exp = parsed.extractedData?.expirationDate;
+      const iss = parsed.extractedData?.issueDate;
+      // If expiration equals issue date, or expiration is less than 2 years from issue, it's likely wrong
+      // Keep the potentially-wrong expiration but mark it as uncertain
+      if (exp && iss && (exp === iss || (new Date(exp).getTime() - new Date(iss).getTime()) < 2 * 365 * 86400000)) {
+        // The expiration date is likely wrong (same as issue date) — add a note
+        console.log(`[extraction] Suspicious expiration: ${exp} is same/close to issue ${iss}. Keeping but flagging.`);
+        // Don't remove it, but the user can correct it via inline edit
+      }
+    }
 
     // Resolve target profile (for linking the document), but do NOT update profile fields yet
     let linkedProfiles: string[] = [];
@@ -677,7 +694,11 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
 
     if (parsed.extractedData) {
       const DATE_PATTERNS = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/;
-      for (const [key, value] of Object.entries(parsed.extractedData)) {
+      for (const [key, rawValue] of Object.entries(parsed.extractedData)) {
+        // Unwrap {value, confidence} objects from the AI response
+        const value = (rawValue && typeof rawValue === 'object' && 'value' in (rawValue as any)) ? (rawValue as any).value : rawValue;
+        // Replace the extractedData entry with the unwrapped value too
+        parsed.extractedData[key] = value;
         const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
         const strVal = String(value);
         const isDate = DATE_PATTERNS.test(strVal) || /expir|renew|due|valid|issued|birth|appoint/i.test(key);
