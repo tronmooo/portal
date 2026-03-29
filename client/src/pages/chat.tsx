@@ -239,7 +239,9 @@ function ExtractionConfirmation({
                 )}
               </div>
               <span className="text-[11px] text-muted-foreground truncate block">
-                {String(field.value)}
+                {typeof field.value === 'object' && field.value !== null
+                  ? JSON.stringify(field.value).replace(/[{}"/]/g, '').replace(/,/g, ', ')
+                  : String(field.value)}
               </span>
               {field.isDate && field.suggestedEvent && field.selected && (
                 <span className="text-[10px] text-blue-600 dark:text-blue-400">

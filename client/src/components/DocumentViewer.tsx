@@ -550,6 +550,25 @@ export function DocumentViewerDialog({
   mimeType: string;
   data: string;
 }) {
+  // If data is empty, fetch it on-demand when the dialog opens
+  const [fetchedData, setFetchedData] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (open && !data && !fetchedData && !loading) {
+      setLoading(true);
+      apiRequest("GET", `/api/documents/${id}`)
+        .then(res => res.json())
+        .then(doc => {
+          if (doc.fileData) setFetchedData(doc.fileData);
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    }
+  }, [open, data, id, fetchedData, loading]);
+
+  const displayData = data || fetchedData || "";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" data-testid={`dialog-doc-viewer-${id}`}>
@@ -559,13 +578,26 @@ export function DocumentViewerDialog({
             {name}
           </DialogTitle>
         </DialogHeader>
-        <DocumentViewer
-          id={id}
-          name={name}
-          mimeType={mimeType}
-          data={data}
-          inline
-        />
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
+            <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
+          </div>
+        ) : displayData ? (
+          <DocumentViewer
+            id={id}
+            name={name}
+            mimeType={mimeType}
+            data={displayData}
+            inline
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <FileText className="h-10 w-10 text-muted-foreground mb-3" />
+            <p className="text-sm font-medium">{name}</p>
+            <p className="text-xs text-muted-foreground mt-1">No preview available for this document.</p>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

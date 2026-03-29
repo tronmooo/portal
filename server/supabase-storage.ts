@@ -413,7 +413,7 @@ export class SupabaseStorage implements IStorage {
       fetchByIds("expenses", allIds.expenses, (r: any) => this.rowToExpense(r)),
       fetchByIds("tasks", allIds.tasks, (r: any) => this.rowToTask(r)),
       fetchByIds("events", allIds.events, (r: any) => this.rowToEvent(r)),
-      fetchByIds("documents", allIds.documents, (r: any) => this.rowToDocument(r)),
+      fetchByIds("documents", allIds.documents, (r: any) => this.rowToDocument({ ...r, file_data: "" })), // Exclude file_data from profile detail (fetched on-demand)
       fetchByIds("obligations", allIds.obligations, (r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p)))),
     ]);
     // Child profiles: profiles whose parentProfileId points to this profile

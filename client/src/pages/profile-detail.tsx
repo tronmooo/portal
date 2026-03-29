@@ -860,7 +860,16 @@ function DocumentsTab({
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        onClick={() => setViewingDoc(doc)}
+                        onClick={async () => {
+                          // Fetch full document with file data on-demand
+                          try {
+                            const res = await apiRequest("GET", `/api/documents/${doc.id}`);
+                            const fullDoc = await res.json();
+                            setViewingDoc(fullDoc);
+                          } catch {
+                            setViewingDoc(doc); // Fallback to what we have
+                          }
+                        }}
                         data-testid={`button-view-doc-${doc.id}`}
                       >
                         <Eye className="h-3.5 w-3.5" />
