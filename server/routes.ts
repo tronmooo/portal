@@ -355,6 +355,9 @@ export async function registerRoutes(
 
       const saved: string[] = [];
 
+      // Helper: unwrap {value, confidence} objects into plain values
+      const unwrap = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+
       // 0. ALWAYS save confirmed fields to the document's extractedData
       if (confirmedFields && confirmedFields.length > 0) {
         try {
@@ -362,7 +365,7 @@ export async function registerRoutes(
           if (doc) {
             const updatedData: Record<string, any> = { ...(doc.extractedData || {}) };
             for (const field of confirmedFields) {
-              updatedData[field.key] = field.value;
+              updatedData[field.key] = unwrap(field.value);
             }
             await storage.updateDocument(extractionId, { extractedData: updatedData });
             saved.push(`Saved ${confirmedFields.length} fields to document`);
@@ -378,7 +381,7 @@ export async function registerRoutes(
         if (profile) {
           const fieldUpdates: Record<string, any> = {};
           for (const field of confirmedFields) {
-            fieldUpdates[field.key] = field.value;
+            fieldUpdates[field.key] = unwrap(field.value);
           }
           await storage.updateProfile(targetProfileId, {
             fields: { ...(profile.fields || {}), ...fieldUpdates },
