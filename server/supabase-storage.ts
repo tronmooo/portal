@@ -1439,11 +1439,20 @@ export class SupabaseStorage implements IStorage {
         const { data: blob, error: dlErr } = await this.supabase.storage
           .from('documents')
           .download(doc.storagePath);
+        if (dlErr) {
+          console.error(`[getDocument] Storage download failed for ${doc.storagePath}:`, dlErr.message);
+        }
         if (!dlErr && blob) {
           const buffer = Buffer.from(await blob.arrayBuffer());
           doc.fileData = buffer.toString('base64');
         }
-      } catch { /* non-critical — fileData stays empty */ }
+      } catch (e: any) {
+        console.error(`[getDocument] Storage download error for ${doc.storagePath}:`, e.message);
+      }
+    }
+    // If still no fileData and file_data column has data, use that
+    if (!doc.fileData && data.file_data && data.file_data.length > 10) {
+      doc.fileData = data.file_data;
     }
     return doc;
   }

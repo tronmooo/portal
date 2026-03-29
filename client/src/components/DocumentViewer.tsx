@@ -557,12 +557,15 @@ export function DocumentViewerDialog({
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (open && !loading && (!fetchedData || !extractedData)) {
+    if (open) {
+      // Always fetch fresh data when dialog opens
       setLoading(true);
+      setFetchedData(null);
+      setExtractedData(null);
       apiRequest("GET", `/api/documents/${id}`)
         .then(res => res.json())
         .then(doc => {
-          if (doc.fileData && !data) setFetchedData(doc.fileData);
+          if (doc.fileData) setFetchedData(doc.fileData);
           if (doc.extractedData && Object.keys(doc.extractedData).length > 0) {
             setExtractedData(doc.extractedData);
           }

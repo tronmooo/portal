@@ -859,7 +859,13 @@ function DocumentsTab({
                         </div>
                       );
                     })()}
-                    <button className="flex-1 min-w-0 text-left" onClick={() => setViewingDoc(doc)}>
+                    <button className="flex-1 min-w-0 text-left" onClick={async () => {
+                      try {
+                        const res = await apiRequest("GET", `/api/documents/${doc.id}`);
+                        const fullDoc = await res.json();
+                        setViewingDoc(fullDoc);
+                      } catch { setViewingDoc(doc); }
+                    }}>
                       <p className="text-sm font-medium truncate text-primary hover:underline">{doc.name}</p>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
