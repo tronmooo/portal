@@ -353,12 +353,14 @@ export async function processFileUpload(
   // Use Claude vision to analyze the image/document
   const extractionPrompt = `You extract data from uploaded documents for Portol.
 
+IMPORTANT: The image may be rotated or sideways. Rotate your reading orientation to match the text direction before extracting. Read every field on the document.
+
 RULE #1 — ZERO FABRICATION (THIS IS THE MOST IMPORTANT RULE):
 If you cannot clearly read a value from the document, DO NOT INCLUDE IT.
 Do not guess. Do not estimate. Do not autocomplete partial text.
 Return FEWER fields with CORRECT values rather than more fields with wrong values.
 If a digit is unclear, skip the entire field. If a date is ambiguous, skip it.
-Every single value you return must be letter-for-letter what the document says.
+Every single value you return must be EXACTLY what the document says — copy it character by character.
 
 RULE #2 — EXPIRATION DATE:
 Always look for the expiration/end date. It's the LATER date on the document.
@@ -389,13 +391,24 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
     const isPdf = mimeType === "application/pdf";
     const mediaType = isImage ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
 
+    // Auto-rotate images using EXIF orientation data (phones often save rotated)
+    let processedBase64 = base64Data;
+    if (isImage) {
+      try {
+        const sharp = require('sharp');
+        const inputBuffer = Buffer.from(base64Data, 'base64');
+        const rotated = await sharp(inputBuffer).rotate().jpeg({ quality: 90 }).toBuffer();
+        processedBase64 = rotated.toString('base64');
+      } catch { /* keep original if sharp fails */ }
+    }
+
     // Build content based on file type
     const messageContent: any[] = [];
     if (isImage || isPdf) {
       // Images and PDFs can be sent to Vision API
       messageContent.push({
         type: isPdf ? "document" : "image",
-        source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: base64Data },
+        source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: processedBase64 },
       });
     } else {
       // Text files: decode and send as text
@@ -409,7 +422,7 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: process.env.ANTHROPIC_EXTRACTION_MODEL || "claude-sonnet-4-20250514", // Use Sonnet for document extraction — better vision accuracy on rotated/complex documents
+      model: process.env.ANTHROPIC_EXTRACTION_MODEL || "claude-sonnet-4-6", // Use latest Sonnet for best vision accuracy on documents
       max_tokens: 2048,
       messages: [{
         role: "user",
