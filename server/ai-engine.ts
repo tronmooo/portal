@@ -351,96 +351,38 @@ export async function processFileUpload(
   const results: any[] = [];
 
   // Use Claude vision to analyze the image/document
-  const extractionPrompt = `You are the document extraction engine for Portol. Read uploaded documents, classify them, and extract ONLY data that is explicitly visible in the document.
+  const extractionPrompt = `You extract data from uploaded documents for Portol.
 
-ZERO FABRICATION RULES (NON-NEGOTIABLE):
-- NEVER make up, infer, estimate, autocomplete, or fabricate values.
-- If a value is not clearly visible in the document, return null for that field.
-- If text is ambiguous or partially visible, return null.
-- It is ALWAYS better to return less data than wrong data.
-- Every extracted value must come directly from visible text in the document.
+RULE #1 — ZERO FABRICATION (THIS IS THE MOST IMPORTANT RULE):
+If you cannot clearly read a value from the document, DO NOT INCLUDE IT.
+Do not guess. Do not estimate. Do not autocomplete partial text.
+Return FEWER fields with CORRECT values rather than more fields with wrong values.
+If a digit is unclear, skip the entire field. If a date is ambiguous, skip it.
+Every single value you return must be letter-for-letter what the document says.
 
-STEP 1 — CLASSIFY the document type using ONLY visible evidence:
-Types: drivers_license, medical_report, lab_results, imaging_result, visit_summary, prescription, insurance_card, insurance_policy, medical_bill, invoice, receipt, bank_statement, loan_statement, utility_bill, vehicle_registration, vehicle_service_record, citation, parking_ticket, warranty, lease, tax_document, pet_record, vaccination_record, contract, school_document, other
-If uncertain, use "other".
+RULE #2 — EXPIRATION DATE:
+Always look for the expiration/end date. It's the LATER date on the document.
+Common labels: EXP, RES, EXPIRES, VALID THROUGH, COVERAGE END, POLICY END, TERM END, BEST BY, VALID THRU.
+The issue date (ISS, ISSUED, EFFECTIVE) is the EARLIER date — do not confuse them.
 
-STEP 2 — EXTRACT only fields that are CLEARLY VISIBLE in the document.
-Use flat camelCase keys. Use ISO dates (YYYY-MM-DD). Use numbers for amounts (not strings).
+RULE #3 — DOLLAR AMOUNTS:
+Always extract total amounts. Scan entire document including corners and footers.
+Use numbers, not strings (1085, not "$1,085").
 
-IMPORTANT FIELDS to look for by document type:
-- ALL types: totalAmount, amountDue, amountPaid, issueDate, expirationDate, dueDate
-- Financial (receipts/bills/citations/invoices): totalAmount is THE most critical field. Scan the ENTIRE document including corners, footers, fine print. A line saying "TOTAL DUE-$ 1085" means totalAmount: 1085.
-- Vehicle docs: licensePlate, vin, make, model, year, registrationExpiration, mileage
-- Citations/fines: citationNumbers, licensePlate, totalAmountDue, agencyName
-- Medical: patientName, providerName, visitDate, diagnosis, followUpDate, nextAppointmentDate
-- Lab results: individual test results as trackerEntries (name, value, unit)
-- Insurance: policyNumber, coverageDates, premium, provider
-- IDs/licenses: licenseNumber, expirationDate, dateOfBirth, name, address, issueDate, class, sex, height, weight, donor, restrictions
-  CRITICAL FOR DRIVER'S LICENSES: The expiration date is labeled "EXP" or on the line with "RES" (e.g., "12 RES 03/12/2034" means expiration 2034-03-12). The issue date is labeled "ISS" (e.g., "ISS 02/01/2026"). Do NOT confuse the issue date with the expiration date. The expiration is typically 8-12 years after issue. If you see both ISS and RES/EXP, use the RES/EXP date as the expiration.
-- Medical docs: patientName, providerName, visitDate, diagnosis, followUpDate, nextAppointmentDate, bloodPressure, heartRate, weight, height, temperature, oxygenSaturation, medications, allergies
-  For medical/lab documents: create trackerEntries for ALL measurable values (blood pressure, glucose, cholesterol, white blood cells, hemoglobin, platelets, weight, heart rate, temperature, BMI, etc.). Each measurable result should become a tracker entry with name, value, unit.
-- Pet docs: petName, species, breed, weight, vaccineNames, vaccineDueDates, vetName
-  For pet medical records: create trackerEntries for weight, temperature, and any lab values.
+RULE #4 — MEDICAL/LAB VALUES:
+For measurable health data (blood pressure, glucose, cholesterol, weight, etc.), create trackerEntries.
 
-EXPIRATION DATE EXTRACTION — THE MOST IMPORTANT FIELD FOR ANY DOCUMENT:
-Every document that has ANY kind of end date, expiration, or renewal MUST have expirationDate extracted. This is critical.
+RULE #5 — PROFILE MATCHING:
+Only set targetProfile if the document explicitly names a person/vehicle/pet that matches an existing profile. Otherwise null.
 
-Common labels for expiration across document types:
-- Driver's license: "EXP", "RES" (e.g., "12 RES 03/12/2034" = expires 2034-03-12). NOT the "ISS" date (that's issue date).
-- Vehicle registration: "EXP", "EXPIRES", "VALID THROUGH", "REGISTRATION EXPIRATION"
-- Insurance: "EXP", "POLICY END", "COVERAGE END", "EFFECTIVE THROUGH", "TERM END"
-- Passport: "DATE OF EXPIRATION", "EXPIRY DATE"
-- Warranty: "WARRANTY EXPIRES", "COVERAGE ENDS", "VALID UNTIL"
-- Prescriptions: "REFILLS UNTIL", "EXPIRES", "DISCARD AFTER"
-- Certificates/licenses: "VALID THROUGH", "EXPIRES", "RENEWAL DATE"
-- Subscriptions/memberships: "RENEWS", "NEXT BILLING", "MEMBERSHIP EXPIRES"
-- Lease/contracts: "LEASE END", "TERM ENDS", "CONTRACT EXPIRES"
-- Food/products: "BEST BY", "USE BY", "EXP"
-- Credit cards: "VALID THRU", "EXP"
-- Coupons/vouchers: "VALID UNTIL", "EXPIRES", "REDEEMABLE THROUGH"
+Classify as: drivers_license, medical_report, lab_results, prescription, insurance_card, insurance_policy, receipt, invoice, bank_statement, vehicle_registration, citation, warranty, pet_record, vaccination_record, or other.
 
-RULE: If you see ANY of these, extract it as expirationDate in YYYY-MM-DD format. If there's also an issue/start date, extract that separately as issueDate. NEVER confuse the two — the expiration is ALWAYS the LATER date.
+${userMessage ? `User said: "${userMessage}"` : ""}
 
-DATE ALERTS — Always extract these dates for dashboard alerts:
-- expirationDate, registrationExpiration, warrantyExpiration, policyExpiration
-- dueDate, paymentDueDate, followUpDate, nextAppointmentDate, vaccineDueDate
-- renewalDate, serviceDate
-These will power "Expiring Soon" and "Upcoming" sections on the dashboard.
+Return valid JSON:
+{"documentType": "...", "label": "Short title", "extractedData": {only fields you can clearly read}, "targetProfile": null, "trackerEntries": [], "summary": "one line"}
 
-STEP 3 — TARGET PROFILE:
-- ONLY set targetProfile if the document content EXPLICITLY names an entity that matches an existing profile.
-- A vehicle registration mentioning a Honda CR-V → match Honda CR-V profile.
-- A medical record naming "Luna" → match Luna pet profile.
-- A generic receipt or ticket with no clear entity → targetProfile: null.
-- NEVER guess. NEVER force-match.
-
-STEP 4 — TRACKER ENTRIES (for measurable/repeatable values):
-- Lab values: each result as a separate tracker entry with name, value, unit
-- Health vitals: blood pressure, weight, heart rate, etc.
-- Vehicle: mileage readings
-- Financial: recurring bill amounts, loan balances
-- Each entry needs: trackerName, values (object), unit, category
-
-STEP 5 — LABEL: Short clean label. "DMV Citation - $1085" or "Honda Registration - Oct 2026"
-
-${userMessage ? `User context: "${userMessage}"` : ""}
-
-RETURN FORMAT (must be valid JSON):
-{
-  "documentType": "citation",
-  "label": "DMV Citation - $1085",
-  "extractedData": {
-    "licensePlate": "8YP1488",
-    "totalAmountDue": 1085,
-    "currentExpDate": "2024-10-22",
-    "newExpDate": "2026-10-22"
-  },
-  "targetProfile": null,
-  "trackerEntries": [],
-  "summary": "DMV park/toll citation — $1,085 total due. Registration renewed through Oct 2026."
-}
-
-FINAL ENFORCEMENT: If the document does not explicitly show a value, return null. Extract only what you can SEE.`;
+If you cannot read a field clearly, OMIT IT. Do not return null values — just don't include the field.`;
 
   try {
     const isImage = mimeType.startsWith("image/");
