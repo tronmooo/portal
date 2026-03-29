@@ -165,6 +165,12 @@ function ExtractionConfirmation({
   );
   const [confirming, setConfirming] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
+
+  // Fetch profiles for the dropdown
+  const { data: allProfiles = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+  });
 
   const toggleField = (idx: number) => {
     setFields((prev) => prev.map((f, i) => i === idx ? { ...f, selected: !f.selected } : f));
@@ -184,7 +190,7 @@ function ExtractionConfirmation({
     const success = await onConfirm({
       extractionId: extraction.extractionId,
       confirmedFields,
-      targetProfileId: extraction.targetProfile?.id,
+      targetProfileId: selectedProfileId || extraction.targetProfile?.id,
       createCalendarEvents,
       trackerEntries: extraction.trackerEntries || [],
     });
@@ -211,11 +217,17 @@ function ExtractionConfirmation({
         <span className="text-xs font-medium text-foreground">
           Review extracted data
         </span>
-        {extraction.targetProfile && (
-          <Badge variant="secondary" className="text-[10px]">
-            {extraction.targetProfile.isNew ? "New: " : ""}{extraction.targetProfile.name}
-          </Badge>
-        )}
+        <select
+          className="text-[10px] bg-muted border border-border rounded px-1.5 py-0.5 text-foreground max-w-[140px]"
+          value={selectedProfileId || ""}
+          onChange={(e) => setSelectedProfileId(e.target.value || undefined)}
+          data-testid="select-extraction-profile"
+        >
+          <option value="">Link to profile...</option>
+          {allProfiles.map((p: any) => (
+            <option key={p.id} value={p.id}>{p.name} ({p.type})</option>
+          ))}
+        </select>
       </div>
 
       <div className="space-y-1.5">

@@ -477,15 +477,32 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
     );
   }
 
+  const deleteMut = useMutation({
+    mutationFn: async () => {
+      const { [fieldKey]: _, ...rest } = allFields;
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: rest });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      toast({ title: `Removed ${formatKey(fieldKey)}` });
+    },
+  });
+
   return (
     <div
-      className="flex items-center justify-between py-2 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 -mx-2 px-2 rounded transition-colors group"
-      onClick={() => setEditing(true)}
+      className="flex items-center justify-between py-2 border-b border-border last:border-0 hover:bg-muted/30 -mx-2 px-2 rounded transition-colors group"
     >
-      <span className="text-xs text-muted-foreground shrink-0 min-w-[80px]">{formatKey(fieldKey)}</span>
+      <span className="text-xs text-muted-foreground shrink-0 min-w-[80px] cursor-pointer" onClick={() => setEditing(true)}>{formatKey(fieldKey)}</span>
       <div className="flex items-center gap-1.5 min-w-0 justify-end">
-        <span className="text-sm font-medium text-right break-words">{fieldValue}</span>
-        <Pencil className="h-2.5 w-2.5 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+        <span className="text-sm font-medium text-right break-words cursor-pointer" onClick={() => setEditing(true)}>{fieldValue}</span>
+        <Pencil className="h-2.5 w-2.5 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer" onClick={() => setEditing(true)} />
+        <button
+          className="h-4 w-4 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-600"
+          onClick={(e) => { e.stopPropagation(); deleteMut.mutate(); }}
+          data-testid={`delete-field-${fieldKey}`}
+        >
+          <Trash2 className="h-2.5 w-2.5" />
+        </button>
       </div>
     </div>
   );
