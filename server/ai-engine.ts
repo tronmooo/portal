@@ -523,7 +523,9 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
     }
 
     // Auto-create expense if the document has any dollar amount
-    const rawAmount = parsed.extractedData?.totalAmount || parsed.extractedData?.totalAmountDue || parsed.extractedData?.totalDue || parsed.extractedData?.amountDue || parsed.extractedData?.amountPaid || parsed.extractedData?.balance || parsed.extractedData?.total_amount || parsed.extractedData?.amount_due;
+    // Helper to unwrap {value, confidence} objects
+    const unwrapVal = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+    const rawAmount = unwrapVal(parsed.extractedData?.totalAmount) || unwrapVal(parsed.extractedData?.totalAmountDue) || unwrapVal(parsed.extractedData?.totalDue) || unwrapVal(parsed.extractedData?.amountDue) || unwrapVal(parsed.extractedData?.amountPaid) || unwrapVal(parsed.extractedData?.balance) || unwrapVal(parsed.extractedData?.total_amount) || unwrapVal(parsed.extractedData?.amount_due) || unwrapVal(parsed.extractedData?.totalDispCD);
     const numAmount = typeof rawAmount === 'number' ? rawAmount : parseFloat(String(rawAmount));
     if (numAmount && isFinite(numAmount) && numAmount > 0) {
       try {
@@ -2974,7 +2976,14 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     `Habits (${habits.length}): ${habits.slice(0, 20).map(h => `${h.name} (${h.frequency}, ${h.currentStreak}d streak)`).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
     `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
-    `Documents (${documents.length}): ${documents.slice(0, 30).map(d => `"${d.name}" (${d.type})`).join("; ") || "none"}`,
+    `Documents (${documents.length}): ${documents.slice(0, 20).map(d => {
+      const ed = d.extractedData || {};
+      const keyFields = Object.entries(ed).slice(0, 8).map(([k, v]) => {
+        const val = (v && typeof v === 'object' && 'value' in (v as any)) ? (v as any).value : v;
+        return `${k}: ${String(val).slice(0, 40)}`;
+      }).join(', ');
+      return `"${d.name}" (${d.type})${keyFields ? ` [${keyFields}]` : ''}`;
+    }).join("; ") || "none"}`,
     `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
   ].join("\n");
 
