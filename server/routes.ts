@@ -353,6 +353,19 @@ export async function registerRoutes(
         return res.status(400).json({ error: "extractionId required" });
       }
 
+      console.log(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
+
+      // If no profile was selected, auto-use the self profile for personal documents
+      let resolvedProfileId = targetProfileId;
+      if (!resolvedProfileId && confirmedFields && confirmedFields.length > 0) {
+        const profiles = await storage.getProfiles();
+        const selfProfile = profiles.find((p: any) => p.type === 'self');
+        if (selfProfile) {
+          resolvedProfileId = selfProfile.id;
+          console.log(`[confirm-extraction] Auto-selected self profile: ${selfProfile.name} (${selfProfile.id})`);
+        }
+      }
+
       const saved: string[] = [];
 
       // Helper: unwrap {value, confidence} objects into plain values
@@ -376,23 +389,23 @@ export async function registerRoutes(
       }
 
       // 1. If a profile was selected, ALSO save fields to that profile AND link the document
-      if (targetProfileId && confirmedFields && confirmedFields.length > 0) {
-        const profile = await storage.getProfile(targetProfileId);
+      if (resolvedProfileId && confirmedFields && confirmedFields.length > 0) {
+        const profile = await storage.getProfile(resolvedProfileId);
         if (profile) {
           const fieldUpdates: Record<string, any> = {};
           for (const field of confirmedFields) {
             fieldUpdates[field.key] = unwrap(field.value);
           }
-          await storage.updateProfile(targetProfileId, {
+          await storage.updateProfile(resolvedProfileId, {
             fields: { ...(profile.fields || {}), ...fieldUpdates },
           });
           saved.push(`Updated ${confirmedFields.length} fields on ${profile.name}`);
+          console.log(`[confirm-extraction] Saved ${confirmedFields.length} fields to profile ${profile.name}`);
 
           // Link the document to the selected profile
           try {
-            await storage.linkProfileTo(targetProfileId, "document", extractionId);
-            // Also propagate up to parent/self profile
-            await storage.propagateDocumentToAncestors(extractionId, targetProfileId);
+            await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
+            await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
           } catch { /* may already be linked */ }
         }
       }
@@ -426,7 +439,7 @@ export async function registerRoutes(
               recurrence: "none",
               recurrenceEnd: undefined,
               color: undefined,
-              linkedProfiles: targetProfileId ? [targetProfileId] : [],
+              linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
               linkedDocuments: [extractionId],
               tags: ["document-extraction"],
               source: "chat",
@@ -465,9 +478,9 @@ export async function registerRoutes(
                   : [{ name: "value", type: "number" as const, unit: entry.unit || "", isPrimary: true, options: [] }],
               });
               // Link tracker to profile if specified
-              if (targetProfileId && tracker) {
+              if (resolvedProfileId && tracker) {
                 try {
-                  await storage.updateTracker(tracker.id, { linkedProfiles: [targetProfileId] } as Partial<Tracker>);
+                  await storage.updateTracker(tracker.id, { linkedProfiles: [resolvedProfileId] } as Partial<Tracker>);
                 } catch { /* non-critical */ }
               }
               saved.push(`Created tracker: ${humanName}`);

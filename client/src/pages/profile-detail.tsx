@@ -482,9 +482,21 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
       const { [fieldKey]: _, ...rest } = allFields;
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: rest });
     },
+    onMutate: async () => {
+      // Optimistic: immediately update cache to remove the field
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.fields) return old;
+        const { [fieldKey]: _, ...rest } = old.fields;
+        return { ...old, fields: rest };
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      toast({ title: `Removed ${formatKey(fieldKey)}` });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      toast({ title: "Failed to delete", variant: "destructive" });
     },
   });
 

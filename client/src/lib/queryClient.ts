@@ -62,7 +62,7 @@ export const queryClient = new QueryClient({
       refetchInterval: false,
       refetchOnWindowFocus: true,
       refetchOnMount: true,
-      staleTime: 30000,
+      staleTime: 5000, // 5s — keep data fresh so deletes/creates show quickly
       gcTime: 5 * 60 * 1000,
       retry: (failureCount, error) => {
         // Don't retry auth errors or client errors
