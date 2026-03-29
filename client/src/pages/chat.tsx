@@ -104,6 +104,36 @@ function actionLabel(type: string) {
 }
 
 // ── Inline document previews in chat messages ─────────────────────────────────
+function LazyDocumentPreview({ id, name, mimeType, data }: { id: string; name: string; mimeType: string; data: string }) {
+  const [imageData, setImageData] = useState<string>(data === "__LAZY_LOAD__" ? "" : data);
+  const [loading, setLoading] = useState(data === "__LAZY_LOAD__");
+
+  useEffect(() => {
+    if (data === "__LAZY_LOAD__" && !imageData) {
+      apiRequest("GET", `/api/documents/${id}`)
+        .then(res => res.json())
+        .then(doc => {
+          if (doc.fileData) setImageData(doc.fileData);
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    }
+  }, [id, data]);
+
+  if (loading) {
+    return (
+      <div className="mt-3 rounded-xl border border-border bg-muted/10 p-8 flex items-center justify-center">
+        <div className="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
+        <span className="ml-2 text-xs text-muted-foreground">Loading {name}...</span>
+      </div>
+    );
+  }
+
+  if (!imageData) return null;
+
+  return <DocumentViewer id={id} name={name} mimeType={mimeType} data={imageData} inline />;
+}
+
 function ChatDocumentPreviews({
   documentPreview,
   documentPreviews,
@@ -111,7 +141,6 @@ function ChatDocumentPreviews({
   documentPreview?: ChatMessage["documentPreview"];
   documentPreviews?: ChatMessage["documentPreviews"];
 }) {
-  // Merge into a deduplicated list
   const allPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
   const seen = new Set<string>();
 
@@ -131,14 +160,7 @@ function ChatDocumentPreviews({
   return (
     <div className="space-y-2">
       {allPreviews.map((doc) => (
-        <DocumentViewer
-          key={doc.id}
-          id={doc.id}
-          name={doc.name}
-          mimeType={doc.mimeType}
-          data={doc.data}
-          inline
-        />
+        <LazyDocumentPreview key={doc.id} id={doc.id} name={doc.name} mimeType={doc.mimeType} data={doc.data} />
       ))}
     </div>
   );

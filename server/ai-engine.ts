@@ -2935,19 +2935,15 @@ export async function processMessage(userMessage: string, conversationHistory?: 
                nameLC.includes(searchTerm.replace(/'/g, ""));
       });
       if (matches.length > 0) {
-        // Fetch the FULL document (with fileData) for the preview
-        const fullDoc = await storage.getDocument(matches[0].id);
-        if (fullDoc) {
-          const preview = fullDoc.fileData ? {
-            id: fullDoc.id, name: fullDoc.name, mimeType: fullDoc.mimeType, data: fullDoc.fileData,
-          } : undefined;
-          return {
-            reply: `Here's your ${fullDoc.name}.${matches.length > 1 ? ` (Found ${matches.length} matches — showing the first one.)` : ""}`,
-            actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: fullDoc.id } }],
-            results: [{ id: fullDoc.id, name: fullDoc.name, type: fullDoc.type, mimeType: fullDoc.mimeType }],
-            documentPreview: preview,
-          };
-        }
+        const doc = matches[0];
+        // Return a lightweight preview reference — the client will fetch the image from /api/documents/:id/file
+        // This avoids embedding multi-MB base64 in the chat JSON response
+        return {
+          reply: `Here's your ${doc.name}.${matches.length > 1 ? ` (Found ${matches.length} matches — showing the first one.)` : ""}`,
+          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],
+          results: [{ id: doc.id, name: doc.name, type: doc.type, mimeType: doc.mimeType }],
+          documentPreview: { id: doc.id, name: doc.name, mimeType: doc.mimeType, data: "__LAZY_LOAD__" },
+        };
       }
       // No match found — fall through to AI to try harder
     } catch { /* fall through to AI */ }

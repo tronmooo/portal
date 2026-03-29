@@ -550,24 +550,31 @@ export function DocumentViewerDialog({
   mimeType: string;
   data: string;
 }) {
-  // If data is empty, fetch it on-demand when the dialog opens
+  // Fetch full document (file data + extracted data) on-demand
   const [fetchedData, setFetchedData] = useState<string | null>(null);
+  const [extractedData, setExtractedData] = useState<Record<string, any> | null>(null);
+  const [docType, setDocType] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (open && !data && !fetchedData && !loading) {
+    if (open && !loading && (!fetchedData || !extractedData)) {
       setLoading(true);
       apiRequest("GET", `/api/documents/${id}`)
         .then(res => res.json())
         .then(doc => {
-          if (doc.fileData) setFetchedData(doc.fileData);
+          if (doc.fileData && !data) setFetchedData(doc.fileData);
+          if (doc.extractedData && Object.keys(doc.extractedData).length > 0) {
+            setExtractedData(doc.extractedData);
+          }
+          if (doc.type) setDocType(doc.type);
           setLoading(false);
         })
         .catch(() => setLoading(false));
     }
-  }, [open, data, id, fetchedData, loading]);
+  }, [open, id]);
 
   const displayData = data || fetchedData || "";
+  const formatFieldKey = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase()).trim();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -576,26 +583,47 @@ export function DocumentViewerDialog({
           <DialogTitle className="text-sm flex items-center gap-2">
             <FileText className="h-4 w-4" />
             {name}
+            {docType && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal">{docType.replace(/_/g, ' ')}</span>}
           </DialogTitle>
         </DialogHeader>
+
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
-        ) : displayData ? (
-          <DocumentViewer
-            id={id}
-            name={name}
-            mimeType={mimeType}
-            data={displayData}
-            inline
-          />
         ) : (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <FileText className="h-10 w-10 text-muted-foreground mb-3" />
-            <p className="text-sm font-medium">{name}</p>
-            <p className="text-xs text-muted-foreground mt-1">No preview available for this document.</p>
+          <div className="space-y-4">
+            {/* Document preview */}
+            {displayData ? (
+              <DocumentViewer id={id} name={name} mimeType={mimeType} data={displayData} inline />
+            ) : (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <FileText className="h-10 w-10 text-muted-foreground mb-3" />
+                <p className="text-sm font-medium">{name}</p>
+                <p className="text-xs text-muted-foreground mt-1">No preview available.</p>
+              </div>
+            )}
+
+            {/* Extracted data section */}
+            {extractedData && Object.keys(extractedData).length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <h3 className="text-xs font-semibold text-foreground mb-2 flex items-center gap-1.5">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                  Extracted Data
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                  {Object.entries(extractedData)
+                    .filter(([_, v]) => v != null && v !== '' && typeof v !== 'object')
+                    .map(([key, value]) => (
+                      <div key={key} className="flex justify-between items-baseline py-1 border-b border-border/30 last:border-0">
+                        <span className="text-[11px] text-muted-foreground">{formatFieldKey(key)}</span>
+                        <span className="text-[11px] font-medium text-foreground ml-2 text-right">{String(value)}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </DialogContent>
