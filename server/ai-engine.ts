@@ -548,8 +548,17 @@ FINAL ENFORCEMENT: If the document does not explicitly show a value, return null
           date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
           tags: ["from-document"],
         });
+        // Link to the asset/profile AND propagate up to the self (Me) profile
         if (existingProfileId) {
-          await autoLinkToProfiles("expense", expense.id, desc, (await storage.getProfile(existingProfileId))?.name);
+          await storage.linkProfileTo(existingProfileId, "expense", expense.id);
+          // Propagate up: Honda → Me, so it shows in Me's Finance tab too
+          try { await storage.propagateEntityToAncestors("expense", expense.id, existingProfileId); } catch { /* non-critical */ }
+        }
+        // Also always link to self profile so it appears in the main Finance view
+        const profiles = await storage.getProfiles();
+        const selfProfile = profiles.find(p => p.type === 'self');
+        if (selfProfile && selfProfile.id !== existingProfileId) {
+          try { await storage.linkProfileTo(selfProfile.id, "expense", expense.id); } catch { /* may already be linked */ }
         }
         savedItems.push(`$${numAmount} expense saved to Finance`);
         actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: numAmount, description: desc } });
@@ -580,16 +589,27 @@ FINAL ENFORCEMENT: If the document does not explicitly show a value, return null
         try {
           const docLabel = parsed.label || fileName;
           const eventTitle = `${label}: ${docLabel}`;
-          await storage.createEvent({
+          // Link alert to both the asset profile and the self profile
+          const alertProfiles: string[] = [];
+          if (existingProfileId) alertProfiles.push(existingProfileId);
+          const allProfiles = await storage.getProfiles();
+          const selfP = allProfiles.find(p => p.type === 'self');
+          if (selfP && selfP.id !== existingProfileId) alertProfiles.push(selfP.id);
+
+          const evt = await storage.createEvent({
             title: eventTitle,
             date: dateVal.slice(0, 10),
             allDay: true,
             category: 'other',
             description: `Auto-created from document: ${docLabel}`,
             tags: ['from-document', 'expiration-alert'],
-            linkedProfiles: existingProfileId ? [existingProfileId] : [],
+            linkedProfiles: alertProfiles,
             linkedDocuments: [document.id],
           });
+          // Link the event to profiles via junction tables too
+          for (const pId of alertProfiles) {
+            try { await storage.linkProfileTo(pId, 'event', evt.id); } catch { /* */ }
+          }
           savedItems.push(`📅 ${label} alert: ${dateVal.slice(0,10)}`);
         } catch { /* non-critical */ }
       }
@@ -2772,21 +2792,19 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
       } catch (e) { /* non-critical */ }
     }
 
-    // If a non-self profile was explicitly matched via forProfile, remove the auto self-link
-    const hasExplicitNonSelf = explicitProfileName && matchedNonSelfIds.length > 0;
-    if (hasExplicitNonSelf && selfProfile) {
+    // When an entity is linked to an asset/child profile (Honda, Tesla, etc.),
+    // ALSO ensure it's linked to the self profile so it appears in the main Finance/Tasks view.
+    // Previously this was removing the self-link, causing data to vanish from the main profile.
+    if (matchedNonSelfIds.length > 0 && selfProfile) {
+      for (const matchedId of matchedNonSelfIds) {
+        // Propagate up the parent chain (Honda → Me)
+        try { await storage.propagateEntityToAncestors(entityType, entityId, matchedId); } catch { /* non-critical */ }
+      }
+      // Ensure self profile always has the link
       try {
-        if (entityType === "tracker") {
-          const tracker = await storage.getTracker(entityId);
-          if (tracker && tracker.linkedProfiles.includes(selfProfile.id)) {
-            const newLinked = tracker.linkedProfiles.filter(pid => pid !== selfProfile.id);
-            await storage.updateTracker(entityId, { linkedProfiles: newLinked } as any);
-            await storage.unlinkProfileFrom(selfProfile.id, "tracker", entityId);
-          }
-        } else {
-          await storage.unlinkProfileFrom(selfProfile.id, entityType, entityId);
-        }
-      } catch (e) { console.error("Remove self-link failed:", e); }
+        await storage.linkProfileTo(selfProfile.id, entityType, entityId);
+        await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
+      } catch { /* may already be linked */ }
     }
   } catch (err) {
     console.error("Auto-link failed:", err);

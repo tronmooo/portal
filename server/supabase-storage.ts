@@ -374,6 +374,10 @@ export class SupabaseStorage implements IStorage {
       documents: [...documentIds],
       obligations: [...obligationIds],
     };
+    // Debug: log what IDs we're fetching
+    if (allIds.expenses.length > 0 || allIds.trackers.length > 0) {
+      console.log(`[getProfileDetail] Profile ${id} (userId: ${this.userId}): expenses=${allIds.expenses.length}, trackers=${allIds.trackers.length}, tasks=${allIds.tasks.length}, events=${allIds.events.length}, docs=${allIds.documents.length}, obligations=${allIds.obligations.length}`);
+    }
     // Helper: fetch rows by IDs, also include any that have this profile in linkedProfiles JSONB
     const fetchByIds = async <T>(table: string, ids: string[], rowMapper: (r: any) => T): Promise<T[]> => {
       if (ids.length === 0) {
