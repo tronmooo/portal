@@ -631,23 +631,19 @@ export function DocumentViewerDialog({
 
             {/* Extracted data section */}
             {extractedData && Object.keys(extractedData).length > 0 && (
-              <div className="rounded-lg border border-border bg-muted/20 p-3">
-                <h3 className="text-xs font-semibold text-foreground mb-2 flex items-center gap-1.5">
-                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                  Extracted Data
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+              <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
+                <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Extracted Data</p>
+                <div className="grid grid-cols-2 gap-x-3">
                   {Object.entries(extractedData)
                     .filter(([_, v]) => v != null && v !== '')
                     .map(([key, rawVal]) => {
-                      // Unwrap {value, confidence} objects
                       const val = (rawVal && typeof rawVal === 'object' && 'value' in rawVal) ? rawVal.value : rawVal;
                       const display = typeof val === 'object' ? JSON.stringify(val) : String(val);
                       if (!display || display === 'null' || display === 'undefined') return null;
                       return (
-                        <div key={key} className="flex justify-between items-baseline py-1 border-b border-border/30 last:border-0 gap-2">
-                          <span className="text-[10px] text-muted-foreground shrink-0">{formatFieldKey(key)}</span>
-                          <span className="text-[10px] font-medium text-foreground text-right truncate">{display}</span>
+                        <div key={key} className="flex justify-between items-baseline py-[2px] gap-1">
+                          <span className="text-[9px] text-muted-foreground shrink-0 truncate">{formatFieldKey(key)}</span>
+                          <span className="text-[9px] font-medium text-foreground text-right truncate">{display}</span>
                         </div>
                       );
                     })}
