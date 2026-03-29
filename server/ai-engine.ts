@@ -2909,7 +2909,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     let documentPreview: { id: string; name: string; mimeType: string; data: string } | undefined;
     const documentPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
     let iterations = 0;
-    const MAX_ITERATIONS = 15;
+    const MAX_ITERATIONS = 8; // Each iteration is a full AI round-trip; 8 is enough for even 10+ tool calls
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;

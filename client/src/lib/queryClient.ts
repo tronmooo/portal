@@ -10,7 +10,7 @@ async function throwIfResNotOk(res: Response) {
 }
 
 const DEFAULT_TIMEOUT_MS = 30000; // 30s timeout for most API requests
-const CHAT_TIMEOUT_MS = 90000; // 90s for chat (AI can take longer on complex queries)
+const CHAT_TIMEOUT_MS = 120000; // 120s for chat (complex multi-action queries need multiple AI rounds)
 
 export async function apiRequest(
   method: string,

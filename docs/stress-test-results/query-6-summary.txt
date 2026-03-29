@@ -1,0 +1,8 @@
+Query 6:
+For Mom, add a medication tracker and log that she took her medicine at 9 AM, schedule daily reminders at 9 AM, attach prescription document, I ran 2 miles, ate oatmeal, practiced guitar 20 minutes, create a task to refill her prescription next week and complete it
+
+Time: 60153ms
+Actions (0): none
+
+Full Reply:
+PARSE ERROR
