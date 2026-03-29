@@ -2835,7 +2835,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   if (isDocOpen) {
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
     try {
-      const allDocs = await storage.getDocuments();
+      const allDocs = await storage.getDocuments(); // Note: fileData is excluded from list queries for performance
       // Fuzzy match: search in document name, type, and extracted data
       const matches = allDocs.filter(d => {
         const nameLC = d.name.toLowerCase();
@@ -2848,16 +2848,19 @@ export async function processMessage(userMessage: string, conversationHistory?: 
                nameLC.includes(searchTerm.replace(/'/g, ""));
       });
       if (matches.length > 0) {
-        const doc = matches[0];
-        const preview = doc.fileData ? {
-          id: doc.id, name: doc.name, mimeType: doc.mimeType, data: doc.fileData,
-        } : undefined;
-        return {
-          reply: `Here's your ${doc.name}.${matches.length > 1 ? ` (Found ${matches.length} matches — showing the first one.)` : ""}`,
-          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],
-          results: [doc],
-          documentPreview: preview,
-        };
+        // Fetch the FULL document (with fileData) for the preview
+        const fullDoc = await storage.getDocument(matches[0].id);
+        if (fullDoc) {
+          const preview = fullDoc.fileData ? {
+            id: fullDoc.id, name: fullDoc.name, mimeType: fullDoc.mimeType, data: fullDoc.fileData,
+          } : undefined;
+          return {
+            reply: `Here's your ${fullDoc.name}.${matches.length > 1 ? ` (Found ${matches.length} matches — showing the first one.)` : ""}`,
+            actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: fullDoc.id } }],
+            results: [{ id: fullDoc.id, name: fullDoc.name, type: fullDoc.type, mimeType: fullDoc.mimeType }],
+            documentPreview: preview,
+          };
+        }
       }
       // No match found — fall through to AI to try harder
     } catch { /* fall through to AI */ }
@@ -3109,13 +3112,16 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
         return nameNorm.includes(normalized) || normalized.includes(nameNorm) || d.name.toLowerCase().includes(searchTerm);
       });
       if (matches.length > 0) {
-        const doc = matches[0];
-        return {
-          reply: `Here's your ${doc.name}.`,
-          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],
-          results: [doc],
-          documentPreview: doc.fileData ? { id: doc.id, name: doc.name, mimeType: doc.mimeType, data: doc.fileData } : undefined,
-        };
+        // Fetch full document with fileData for the actual preview
+        const fullDoc = await storage.getDocument(matches[0].id);
+        if (fullDoc) {
+          return {
+            reply: `Here's your ${fullDoc.name}.`,
+            actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: fullDoc.id } }],
+            results: [{ id: fullDoc.id, name: fullDoc.name, type: fullDoc.type }],
+            documentPreview: fullDoc.fileData ? { id: fullDoc.id, name: fullDoc.name, mimeType: fullDoc.mimeType, data: fullDoc.fileData } : undefined,
+          };
+        }
       }
     } catch { /* continue to other handlers */ }
   }
