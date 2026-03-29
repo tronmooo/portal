@@ -1641,6 +1641,9 @@ Always resolve the owner (person, pet, vehicle) from context before searching do
 CRITICAL ANTI-HALLUCINATION RULE FOR DOCUMENTS:
 If retrieve_document returns { found: false }, you MUST tell the user the document was NOT found. NEVER say "Here's your [document]" if the tool returned found:false. Say something like: "I couldn't find that document. You can upload it through chat by attaching the file, or through the Documents section." This is a HARD rule — fabricating document retrieval results destroys user trust.
 
+DOCUMENT DISPLAY RULE — let the viewer show the image:
+When retrieve_document returns { found: true }, the actual document IMAGE will be displayed automatically by the app below your message. Do NOT list extracted fields as bullet points — the user wants to SEE the document, not read a text dump. Just say something brief like "Here's your [document name]." and let the image viewer do its job. If the user specifically asks about a data field (e.g., "what's my license plate?"), THEN you can mention the specific field value from the extracted data in your response text.
+
 DATE AWARENESS — route dates to the calendar:
 Whenever you encounter dates in ANY context (document extraction, user messages, data entry), identify and call out actionable dates:
 - Expiration dates → suggest creating a reminder event
@@ -1699,6 +1702,18 @@ function summarizeResult(result: any): any {
 
 function summarizeSingleItem(item: any): any {
   if (!item) return item;
+
+  // For retrieve_document results: strip extractedData details and documentPreview
+  // The image viewer will display the document — AI just needs to know it was found
+  if (item.found !== undefined && item.documentPreview) {
+    return {
+      found: item.found,
+      documentName: item.document?.name,
+      documentType: item.document?.type,
+      imageWillBeDisplayed: true, // tells AI the image is auto-shown
+      totalMatches: item.totalMatches,
+    };
+  }
 
   // Never send fileData to Claude
   if (item.fileData) {
@@ -2632,27 +2647,26 @@ async function executeTool(name: string, input: any): Promise<any> {
 
       if (candidates.length === 0) return { found: false, message: "No matching documents found." };
 
-      // Return top match with full data for preview
+      // Return top match — use __LAZY_LOAD__ so client fetches file on-demand
+      // (avoids embedding multi-MB base64 in the AI JSON response which can blow up Vercel limits)
       const doc = candidates[0];
-      const fullDoc = await storage.getDocument(doc.id);
-      if (!fullDoc) return { found: false, message: "Document not found." };
       return {
         found: true,
         document: {
-          id: fullDoc.id,
-          name: fullDoc.name,
-          type: fullDoc.type,
-          mimeType: fullDoc.mimeType,
-          extractedData: fullDoc.extractedData,
-          linkedProfiles: fullDoc.linkedProfiles,
-          tags: fullDoc.tags,
+          id: doc.id,
+          name: doc.name,
+          type: doc.type,
+          mimeType: doc.mimeType,
+          extractedData: doc.extractedData,
+          linkedProfiles: doc.linkedProfiles,
+          tags: doc.tags,
           hasFileData: true,
         },
         documentPreview: {
-          id: fullDoc.id,
-          name: fullDoc.name,
-          mimeType: fullDoc.mimeType,
-          data: fullDoc.fileData,
+          id: doc.id,
+          name: doc.name,
+          mimeType: doc.mimeType,
+          data: "__LAZY_LOAD__",
         },
         totalMatches: candidates.length,
       };
@@ -2925,17 +2939,68 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
     try {
       const allDocs = await storage.getDocuments(); // Note: fileData is excluded from list queries for performance
+      // Synonym map for common document terms
+      const synonymMap: Record<string, string[]> = {
+        car: ["vehicle", "auto", "automobile"],
+        vehicle: ["car", "auto", "automobile"],
+        registration: ["reg"],
+        license: ["licence", "dl"],
+        licence: ["license", "dl"],
+        insurance: ["policy", "coverage"],
+        citation: ["ticket", "parking ticket", "toll"],
+        passport: ["travel document"],
+        birth: ["born"],
+        id: ["identification"],
+      };
+      // Expand search term with synonyms
+      const expandWithSynonyms = (term: string): string[] => {
+        const words = term.split(/\s+/);
+        const expanded: string[] = [term];
+        for (let i = 0; i < words.length; i++) {
+          const syns = synonymMap[words[i]];
+          if (syns) {
+            for (const syn of syns) {
+              expanded.push([...words.slice(0, i), syn, ...words.slice(i + 1)].join(" "));
+            }
+          }
+        }
+        return expanded;
+      };
+      // Strip filler words like "for my", "of my", etc. for cleaner matching
+      const cleanSearch = searchTerm.replace(/\b(for|of|the|a|an|my)\b\s*/g, "").replace(/\s+/g, " ").trim();
+      const searchVariants = expandWithSynonyms(cleanSearch);
+
       // Fuzzy match: search in document name, type, and extracted data
-      const matches = allDocs.filter(d => {
+      const scored = allDocs.map(d => {
         const nameLC = d.name.toLowerCase();
-        const typeLC = (d.type || "").toLowerCase();
-        // Normalize search terms: "drivers license" matches "driver's license", "drivers_license", etc.
-        const normalized = searchTerm.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
-        const nameNorm = nameLC.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
-        return nameNorm.includes(normalized) || normalized.includes(nameNorm) ||
-               typeLC.includes(searchTerm) ||
-               nameLC.includes(searchTerm.replace(/'/g, ""));
-      });
+        const typeLC = (d.type || "").toLowerCase().replace(/_/g, " ");
+        // Normalize: remove punctuation and collapse whitespace
+        const nameNorm = nameLC.replace(/[''\-_–—]/g, " ").replace(/\s+/g, " ");
+        const searchable = `${nameNorm} ${typeLC}`;
+        let score = 0;
+        // Check each search variant (original + synonym-expanded)
+        for (const variant of searchVariants) {
+          const vNorm = variant.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
+          if (searchable.includes(vNorm)) score += 10;
+          // Check individual words
+          const vWords = vNorm.split(/\s+/).filter(w => w.length >= 2);
+          for (const w of vWords) {
+            if (searchable.includes(w)) score += 2;
+          }
+        }
+        // Also check extracted data values for profile-specific queries (e.g., "honda")
+        const ed = d.extractedData || {};
+        const edText = Object.values(ed).map(v => {
+          const val = (v && typeof v === 'object' && 'value' in (v as any)) ? (v as any).value : v;
+          return String(val).toLowerCase();
+        }).join(" ");
+        const cleanWords = cleanSearch.split(/\s+/).filter(w => w.length >= 2);
+        for (const w of cleanWords) {
+          if (edText.includes(w)) score += 1;
+        }
+        return { doc: d, score };
+      }).filter(s => s.score >= 4).sort((a, b) => b.score - a.score);
+      const matches = scored.map(s => s.doc);
       if (matches.length > 0) {
         const doc = matches[0];
         // Return a lightweight preview reference — the client will fetch the image from /api/documents/:id/file
