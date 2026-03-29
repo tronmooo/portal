@@ -336,7 +336,28 @@ export default function DocumentViewer({
     handleMouseDown, handleMouseMove, handleMouseUp,
   } = useViewerControls();
 
-  const dataUrl = `data:${mimeType};base64,${data}`;
+  // For large files, fetch as blob and create object URL (data URLs > 500KB crash mobile browsers)
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (data && data !== "__LAZY_LOAD__" && data.length <= 500000) return; // Small enough for data URL
+    // Fetch the file as a blob via the authenticated API
+    let cancelled = false;
+    apiRequest("GET", `/api/documents/${id}/file`)
+      .then(res => res.blob())
+      .then(blob => {
+        if (!cancelled) setBlobUrl(URL.createObjectURL(blob));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, data]);
+
+  // Clean up blob URL on unmount
+  useEffect(() => {
+    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+  }, [blobUrl]);
+
+  const dataUrl = blobUrl
+    || (data && data !== "__LAZY_LOAD__" && data.length > 0 ? `data:${mimeType};base64,${data}` : "");
 
   const ZoomControls = () => (
     <div className="flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-lg border border-border p-1 shadow-sm">
@@ -617,13 +638,19 @@ export function DocumentViewerDialog({
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
                   {Object.entries(extractedData)
-                    .filter(([_, v]) => v != null && v !== '' && typeof v !== 'object')
-                    .map(([key, value]) => (
-                      <div key={key} className="flex justify-between items-baseline py-1 border-b border-border/30 last:border-0">
-                        <span className="text-[11px] text-muted-foreground">{formatFieldKey(key)}</span>
-                        <span className="text-[11px] font-medium text-foreground ml-2 text-right">{String(value)}</span>
-                      </div>
-                    ))}
+                    .filter(([_, v]) => v != null && v !== '')
+                    .map(([key, rawVal]) => {
+                      // Unwrap {value, confidence} objects
+                      const val = (rawVal && typeof rawVal === 'object' && 'value' in rawVal) ? rawVal.value : rawVal;
+                      const display = typeof val === 'object' ? JSON.stringify(val) : String(val);
+                      if (!display || display === 'null' || display === 'undefined') return null;
+                      return (
+                        <div key={key} className="flex justify-between items-baseline py-1 border-b border-border/30 last:border-0 gap-2">
+                          <span className="text-[10px] text-muted-foreground shrink-0">{formatFieldKey(key)}</span>
+                          <span className="text-[10px] font-medium text-foreground text-right truncate">{display}</span>
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
             )}
