@@ -371,7 +371,7 @@ Rules:
    DO NOT include: units for lab values (put those in trackerEntries), reference ranges, lab methods, facility metadata.
    Use camelCase keys. Use ISO date format (YYYY-MM-DD) for all dates.
 
-3. TARGET PROFILE: Who does this belong to? Match to an existing profile by name. For vehicle docs, match the vehicle profile if one exists.
+3. TARGET PROFILE: Who does this document CLEARLY belong to? ONLY match to an existing profile if the document content explicitly mentions that profile (e.g., a vehicle registration mentions the vehicle, a medical report mentions the patient by name, an insurance card has the policyholder's name). For general receipts, event tickets, or documents that don't clearly belong to a specific person/vehicle/pet, set targetProfile to null — do NOT guess or force-match. A receipt from a brewery does NOT belong to a car profile.
 
 4. TRACKER ENTRIES: Lab/health readings go here as tracker entries. Use human-readable names.
    - Reuse existing tracker names if they exist (e.g., "Weight", "LDL Cholesterol").
