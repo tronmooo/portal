@@ -2939,19 +2939,25 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
     try {
       const allDocs = await storage.getDocuments(); // Note: fileData is excluded from list queries for performance
-      // Synonym map for common document terms
-      const synonymMap: Record<string, string[]> = {
-        car: ["vehicle", "auto", "automobile"],
-        vehicle: ["car", "auto", "automobile"],
-        registration: ["reg"],
-        license: ["licence", "dl"],
-        licence: ["license", "dl"],
-        insurance: ["policy", "coverage"],
-        citation: ["ticket", "parking ticket", "toll"],
-        passport: ["travel document"],
-        birth: ["born"],
-        id: ["identification"],
-      };
+      // Bidirectional synonym groups — every word in a group maps to all others
+      const synonymGroups: string[][] = [
+        ["car", "vehicle", "auto", "automobile"],
+        ["registration", "reg"],
+        ["license", "licence", "dl"],
+        ["insurance", "policy", "coverage"],
+        ["citation", "ticket", "toll", "parking"],
+        ["passport", "travel document"],
+        ["birth", "born"],
+        ["id", "identification"],
+        ["bank", "statement"],
+      ];
+      // Build bidirectional map from groups
+      const synonymMap: Record<string, string[]> = {};
+      for (const group of synonymGroups) {
+        for (const word of group) {
+          synonymMap[word] = group.filter(w => w !== word);
+        }
+      }
       // Expand search term with synonyms
       const expandWithSynonyms = (term: string): string[] => {
         const words = term.split(/\s+/);
@@ -2978,14 +2984,22 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         const nameNorm = nameLC.replace(/[''\-_–—]/g, " ").replace(/\s+/g, " ");
         const searchable = `${nameNorm} ${typeLC}`;
         let score = 0;
+        // Simple stem: strip trailing s/ing/ed/tion for prefix matching
+        const stem = (w: string) => w.replace(/(ing|tion|ed|s)$/i, "");
         // Check each search variant (original + synonym-expanded)
         for (const variant of searchVariants) {
           const vNorm = variant.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
           if (searchable.includes(vNorm)) score += 10;
-          // Check individual words
+          // Check individual words — exact match or prefix/stem match
           const vWords = vNorm.split(/\s+/).filter(w => w.length >= 2);
           for (const w of vWords) {
-            if (searchable.includes(w)) score += 2;
+            if (searchable.includes(w)) {
+              score += 2;
+            } else {
+              // Stem match: "parking" → "park", "registration" → "registra" 
+              const ws = stem(w);
+              if (ws.length >= 3 && searchable.includes(ws)) score += 1.5;
+            }
           }
         }
         // Also check extracted data values for profile-specific queries (e.g., "honda")
@@ -2997,6 +3011,10 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         const cleanWords = cleanSearch.split(/\s+/).filter(w => w.length >= 2);
         for (const w of cleanWords) {
           if (edText.includes(w)) score += 1;
+          else {
+            const ws = stem(w);
+            if (ws.length >= 3 && edText.includes(ws)) score += 0.5;
+          }
         }
         return { doc: d, score };
       }).filter(s => s.score >= 4).sort((a, b) => b.score - a.score);
@@ -3198,6 +3216,18 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     // If no text reply was generated but we did actions, create a summary
     if (!textReply && allActions.length > 0) {
       textReply = `Done — executed ${allActions.length} action${allActions.length > 1 ? "s" : ""}.`;
+    }
+
+    // SAFETY NET: If document previews are attached, the image viewer will show the doc.
+    // Strip any verbose field-listing from the AI reply — user wants to SEE the doc, not read text.
+    if (documentPreviews.length > 0 && textReply) {
+      // If the reply has bullet-point field listings (• field: value), replace with a brief message
+      const bulletCount = (textReply.match(/[•\-\*]\s+\w+.*:/g) || []).length;
+      if (bulletCount >= 3) {
+        // AI listed 3+ fields as bullets — replace with brief message
+        const docName = documentPreviews[0].name;
+        textReply = `Here's your "${docName}".`;
+      }
     }
 
     return {
