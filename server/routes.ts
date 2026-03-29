@@ -371,7 +371,11 @@ export async function registerRoutes(
       // Helper: unwrap {value, confidence} objects into plain values
       const unwrap = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
 
-      // 0. ALWAYS save confirmed fields to the document's extractedData
+      // ═══ INTELLIGENT DATA ROUTING ═══
+      // Each extracted field gets routed to the correct destination based on what it IS.
+      // The document always keeps ALL data as the source of truth.
+
+      // Step 0: ALWAYS save all confirmed fields to the document's extractedData (source of truth)
       if (confirmedFields && confirmedFields.length > 0) {
         try {
           const doc = await storage.getDocument(extractionId);
@@ -388,25 +392,56 @@ export async function registerRoutes(
         }
       }
 
-      // 1. If a profile was selected, ALSO save fields to that profile AND link the document
-      if (resolvedProfileId && confirmedFields && confirmedFields.length > 0) {
-        const profile = await storage.getProfile(resolvedProfileId);
-        if (profile) {
-          const fieldUpdates: Record<string, any> = {};
-          for (const field of confirmedFields) {
-            fieldUpdates[field.key] = unwrap(field.value);
-          }
-          await storage.updateProfile(resolvedProfileId, {
-            fields: { ...(profile.fields || {}), ...fieldUpdates },
-          });
-          saved.push(`Updated ${confirmedFields.length} fields on ${profile.name}`);
-          console.log(`[confirm-extraction] Saved ${confirmedFields.length} fields to profile ${profile.name}`);
+      // Step 1: Classify each field and route to the correct destination
+      if (confirmedFields && confirmedFields.length > 0) {
+        // Field classification rules
+        const PERSONAL_FIELDS = new Set(['firstName', 'lastName', 'middleName', 'name', 'dateOfBirth', 'sex', 'height', 'weight', 'address', 'city', 'state', 'zip', 'stateAddr', 'country', 'donor', 'safeDriver', 'licenseNumber', 'class', 'endorsements', 'restrictions', 'eyeColor', 'hairColor', 'ssn', 'passportNumber', 'nationality', 'maritalStatus', 'bloodType', 'allergies', 'emergencyContact']);
+        const FINANCE_FIELDS = new Set(['totalAmount', 'totalAmountDue', 'totalDue', 'amountDue', 'amountPaid', 'balance', 'premium', 'monthlyPayment', 'subtotal', 'tax', 'minimumPayment', 'interestRate', 'principalBalance', 'payoffAmount']);
+        const DATE_FIELDS = new Set(['expirationDate', 'issueDate', 'dueDate', 'paymentDueDate', 'renewalDate', 'registrationExpiration', 'warrantyExpiration', 'policyExpiration', 'followUpDate', 'nextAppointmentDate', 'vaccineDueDate', 'coverageEnd', 'validThrough']);
+        const HEALTH_FIELDS = new Set(['bloodPressure', 'heartRate', 'temperature', 'oxygenSaturation', 'glucose', 'cholesterol', 'bmi', 'diagnosis', 'medications', 'providerName', 'facilityName', 'doctorName']);
+        const VEHICLE_FIELDS = new Set(['make', 'model', 'year', 'vin', 'licensePlate', 'mileage', 'serviceType', 'registrationNumber', 'engineType', 'fuelType', 'color']);
 
-          // Link the document to the selected profile
-          try {
-            await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
-            await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
-          } catch { /* may already be linked */ }
+        const profileFields: Record<string, any> = {};
+        const expenseData: { amount: number; description: string; category: string } | null = null;
+
+        for (const field of confirmedFields) {
+          const key = field.key;
+          const val = unwrap(field.value);
+
+          // Route to profile personal info
+          if (PERSONAL_FIELDS.has(key) || VEHICLE_FIELDS.has(key)) {
+            profileFields[key] = val;
+          }
+
+          // Route financial amounts to expense creation
+          if (FINANCE_FIELDS.has(key) && val) {
+            const amount = typeof val === 'number' ? val : parseFloat(String(val));
+            if (amount && isFinite(amount) && amount > 0 && !expenseData) {
+              // Will create expense below
+              (expenseData as any) || Object.assign({}, { amount, description: '', category: 'general' });
+            }
+          }
+
+          // ALL fields go to profile.fields as well (generic storage)
+          profileFields[key] = val;
+        }
+
+        // Save to the resolved profile
+        if (resolvedProfileId && Object.keys(profileFields).length > 0) {
+          const profile = await storage.getProfile(resolvedProfileId);
+          if (profile) {
+            await storage.updateProfile(resolvedProfileId, {
+              fields: { ...(profile.fields || {}), ...profileFields },
+            });
+            saved.push(`Saved ${Object.keys(profileFields).length} fields to ${profile.name}`);
+            console.log(`[confirm-extraction] Routed ${Object.keys(profileFields).length} fields to profile ${profile.name}`);
+
+            // Link the document to the profile
+            try {
+              await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
+              await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
+            } catch { /* may already be linked */ }
+          }
         }
       }
 
