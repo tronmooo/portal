@@ -463,9 +463,9 @@ export default function DocumentViewer({
     </div>
   );
 
-  // Inline mode (inside chat bubble)
+  // Inline mode (inside chat bubble or document dialog)
   if (inline) {
-    const maxH = expanded ? "80vh" : "320px";
+    const maxH = expanded ? "85vh" : "480px"; // Taller default so documents are readable
     return (
       <div
         className="mt-3 rounded-xl overflow-hidden border border-border bg-muted/10"
@@ -571,7 +571,7 @@ export function DocumentViewerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" data-testid={`dialog-doc-viewer-${id}`}>
+      <DialogContent className="max-w-[95vw] md:max-w-5xl max-h-[92vh] overflow-y-auto p-4" data-testid={`dialog-doc-viewer-${id}`}>
         <DialogHeader>
           <DialogTitle className="text-sm flex items-center gap-2">
             <FileText className="h-4 w-4" />

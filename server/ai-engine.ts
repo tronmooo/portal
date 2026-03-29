@@ -361,15 +361,19 @@ Rules:
    - Names (owner, patient, policyholder)
    - All dates: expiration dates, issue dates, valid-from/to dates, renewal dates, due dates
    - ID numbers: VIN, license number, policy number, plate number, account number
-   - Financial: amounts paid, amounts due, premiums
+   - Financial: ALL dollar amounts — total due, total paid, individual line items, fees, premiums. The TOTAL AMOUNT is the most critical field — NEVER miss it. Look at the bottom of the document for totals.
    - For vehicles: make, model, year, VIN, license plate, registration expiration
+   - For citations/tickets/fines: citation numbers, violation types, total amount due, agency, license plate
    - For insurance: policy number, coverage dates, provider, premium
    - For licenses/IDs: license number, expiration date, date of birth, class
    - For medical: patient name, visit date, provider, diagnosis
    - For warranties: item covered, warranty expiration, coverage details
 
+   CRITICAL: For any document with a dollar amount (receipts, bills, citations, invoices), you MUST extract "totalAmount" as a top-level field. Scan the ENTIRE document including corners, footers, and fine print. A DMV citation saying "TOTAL DUE-$ 1085" must have totalAmount: 1085.
+
    DO NOT include: units for lab values (put those in trackerEntries), reference ranges, lab methods, facility metadata.
    Use camelCase keys. Use ISO date format (YYYY-MM-DD) for all dates.
+   For nested data like date ranges, use flat keys: "statementStartDate" and "statementEndDate" instead of a nested object.
 
 3. TARGET PROFILE: Who does this document CLEARLY belong to? ONLY match to an existing profile if the document content explicitly mentions that profile (e.g., a vehicle registration mentions the vehicle, a medical report mentions the patient by name, an insurance card has the policyholder's name). For general receipts, event tickets, or documents that don't clearly belong to a specific person/vehicle/pet, set targetProfile to null — do NOT guess or force-match. A receipt from a brewery does NOT belong to a car profile.
 
@@ -523,6 +527,36 @@ Example for lab results:
     if (existingProfileId && parsed.extractedData && Object.keys(parsed.extractedData).length > 0) {
       const profileName = (await storage.getProfile(existingProfileId))?.name || "profile";
       savedItems.push(`${Object.keys(parsed.extractedData).length} fields ready for ${profileName} (confirm to save)`);
+    }
+
+    // Auto-create expense if the document has a totalAmount (receipts, citations, bills, invoices)
+    const totalAmount = parsed.extractedData?.totalAmount || parsed.extractedData?.amountDue || parsed.extractedData?.amountPaid;
+    if (totalAmount && typeof totalAmount === 'number' && totalAmount > 0) {
+      try {
+        const docType = parsed.documentType || "receipt";
+        const category = ["vehicle_registration", "citation", "parking_ticket", "toll"].some(t => docType.includes(t)) ? "vehicle"
+          : ["medical", "prescription", "lab"].some(t => docType.includes(t)) ? "health"
+          : ["utility", "bill"].some(t => docType.includes(t)) ? "utilities"
+          : ["insurance"].some(t => docType.includes(t)) ? "insurance"
+          : "general";
+        const desc = parsed.label || parsed.summary || fileName;
+        const expense = await storage.createExpense({
+          amount: totalAmount,
+          category,
+          description: desc,
+          date: parsed.extractedData?.dateIssued || parsed.extractedData?.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          tags: ["from-document"],
+        });
+        // Link expense to the same profile as the document
+        if (existingProfileId) {
+          await autoLinkToProfiles("expense", expense.id, desc, (await storage.getProfile(existingProfileId))?.name);
+        }
+        savedItems.push(`$${totalAmount} expense auto-saved to Finance`);
+        actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: totalAmount, description: desc } });
+        results.push(expense);
+      } catch (e) {
+        console.error("Auto-expense from document failed:", e);
+      }
     }
 
     // 2. Auto-create trackers from extracted health/lab data
