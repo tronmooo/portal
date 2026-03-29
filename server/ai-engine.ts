@@ -108,15 +108,23 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   const results: any[] = [];
 
   // GUARD: Skip fast-path for multi-intent messages.
-  // If the message contains conjunctions, multiple sentences, or commas separating actions,
-  // let the AI handle it to avoid losing secondary intents.
+  // If the message contains multiple verbs/actions, conjunctions, or multiple sentences,
+  // let the AI handle it to preserve all intents.
   const multiIntentSignals = [
-    /\band\s+(?:also|then|i|my|please|add|log|create|set|track|record|remind)/i,
+    /\band\s+(?:also|then|i|my|please|add|log|create|set|track|record|remind|play|spent|bought|ate|drank|took|went)/i,
+    /\band\s+\w+ed\b/i,  // "and played", "and spent", "and walked"
     /[.!?]\s+[A-Z]/,     // Multiple sentences
     /,\s*(?:also|then|and|plus)/i,  // Comma-separated actions
     /\balso\b.*\b(?:add|log|create|set|track|remind|save|record)\b/i,
   ];
   if (multiIntentSignals.some(re => re.test(message))) {
+    return { matched: false, reply: "", actions: [], results: [] };
+  }
+
+  // Count distinct action verbs — if 2+, it's multi-intent, let the AI handle it
+  const actionVerbs = lower.match(/\b(?:ran|run|walked|walk|played|play|spent|bought|ate|drank|slept|logged|tracked|created|added|reminded|weight|bp|mood|feeling|swam|cycled|biked|lifted|meditated|practiced|cooked|read|studied|worked)\b/gi) || [];
+  const uniqueVerbs = new Set(actionVerbs.map(v => v.toLowerCase()));
+  if (uniqueVerbs.size >= 2) {
     return { matched: false, reply: "", actions: [], results: [] };
   }
 
@@ -2816,8 +2824,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   const lower = userMessage.toLowerCase().trim();
 
   // FAST-PATH: "open [document name]" — direct DB lookup, no AI needed
-  if (lower.match(/^(?:open|show|view|pull up|find|get)\s+(?:my\s+)?(.+)/)) {
-    const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:my\s+)?/, "").trim();
+  // Only trigger for "open" / "pull up" / "view" (not "show" which is ambiguous with "show me my tasks")
+  // Skip if it looks like a general query: "show me", "show my tasks", "get my tasks"
+  const isDocOpen = lower.match(/^(?:open|pull up)\s+(?:up\s+)?(?:my\s+)?(.+)/) ||
+    (lower.match(/^(?:view|show|find|get)\s+(?:my\s+)?(.+)/) && 
+     !lower.match(/\b(?:tasks?|expenses?|trackers?|habits?|events?|calendar|bills?|obligations?|goals?|spending|journal|mood|summary|data|stats|schedule)\b/));
+  if (isDocOpen) {
+    const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
     try {
       const allDocs = await storage.getDocuments();
       // Fuzzy match: search in document name, type, and extracted data
