@@ -351,75 +351,73 @@ export async function processFileUpload(
   const results: any[] = [];
 
   // Use Claude vision to analyze the image/document
-  const extractionPrompt = `You are Portol AI — analyzing an uploaded file. Extract ALL important data thoroughly.
+  const extractionPrompt = `You are the document extraction engine for Portol. Read uploaded documents, classify them, and extract ONLY data that is explicitly visible in the document.
 
-Rules:
-1. DOCUMENT TYPE: (drivers_license, medical_report, receipt, insurance_card, passport, vehicle_registration, prescription, lab_results, utility_bill, bank_statement, warranty, pet_record, school_record, tax_document, other)
+ZERO FABRICATION RULES (NON-NEGOTIABLE):
+- NEVER make up, infer, estimate, autocomplete, or fabricate values.
+- If a value is not clearly visible in the document, return null for that field.
+- If text is ambiguous or partially visible, return null.
+- It is ALWAYS better to return less data than wrong data.
+- Every extracted value must come directly from visible text in the document.
 
-2. EXTRACTED DATA: Extract ALL essential fields for the document type. Be thorough — missing data is worse than extra data.
-   ALWAYS extract these when present:
-   - Names (owner, patient, policyholder)
-   - All dates: expiration dates, issue dates, valid-from/to dates, renewal dates, due dates
-   - ID numbers: VIN, license number, policy number, plate number, account number
-   - Financial: ALL dollar amounts — total due, total paid, individual line items, fees, premiums. The TOTAL AMOUNT is the most critical field — NEVER miss it. Look at the bottom of the document for totals.
-   - For vehicles: make, model, year, VIN, license plate, registration expiration
-   - For citations/tickets/fines: citation numbers, violation types, total amount due, agency, license plate
-   - For insurance: policy number, coverage dates, provider, premium
-   - For licenses/IDs: license number, expiration date, date of birth, class
-   - For medical: patient name, visit date, provider, diagnosis
-   - For warranties: item covered, warranty expiration, coverage details
+STEP 1 — CLASSIFY the document type using ONLY visible evidence:
+Types: drivers_license, medical_report, lab_results, imaging_result, visit_summary, prescription, insurance_card, insurance_policy, medical_bill, invoice, receipt, bank_statement, loan_statement, utility_bill, vehicle_registration, vehicle_service_record, citation, parking_ticket, warranty, lease, tax_document, pet_record, vaccination_record, contract, school_document, other
+If uncertain, use "other".
 
-   CRITICAL: For any document with a dollar amount (receipts, bills, citations, invoices), you MUST extract "totalAmount" as a top-level field. Scan the ENTIRE document including corners, footers, and fine print. A DMV citation saying "TOTAL DUE-$ 1085" must have totalAmount: 1085.
+STEP 2 — EXTRACT only fields that are CLEARLY VISIBLE in the document.
+Use flat camelCase keys. Use ISO dates (YYYY-MM-DD). Use numbers for amounts (not strings).
 
-   DO NOT include: units for lab values (put those in trackerEntries), reference ranges, lab methods, facility metadata.
-   Use camelCase keys. Use ISO date format (YYYY-MM-DD) for all dates.
-   For nested data like date ranges, use flat keys: "statementStartDate" and "statementEndDate" instead of a nested object.
+IMPORTANT FIELDS to look for by document type:
+- ALL types: totalAmount, amountDue, amountPaid, issueDate, expirationDate, dueDate
+- Financial (receipts/bills/citations/invoices): totalAmount is THE most critical field. Scan the ENTIRE document including corners, footers, fine print. A line saying "TOTAL DUE-$ 1085" means totalAmount: 1085.
+- Vehicle docs: licensePlate, vin, make, model, year, registrationExpiration, mileage
+- Citations/fines: citationNumbers, licensePlate, totalAmountDue, agencyName
+- Medical: patientName, providerName, visitDate, diagnosis, followUpDate, nextAppointmentDate
+- Lab results: individual test results as trackerEntries (name, value, unit)
+- Insurance: policyNumber, coverageDates, premium, provider
+- IDs/licenses: licenseNumber, expirationDate, dateOfBirth, name, address
+- Pet docs: petName, species, breed, weight, vaccineNames, vaccineDueDates, vetName
 
-3. TARGET PROFILE: Who does this document CLEARLY belong to? ONLY match to an existing profile if the document content explicitly mentions that profile (e.g., a vehicle registration mentions the vehicle, a medical report mentions the patient by name, an insurance card has the policyholder's name). For general receipts, event tickets, or documents that don't clearly belong to a specific person/vehicle/pet, set targetProfile to null — do NOT guess or force-match. A receipt from a brewery does NOT belong to a car profile.
+DATE ALERTS — Always extract these dates for dashboard alerts:
+- expirationDate, registrationExpiration, warrantyExpiration, policyExpiration
+- dueDate, paymentDueDate, followUpDate, nextAppointmentDate, vaccineDueDate
+- renewalDate, serviceDate
+These will power "Expiring Soon" and "Upcoming" sections on the dashboard.
 
-4. TRACKER ENTRIES: Lab/health readings go here as tracker entries. Use human-readable names.
-   - Reuse existing tracker names if they exist (e.g., "Weight", "LDL Cholesterol").
-   - Include the unit in the tracker entry. One entry per metric.
+STEP 3 — TARGET PROFILE:
+- ONLY set targetProfile if the document content EXPLICITLY names an entity that matches an existing profile.
+- A vehicle registration mentioning a Honda CR-V → match Honda CR-V profile.
+- A medical record naming "Luna" → match Luna pet profile.
+- A generic receipt or ticket with no clear entity → targetProfile: null.
+- NEVER guess. NEVER force-match.
 
-5. LABEL: Short, clean label like "Honda Registration - Oct 2026" or "Luna's Blood Work - Mar 2026"
+STEP 4 — TRACKER ENTRIES (for measurable/repeatable values):
+- Lab values: each result as a separate tracker entry with name, value, unit
+- Health vitals: blood pressure, weight, heart rate, etc.
+- Vehicle: mileage readings
+- Financial: recurring bill amounts, loan balances
+- Each entry needs: trackerName, values (object), unit, category
+
+STEP 5 — LABEL: Short clean label. "DMV Citation - $1085" or "Honda Registration - Oct 2026"
 
 ${userMessage ? `User context: "${userMessage}"` : ""}
 
-Be thorough. Extract every useful field. Dates are critical — never skip expiration or validity dates.
-
-Example for vehicle registration:
+RETURN FORMAT (must be valid JSON):
 {
-  "documentType": "vehicle_registration",
-  "label": "Honda CR-V Registration - Oct 2026",
+  "documentType": "citation",
+  "label": "DMV Citation - $1085",
   "extractedData": {
-    "ownerName": "John Smith",
-    "make": "Honda",
-    "model": "CR-V",
-    "year": 2021,
-    "vin": "1HGRV2F34MA000123",
-    "licensePlate": "ABC1234",
-    "registrationValidFrom": "2024-10-22",
-    "registrationExpiration": "2026-10-22",
-    "amountPaid": 2105,
-    "dateIssued": "2025-11-12"
+    "licensePlate": "8YP1488",
+    "totalAmountDue": 1085,
+    "currentExpDate": "2024-10-22",
+    "newExpDate": "2026-10-22"
   },
-  "targetProfile": { "name": "Honda CR-V", "type": "vehicle", "matchExisting": true },
+  "targetProfile": null,
   "trackerEntries": [],
-  "summary": "Vehicle registration for Honda CR-V — expires Oct 2026."
+  "summary": "DMV park/toll citation — $1,085 total due. Registration renewed through Oct 2026."
 }
 
-Example for lab results:
-{
-  "documentType": "lab_results",
-  "label": "Luna's Blood Work - Mar 2026",
-  "extractedData": { "patientName": "Luna", "visitDate": "2026-03-15", "veterinarian": "Dr. Smith" },
-  "targetProfile": { "name": "Luna", "type": "pet", "matchExisting": true },
-  "trackerEntries": [
-    { "trackerName": "White Blood Cells", "values": { "value": 12.5 }, "unit": "K/uL", "category": "health" },
-    { "trackerName": "Hemoglobin", "values": { "value": 14.2 }, "unit": "g/dL", "category": "health" }
-  ],
-  "summary": "Luna's blood work — 2 health metrics extracted."
-}`;
+FINAL ENFORCEMENT: If the document does not explicitly show a value, return null. Extract only what you can SEE.`;
 
   try {
     const isImage = mimeType.startsWith("image/");
@@ -530,7 +528,7 @@ Example for lab results:
     }
 
     // Auto-create expense if the document has a totalAmount (receipts, citations, bills, invoices)
-    const totalAmount = parsed.extractedData?.totalAmount || parsed.extractedData?.amountDue || parsed.extractedData?.amountPaid;
+    const totalAmount = parsed.extractedData?.totalAmount || parsed.extractedData?.totalAmountDue || parsed.extractedData?.totalDue || parsed.extractedData?.amountDue || parsed.extractedData?.amountPaid || parsed.extractedData?.balance;
     if (totalAmount && typeof totalAmount === 'number' && totalAmount > 0) {
       try {
         const docType = parsed.documentType || "receipt";
