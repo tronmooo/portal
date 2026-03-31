@@ -392,7 +392,11 @@ export class SupabaseStorage implements IStorage {
       return [...merged.values()].map(rowMapper);
     };
     // For trackers and obligations, we need entries/payments — fetch them in bulk
-    const trackerIdsArr = [...new Set([...allIds.trackers])];
+    // ALSO pre-fetch tracker IDs linked via JSONB `linked_profiles` (not in junction tables)
+    const { data: jsonbLinkedTrackerRows } = await this.supabase
+      .from("trackers").select("id").eq("user_id", this.userId).contains("linked_profiles", [id]);
+    const jsonbLinkedTrackerIds = (jsonbLinkedTrackerRows || []).map((r: any) => r.id);
+    const trackerIdsArr = [...new Set([...allIds.trackers, ...jsonbLinkedTrackerIds])];
     const obligationIdsArr = [...new Set([...allIds.obligations])];
     const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
       trackerIdsArr.length > 0

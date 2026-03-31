@@ -2655,8 +2655,9 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   person: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
-    { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -2664,8 +2665,9 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   self: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
-    { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -2674,6 +2676,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   pet: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health & Vet", testId: "tab-health" },
+    { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "tasks", label: "Reminders", testId: "tab-tasks" },
@@ -2998,10 +3001,10 @@ export default function ProfileDetailPage() {
           const stats: { label: string; value: number }[] = [];
           const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
           if (tabSet.has("health"))    stats.push({ label: "Health",  value: profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
-          if (tabSet.has("trackers"))  stats.push({ label: "Linked", value: profile.relatedTrackers.length + (profile.childProfiles || []).length });
+          if (tabSet.has("all-trackers")) stats.push({ label: "Trackers", value: profile.relatedTrackers.length });
+          if (tabSet.has("trackers"))  stats.push({ label: "Docs", value: profile.relatedDocuments.length });
           if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: profile.relatedExpenses.length });
           if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: profile.relatedTasks.length });
-          if (tabSet.has("documents")) stats.push({ label: "Docs",     value: profile.relatedDocuments.length });
           const gridCls = stats.length <= 3 ? "grid-cols-3" : stats.length <= 4 ? "grid-cols-4" : "grid-cols-5";
           return (
             <div className={`grid ${gridCls} gap-2 mt-4`}>
@@ -3089,6 +3092,22 @@ export default function ProfileDetailPage() {
                     <div className="mt-4">
                       <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
                     </div>
+                  )}
+                </TabsContent>
+              )}
+
+              {tabValues.has("all-trackers") && (
+                <TabsContent value="all-trackers" className="mt-4 px-1 sm:px-0">
+                  {profile.relatedTrackers.length > 0 ? (
+                    <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                  ) : (
+                    <Card>
+                      <CardContent className="py-8 text-center">
+                        <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                        <p className="text-sm text-muted-foreground">No trackers linked to this profile</p>
+                        <p className="text-xs text-muted-foreground mt-1">Create trackers via chat or the Linked page, then link them here</p>
+                      </CardContent>
+                    </Card>
                   )}
                 </TabsContent>
               )}
