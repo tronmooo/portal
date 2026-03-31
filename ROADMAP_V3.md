@@ -442,3 +442,106 @@ Bare minimum production: Supabase free tier + Vercel free tier + domain = **~$6/
 4. **Mobile priority?**
    - PWA first (free, quick, works on any phone)
    - Native app later if you need Apple Health or rich push notifications
+
+---
+
+## Phase 4: Browser Automation Agent Mode
+
+> The AI agent becomes a real-world operator — browsing websites, filling forms, retrieving data, and completing workflows using saved Portol data.
+
+### Core Capability
+
+Full browser automation inside agent mode. The AI can browse the web, navigate websites, fill out forms, upload documents, retrieve information, and complete real browser-based tasks using the user's saved data when authorized. The AI combines internal data from profiles, documents, trackers, calendar, finance, and health records with live web interactions to complete workflows end to end.
+
+### What the Agent Can Do
+
+| Action | Description |
+|--------|-------------|
+| **Open websites** | Navigate to any URL, search online |
+| **Read page content** | Extract text, detect form fields, parse tables |
+| **Fill out forms** | Auto-populate using saved profile, insurance, vehicle, medical data |
+| **Upload documents** | Attach saved PDFs/images from the document vault to web forms |
+| **Submit forms** | With explicit user approval before any submission |
+| **Log into portals** | Securely authenticate to user-authorized services |
+| **Download files** | Save receipts, PDFs, confirmations back into Portol |
+| **Create reports** | Generate spreadsheets, summaries, or documents from gathered data |
+| **Multi-site workflows** | Chain actions across multiple websites in a single task |
+
+### Example Workflows
+
+1. **Medical intake form** → Fill using saved profile + insurance data
+2. **Vehicle registration form** → Populate from stored vehicle info + address
+3. **Online applications** → Apply saved contact details + upload documents
+4. **Portal retrieval** → Log into services, download statements/confirmations
+5. **Price comparison** → Search, gather results, save as spreadsheet
+6. **Document upload** → Attach saved PDFs to a website's upload form
+7. **Research task** → Search online, gather results, save as document/chart
+
+### Safety & Control Layer
+
+| Control | Description |
+|---------|-------------|
+| **Permission prompts** | Explicit approval before high-impact actions |
+| **Submission preview** | Editable preview before any form submit, payment, or send |
+| **Step-by-step log** | Visible activity log for every browser action |
+| **Field confirmation** | User confirms when AI confidence is low |
+| **Secure credentials** | Encrypted credential storage with per-session authorization |
+| **Download/upload history** | Full audit trail tied to each task |
+
+### Artifacts Hub
+
+All outputs from browser automation are automatically saved and linked:
+
+| Artifact Type | Saved To |
+|---------------|----------|
+| Filled form data | Artifacts Hub + linked profile |
+| Confirmation numbers | Artifacts Hub + notes |
+| Screenshots | Artifacts Hub + document vault |
+| Downloaded PDFs | Document vault + linked profile |
+| Generated spreadsheets | Artifacts Hub |
+| Generated reports | Artifacts Hub |
+| Summaries | Artifacts Hub + linked profile |
+
+### Agent Tasks UI
+
+Each agent task has:
+- **Status** (queued / running / awaiting approval / completed / failed)
+- **Website(s) used**
+- **Linked data sources** (which profiles, documents, trackers were used)
+- **Outputs created** (artifacts, documents, reports)
+- **Approval checkpoints** (user-confirmed steps)
+- **Duration and cost**
+
+Task types:
+- Browse and research
+- Fill out online form
+- Upload document to website
+- Compare products or services
+- Pull data from a portal
+- Create spreadsheet from findings
+- Draft and save report
+- Complete multi-site workflow
+
+### Technical Architecture (Planned)
+
+| Component | Approach |
+|-----------|----------|
+| Browser engine | Puppeteer or Playwright (headless Chromium) |
+| Execution | Serverless function or dedicated worker |
+| AI orchestration | Claude tool_use with browser-action tools |
+| Credential storage | Encrypted vault (Supabase Vault or similar) |
+| Session recording | Screenshot + DOM snapshot at each step |
+| Artifact storage | Supabase Storage + linked to profiles/documents |
+| Task queue | Supabase-backed queue with status tracking |
+
+### Implementation Phases
+
+1. **4a: Read-only browsing** — Agent can open URLs, read content, extract data, save findings
+2. **4b: Form detection + auto-fill** — Detect form fields, map to saved data, preview before submit
+3. **4c: Full interaction** — Submit forms, upload files, handle multi-page flows
+4. **4d: Portal integration** — Secure credential management, login to services
+5. **4e: Artifacts Hub UI** — Dedicated section for all agent-created outputs
+
+### Priority: HIGH
+This is a core differentiator. No other personal life management app can do this.
+
