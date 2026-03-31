@@ -97,7 +97,13 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
+  AreaChart,
+  Area,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
+import { Slider } from "@/components/ui/slider";
 import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1358,8 +1364,7 @@ function DocumentsTab({
 // ============================================================
 
 function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
-  const expenses = profile.relatedExpenses;
-  const obligations = profile.relatedObligations;
+  // ── state ──────────────────────────────────────────────────────
   const { toast } = useToast();
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ProfileDetail["relatedExpenses"][number] | null>(null);
@@ -1369,8 +1374,39 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const [expCategory, setExpCategory] = useState("general");
   const [expVendor, setExpVendor] = useState("");
   const [expDate, setExpDate] = useState(new Date().toISOString().slice(0, 10));
+  const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
+  const [amortTableOpen, setAmortTableOpen] = useState(false);
+  const [extraPayment, setExtraPayment] = useState(0);
 
+  const expenses = profile.relatedExpenses;
+  const obligations = profile.relatedObligations;
+
+  // ── type flags ─────────────────────────────────────────────────
+  const isLoan = profile.type === "loan" ||
+    !!(profile.fields.interestRate || profile.fields.loanBalance || profile.fields.monthlyPayment);
+  const isInvestment = profile.type === "investment";
+  const isSubscription = profile.type === "subscription";
+
+  // ── expense categories ─────────────────────────────────────────
+  const expenseCategories = [
+    "general", "food", "transport", "housing", "utilities",
+    "entertainment", "health", "education", "shopping",
+    "insurance", "pet", "vehicle", "travel", "other",
+  ];
+
+  const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
+
+  // ── summary calculations ────────────────────────────────────────
   const totalSpent = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const thisMonth = expenses
+    .filter(e => {
+      const d = new Date(e.date);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey;
+    })
+    .reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const expensesByMonth: Record<string, number> = {};
   for (const exp of expenses) {
@@ -1379,35 +1415,145 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     expensesByMonth[key] = (expensesByMonth[key] || 0) + (exp.amount || 0);
   }
   const sortedMonths = Object.keys(expensesByMonth).sort();
-  const barData = sortedMonths.map(m => ({
-    month: new Date(m + "-01").toLocaleDateString(undefined, { month: "short", year: "2-digit" }),
-    amount: expensesByMonth[m],
-  }));
   const avgPerMonth = sortedMonths.length > 0 ? totalSpent / sortedMonths.length : 0;
 
-  const isLoan = profile.type === "loan";
-  const isInvestment = profile.type === "investment";
-  const isSubscription = profile.type === "subscription";
+  const monthlyObligations = obligations.reduce((sum, ob) => {
+    const freq = (ob.frequency || "").toLowerCase();
+    const amt = ob.amount || 0;
+    if (freq === "weekly") return sum + amt * 4.33;
+    if (freq === "biweekly") return sum + amt * 2.17;
+    if (freq === "quarterly") return sum + amt / 3;
+    if (freq === "annual" || freq === "yearly") return sum + amt / 12;
+    return sum + amt; // monthly default
+  }, 0);
+  const monthlyBurn = monthlyObligations + avgPerMonth;
 
+  const outstanding =
+    Number(profile.fields.remainingBalance || profile.fields.loanBalance || profile.fields.balance || 0) ||
+    obligations.reduce((sum, ob) => sum + (ob.amount || 0), 0);
+
+  // ── loan / amortization ────────────────────────────────────────
+  type AmortRow = { month: number; payment: number; principal: number; interest: number; balance: number; cumPrincipal: number; cumInterest: number };
+
+  function calculateAmortization(principal: number, annualRate: number, termMonths: number): AmortRow[] {
+    if (!principal || !annualRate || !termMonths) return [];
+    const monthlyRate = annualRate / 100 / 12;
+    const payment = monthlyRate === 0
+      ? principal / termMonths
+      : principal * (monthlyRate * Math.pow(1 + monthlyRate, termMonths)) / (Math.pow(1 + monthlyRate, termMonths) - 1);
+    const rows: AmortRow[] = [];
+    let balance = principal;
+    let cumPrincipal = 0;
+    let cumInterest = 0;
+    for (let month = 1; month <= termMonths && balance > 0.005; month++) {
+      const interest = balance * monthlyRate;
+      const principalPaid = Math.min(payment - interest, balance);
+      balance -= principalPaid;
+      cumPrincipal += principalPaid;
+      cumInterest += interest;
+      rows.push({
+        month,
+        payment,
+        principal: principalPaid,
+        interest,
+        balance: Math.max(0, balance),
+        cumPrincipal,
+        cumInterest,
+      });
+    }
+    return rows;
+  }
+
+  const loanPrincipal = Number(profile.fields.originalAmount || profile.fields.loanBalance || profile.fields.remainingBalance || profile.fields.balance || 0);
+  const loanRate = Number(profile.fields.interestRate || profile.fields.rate || 0);
+  const loanTerm = Number(profile.fields.termMonths || profile.fields.term || 0);
+  const loanMonthlyPayment = Number(profile.fields.monthlyPayment || 0);
+
+  // Derive term from monthly payment if not provided
+  const derivedTerm = loanTerm || (() => {
+    if (!loanPrincipal || !loanRate || !loanMonthlyPayment) return 0;
+    const r = loanRate / 100 / 12;
+    if (r === 0) return Math.round(loanPrincipal / loanMonthlyPayment);
+    return Math.round(-Math.log(1 - (loanPrincipal * r) / loanMonthlyPayment) / Math.log(1 + r));
+  })();
+
+  const amortRows = isLoan ? calculateAmortization(loanPrincipal, loanRate, derivedTerm) : [];
+  const totalInterest = amortRows.reduce((s, r) => s + r.interest, 0);
+  const payoffDate = amortRows.length > 0
+    ? new Date(now.getFullYear(), now.getMonth() + amortRows.length, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" })
+    : null;
+
+  // Amortization chart — sample every N months so chart is not too dense
+  const amortChartSample = amortRows.filter((_, i) => {
+    const step = Math.max(1, Math.floor(amortRows.length / 24));
+    return i % step === 0 || i === amortRows.length - 1;
+  }).map(r => ({
+    month: r.month,
+    balance: Math.round(r.balance),
+    cumPrincipal: Math.round(r.cumPrincipal),
+    cumInterest: Math.round(r.cumInterest),
+  }));
+
+  // ── payoff simulator ───────────────────────────────────────────
+  // Simple simulation: recalc with extra payment
+  function simulatePayoff(extra: number): { months: number; totalInterest: number } {
+    if (!loanPrincipal || !loanRate) return { months: 0, totalInterest: 0 };
+    const r = loanRate / 100 / 12;
+    const basePayment = amortRows.length > 0 ? amortRows[0].payment : loanMonthlyPayment;
+    const payment = basePayment + extra;
+    let balance = loanPrincipal;
+    let months = 0;
+    let totalInt = 0;
+    while (balance > 0.005 && months < 1200) {
+      const interest = balance * r;
+      const principalPaid = Math.min(payment - interest, balance);
+      balance -= principalPaid;
+      totalInt += interest;
+      months++;
+    }
+    return { months, totalInterest: totalInt };
+  }
+
+  const baseSim = simulatePayoff(0);
+  const extraSim = simulatePayoff(extraPayment);
+  const monthsSaved = Math.max(0, baseSim.months - extraSim.months);
+  const interestSaved = Math.max(0, baseSim.totalInterest - extraSim.totalInterest);
+  const newPayoffDate = extraSim.months > 0
+    ? new Date(now.getFullYear(), now.getMonth() + extraSim.months, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" })
+    : null;
+
+  // ── spending by category ───────────────────────────────────────
+  const categoryTotals: Record<string, number> = {};
+  for (const exp of expenses) {
+    const cat = exp.category || "general";
+    categoryTotals[cat] = (categoryTotals[cat] || 0) + (exp.amount || 0);
+  }
+  const pieData = Object.entries(categoryTotals)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, value]) => ({ name, value }));
+
+  // ── investment ─────────────────────────────────────────────────
   const performanceHistory: any[] = Array.isArray(profile.fields.performanceHistory) ? profile.fields.performanceHistory : [];
   const perfChartData = performanceHistory
     .filter(p => p.date && p.value != null)
     .map(p => ({ date: new Date(p.date).toLocaleDateString(undefined, { month: "short", year: "2-digit" }), value: Number(p.value) }));
 
+  // ── mutations ──────────────────────────────────────────────────
   const createExpenseMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/expenses", {
-        description: expDesc, amount: Number(expAmount), category: expCategory, vendor: expVendor || undefined, date: expDate,
+        description: expDesc, amount: Number(expAmount), category: expCategory,
+        vendor: expVendor || undefined, date: expDate,
       });
       const expense = await res.json();
-      // Link to this profile
       await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "expense", entityId: expense.id });
       return expense;
     },
     onSuccess: () => {
       toast({ title: "Expense added" });
       setShowAddExpense(false);
-      setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10));
+      setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor("");
+      setExpDate(new Date().toISOString().slice(0, 10));
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -1420,7 +1566,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     mutationFn: async () => {
       if (!editingExpense) return;
       await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
-        description: expDesc, amount: Number(expAmount), category: expCategory, vendor: expVendor || undefined, date: expDate,
+        description: expDesc, amount: Number(expAmount), category: expCategory,
+        vendor: expVendor || undefined, date: expDate,
       });
     },
     onSuccess: () => {
@@ -1451,82 +1598,429 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   });
 
   function openEdit(expense: ProfileDetail["relatedExpenses"][number]) {
-    setExpDesc(expense.description); setExpAmount(String(expense.amount)); setExpCategory(expense.category || "general");
-    setExpVendor(expense.vendor || ""); setExpDate(expense.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+    setExpDesc(expense.description);
+    setExpAmount(String(expense.amount));
+    setExpCategory(expense.category || "general");
+    setExpVendor(expense.vendor || "");
+    setExpDate(expense.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
     setEditingExpense(expense);
   }
 
   function openAdd() {
-    setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10));
+    setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor("");
+    setExpDate(new Date().toISOString().slice(0, 10));
     setShowAddExpense(true);
   }
 
-  const expenseCategories = ["general", "food", "transport", "housing", "utilities", "entertainment", "health", "education", "shopping", "insurance", "pet", "vehicle", "travel", "other"];
+  // ── sorted expenses ────────────────────────────────────────────
+  const sortedExpenses = [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+  // ── obligation urgency helper ──────────────────────────────────
+  function obligationUrgency(ob: ProfileDetail["relatedObligations"][number]): "overdue" | "soon" | "ok" {
+    if (!ob.nextDueDate) return "ok";
+    const due = new Date(ob.nextDueDate);
+    const diffDays = (due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+    if (diffDays < 0) return "overdue";
+    if (diffDays <= 7) return "soon";
+    return "ok";
+  }
+
+  // ── render ─────────────────────────────────────────────────────
   return (
-    <div className="space-y-4">
-      {/* Add Expense Button */}
-      <div className="flex justify-end">
-        <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={openAdd} data-testid="button-add-expense">
-          <Plus className="h-3.5 w-3.5" /> Add Expense
-        </Button>
+    <div className="space-y-5">
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 1 — Summary stat cards                         */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-2 gap-3">
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">Total Spent</p>
+            <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(totalSpent)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">This Month</p>
+            <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(thisMonth)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">Monthly Burn</p>
+            <p className="text-xl font-bold tabular-nums text-amber-600 dark:text-amber-400">{formatCurrency(monthlyBurn)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">Outstanding</p>
+            <p className="text-xl font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(outstanding)}</p>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Loan: Prominent Balance Card */}
-      {isLoan && (profile.fields.remainingBalance || profile.fields.balance || profile.fields.originalAmount) && (
-        <Card className="border-orange-500/30">
-          <CardContent className="p-4">
-            <div className="grid grid-cols-3 gap-3">
-              {profile.fields.originalAmount && (
-                <div className="text-center">
-                  <p className="text-[11px] text-muted-foreground">Original</p>
-                  <p className="text-base font-semibold tabular-nums">{formatCurrency(Number(profile.fields.originalAmount))}</p>
-                </div>
-              )}
-              {(profile.fields.remainingBalance || profile.fields.balance) && (
-                <div className="text-center">
-                  <p className="text-[11px] text-muted-foreground">Remaining</p>
-                  <p className="text-base font-semibold tabular-nums text-orange-600">{formatCurrency(Number(profile.fields.remainingBalance || profile.fields.balance))}</p>
-                </div>
-              )}
-              {(profile.fields.interestRate || profile.fields.rate) && (
-                <div className="text-center">
-                  <p className="text-[11px] text-muted-foreground">Rate</p>
-                  <p className="text-base font-semibold tabular-nums">{String(profile.fields.interestRate || profile.fields.rate)}%</p>
-                </div>
-              )}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 2 — Expenses list                              */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-muted-foreground" /> Expenses
+            </CardTitle>
+            <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={openAdd} data-testid="button-add-expense">
+              <Plus className="h-3.5 w-3.5" /> Add Expense
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {sortedExpenses.length === 0 ? (
+            <div className="py-8 text-center">
+              <DollarSign className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No expenses yet. Add one or tell the AI.</p>
             </div>
-            {(profile.fields.monthlyPayment) && (
-              <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">Monthly Payment</span>
-                <span className="text-sm font-semibold tabular-nums">{formatCurrency(Number(profile.fields.monthlyPayment))}</span>
+          ) : (
+            <div className="divide-y divide-border">
+              {sortedExpenses.map(expense => (
+                <div key={expense.id} data-testid={`row-expense-${expense.id}`}>
+                  <button
+                    className="w-full text-left py-2.5 group"
+                    onClick={() => setExpandedExpenseId(expandedExpenseId === expense.id ? null : expense.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{expense.description}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                          </span>
+                          {expense.category && (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{expense.category}</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 ml-3">
+                        <span className="text-sm font-bold tabular-nums">{formatCurrency(expense.amount)}</span>
+                        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${expandedExpenseId === expense.id ? "rotate-180" : ""}`} />
+                      </div>
+                    </div>
+                  </button>
+                  {expandedExpenseId === expense.id && (
+                    <div className="pb-3 pl-1 space-y-2">
+                      {expense.vendor && (
+                        <p className="text-xs text-muted-foreground">Vendor: <span className="text-foreground">{expense.vendor}</span></p>
+                      )}
+                      <p className="text-xs text-muted-foreground">Date: <span className="text-foreground">{expense.date}</span></p>
+                      <p className="text-xs text-muted-foreground">Category: <span className="text-foreground">{expense.category || "general"}</span></p>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-xs gap-1"
+                          onClick={() => openEdit(expense)}
+                          data-testid={`button-edit-expense-${expense.id}`}
+                        >
+                          <Edit className="h-3 w-3" /> Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-xs gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
+                          onClick={() => setDeleteExpenseId(expense.id)}
+                          data-testid={`button-delete-expense-${expense.id}`}
+                        >
+                          <Trash2 className="h-3 w-3" /> Delete
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 3 — Subscriptions & Bills                      */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CreditCard className="h-4 w-4 text-muted-foreground" /> Subscriptions &amp; Bills
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {obligations.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">No recurring bills</p>
+          ) : (
+            <div className="divide-y divide-border">
+              {obligations.map(ob => {
+                const urgency = obligationUrgency(ob);
+                const rowClass =
+                  urgency === "overdue" ? "bg-red-500/5" :
+                  urgency === "soon" ? "bg-amber-500/5" : "";
+                return (
+                  <div key={ob.id} className={`py-3 px-1 rounded-sm ${rowClass}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium truncate">{ob.name}</p>
+                          {ob.autopay && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-green-600 border-green-500/40">Autopay</Badge>
+                          )}
+                          {urgency === "overdue" && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-red-600 border-red-500/40">Overdue</Badge>
+                          )}
+                          {urgency === "soon" && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-600 border-amber-500/40">Due soon</Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Badge variant="secondary" className="text-[10px]">{ob.frequency}</Badge>
+                          {ob.nextDueDate && (
+                            <span className="text-xs text-muted-foreground">Next: {ob.nextDueDate}</span>
+                          )}
+                        </div>
+                      </div>
+                      <span className="text-sm font-bold tabular-nums shrink-0">{formatCurrency(ob.amount)}</span>
+                    </div>
+                    {ob.payments && ob.payments.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Recent payments</p>
+                        {ob.payments.slice(-3).reverse().map(p => (
+                          <div key={p.id} className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">{p.date}</span>
+                            <span className="font-medium">{formatCurrency(p.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 4 — Loan Amortization (loans only)             */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {isLoan && loanPrincipal > 0 && loanRate > 0 && derivedTerm > 0 && (
+        <Card className="border-orange-500/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-muted-foreground" /> Loan Amortization
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Key stats row */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="text-center">
+                <p className="text-[11px] text-muted-foreground mb-1">Monthly Payment</p>
+                <p className="text-lg font-bold tabular-nums text-orange-600 dark:text-orange-400">
+                  {amortRows.length > 0 ? formatCurrency(amortRows[0].payment) : "—"}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[11px] text-muted-foreground mb-1">Total Interest</p>
+                <p className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(totalInterest)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[11px] text-muted-foreground mb-1">Payoff Date</p>
+                <p className="text-base font-bold text-foreground">{payoffDate || "—"}</p>
+              </div>
+            </div>
+
+            {/* Area chart: balance / cumulative principal / cumulative interest */}
+            {amortChartSample.length > 1 && (
+              <div>
+                <p className="text-[11px] text-muted-foreground mb-2">Balance &amp; Cumulative Paid Over Time</p>
+                <ResponsiveContainer width="100%" height={180}>
+                  <AreaChart data={amortChartSample} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="gradBalance" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.02} />
+                      </linearGradient>
+                      <linearGradient id="gradPrincipal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+                      </linearGradient>
+                      <linearGradient id="gradInterest" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} label={{ value: "Month", position: "insideBottom", offset: -2, fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+                    <Tooltip
+                      contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
+                      formatter={(val: number, name: string) => [formatCurrency(val), name === "balance" ? "Remaining Balance" : name === "cumPrincipal" ? "Principal Paid" : "Interest Paid"]}
+                    />
+                    <Area type="monotone" dataKey="balance" stroke="#3b82f6" strokeWidth={2} fill="url(#gradBalance)" />
+                    <Area type="monotone" dataKey="cumPrincipal" stroke="#10b981" strokeWidth={2} fill="url(#gradPrincipal)" />
+                    <Area type="monotone" dataKey="cumInterest" stroke="#ef4444" strokeWidth={2} fill="url(#gradInterest)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+                <div className="flex items-center gap-4 justify-center mt-1">
+                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 inline-block" /><span className="text-[11px] text-muted-foreground">Remaining Balance</span></div>
+                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block" /><span className="text-[11px] text-muted-foreground">Principal Paid</span></div>
+                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500 inline-block" /><span className="text-[11px] text-muted-foreground">Interest Paid</span></div>
+                </div>
+              </div>
+            )}
+
+            {/* Collapsible amortization table */}
+            {amortRows.length > 0 && (
+              <div>
+                <button
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setAmortTableOpen(!amortTableOpen)}
+                >
+                  {amortTableOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {amortTableOpen ? "Hide" : "Show"} amortization schedule
+                </button>
+                {amortTableOpen && (
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full text-xs tabular-nums">
+                      <thead>
+                        <tr className="border-b border-border text-muted-foreground">
+                          <th className="text-left py-1.5 pr-3 font-medium">Month</th>
+                          <th className="text-right py-1.5 pr-3 font-medium">Payment</th>
+                          <th className="text-right py-1.5 pr-3 font-medium">Principal</th>
+                          <th className="text-right py-1.5 pr-3 font-medium">Interest</th>
+                          <th className="text-right py-1.5 font-medium">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {[
+                          ...amortRows.slice(0, 12),
+                          ...(amortRows.length > 13 ? [null] : []),
+                          ...(amortRows.length > 12 ? [amortRows[amortRows.length - 1]] : []),
+                        ].map((row, i) =>
+                          row === null ? (
+                            <tr key="ellipsis">
+                              <td colSpan={5} className="text-center text-muted-foreground py-1">…</td>
+                            </tr>
+                          ) : (
+                            <tr key={row.month} className={i >= 12 ? "text-muted-foreground" : ""}>
+                              <td className="py-1.5 pr-3">{row.month}</td>
+                              <td className="text-right py-1.5 pr-3">{formatCurrency(row.payment)}</td>
+                              <td className="text-right py-1.5 pr-3 text-green-600">{formatCurrency(row.principal)}</td>
+                              <td className="text-right py-1.5 pr-3 text-red-500">{formatCurrency(row.interest)}</td>
+                              <td className="text-right py-1.5">{formatCurrency(row.balance)}</td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
         </Card>
       )}
 
-      {/* Investment: Current Balance + Performance Chart */}
-      {isInvestment && profile.fields.balance && (
-        <Card className="border-green-500/30">
-          <CardContent className="p-4">
-            <div className="grid grid-cols-2 gap-4 mb-3">
-              <div>
-                <p className="text-xs text-muted-foreground">Current Balance</p>
-                <p className="text-xl font-semibold tabular-nums text-green-600">{formatCurrency(Number(profile.fields.balance))}</p>
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 5 — Payoff Simulator (loans only)              */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {isLoan && loanPrincipal > 0 && loanRate > 0 && baseSim.months > 0 && (
+        <Card className="border-blue-500/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <TrendingDown className="h-4 w-4 text-muted-foreground" /> Payoff Simulator
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-muted-foreground">Extra monthly payment</span>
+                <span className="text-sm font-bold tabular-nums text-blue-600">${extraPayment}/mo</span>
               </div>
-              {(profile.fields.contributions || profile.fields.ytdContributions) && (
-                <div>
-                  <p className="text-xs text-muted-foreground">YTD Contributions</p>
-                  <p className="text-xl font-semibold tabular-nums">{formatCurrency(Number(profile.fields.contributions || profile.fields.ytdContributions))}</p>
+              <Slider
+                min={0}
+                max={500}
+                step={10}
+                value={[extraPayment]}
+                onValueChange={([v]) => setExtraPayment(v)}
+                className="mb-3"
+              />
+              <div className="grid grid-cols-3 gap-3 mt-2">
+                <div className="text-center p-3 rounded-lg bg-muted/50">
+                  <p className="text-[11px] text-muted-foreground mb-1">New Payoff</p>
+                  <p className="text-sm font-bold text-foreground">{newPayoffDate || "—"}</p>
                 </div>
-              )}
+                <div className="text-center p-3 rounded-lg bg-green-500/10">
+                  <p className="text-[11px] text-muted-foreground mb-1">Months Saved</p>
+                  <p className="text-sm font-bold text-green-600">{monthsSaved}</p>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-green-500/10">
+                  <p className="text-[11px] text-muted-foreground mb-1">Interest Saved</p>
+                  <p className="text-sm font-bold text-green-600">{formatCurrency(interestSaved)}</p>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Investment: Performance Chart */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 6 — Spending by Category (non-loan profiles)   */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {!isLoan && pieData.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-muted-foreground" /> Spending by Category
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col sm:flex-row items-center gap-4">
+              <ResponsiveContainer width={180} height={180}>
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={80}
+                    paddingAngle={2}
+                    dataKey="value"
+                  >
+                    {pieData.map((_, index) => (
+                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
+                    formatter={(val: number) => [formatCurrency(val)]}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="flex-1 space-y-1.5 w-full">
+                {pieData.map((item, index) => (
+                  <div key={item.name} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full shrink-0"
+                        style={{ background: CHART_COLORS[index % CHART_COLORS.length] }}
+                      />
+                      <span className="text-xs capitalize text-muted-foreground">{item.name}</span>
+                    </div>
+                    <span className="text-xs font-semibold tabular-nums">{formatCurrency(item.value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Investment performance chart (preserved) */}
       {isInvestment && perfChartData.length > 1 && (
         <Card>
           <CardHeader className="pb-2">
@@ -1551,153 +2045,9 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
         </Card>
       )}
 
-      {/* Subscription: Billing Info */}
-      {isSubscription && (profile.fields.cost || profile.fields.price) && (
-        <Card className="border-pink-500/30">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-muted-foreground">Billing Amount</p>
-                <p className="text-xl font-semibold tabular-nums">{formatCurrency(Number(profile.fields.cost || profile.fields.price))}</p>
-              </div>
-              {profile.fields.frequency && (
-                <Badge variant="secondary" className="capitalize text-sm px-3 py-1">{String(profile.fields.frequency)}</Badge>
-              )}
-            </div>
-            {profile.fields.nextBillingDate && (
-              <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">Next Billing Date</span>
-                <span className="text-sm font-medium">{String(profile.fields.nextBillingDate)}</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Spending Summary */}
-      {expenses.length > 0 && (
-        <Card>
-          <CardContent className="p-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Total Spent</p>
-                <p className="text-xl font-semibold tabular-nums">{formatCurrency(totalSpent)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Avg / Month</p>
-                <p className="text-xl font-semibold tabular-nums">{formatCurrency(avgPerMonth)}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Spending by Month Bar Chart */}
-      {barData.length > 1 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <BarChart2 className="h-4 w-4 text-muted-foreground" /> Spending by Month
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={140}>
-              <BarChart data={barData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${v}`} />
-                <Tooltip
-                  contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                  formatter={(val: number) => [formatCurrency(val), "Spent"]}
-                />
-                <Bar dataKey="amount" fill="#20808D" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Linked Obligations with Payment Schedule */}
-      {obligations.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <CreditCard className="h-4 w-4 text-muted-foreground" />
-              {isSubscription ? "Billing Schedule" : isLoan ? "Payment Obligations" : "Obligations"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {obligations.map(ob => (
-              <div key={ob.id} className="py-2.5 border-b border-border last:border-0">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">{ob.name}</p>
-                  <span className="text-sm font-semibold tabular-nums">{formatCurrency(ob.amount)}</span>
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <Badge variant="secondary" className="text-[10px]">{ob.frequency}</Badge>
-                  <span className="text-xs text-muted-foreground">Next: {ob.nextDueDate}</span>
-                  {ob.autopay && <Badge variant="outline" className="text-[10px]">Autopay</Badge>}
-                </div>
-                {ob.payments.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Recent payments</p>
-                    {ob.payments.slice(-3).reverse().map(p => (
-                      <div key={p.id} className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">{p.date}</span>
-                        <span className="font-medium">{formatCurrency(p.amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Expense History with edit/delete */}
-      {expenses.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <DollarSign className="h-4 w-4 text-muted-foreground" /> Expense History
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {expenses.slice(0, 20).map(expense => (
-              <div key={expense.id} className="flex items-center justify-between py-2 border-b border-border last:border-0 group" data-testid={`row-expense-${expense.id}`}>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm">{expense.description}</p>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="text-xs text-muted-foreground">{new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
-                    {expense.category && <Badge variant="secondary" className="text-[10px]">{expense.category}</Badge>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0 ml-2">
-                  <span className="text-sm font-semibold tabular-nums">{formatCurrency(expense.amount)}</span>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => openEdit(expense)} data-testid={`button-edit-expense-${expense.id}`}>
-                    <Edit className="h-3 w-3" />
-                  </Button>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteExpenseId(expense.id)} data-testid={`button-delete-expense-${expense.id}`}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Empty state */}
-      {expenses.length === 0 && obligations.length === 0 && performanceHistory.length === 0 && (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <DollarSign className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-            <p className="text-sm font-medium text-muted-foreground">No financial data yet</p>
-            <p className="text-xs text-muted-foreground mt-1">Add an expense above or use chat</p>
-          </CardContent>
-        </Card>
-      )}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* Dialogs                                                 */}
+      {/* ═══════════════════════════════════════════════════════ */}
 
       {/* Add Expense Dialog */}
       <Dialog open={showAddExpense} onOpenChange={setShowAddExpense}>
@@ -2376,46 +2726,116 @@ function QuickHealthButton({ profileId, name, unit, field, category, fieldType =
 }
 
 function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChanged: () => void }) {
-  const healthCats = ["health", "fitness", "weight", "sleep", "wellness", "nutrition"];
+  const { toast } = useToast();
+  const profileId = profile.id;
+
+  // ── state ──────────────────────────────────────────────────
+  const [expandedTrackers, setExpandedTrackers] = useState<Set<string>>(new Set());
+  const [logOpen, setLogOpen] = useState<string | null>(null); // trackerId
+  const [logValue, setLogValue] = useState("");
+  const [logNotes, setLogNotes] = useState("");
+  const [quickLogOpen, setQuickLogOpen] = useState<string | null>(null); // tracker name
+  const [quickLogValue, setQuickLogValue] = useState("");
+
+  // ── filter health trackers ─────────────────────────────────
+  const healthCats = ["health", "fitness", "weight", "sleep", "wellness", "nutrition", "medical", "vitals", "diet", "calories", "water", "blood"];
   const healthTrackers = profile.relatedTrackers.filter((t: any) =>
     healthCats.some(c => (t.category || "").toLowerCase().includes(c) || (t.name || "").toLowerCase().includes(c))
   );
 
-  // Extract latest vitals from trackers
-  const vitals: { name: string; value: string; unit: string; trend: "up" | "down" | "flat" }[] = [];
-  for (const t of healthTrackers.slice(0, 6)) {
-    const pf = t.fields?.find((f: any) => f.isPrimary) || t.fields?.[0];
-    const fn = pf?.name || "value";
-    const sorted = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    const latest = sorted[0]?.values?.[fn];
-    const prev = sorted[1]?.values?.[fn];
-    if (latest == null) continue;
-    const trend: "up" | "down" | "flat" = typeof latest === "number" && typeof prev === "number"
-      ? latest > prev ? "up" : latest < prev ? "down" : "flat" : "flat";
-    vitals.push({ name: t.name, value: String(latest), unit: pf?.unit || t.unit || "", trend });
+  // ── helpers ───────────────────────────────────────────────
+  function getPrimaryField(tracker: any): string {
+    return tracker.fields?.find((f: any) => f.isPrimary)?.name || tracker.fields?.[0]?.name || "value";
   }
 
-  // Group trackers by category
-  const groups: Record<string, typeof healthTrackers> = {};
-  for (const t of healthTrackers) {
-    const cat = (t.category || "custom").toLowerCase();
-    const group = cat.includes("fitness") ? "Fitness" : cat.includes("nutrition") ? "Nutrition" : cat.includes("sleep") ? "Sleep" : "Vitals";
-    (groups[group] ||= []).push(t);
+  function getLatestValue(tracker: any): number | null {
+    const pf = getPrimaryField(tracker);
+    const sorted = [...(tracker.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const v = sorted[0]?.values?.[pf];
+    return v != null ? Number(v) : null;
   }
 
+  function getPrevValue(tracker: any): number | null {
+    const pf = getPrimaryField(tracker);
+    const sorted = [...(tracker.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const v = sorted[1]?.values?.[pf];
+    return v != null ? Number(v) : null;
+  }
+
+  function get7DayAvg(tracker: any): number | null {
+    const pf = getPrimaryField(tracker);
+    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const recent = (tracker.entries || []).filter((e: any) => new Date(e.timestamp).getTime() >= since);
+    if (recent.length === 0) return null;
+    const nums = recent.map((e: any) => Number(e.values?.[pf])).filter((n: number) => !isNaN(n));
+    if (nums.length === 0) return null;
+    return nums.reduce((a: number, b: number) => a + b, 0) / nums.length;
+  }
+
+  function getTrend(tracker: any): "up" | "down" | "flat" {
+    const latest = getLatestValue(tracker);
+    const prev = getPrevValue(tracker);
+    if (latest == null || prev == null) return "flat";
+    if (latest > prev) return "up";
+    if (latest < prev) return "down";
+    return "flat";
+  }
+
+  function getDaysSinceLastEntry(tracker: any): number | null {
+    if (!tracker.entries?.length) return null;
+    const sorted = [...tracker.entries].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const ms = Date.now() - new Date(sorted[0].timestamp).getTime();
+    return Math.floor(ms / (24 * 60 * 60 * 1000));
+  }
+
+  function getStreak(tracker: any): number {
+    if (!tracker.entries?.length) return 0;
+    const sorted = [...tracker.entries].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    let streak = 0;
+    let prevDate = new Date();
+    prevDate.setHours(0, 0, 0, 0);
+    for (const e of sorted) {
+      const d = new Date(e.timestamp);
+      d.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((prevDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+      if (diffDays <= 1) { streak++; prevDate = d; }
+      else break;
+    }
+    return streak;
+  }
+
+  // ── log entry mutation ────────────────────────────────────
+  const logMutation = useMutation({
+    mutationFn: async ({ trackerId, values, notes }: { trackerId: string; values: Record<string, number>; notes: string }) => {
+      await apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values, notes });
+    },
+    onSuccess: () => {
+      toast({ title: "Entry logged" });
+      setLogOpen(null); setLogValue(""); setLogNotes("");
+      setQuickLogOpen(null); setQuickLogValue("");
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  // ── empty state ───────────────────────────────────────────
   if (healthTrackers.length === 0) {
     return (
       <div className="space-y-3">
         <Card>
-          <CardContent className="py-8 text-center">
-            <HeartPulse className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-            <p className="text-sm font-medium text-muted-foreground">No health data yet</p>
-            <p className="text-xs text-muted-foreground mt-2 mb-4">Create a health tracker to start logging data</p>
+          <CardContent className="py-10 text-center">
+            <HeartPulse className="h-12 w-12 text-muted-foreground/25 mx-auto mb-3" />
+            <p className="text-sm font-semibold text-muted-foreground">No health data yet</p>
+            <p className="text-xs text-muted-foreground mt-1.5 mb-5">Create a health tracker to start logging data</p>
             <div className="flex flex-wrap gap-2 justify-center">
-              <QuickHealthButton profileId={profile.id} name="Weight" unit={profile.type === 'pet' ? 'lbs' : 'lbs'} field="weight" category="health" onCreated={onChanged} />
+              <QuickHealthButton profileId={profile.id} name="Weight" unit="lbs" field="weight" category="health" onCreated={onChanged} />
               <QuickHealthButton profileId={profile.id} name="Blood Pressure" unit="mmHg" field="systolic" category="health" onCreated={onChanged} />
-              <QuickHealthButton profileId={profile.id} name="Medication" unit="" field="medication" category="health" fieldType="text" onCreated={onChanged} />
-              {profile.type === 'pet' && (
+              <QuickHealthButton profileId={profile.id} name="Sleep" unit="hrs" field="hours" category="sleep" onCreated={onChanged} />
+              <QuickHealthButton profileId={profile.id} name="Calories" unit="kcal" field="calories" category="nutrition" onCreated={onChanged} />
+              <QuickHealthButton profileId={profile.id} name="Water" unit="oz" field="oz" category="health" onCreated={onChanged} />
+              {profile.type === "pet" && (
                 <QuickHealthButton profileId={profile.id} name="Vaccination" unit="" field="vaccine" category="health" fieldType="text" onCreated={onChanged} />
               )}
             </div>
@@ -2425,44 +2845,353 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     );
   }
 
+  // ── Section 1: Vitals Dashboard ───────────────────────────
+  const vitalCards = healthTrackers.map((t: any) => {
+    const pf = getPrimaryField(t);
+    const latest = getLatestValue(t);
+    const prev = getPrevValue(t);
+    const avg7 = get7DayAvg(t);
+    const trend = getTrend(t);
+    const sparkData = (t.entries || []).slice(-10).map((e: any) => ({
+      v: Number(e.values?.[pf] ?? 0),
+    }));
+    const sorted = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const lastDate = sorted[0]?.timestamp ? new Date(sorted[0].timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+    return { tracker: t, pf, latest, prev, avg7, trend, sparkData, lastDate };
+  }).filter((v: any) => v.latest != null);
+
+  // ── Section 2: Top 3 trackers by entry count (trend charts) ─
+  const topChartTrackers = [...healthTrackers]
+    .sort((a: any, b: any) => (b.entries?.length || 0) - (a.entries?.length || 0))
+    .slice(0, 3)
+    .filter((t: any) => (t.entries?.length || 0) >= 2);
+
+  // ── Section 4: Quick log trackers ────────────────────────
+  const quickLogNames = ["Weight", "Blood Pressure", "Calories", "Sleep", "Water"];
+  const quickLogTrackers = quickLogNames
+    .map(name => healthTrackers.find((t: any) => t.name.toLowerCase() === name.toLowerCase()))
+    .filter(Boolean);
+
+  // ── Section 5: AI Health Insights ────────────────────────
+  const insights: { key: string; text: string; level: "warn" | "info" | "good" }[] = [];
+
+  for (const t of healthTrackers) {
+    const pf = getPrimaryField(t);
+    const latest = getLatestValue(t);
+    const avg7 = get7DayAvg(t);
+    const trend = getTrend(t);
+    const days = getDaysSinceLastEntry(t);
+    const streak = getStreak(t);
+    const nameLower = t.name.toLowerCase();
+
+    // Weight trending up
+    if (nameLower.includes("weight") && trend === "up" && latest != null && avg7 != null) {
+      insights.push({ key: `weight-up-${t.id}`, text: `Weight trending up — ${latest.toFixed(1)} ${t.unit || ""} vs ${avg7.toFixed(1)} ${t.unit || ""} (7-day avg)`, level: "warn" });
+    }
+    // BP elevated
+    if ((nameLower.includes("blood pressure") || nameLower.includes("bp")) && latest != null && latest > 130) {
+      insights.push({ key: `bp-${t.id}`, text: `Blood pressure reading is elevated (${latest} ${t.unit || "mmHg"})`, level: "warn" });
+    }
+    // No entries in 3+ days
+    if (days != null && days >= 3 && t.entries?.length > 0) {
+      insights.push({ key: `no-log-${t.id}`, text: `No ${t.name} logged in ${days} day${days !== 1 ? "s" : ""}`, level: "info" });
+    }
+    // Good streak
+    if (streak >= 3) {
+      insights.push({ key: `streak-${t.id}`, text: `${t.name}: ${streak}-day logging streak`, level: "good" });
+    }
+  }
+
   return (
-    <div className="space-y-3">
-      {/* Vitals Summary */}
-      {vitals.length > 0 && (
-        <Card>
-          <CardHeader className="py-2 px-3">
-            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
-              <Heart className="h-3.5 w-3.5 text-primary" /> Latest Vitals
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-2.5 pt-0">
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {vitals.map(v => (
-                <div key={v.name} className="flex items-center gap-2 p-2 rounded-lg bg-muted/40">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[9px] text-muted-foreground truncate">{v.name}</p>
-                    <div className="flex items-center gap-1">
-                      <span className="text-sm font-bold tabular-nums">{v.value}</span>
-                      {v.unit && <span className="text-[10px] text-muted-foreground">{v.unit}</span>}
-                      {v.trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
-                      {v.trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
-                      {v.trend === "flat" && <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+    <div className="space-y-4">
+
+      {/* ── Section 1: Vitals Dashboard ── */}
+      {vitalCards.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+            <Heart className="h-3 w-3" /> Latest Vitals
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {vitalCards.map(({ tracker, latest, prev, avg7, trend, sparkData, lastDate }: any) => {
+              const trendColor = trend === "up" ? "text-green-500" : trend === "down" ? "text-red-500" : "text-muted-foreground";
+              return (
+                <div key={tracker.id} className="rounded-lg border bg-card p-3 flex flex-col gap-1.5">
+                  <p className="text-[10px] text-muted-foreground truncate font-medium">{tracker.name}</p>
+                  <div className="flex items-end justify-between">
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-xl font-bold tabular-nums leading-none">
+                        {typeof latest === "number" ? latest.toLocaleString(undefined, { maximumFractionDigits: 1 }) : latest}
+                      </span>
+                      {tracker.unit && <span className="text-[10px] text-muted-foreground">{tracker.unit}</span>}
+                    </div>
+                    <div className={`flex items-center gap-0.5 text-[10px] font-medium ${trendColor}`}>
+                      {trend === "up" && <ArrowUp className="h-3 w-3" />}
+                      {trend === "down" && <ArrowDown className="h-3 w-3" />}
+                      {trend === "flat" && <Minus className="h-3 w-3" />}
                     </div>
                   </div>
+                  {sparkData.length >= 2 && (
+                    <div style={{ width: "100%", height: 22 }}>
+                      <ResponsiveContainer width="100%" height={22}>
+                        <AreaChart data={sparkData} margin={{ top: 1, right: 0, left: 0, bottom: 1 }}>
+                          <Area type="monotone" dataKey="v" stroke="#20808D" fill="#20808D22" strokeWidth={1.5} dot={false} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between">
+                    {avg7 != null && (
+                      <span className="text-[9px] text-muted-foreground">7d avg {avg7.toFixed(1)}</span>
+                    )}
+                    {lastDate && (
+                      <span className="text-[9px] text-muted-foreground ml-auto">{lastDate}</span>
+                    )}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+              );
+            })}
+          </div>
+        </div>
       )}
 
-      {/* Grouped Trackers */}
-      {Object.entries(groups).map(([group, trks]) => (
-        <div key={group}>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">{group}</p>
-          <TrackersTab trackers={trks} profileId={profile.id} onChanged={onChanged} />
+      {/* ── Section 2: Trend Charts ── */}
+      {topChartTrackers.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+            <Activity className="h-3 w-3" /> Trends
+          </p>
+          <div className="space-y-2">
+            {topChartTrackers.map((t: any) => {
+              const pf = getPrimaryField(t);
+              const chartData = (t.entries || []).slice(-30).map((e: any) => ({
+                date: new Date(e.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+                value: Number(e.values?.[pf] ?? 0),
+              }));
+              return (
+                <Card key={t.id}>
+                  <CardHeader className="py-2 px-3">
+                    <CardTitle className="text-xs font-semibold">{t.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-3 pb-3 pt-0">
+                    <ResponsiveContainer width="100%" height={100}>
+                      <LineChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                        <XAxis dataKey="date" tick={{ fontSize: 9 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                        <YAxis tick={{ fontSize: 9 }} tickLine={false} axisLine={false} width={36} />
+                        <Tooltip
+                          contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
+                          formatter={(val: number) => [`${val.toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? " " + t.unit : ""}`, t.name]}
+                        />
+                        <Line type="monotone" dataKey="value" stroke="#20808D" strokeWidth={2} dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
         </div>
-      ))}
+      )}
+
+      {/* ── Section 4: Quick Log ── */}
+      {quickLogTrackers.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+            <Plus className="h-3 w-3" /> Quick Log
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {quickLogTrackers.map((t: any) => (
+              <div key={t.id}>
+                {quickLogOpen === t.name ? (
+                  <div className="flex items-center gap-1.5 border rounded-lg px-2 py-1 bg-card">
+                    <span className="text-xs text-muted-foreground">{t.name}</span>
+                    <Input
+                      className="h-6 w-16 text-xs px-1"
+                      type="number"
+                      placeholder={t.unit || "value"}
+                      value={quickLogValue}
+                      onChange={e => setQuickLogValue(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter" && quickLogValue) {
+                          const pf = getPrimaryField(t);
+                          logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(quickLogValue) }, notes: "" });
+                        }
+                        if (e.key === "Escape") { setQuickLogOpen(null); setQuickLogValue(""); }
+                      }}
+                      autoFocus
+                    />
+                    <Button
+                      size="sm" className="h-6 text-[10px] px-2"
+                      disabled={!quickLogValue || logMutation.isPending}
+                      onClick={() => {
+                        const pf = getPrimaryField(t);
+                        logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(quickLogValue) }, notes: "" });
+                      }}
+                    >
+                      {logMutation.isPending ? "..." : "Save"}
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => { setQuickLogOpen(null); setQuickLogValue(""); }}>
+                      <Minus className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
+                    onClick={() => { setQuickLogOpen(t.name); setQuickLogValue(""); }}>
+                    <Plus className="h-3 w-3" /> {t.name}
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Section 3: All Trackers (expandable) ── */}
+      <div>
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+          <HeartPulse className="h-3 w-3" /> All Trackers
+        </p>
+        <div className="space-y-2">
+          {healthTrackers.map((t: any) => {
+            const pf = getPrimaryField(t);
+            const latest = getLatestValue(t);
+            const sortedEntries = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            const lastEntry = sortedEntries[0];
+            const lastDate = lastEntry ? new Date(lastEntry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+            const isExpanded = expandedTrackers.has(t.id);
+            const isLogging = logOpen === t.id;
+
+            return (
+              <Card key={t.id}>
+                <CardContent className="p-3">
+                  {/* Collapsed header */}
+                  <button
+                    className="w-full flex items-center justify-between gap-2 text-left"
+                    onClick={() => setExpandedTrackers(prev => {
+                      const s = new Set(prev);
+                      if (s.has(t.id)) s.delete(t.id); else s.add(t.id);
+                      return s;
+                    })}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate">{t.name}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        {t.category && <Badge variant="secondary" className="text-[9px] py-0">{t.category}</Badge>}
+                        <span className="text-[10px] text-muted-foreground">{t.entries?.length || 0} entries</span>
+                        {lastDate && <span className="text-[10px] text-muted-foreground">· last {lastDate}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {latest != null && (
+                        <span className="text-base font-bold tabular-nums">
+                          {latest.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                          {t.unit && <span className="text-xs text-muted-foreground ml-0.5 font-normal">{t.unit}</span>}
+                        </span>
+                      )}
+                      {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                  </button>
+
+                  {/* Expanded content */}
+                  {isExpanded && (
+                    <div className="mt-3 space-y-3">
+                      {/* Last 10 entries */}
+                      {sortedEntries.length > 0 ? (
+                        <div className="space-y-0">
+                          {sortedEntries.slice(0, 10).map((entry: any) => (
+                            <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-mono font-semibold tabular-nums">
+                                  {entry.values?.[pf] != null
+                                    ? `${Number(entry.values[pf]).toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? ` ${t.unit}` : ""}`
+                                    : Object.values(entry.values || {}).filter(Boolean).join(", ") || "—"}
+                                </span>
+                                {entry.notes && <span className="text-muted-foreground truncate max-w-[100px]" title={entry.notes}>{entry.notes}</span>}
+                              </div>
+                              <span className="text-[10px] text-muted-foreground shrink-0 ml-2">
+                                {new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground text-center py-2">No entries yet</p>
+                      )}
+
+                      {/* Log Entry inline form */}
+                      {isLogging ? (
+                        <div className="flex flex-col gap-2 p-2 rounded-lg border bg-muted/30">
+                          <p className="text-xs font-medium">Log Entry — {t.name}</p>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              className="h-7 text-xs flex-1"
+                              placeholder={`Value${t.unit ? ` (${t.unit})` : ""}`}
+                              value={logValue}
+                              onChange={e => setLogValue(e.target.value)}
+                              autoFocus
+                            />
+                            <Input
+                              type="text"
+                              className="h-7 text-xs flex-1"
+                              placeholder="Notes (optional)"
+                              value={logNotes}
+                              onChange={e => setLogNotes(e.target.value)}
+                            />
+                          </div>
+                          <div className="flex gap-1.5">
+                            <Button
+                              size="sm" className="h-7 text-xs flex-1"
+                              disabled={!logValue || logMutation.isPending}
+                              onClick={() => {
+                                logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(logValue) }, notes: logNotes });
+                              }}
+                            >
+                              {logMutation.isPending ? "Saving..." : "Save"}
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setLogOpen(null); setLogValue(""); setLogNotes(""); }}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <Button variant="secondary" size="sm" className="h-7 text-xs w-full gap-1"
+                          onClick={() => { setLogOpen(t.id); setLogValue(""); setLogNotes(""); }}>
+                          <Plus className="h-3.5 w-3.5" /> Log Entry
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Section 5: AI Health Insights ── */}
+      {insights.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+            <Sparkles className="h-3 w-3" /> Insights
+          </p>
+          <div className="space-y-1.5">
+            {insights.map(ins => (
+              <div key={ins.key} className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
+                ins.level === "warn" ? "border-yellow-500/30 bg-yellow-500/5 text-yellow-700 dark:text-yellow-400" :
+                ins.level === "good" ? "border-green-500/30 bg-green-500/5 text-green-700 dark:text-green-400" :
+                "border-border bg-muted/30 text-muted-foreground"
+              }`}>
+                {ins.level === "warn" && <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
+                {ins.level === "good" && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
+                {ins.level === "info" && <Activity className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
+                <span>{ins.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
