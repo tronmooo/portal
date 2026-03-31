@@ -2975,6 +2975,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       // Strip filler words like "for my", "of my", etc. for cleaner matching
       const cleanSearch = searchTerm.replace(/\b(for|of|the|a|an|my)\b\s*/g, "").replace(/\s+/g, " ").trim();
       const searchVariants = expandWithSynonyms(cleanSearch);
+      // Simple stem: strip trailing s/ing/ed/tion for prefix matching
+      const stem = (w: string) => w.replace(/(ing|tion|ed|s)$/i, "");
 
       // Fuzzy match: search in document name, type, and extracted data
       const scored = allDocs.map(d => {
@@ -2984,8 +2986,6 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         const nameNorm = nameLC.replace(/[''\-_–—]/g, " ").replace(/\s+/g, " ");
         const searchable = `${nameNorm} ${typeLC}`;
         let score = 0;
-        // Simple stem: strip trailing s/ing/ed/tion for prefix matching
-        const stem = (w: string) => w.replace(/(ing|tion|ed|s)$/i, "");
         // Check each search variant (original + synonym-expanded)
         for (const variant of searchVariants) {
           const vNorm = variant.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
@@ -3019,10 +3019,53 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         return { doc: d, score };
       }).filter(s => s.score >= 4).sort((a, b) => b.score - a.score);
       const matches = scored.map(s => s.doc);
+
+      // Check if the user asked for MULTIPLE documents (e.g., "open my registration, license, and birth certificate")
+      // Split on commas / "and" to find multiple search terms
+      const multiParts = cleanSearch.split(/\s*(?:,|\band\b)\s*/).filter(p => p.trim().length >= 2);
+      if (multiParts.length > 1) {
+        // Search each part separately against all docs
+        const multiMatches: Array<{ doc: any; part: string }> = [];
+        const usedIds = new Set<string>();
+        for (const part of multiParts) {
+          const partVariants = expandWithSynonyms(part.trim());
+          const partScored = allDocs.filter(d => !usedIds.has(d.id)).map(d => {
+            const nLC = d.name.toLowerCase();
+            const tLC = (d.type || "").toLowerCase().replace(/_/g, " ");
+            const nNorm = nLC.replace(/[''\-_\u2013\u2014]/g, " ").replace(/\s+/g, " ");
+            const s = `${nNorm} ${tLC}`;
+            let sc = 0;
+            for (const v of partVariants) {
+              const vn = v.replace(/[''\-_]/g, "");
+              if (s.includes(vn)) sc += 10;
+              for (const w of vn.split(/\s+/).filter(x => x.length >= 2)) {
+                if (s.includes(w)) sc += 2;
+                else { const ws = stem(w); if (ws.length >= 3 && s.includes(ws)) sc += 1.5; }
+              }
+            }
+            return { doc: d, score: sc };
+          }).filter(x => x.score >= 3).sort((a, b) => b.score - a.score);
+          if (partScored.length > 0) {
+            multiMatches.push({ doc: partScored[0].doc, part: part.trim() });
+            usedIds.add(partScored[0].doc.id);
+          }
+        }
+        if (multiMatches.length > 1) {
+          const names = multiMatches.map(m => m.doc.name);
+          const previews = multiMatches.map(m => ({ id: m.doc.id, name: m.doc.name, mimeType: m.doc.mimeType, data: "__LAZY_LOAD__" }));
+          return {
+            reply: `Here are your ${multiMatches.length} documents: ${names.join(", ")}.`,
+            actions: multiMatches.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.doc.id } })),
+            results: multiMatches.map(m => ({ id: m.doc.id, name: m.doc.name, type: m.doc.type, mimeType: m.doc.mimeType })),
+            documentPreview: previews[0],
+            documentPreviews: previews,
+          };
+        }
+      }
+
+      // Single document match
       if (matches.length > 0) {
         const doc = matches[0];
-        // Return a lightweight preview reference — the client will fetch the image from /api/documents/:id/file
-        // This avoids embedding multi-MB base64 in the chat JSON response
         return {
           reply: `Here's your ${doc.name}.${matches.length > 1 ? ` (Found ${matches.length} matches — showing the first one.)` : ""}`,
           actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],

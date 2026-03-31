@@ -817,7 +817,7 @@ function HealthSection({ data }: { data: any[] }) {
               <HeartPulse className="h-4 w-4 text-primary" />
               {selectedTracker?.name}
             </DialogTitle>
-            <DialogDescription className="text-xs">{selectedTracker?.category} tracker</DialogDescription>
+            <DialogDescription className="text-xs">{selectedTracker?.entries || 0} entries · {selectedTracker?.unit || ""}</DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
             <div className="flex justify-between text-xs"><span className="text-muted-foreground">Latest</span><span className="font-semibold">{selectedTracker?.latestValue} {selectedTracker?.unit}</span></div>

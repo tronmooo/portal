@@ -944,8 +944,16 @@ function TrackerCard({
               {tracker.name}
             </CardTitle>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <Badge variant="secondary" className="text-[10px] capitalize">{tracker.category}</Badge>
-              <span className="text-[10px] text-muted-foreground">{tracker.entries.length} {tracker.entries.length === 1 ? 'entry' : 'entries'}</span>
+              {(() => {
+                const last = tracker.entries[tracker.entries.length - 1];
+                const pf = tracker.fields?.[0]?.name || Object.keys(last?.values || {})[0] || "value";
+                const lastVal = last?.values?.[pf];
+                if (lastVal != null) {
+                  return <span className="text-xs font-semibold tabular-nums">{typeof lastVal === 'number' ? lastVal.toFixed(1) : lastVal}{tracker.unit ? ` ${tracker.unit}` : ''}</span>;
+                }
+                return null;
+              })()}
+              <span className="text-[10px] text-muted-foreground">· {tracker.entries.length} {tracker.entries.length === 1 ? 'entry' : 'entries'}</span>
               {linkedProfileNames.map(p => {
                 const PIcon = PROFILE_TYPE_ICONS[p.type] || User;
                 return (
@@ -2336,8 +2344,8 @@ function HistoryTabContent({ tracker, primaryField }: { tracker: Tracker; primar
           const delta = typeof val === "number" && typeof nextVal === "number" ? val - nextVal : null;
 
           return (
-            <div key={entry.id} className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm" data-testid={`entry-row-${entry.id}`}>
-              <div className="flex items-center gap-3 min-w-0 flex-wrap">
+            <div key={entry.id} className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm gap-2" data-testid={`entry-row-${entry.id}`}>
+              <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
                 <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
                 {delta != null && delta !== 0 && (
                   <span className={`text-[10px] font-medium tabular-nums ${delta < 0 ? "text-green-600" : "text-orange-500"}`}>
@@ -2350,14 +2358,18 @@ function HistoryTabContent({ tracker, primaryField }: { tracker: Tracker; primar
                   </span>
                 )}
                 {(notes || entry.notes) && (
-                  <span className="text-[10px] text-muted-foreground italic truncate max-w-[200px]">"{notes || entry.notes}"</span>
+                  <span className="text-[10px] text-muted-foreground italic truncate max-w-[140px]">"{notes || entry.notes}"</span>
                 )}
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-[11px] text-muted-foreground tabular-nums">
-                  {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                  {" "}{new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <div className="text-right">
+                  <span className="text-[10px] text-muted-foreground tabular-nums block">
+                    {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                  </span>
+                  <span className="text-[9px] text-muted-foreground/70 tabular-nums block">
+                    {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
                 <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
               </div>
             </div>
@@ -2488,24 +2500,31 @@ function TrackerDetailDialog({
       <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
         <DialogContent className="max-w-2xl h-[90vh] max-h-[90vh] flex flex-col p-0" data-testid="tracker-detail-dialog">
           {/* ── Header ── */}
-          <div className="px-5 pt-5 pb-3 border-b shrink-0">
+          <div className="px-5 pt-5 pb-3 pr-12 border-b shrink-0">
             <div className="flex items-center justify-between">
-              <div>
-                <DialogTitle className="text-base font-semibold">{tracker.name}</DialogTitle>
+              <div className="min-w-0">
+                <DialogTitle className="text-base font-semibold truncate">{tracker.name}</DialogTitle>
                 <DialogDescription className="text-xs mt-0.5">
                   {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
                   {tracker.unit ? ` · ${tracker.unit}` : ""}
-                  {" · "}<span className="capitalize">{tracker.category}</span>
                 </DialogDescription>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <Button size="sm" onClick={() => setAddEntryOpen(true)} data-testid="button-add-entry-detail" className="h-7 text-xs">
-                  <Plus className="w-3 h-3 mr-1" /> Add Entry
+                  <Plus className="w-3 h-3 mr-1" /> Add
                 </Button>
-                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                  onClick={() => setDeleteTrackerOpen(true)} data-testid="button-delete-tracker-detail">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" data-testid="button-tracker-detail-menu">
+                      <MoreHorizontal className="w-3.5 h-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteTrackerOpen(true)} data-testid="button-delete-tracker-detail">
+                      <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete Tracker
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
           </div>
@@ -2760,8 +2779,9 @@ export default function TrackersPage() {
   }
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
+  // Show all person/pet/vehicle profiles in filter — not just ones with linked trackers
   const profilesWithTrackers = (profiles || []).filter(p =>
-    p.type === "self" || (trackers || []).some(t => t.linkedProfiles?.includes(p.id))
+    ["self", "person", "pet", "vehicle"].includes(p.type)
   );
 
   // Sort so "self" (Me) comes first
