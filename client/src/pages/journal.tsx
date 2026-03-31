@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -139,10 +140,12 @@ export default function JournalPage() {
   const [mood, setMood] = useState<MoodLevel | null>(null);
   const [content, setContent] = useState("");
   const [energy, setEnergy] = useState(3);
+  const { id: profileId, name: profileName } = getDashboardProfileFilter();
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
 
   const { data: entries = [], isLoading } = useQuery<JournalEntry[]>({
-    queryKey: ["/api/journal"],
-    queryFn: () => apiRequest("GET", "/api/journal").then(r => r.json()),
+    queryKey: ["/api/journal", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/journal${profileParam}`).then(r => r.json()),
   });
 
   const handleSaveJournal = () => {
@@ -178,7 +181,7 @@ export default function JournalPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Journal</h1>
+            <h1 className="text-lg font-semibold">Journal{profileId ? ` — ${profileName}` : ""}</h1>
           </div>
           <p className="text-xs text-muted-foreground">{entries.length} entries</p>
         </div>

@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -293,9 +294,12 @@ function TaskItem({
 export default function TasksPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
+  const { id: profileId, name: profileName } = getDashboardProfileFilter();
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
 
   const { data: tasks, isLoading } = useQuery<Task[]>({
-    queryKey: ["/api/tasks"],
+    queryKey: ["/api/tasks", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
   });
 
   if (isLoading) {
@@ -322,7 +326,7 @@ export default function TasksPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-xl font-semibold" data-testid="text-tasks-title">Tasks</h1>
+            <h1 className="text-xl font-semibold" data-testid="text-tasks-title">Tasks{profileId ? ` — ${profileName}` : ""}</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
             {activeTasks.length} active, {completedTasks.length} completed

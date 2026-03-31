@@ -1052,7 +1052,19 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Tasks ----
-  app.get("/api/tasks", asyncHandler(async (req, res) => { const items = await storage.getTasks(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/tasks", asyncHandler(async (req, res) => {
+    let items = await storage.getTasks();
+    const fp = req.query.profileId as string | undefined;
+    if (fp) {
+      const allProfiles = await storage.getProfiles();
+      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      items = items.filter(item => {
+        const lp = item.linkedProfiles || [];
+        return lp.includes(fp) || (isSelf && lp.length === 0);
+      });
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+  }));
   app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
     const tasks = await storage.getTasks();
     const task = tasks.find(t => t.id === req.params.id);
@@ -1096,7 +1108,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       items = items.filter(e => e.category === req.query.category);
     }
     if (req.query.profileId && typeof req.query.profileId === "string") {
-      items = items.filter(e => e.linkedProfiles?.includes(req.query.profileId as string));
+      const fp = req.query.profileId as string;
+      const allProfiles = await storage.getProfiles();
+      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      items = items.filter(e => {
+        const lp = e.linkedProfiles || [];
+        return lp.includes(fp) || (isSelf && lp.length === 0);
+      });
     }
     if (req.query.from && typeof req.query.from === "string") {
       items = items.filter(e => e.date >= (req.query.from as string));
@@ -1239,7 +1257,19 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Habits ----
-  app.get("/api/habits", asyncHandler(async (req, res) => { const items = await storage.getHabits(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/habits", asyncHandler(async (req, res) => {
+    let items = await storage.getHabits();
+    const fp = req.query.profileId as string | undefined;
+    if (fp) {
+      const allProfiles = await storage.getProfiles();
+      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      items = items.filter(item => {
+        const lp = item.linkedProfiles || [];
+        return lp.includes(fp) || (isSelf && lp.length === 0);
+      });
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+  }));
   app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
     if (!habit) return res.status(404).json({ error: "Not found" });
@@ -1274,7 +1304,19 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Obligations ----
-  app.get("/api/obligations", asyncHandler(async (req, res) => { const items = await storage.getObligations(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/obligations", asyncHandler(async (req, res) => {
+    let items = await storage.getObligations();
+    const fp = req.query.profileId as string | undefined;
+    if (fp) {
+      const allProfiles = await storage.getProfiles();
+      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      items = items.filter(item => {
+        const lp = item.linkedProfiles || [];
+        return lp.includes(fp) || (isSelf && lp.length === 0);
+      });
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+  }));
   app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Not found" });
@@ -1349,7 +1391,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Journal ----
-  app.get("/api/journal", asyncHandler(async (req, res) => { const items = await storage.getJournalEntries(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/journal", asyncHandler(async (req, res) => {
+    let items = await storage.getJournalEntries();
+    const fp = req.query.profileId as string | undefined;
+    if (fp) {
+      const allProfiles = await storage.getProfiles();
+      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      // Journal entries are personal — only show for self profile
+      if (!isSelf) { items = []; }
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+  }));
   app.post("/api/journal", asyncHandler(async (req, res) => {
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
       return res.status(400).json({ error: "Journal content is required" });

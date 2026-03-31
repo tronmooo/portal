@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -102,10 +103,12 @@ export default function ObligationsPage() {
   const [newFrequency, setNewFrequency] = useState("monthly");
   const [newCategory, setNewCategory] = useState("housing");
   const [newDueDate, setNewDueDate] = useState(new Date().toISOString().slice(0, 10));
+  const { id: profileId, name: profileName } = getDashboardProfileFilter();
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
 
   const { data: obligations = [], isLoading } = useQuery<Obligation[]>({
-    queryKey: ["/api/obligations"],
-    queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
+    queryKey: ["/api/obligations", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
 
   const createMutation = useMutation({
@@ -148,7 +151,7 @@ export default function ObligationsPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Obligations</h1>
+            <h1 className="text-lg font-semibold">Obligations{profileId ? ` — ${profileName}` : ""}</h1>
           </div>
           <p className="text-xs text-muted-foreground">Recurring bills and payments</p>
         </div>

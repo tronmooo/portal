@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,8 +36,11 @@ const EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet
 
 export default function FinancePage() {
   const { toast } = useToast();
+  const { id: profileId, name: profileName } = getDashboardProfileFilter();
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
   const { data: expenses, isLoading } = useQuery<Expense[]>({
-    queryKey: ["/api/expenses"],
+    queryKey: ["/api/expenses", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
   });
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
@@ -90,7 +94,7 @@ export default function FinancePage() {
               <ArrowLeft className="w-4 h-4" />
             </button>
           </Link>
-          <h1 className="text-xl font-semibold" data-testid="text-finance-title">Finance</h1>
+          <h1 className="text-xl font-semibold" data-testid="text-finance-title">Finance{profileId ? ` — ${profileName}` : ""}</h1>
           <div className="ml-auto flex items-center gap-2">
             <Select value={filterCategory} onValueChange={setFilterCategory}>
               <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-category-filter">

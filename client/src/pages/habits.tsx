@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -138,10 +139,12 @@ export default function HabitsPage() {
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
+  const { id: profileId, name: profileName } = getDashboardProfileFilter();
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
 
   const { data: habits = [], isLoading } = useQuery<Habit[]>({
-    queryKey: ["/api/habits"],
-    queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
+    queryKey: ["/api/habits", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()),
   });
 
   const handleCreate = () => {
@@ -171,7 +174,7 @@ export default function HabitsPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Habits</h1>
+            <h1 className="text-lg font-semibold">Habits{profileId ? ` — ${profileName}` : ""}</h1>
           </div>
           <p className="text-xs text-muted-foreground">{completedToday}/{totalActive} completed today</p>
         </div>

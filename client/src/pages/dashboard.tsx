@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -567,9 +568,11 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
 function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { id: profileId } = getDashboardProfileFilter();
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
   const { data: tasks = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/tasks"],
-    queryFn: () => apiRequest("GET", "/api/tasks").then(r => r.json()),
+    queryKey: ["/api/tasks", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
     enabled: open,
   });
 
@@ -1405,7 +1408,10 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [profileFilter, setProfileFilter] = useState<string>("me");
+  const [profileFilter, setProfileFilter] = useState<string>(() => {
+    const stored = getDashboardProfileFilter();
+    return stored.id ? stored.id : "me";
+  });
 
   // Fetch profiles for filter
   const { data: allProfiles = [] } = useQuery<any[]>({
@@ -1427,6 +1433,13 @@ export default function DashboardPage() {
     return profileFilter;
   }, [profileFilter, selfProfileObj]);
   const statsProfileParam = useMemo(() => resolvedFilterId ? `?profileId=${resolvedFilterId}` : "", [resolvedFilterId]);
+
+  // Sync profile filter to module-level state so sub-pages can read it
+  // Only sync when we have a real value (not during initial load when selfProfileObj is undefined)
+  useEffect(() => {
+    if (profileFilter === "me" && !selfProfileObj) return; // Still loading profiles, don't overwrite stored filter
+    setDashboardProfileFilter(resolvedFilterId, selectedProfileName);
+  }, [resolvedFilterId, selectedProfileName, profileFilter, selfProfileObj]);
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", resolvedFilterId || "all"],
