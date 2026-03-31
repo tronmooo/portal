@@ -31,6 +31,7 @@ import {
   Target,
   Flame,
   BookOpen,
+  RotateCcw,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
@@ -1145,6 +1146,20 @@ export default function ChatPage() {
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-2xl mx-auto space-y-4">
+          {/* Reset chat button - show when there are messages beyond welcome */}
+          {messages.length > 1 && (
+            <div className="flex justify-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground gap-1.5"
+                onClick={() => { setMessages([WELCOME_MSG]); }}
+                data-testid="button-reset-chat"
+              >
+                <RotateCcw className="h-3 w-3" /> New Chat
+              </Button>
+            </div>
+          )}
           {messages.map((msg) => (
             <div
               key={msg.id}

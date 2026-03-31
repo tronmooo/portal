@@ -376,7 +376,22 @@ Always extract total amounts. Scan entire document including corners and footers
 Use numbers, not strings (1085, not "$1,085").
 
 RULE #4 — MEDICAL/LAB VALUES:
-For measurable health data (blood pressure, glucose, cholesterol, weight, etc.), create trackerEntries.
+For ANY measurable health data (blood pressure, glucose, cholesterol, weight, WBC, hemoglobin, platelets, triglycerides, HDL, LDL, A1C, etc.), you MUST create trackerEntries.
+Each tracker entry should have:
+- trackerName: the test/metric name (e.g., "White Blood Cell Count", "Hemoglobin", "Total Cholesterol")
+- values: an object with the value as a number, e.g., {"value": 7.2}
+- unit: the unit of measurement (e.g., "K/uL", "g/dL", "mg/dL")
+- category: "health"
+
+Example for a lab report:
+"trackerEntries": [
+  {"trackerName": "White Blood Cell Count", "values": {"value": 7.2}, "unit": "K/uL", "category": "health"},
+  {"trackerName": "Hemoglobin", "values": {"value": 14.5}, "unit": "g/dL", "category": "health"},
+  {"trackerName": "Platelets", "values": {"value": 250}, "unit": "K/uL", "category": "health"},
+  {"trackerName": "Glucose", "values": {"value": 95}, "unit": "mg/dL", "category": "health"},
+  {"trackerName": "Total Cholesterol", "values": {"value": 105}, "unit": "mg/dL", "category": "health"}
+]
+Do NOT set values to 0. Extract the ACTUAL number from the document.
 
 RULE #5 — PROFILE MATCHING:
 Only set targetProfile if the document explicitly names a person/vehicle/pet that matches an existing profile. Otherwise null.
