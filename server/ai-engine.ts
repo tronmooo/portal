@@ -426,7 +426,7 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: process.env.ANTHROPIC_EXTRACTION_MODEL || "claude-sonnet-4-6", // Use latest Sonnet for best vision accuracy on documents
+      model: process.env.ANTHROPIC_EXTRACTION_MODEL || process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001", // Use same model as chat — Sonnet requires separate API access
       max_tokens: 2048,
       messages: [{
         role: "user",
