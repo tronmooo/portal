@@ -3038,19 +3038,9 @@ export default function ProfileDetailPage() {
         <AISummaryCard profileId={id} profileType={profile.type} />
       </div>
 
-      {/* Type-specific Tabs — use DynamicProfileDetail when registry type is available */}
+      {/* Profile Tabs — always use the full tab system */}
       <div className="px-4 md:px-6 pb-6">
-        {typeDef ? (
-          <div className="mt-4">
-            <DynamicProfileDetail
-              profile={profile}
-              typeDef={typeDef}
-              onChanged={handleSaved}
-            />
-          </div>
-        ) : (
-        /* Legacy hardcoded tab system */
-        (() => {
+        {(() => {
           const tabs = getTabsForType(profile.type, profile);
           const tabValues = new Set(tabs.map(t => t.value));
           return (
@@ -3177,8 +3167,7 @@ export default function ProfileDetailPage() {
               )}
             </Tabs>
           );
-        })()
-        )}
+        })()}
       </div>
 
       {/* Edit Dialog */}
