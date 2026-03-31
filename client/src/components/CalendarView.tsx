@@ -709,6 +709,8 @@ export default function CalendarView() {
   const [filterType, setFilterType] = useState<string>("all");
   const [profileFilter, setProfileFilter] = useState<string>("all");
   const [syncing, setSyncing] = useState(false);
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [quickAddDate, setQuickAddDate] = useState<string | null>(null);
   const { toast } = useToast();
 
   // Fetch profiles for the person/pet filter
@@ -728,6 +730,7 @@ export default function CalendarView() {
       toast({ title: "Calendar Synced", description: data.message });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      setLastSynced(new Date());
     } catch {
       toast({ title: "Sync Failed", description: "Could not connect to Google Calendar.", variant: "destructive" });
     } finally {
@@ -861,13 +864,16 @@ export default function CalendarView() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1 text-xs"
+            className="h-8 gap-1.5 text-xs"
             onClick={handleGcalSync}
             disabled={syncing}
             data-testid="btn-gcal-sync"
           >
             <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Syncing..." : "Sync GCal"}
+            {!syncing && lastSynced && (
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" title={`Last synced: ${lastSynced.toLocaleTimeString()}`} />
+            )}
           </Button>
           <Button
             size="sm"
@@ -907,12 +913,11 @@ export default function CalendarView() {
         ].map(f => (
           <button
             key={f.key}
-            className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all ${
+            className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
               filterType === f.key
-                ? "text-white border-transparent"
-                : "border-border text-muted-foreground hover:border-foreground/30"
+                ? "bg-primary text-primary-foreground font-semibold border-transparent shadow-sm"
+                : "border-border text-muted-foreground hover:bg-muted hover:border-foreground/20"
             }`}
-            style={filterType === f.key ? { backgroundColor: f.color } : {}}
             onClick={() => setFilterType(f.key)}
             data-testid={`btn-filter-${f.key}`}
           >
@@ -950,19 +955,20 @@ export default function CalendarView() {
               return (
                 <button
                   key={idx}
-                  className={`relative min-h-[52px] sm:min-h-[64px] p-1 border-b border-r border-border/40 transition-all text-left flex flex-col ${
-                    day.isCurrentMonth ? "" : "opacity-30"
-                  } ${isSelected ? "bg-primary/5 ring-1 ring-inset ring-primary/30" : "hover:bg-muted/30"} ${
-                    isToday ? "bg-primary/8" : ""
+                  className={`relative min-h-[80px] md:min-h-[100px] p-1 border-b border-r border-border/40 transition-all text-left flex flex-col ${
+                    day.isCurrentMonth ? "" : "opacity-40"
+                  } ${isSelected && !isToday ? "bg-primary/5 ring-1 ring-inset ring-primary/30" : !isSelected && !isToday ? "hover:bg-muted/30" : ""} ${
+                    isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/30" : ""
                   }`}
                   onClick={() => setSelectedDate(day.date)}
+                  onDoubleClick={() => { setQuickAddDate(day.date); setAddOpen(true); }}
                   data-testid={`day-cell-${day.date}`}
                 >
                   <span
-                    className={`text-xs font-medium leading-none ${
+                    className={`text-xs leading-none ${
                       isToday
-                        ? "bg-primary text-primary-foreground rounded-full w-5 h-5 flex items-center justify-center"
-                        : ""
+                        ? "font-bold text-primary bg-primary/20 rounded-full w-5 h-5 flex items-center justify-center ring-1 ring-primary/40"
+                        : "font-medium"
                     }`}
                   >
                     {day.dayNum}
@@ -986,7 +992,7 @@ export default function CalendarView() {
                           </div>
                         ))}
                         {dayItems.length > 2 && (
-                          <span className="text-[8px] text-muted-foreground px-1">
+                          <span className="text-xs font-medium text-primary hover:underline cursor-pointer px-1 py-0.5">
                             +{dayItems.length - 2} more
                           </span>
                         )}
@@ -1045,8 +1051,8 @@ export default function CalendarView() {
       {addOpen && (
         <EventFormDialog
           open={addOpen}
-          onClose={() => setAddOpen(false)}
-          defaultDate={selectedDate}
+          onClose={() => { setAddOpen(false); setQuickAddDate(null); }}
+          defaultDate={quickAddDate ?? selectedDate}
         />
       )}
 

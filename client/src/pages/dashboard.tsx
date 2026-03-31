@@ -54,6 +54,17 @@ function fmtDate(d: string): string {
   return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function fmtDateWithYear(d: string): string {
+  return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function journalStreakLabel(streak: number): string {
+  if (streak === 0) return "Start today";
+  if (streak <= 2) return "Building";
+  if (streak <= 6) return "Good";
+  return "Great";
+}
+
 function daysUntilStr(days: number): string {
   if (days < 0) return `${Math.abs(days)}d overdue`;
   if (days === 0) return "Today";
@@ -128,7 +139,7 @@ function CollapsibleSection({
           {sub && <span className="text-[10px] text-muted-foreground ml-1">{sub}</span>}
           <div className="ml-auto flex items-center gap-1">
             {headerRight}
-            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0 text-muted-foreground"
+            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:bg-muted rounded-full"
               onClick={() => setOpen(v => !v)}
               aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
               aria-expanded={open}
@@ -215,9 +226,36 @@ function InsightsSection({ profileId }: { profileId?: string }) {
     queryFn: () => apiRequest("GET", `/api/insights${profileParam}`).then(r => r.json()),
   });
 
-  const sorted = useMemo(() => [...insights]
-    .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9))
-    .slice(0, 10), [insights]);
+  const sorted = useMemo(() => {
+    const seenTitles = new Set<string>();
+    return [...insights]
+      .filter(insight => {
+        const insightType = insight.type as string;
+        const isExpirationInsight = insightType === "expiring_document" || insightType === "document_expiry" || insightType === "expiration";
+        // Skip expiration alerts for the self/"Me" profile
+        if (isExpirationInsight) {
+          if ((insight as any).profileType === "self") return false;
+        }
+        // Skip bad data: expiration date more than 365 days in the past with out-of-range year
+        if (isExpirationInsight) {
+          const daysUntil = (insight as any).daysUntil;
+          if (typeof daysUntil === "number" && daysUntil < -365) {
+            const expDate = (insight as any).expirationDate ? new Date((insight as any).expirationDate) : null;
+            if (expDate) {
+              const yr = expDate.getFullYear();
+              if (yr < 2020 || yr > 2040) return false;
+            }
+          }
+        }
+        // Deduplicate by title
+        const titleKey = insight.title?.trim().toLowerCase() || "";
+        if (titleKey && seenTitles.has(titleKey)) return false;
+        if (titleKey) seenTitles.add(titleKey);
+        return true;
+      })
+      .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9))
+      .slice(0, 10);
+  }, [insights]);
 
   if (isLoading) return (
     <CollapsibleSection icon={Brain} label="Important Right Now" testId="section-insights">
@@ -283,8 +321,8 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
   if (!hasSchedule && !hasDue) return (
     <CollapsibleSection icon={Calendar} label="Today" testId="section-today">
       <div className="text-center py-4">
-        <Calendar className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground">Nothing scheduled for today</p>
+        <Calendar className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
+        <p className="text-[10px] text-muted-foreground">Nothing scheduled for today</p>
       </div>
     </CollapsibleSection>
   );
@@ -297,7 +335,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
         <div className="space-y-1.5">
           <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Schedule</p>
           {events.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-2">No events today</p>
+            <p className="text-[10px] text-muted-foreground py-2">No events today</p>
           ) : (
             events.map((ev: any) => (
               <div key={ev.id}
@@ -386,7 +424,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
             onClick={() => navigate("/dashboard/habits")} />
           <MiniStat icon={BookHeart} label="Journal Streak"
             value={`${stats.journalStreak}d`}
-            sub={moodConf ? moodConf.label : undefined}
+            sub={moodConf ? moodConf.label : journalStreakLabel(stats.journalStreak)}
             color={moodConf?.color}
             onClick={() => navigate("/dashboard/journal")} />
           <MiniStat icon={CreditCard} label="Upcoming Bills"
@@ -395,7 +433,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
             onClick={() => setPopup("bills")} />
           <MiniStat icon={FileWarning} label="Expiring Docs"
             value={enhanced?.expiringDocuments?.length || 0}
-            sub={enhanced?.expiringDocuments?.[0] ? `next: ${fmtDate(enhanced.expiringDocuments[0].expirationDate)}` : "all clear"}
+            sub={enhanced?.expiringDocuments?.[0] ? `next: ${fmtDateWithYear(enhanced.expiringDocuments[0].expirationDate)}` : "all clear"}
             color={enhanced?.expiringDocuments?.some((d: any) => d.status === 'expired') ? '#A13544' : enhanced?.expiringDocuments?.length > 0 ? '#BB653B' : undefined}
             onClick={() => setPopup("docs")} />
         </div>
@@ -651,7 +689,7 @@ function UpcomingSection({ enhanced, stats }: { enhanced: any; stats: DashboardS
     items.push({
       date: d.expirationDate, daysUntil: d.daysUntil, type: "document",
       icon: FileWarning, title: d.documentName,
-      detail: `${d.fieldName}: ${d.status === "expired" ? "Expired" : `Expires ${fmtDate(d.expirationDate)}`}`,
+      detail: d.status === "expired" ? "Expired" : `Expires ${fmtDate(d.expirationDate)}`,
       route: "/dashboard/artifacts",
     });
   }
@@ -673,17 +711,23 @@ function UpcomingSection({ enhanced, stats }: { enhanced: any; stats: DashboardS
       <div className="space-y-1">
         {capped.map((item, i) => {
           const urgent = item.daysUntil <= 0;
-          const soon = item.daysUntil <= 3;
+          const soon = item.daysUntil <= 3 && item.daysUntil > 0;
           return (
             <div key={`${item.type}-${i}`}
               onClick={() => navigate(item.route)}
-              className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors ${urgent ? "bg-red-500/5" : ""}`}>
-              <Badge variant="outline" className={`shrink-0 text-[9px] px-1.5 py-0.5 h-5 min-w-[48px] justify-center tabular-nums ${urgent ? "border-red-500/40 text-red-500" : soon ? "border-amber-500/40 text-amber-500" : ""}`}>
-                {item.daysUntil <= 0 ? "Overdue" : item.daysUntil === 0 ? "Today" : `${item.daysUntil}d`}
-              </Badge>
+              className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors ${
+                urgent ? "bg-red-500/5 border-l-2 border-red-500 pl-2" : ""
+              }`}>
+              {!urgent && (
+                <Badge variant="outline" className={`shrink-0 text-[9px] px-1.5 py-0.5 h-5 min-w-[48px] justify-center tabular-nums ${
+                  soon ? "border-amber-500/40 text-amber-500" : ""
+                }`}>
+                  {item.daysUntil === 0 ? "Today" : `${item.daysUntil}d`}
+                </Badge>
+              )}
               <item.icon className={`h-3 w-3 shrink-0 ${urgent ? "text-red-500" : "text-muted-foreground"}`} />
               <span className="text-xs truncate flex-1">{item.title}</span>
-              <span className="text-[10px] text-muted-foreground shrink-0">{item.detail}</span>
+              <span className={`text-[10px] shrink-0 ${urgent ? "text-red-500" : "text-muted-foreground"}`}>{item.detail}</span>
             </div>
           );
         })}
@@ -711,15 +755,17 @@ function TrendsSection({ stats, enhanced }: { stats: DashboardStats; enhanced: a
         {/* Spending */}
         <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
           <p className="text-[10px] text-muted-foreground">Spending</p>
-          <p className="text-sm font-bold tabular-nums">{formatMoney(finSnap?.totalMonthlySpend || 0)}</p>
           <div className="flex items-center gap-1">
-            {spendDir === "up" ? <ArrowUp className="h-2.5 w-2.5 text-red-500" /> :
-             spendDir === "down" ? <ArrowDown className="h-2.5 w-2.5 text-green-500" /> :
-             <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
-            <span className={`text-[10px] ${spendDir === "up" ? "text-red-500" : spendDir === "down" ? "text-green-500" : "text-muted-foreground"}`}>
-              {spendChange !== 0 ? `${spendChange > 0 ? "+" : ""}${spendChange}%` : "No change"} vs last month
+            <p className="text-sm font-bold tabular-nums">{formatMoney(finSnap?.totalMonthlySpend || 0)}</p>
+            <span className={`text-[10px] font-medium ${
+              spendDir === "up" ? "text-red-500" : spendDir === "down" ? "text-green-500" : "text-muted-foreground"
+            }`}>
+              {spendDir === "up" ? "↑" : spendDir === "down" ? "↓" : "→"}
             </span>
           </div>
+          <span className={`text-[10px] ${spendDir === "up" ? "text-red-500" : spendDir === "down" ? "text-green-500" : "text-muted-foreground"}`}>
+            {spendChange !== 0 ? `${spendChange > 0 ? "+" : ""}${spendChange}%` : "No change"} vs last month
+          </span>
         </div>
 
         {/* Health */}
@@ -729,9 +775,14 @@ function TrendsSection({ stats, enhanced }: { stats: DashboardStats; enhanced: a
             <div className="flex items-center gap-1">
               <p className="text-sm font-bold tabular-nums">{topHealth.latestValue}</p>
               {topHealth.unit && <span className="text-[10px] text-muted-foreground">{topHealth.unit}</span>}
+              <span className={`text-[10px] font-medium ${
+                topHealth.trend === "up" ? "text-green-500" :
+                topHealth.trend === "down" ? "text-red-500" : "text-muted-foreground"
+              }`}>
+                {topHealth.trend === "up" ? "↑" : topHealth.trend === "down" ? "↓" : "→"}
+              </span>
             </div>
             <div className="flex items-center gap-1">
-              <TrendIcon trend={topHealth.trend} />
               <span className="text-[10px] text-muted-foreground">7-day avg: {topHealth.average}</span>
             </div>
           </div>
@@ -781,16 +832,18 @@ function HealthSection({ data }: { data: any[] }) {
     </CollapsibleSection>
   );
 
+  const filteredData = data.filter((item: any) => !/test/i.test(item.name));
+
   return (
     <>
-      <CollapsibleSection icon={HeartPulse} label="Health" count={data.length} testId="section-health">
+      <CollapsibleSection icon={HeartPulse} label="Health" count={filteredData.length} testId="section-health">
         <div className="grid grid-cols-2 gap-2">
-          {data.slice(0, 6).map((item: any) => (
+          {filteredData.slice(0, 6).map((item: any) => (
             <div key={item.trackerId}
               onClick={() => setSelectedTracker(item)}
               className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-muted-foreground truncate">{item.name}</p>
+                <p className="text-[10px] text-muted-foreground truncate" title={item.name}>{item.name}</p>
                 <div className="flex items-center gap-1">
                   <span className="text-sm font-bold tabular-nums">{item.latestValue}</span>
                   {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
@@ -802,7 +855,7 @@ function HealthSection({ data }: { data: any[] }) {
                   )}
                 </div>
               </div>
-              <span className="text-[9px] text-muted-foreground">avg {item.average}</span>
+              <span className="text-[9px] text-muted-foreground">avg: {item.average}</span>
             </div>
           ))}
         </div>
@@ -938,9 +991,26 @@ interface GoalItem {
 }
 
 function GoalProgressBar({ goal }: { goal: GoalItem }) {
-  const pct = goal.target > 0 ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
+  const hasValidTarget = goal.target > 0;
+  const pct = hasValidTarget ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
   const isComplete = goal.status === "completed" || pct >= 100;
   const daysLeft = goal.deadline ? Math.ceil((new Date(goal.deadline).getTime() - Date.now()) / 86400000) : null;
+
+  if (!hasValidTarget) {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium truncate">{goal.title}</span>
+          <span className="text-[10px] text-muted-foreground shrink-0 ml-2">No target set</span>
+        </div>
+        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+          <span>{goal.current} {goal.unit}</span>
+          {daysLeft != null && daysLeft > 0 && <span>{daysLeft}d left</span>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
@@ -951,7 +1021,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
       </div>
       <Progress value={pct} className="h-1.5" />
       <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-        <span>{goal.current} / {goal.target} {goal.unit}</span>
+        <span>{goal.current} / {goal.target} {goal.unit}{(!goal.current && !isComplete) ? " · 0%" : ""}</span>
         {daysLeft != null && daysLeft > 0 && <span>{daysLeft}d left</span>}
         {daysLeft != null && daysLeft <= 0 && goal.status === "active" && <span className="text-destructive">overdue</span>}
       </div>
@@ -1037,9 +1107,9 @@ function GoalsSection() {
               <div className="pt-2 border-t">
                 <p className="text-[10px] text-muted-foreground mb-1">{completedGoals.length} completed</p>
                 {completedGoals.slice(0, 3).map(g => (
-                  <div key={g.id} className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
-                    <CheckCircle2 className="h-3 w-3 text-green-500" />
-                    <span className="line-through">{g.title}</span>
+                  <div key={g.id} className="flex items-center gap-2 py-1 text-xs">
+                    <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
+                    <span className="text-muted-foreground/80">{g.title}</span>
                   </div>
                 ))}
               </div>
@@ -1129,7 +1199,13 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
     expense: "/dashboard/finance",
   };
 
-  if (!activities || activities.length === 0) return (
+  // Filter out empty descriptions
+  const validActivities = (activities || []).filter(item => {
+    const desc = item.description?.trim();
+    return desc && desc.length > 0;
+  }).slice(0, 10);
+
+  if (validActivities.length === 0) return (
     <CollapsibleSection icon={Activity} label="Recent Activity" testId="section-activity">
       <div className="text-center py-4">
         <Activity className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
@@ -1138,22 +1214,42 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
     </CollapsibleSection>
   );
 
+  // Group by hour bucket
+  type ActivityItem = (typeof validActivities)[0];
+  const groups: { hourLabel: string; items: ActivityItem[] }[] = [];
+  for (const item of validActivities) {
+    const d = new Date(item.timestamp);
+    const hourKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.getHours()}`;
+    const hourLabel = timeAgo(item.timestamp);
+    const last = groups[groups.length - 1];
+    const lastKey = last ? (() => { const ld = new Date(last.items[0].timestamp); return `${ld.getFullYear()}-${ld.getMonth()}-${ld.getDate()}-${ld.getHours()}`; })() : null;
+    if (lastKey === hourKey) {
+      last.items.push(item);
+    } else {
+      groups.push({ hourLabel, items: [item] });
+    }
+  }
+
   return (
-    <CollapsibleSection icon={Activity} label="Recent Activity" count={activities.length} testId="section-activity">
-      <div className="space-y-0.5">
-        {activities.slice(0, 10).map((item, i) => {
-          const Icon = ACTIVITY_ICONS[item.type] || Activity;
-          const route = ACTIVITY_ROUTES[item.type];
-          return (
-            <div key={i}
-              onClick={() => route && navigate(route)}
-              className={`flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0 ${route ? "cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors" : ""}`}>
-              <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
-              <span className="text-xs truncate flex-1">{item.description}</span>
-              <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{timeAgo(item.timestamp)}</span>
-            </div>
-          );
-        })}
+    <CollapsibleSection icon={Activity} label="Recent Activity" count={validActivities.length} testId="section-activity">
+      <div className="space-y-1.5">
+        {groups.map((group, gi) => (
+          <div key={gi}>
+            <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-0.5 mt-1 first:mt-0">{group.hourLabel}</p>
+            {group.items.map((item, i) => {
+              const Icon = ACTIVITY_ICONS[item.type] || Activity;
+              const route = ACTIVITY_ROUTES[item.type];
+              return (
+                <div key={i}
+                  onClick={() => route && navigate(route)}
+                  className={`flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0 ${route ? "cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors" : ""}`}>
+                  <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
+                  <span className="text-xs truncate flex-1">{item.description}</span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
     </CollapsibleSection>
   );
@@ -1478,7 +1574,7 @@ export default function DashboardPage() {
               </SelectContent>
             </Select>
           </div>
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
           </p>
         </div>

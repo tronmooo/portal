@@ -926,6 +926,24 @@ function CreateProfileDialog({
 
 // ─── Profile Card ────────────────────────────────────────────────────────────
 
+const HIDDEN_FIELDS = ["class", "donor", "provider", "patientId", "property"];
+
+const formatFieldValue = (key: string, value: any): string => {
+  if (value === true || value === "true") return "Yes";
+  if (value === false || value === "false") return "No";
+  return String(value);
+};
+
+const AVATAR_COLORS: Record<string, string> = {
+  self: "bg-primary/20 text-primary",
+  person: "bg-blue-500/20 text-blue-500",
+  pet: "bg-amber-500/20 text-amber-500",
+  vehicle: "bg-slate-500/20 text-slate-500",
+  subscription: "bg-green-500/20 text-green-500",
+  asset: "bg-purple-500/20 text-purple-500",
+  loan: "bg-red-500/20 text-red-500",
+};
+
 function ProfileCard({
   profile,
   onDelete,
@@ -934,8 +952,17 @@ function ProfileCard({
   onDelete: (id: string) => void;
 }) {
   const fields = Object.entries(profile.fields).filter(
-    ([_, v]) => v !== null && v !== undefined && v !== ""
+    ([key, v]) => v !== null && v !== undefined && v !== "" && !HIDDEN_FIELDS.includes(key)
   );
+
+  const initials = profile.name
+    .split(" ")
+    .map((w: string) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  const avatarColorClass = AVATAR_COLORS[profile.type] || "bg-muted text-muted-foreground";
   const linkedCount =
     (profile.linkedTrackers?.length || 0) +
     (profile.linkedExpenses?.length || 0) +
@@ -957,15 +984,16 @@ function ProfileCard({
       >
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
-            <Avatar className={`h-10 w-10 ${profileColor(profile.type)}`}>
-              <AvatarFallback className={profileColor(profile.type)}>
-                {profileIcon(profile.type)}
+            <Avatar className={`h-10 w-10 ${avatarColorClass}`}>
+              <AvatarFallback className={`${avatarColorClass} text-xs font-bold`}>
+                {initials}
               </AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <h3
-                  className="text-sm font-semibold truncate"
+                  className="text-sm font-semibold line-clamp-2"
+                  title={profile.name}
                   data-testid={`text-profile-name-${profile.id}`}
                 >
                   {profile.name}
@@ -979,7 +1007,7 @@ function ProfileCard({
                   {fields.slice(0, 3).map(([key, val]) => (
                     <div key={key} className="flex items-center gap-2 text-xs">
                       <span className="text-muted-foreground capitalize">{key}:</span>
-                      <span className="truncate">{String(val)}</span>
+                      <span className="truncate">{formatFieldValue(key, val)}</span>
                     </div>
                   ))}
                 </div>
@@ -1026,6 +1054,7 @@ export default function ProfilesPage() {
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const { data: profiles, isLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -1077,9 +1106,24 @@ export default function ProfilesPage() {
   // Everything else (vehicles, subscriptions, assets, loans) lives under Linked tab of the parent profile
   const primaryTypes = new Set(["person", "pet", "self", "medical"]);
   const primaryProfiles = (profiles || []).filter(p => primaryTypes.has(p.type));
-  
+
+  // Filter by search query
+  const filteredProfiles = searchQuery.trim()
+    ? primaryProfiles.filter(p => {
+        const q = searchQuery.toLowerCase();
+        if (p.name.toLowerCase().includes(q)) return true;
+        if (p.type.toLowerCase().includes(q)) return true;
+        if (p.fields) {
+          return Object.values(p.fields).some(v =>
+            v !== null && v !== undefined && String(v).toLowerCase().includes(q)
+          );
+        }
+        return false;
+      })
+    : primaryProfiles;
+
   // Group by type
-  const grouped = primaryProfiles.reduce((acc: Record<string, Profile[]>, p) => {
+  const grouped = filteredProfiles.reduce((acc: Record<string, Profile[]>, p) => {
     (acc[p.type] = acc[p.type] || []).push(p);
     return acc;
   }, {});
@@ -1131,6 +1175,18 @@ export default function ProfilesPage() {
           Add
         </Button>
       </div>
+
+      {/* Search bar */}
+      {profiles && profiles.length > 0 && (
+        <input
+          type="text"
+          placeholder="Search profiles..."
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          className="w-full h-8 px-3 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary mb-3"
+          data-testid="input-search-profiles"
+        />
+      )}
 
       {/* Empty state */}
       {(!profiles || profiles.length === 0) ? (

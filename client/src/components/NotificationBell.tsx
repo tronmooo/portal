@@ -162,9 +162,9 @@ export function NotificationBell() {
           data-testid="button-notification-bell"
         >
           <Bell className="h-4 w-4" />
-          {urgentCount > 0 && (
+          {urgentCount > 0 && !open && (
             <span
-              className="absolute -top-0.5 -right-0.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none animate-pulse"
+              className="absolute -top-0.5 -right-0.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
               data-testid="badge-notification-count"
             >
               {urgentCount > 99 ? "99+" : urgentCount}
@@ -322,7 +322,7 @@ function NotificationItem({
       <Button
         variant="ghost"
         size="icon"
-        className="h-6 w-6 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 hover:opacity-100 focus:opacity-100"
+        className="h-6 w-6 shrink-0 mt-0.5 opacity-50 hover:opacity-100 focus:opacity-100"
         onClick={(e) => onDismiss(notification.id, e)}
         data-testid={`button-dismiss-${notification.id}`}
       >

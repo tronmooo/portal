@@ -70,11 +70,7 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <div className="px-3 py-2 mt-auto border-t border-border/50">
-        <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer" className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-          Created with Perplexity Computer
-        </a>
-      </div>
+
     </Sidebar>
   );
 }

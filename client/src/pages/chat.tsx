@@ -1144,7 +1144,7 @@ export default function ChatPage() {
       />
 
       {/* Messages area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         <div className="max-w-2xl mx-auto space-y-4">
           {/* Reset chat button - show when there are messages beyond welcome */}
           {messages.length > 1 && (
@@ -1154,6 +1154,7 @@ export default function ChatPage() {
                 size="sm"
                 className="h-7 text-xs text-muted-foreground gap-1.5"
                 onClick={() => { setMessages([WELCOME_MSG]); }}
+                title="Start new conversation"
                 data-testid="button-reset-chat"
               >
                 <RotateCcw className="h-3 w-3" /> New Chat
@@ -1208,7 +1209,7 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                <div className="text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2">
+                <div className="text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 text-foreground">
                   {msg.content}
                 </div>
 
@@ -1243,24 +1244,25 @@ export default function ChatPage() {
                     ))}
                   </div>
                 )}
+
+                {/* Timestamp */}
+                <div className="mt-1.5 flex justify-end">
+                  <span className="text-[10px] text-muted-foreground/60">
+                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
               </div>
             </div>
           ))}
 
           {/* Typing indicator */}
           {isPending && (
-            <div className="flex justify-start message-in">
-              <div className="bg-card border border-border rounded-2xl px-4 py-3">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <Bot className="h-3.5 w-3.5 text-primary" />
-                  <span className="text-xs font-medium text-primary">
-                    Portol
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-primary thinking-dot" />
-                  <div className="w-2 h-2 rounded-full bg-primary thinking-dot" />
-                  <div className="w-2 h-2 rounded-full bg-primary thinking-dot" />
+            <div className="flex items-start gap-2">
+              <div className="bg-muted rounded-lg px-3 py-2">
+                <div className="flex gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '0ms'}} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '150ms'}} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '300ms'}} />
                 </div>
               </div>
             </div>
@@ -1272,13 +1274,13 @@ export default function ChatPage() {
       {messages.length <= 2 && !hasAttachments && (
         <div className="px-4 pb-2">
           <div className="max-w-2xl mx-auto">
-            <p className="text-xs text-muted-foreground mb-2">Try saying:</p>
-            <div className="flex flex-wrap gap-2 justify-center px-4">
+            <p className="text-sm font-medium text-muted-foreground mb-2">Try saying:</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   onClick={() => handleSuggestion(s)}
-                  className="text-xs px-3 py-1.5 rounded-full border border-border/60 hover:bg-muted/60 transition-colors whitespace-nowrap"
+                  className="text-xs px-3 py-1.5 rounded-full border border-border/60 hover:bg-muted/60 transition-colors text-left"
                   data-testid={`button-suggestion-${s.slice(0, 20)}`}
                 >
                   {s}
@@ -1345,6 +1347,7 @@ export default function ChatPage() {
               className="h-[44px] w-[44px] shrink-0 rounded-xl"
               onClick={() => fileInputRef.current?.click()}
               disabled={isPending}
+              title="Upload image, PDF, or document"
               data-testid="button-attach"
             >
               <Paperclip className="h-4 w-4" />
@@ -1365,7 +1368,7 @@ export default function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Ask anything or log data..."
-              className="min-h-[44px] max-h-[120px] resize-none rounded-xl bg-card text-sm"
+              className="min-h-[48px] max-h-[120px] resize-none rounded-xl bg-card text-sm"
               rows={1}
               data-testid="input-chat"
             />
@@ -1373,7 +1376,7 @@ export default function ChatPage() {
               onClick={handleSend}
               disabled={!input.trim() || isPending}
               size="icon"
-              className="rounded-xl h-[44px] w-[44px] shrink-0"
+              className="rounded-xl h-[44px] w-[44px] shrink-0 hover:scale-105 active:scale-95 transition-transform"
               data-testid="button-send"
             >
               <Send className="h-4 w-4" />
