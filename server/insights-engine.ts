@@ -265,6 +265,8 @@ function analyzeDocuments(documents: Document[], profiles: Profile[], now: Date,
     }
   }
   for (const profile of profiles) {
+    // Skip self profile — self's expiration fields are usually driver's license data, not meaningful alerts
+    if (profile.type === "self") continue;
     if (profile.fields && typeof profile.fields === "object") {
       checkFields(profile.fields as Record<string, any>, profile.id, "profile", profile.name);
     }
