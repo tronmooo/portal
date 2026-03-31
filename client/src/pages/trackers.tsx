@@ -2798,7 +2798,7 @@ export default function TrackersPage() {
   const [docSearch, setDocSearch] = useState("");
   const docFileInputRef = useRef<HTMLInputElement>(null);
   // Unified section filter: which sections to show
-  const [sectionFilter, setSectionFilter] = useState<"all" | "profiles" | "documents" | "trackers" | "obligations">("all");
+  const [sectionFilter, setSectionFilter] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers" | "obligations">("all");
   // Document type filter
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   // Tracker category filter
@@ -3018,13 +3018,16 @@ export default function TrackersPage() {
         {/* Section pills + profile filter (only for documents) */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* Section filter pills */}
-          {(["all", "trackers", "documents", "profiles", "obligations"] as const).map(s => {
-            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", obligations: "Obligations" };
+          {(["all", "trackers", "documents", "profiles", "subscriptions", "obligations"] as const).map(s => {
+            const subCount = (profiles || []).filter(p => p.type === "subscription").length;
+            const assetCount = (profiles || []).filter(p => ["vehicle", "asset", "loan", "investment", "account", "property"].includes(p.type)).length;
+            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", subscriptions: "Subscriptions", obligations: "Obligations" };
             const counts: Record<string, number> = {
-              all: filteredTrackers.length + filteredDocuments.length + filteredObligations.length,
+              all: filteredTrackers.length + filteredDocuments.length + filteredObligations.length + subCount + assetCount,
               trackers: filteredTrackers.length,
               documents: filteredDocuments.length,
-              profiles: 0, // computed below
+              profiles: assetCount,
+              subscriptions: subCount,
               obligations: filteredObligations.length,
             };
             return (
@@ -3132,8 +3135,8 @@ export default function TrackersPage() {
         );
       })()}
 
-      {/* Subscriptions Section (separate from assets) */}
-      {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
+      {/* Subscriptions Section */}
+      {(sectionFilter === "all" || sectionFilter === "subscriptions") && (() => {
         const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
         const subs = (profiles || []).filter(p => {
           if (p.type !== "subscription") return false;
