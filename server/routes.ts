@@ -603,8 +603,10 @@ export async function registerRoutes(
       const expenses = allExpenses.filter(e => mp(e.linkedProfiles));
       const obligations = allObligations.filter(o => mp(o.linkedProfiles));
       const events = allEvents.filter(e => mp(e.linkedProfiles));
+      const filteredHabits = habits.filter(h => mp(h.linkedProfiles || []));
+      const filteredDocuments = documents.filter(d => mp(d.linkedProfiles));
       const insights = generateSmartInsights({
-        profiles, trackers, tasks, expenses, habits, obligations, journal, documents, goals, events,
+        profiles, trackers, tasks, expenses, habits: filteredHabits, obligations, journal, documents: filteredDocuments, goals, events,
       });
       res.json(insights);
     } catch (err: any) {
@@ -2518,7 +2520,18 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // ---- Goals ----
   app.get("/api/goals", asyncHandler(async (req, res) => {
     try {
-      const goals = await storage.getGoals();
+      let goals = await storage.getGoals();
+      const fp = req.query.profileId as string | undefined;
+      if (fp) {
+        const allProfiles = await storage.getProfiles();
+        const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+        goals = goals.filter(g => {
+          const lp = g.linkedProfiles || [];
+          if (lp.includes(fp)) return true;
+          if (isSelf && lp.length === 0) return true;
+          return false;
+        });
+      }
       res.json(goals);
     } catch (err: any) {
       console.error("Goals error:", err);

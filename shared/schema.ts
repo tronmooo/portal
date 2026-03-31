@@ -632,6 +632,7 @@ export interface Goal {
   category?: string;
   status: "active" | "completed" | "abandoned";
   milestones: Array<{ value: number; label: string; reached: boolean; reachedAt?: string }>;
+  linkedProfiles: string[];
   createdAt: string;
   updatedAt: string;
 }

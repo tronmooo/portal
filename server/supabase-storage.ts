@@ -314,7 +314,8 @@ export class SupabaseStorage implements IStorage {
       unit: r.unit, startValue: r.start_value ?? undefined, deadline: r.deadline || undefined,
       trackerId: r.tracker_id || undefined, habitId: r.habit_id || undefined,
       category: r.category || undefined, status: r.status,
-      milestones: r.milestones || [], createdAt: r.created_at, updatedAt: r.updated_at,
+      milestones: r.milestones || [], linkedProfiles: r.linked_profiles || [],
+      createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
 
@@ -2236,7 +2237,7 @@ export class SupabaseStorage implements IStorage {
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const expenses = allExpenses.filter(e => matchesProfile(e.linkedProfiles));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
-    const habits = allHabits; // Habits are global (not profile-specific yet)
+    const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
     const now = new Date();
     const thisMonth = now.getMonth();
@@ -2283,7 +2284,7 @@ export class SupabaseStorage implements IStorage {
       this.getProfiles(), this.getEvents(), this.getArtifacts(), this.getMemories(),
     ]);
     const profiles = profileList;
-    const events = fp ? allEvents.filter(e => e.linkedProfiles.includes(fp)) : allEvents;
+    const events = allEvents.filter(e => matchesProfile(e.linkedProfiles));
 
     return {
       totalProfiles: profiles.length,
@@ -2351,8 +2352,10 @@ export class SupabaseStorage implements IStorage {
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));
     const allEvents = rawEvents.filter(e => matchesProfileEnhanced(e.linkedProfiles));
+    // Filter documents by profile
+    const filteredDocs = documents.filter(d => matchesProfileEnhanced(d.linkedProfiles));
     const expiringDocs: any[] = [];
-    for (const doc of documents) {
+    for (const doc of filteredDocs) {
       const ed = doc.extractedData || {};
       const dateFields = ['expiration_date', 'expirationDate', 'expiry', 'expires', 'exp_date', 'expiration', 'valid_until', 'validUntil', 'end_date', 'endDate', 'renewal_date', 'renewalDate'];
       for (const key of Object.keys(ed)) {
@@ -2427,21 +2430,35 @@ export class SupabaseStorage implements IStorage {
       financeSnapshot: { totalMonthlySpend, lastMonthTotal, spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0, spendByCategory, upcomingBills, monthlyObligationTotal: Math.round(monthlyObligationTotal) },
       overdueTasks,
       todaysEvents,
-      totalDocuments: documents.length,
+      totalDocuments: filteredDocs.length,
     };
   }
 
   // ============================================================
   // INSIGHTS
   // ============================================================
-  async getInsights(): Promise<Insight[]> {
+  async getInsights(filterProfileId?: string): Promise<Insight[]> {
     const profiles = await this.getProfiles();
-    const trackers = await this.getTrackers();
-    const tasks = await this.getTasks();
-    const expenses = await this.getExpenses();
-    const habits = await this.getHabits();
-    const obligations = await this.getObligations();
+    const allTrackers = await this.getTrackers();
+    const allTasks = await this.getTasks();
+    const allExpenses = await this.getExpenses();
+    const allHabits = await this.getHabits();
+    const allObligations = await this.getObligations();
     const journal = await this.getJournalEntries();
+    // Apply profile filter
+    const fp = filterProfileId;
+    const isSelf = fp && profiles.find(p => p.id === fp)?.type === "self";
+    const matchFp = (lp: string[]) => {
+      if (!fp) return true;
+      if (lp.includes(fp)) return true;
+      if (isSelf && lp.length === 0) return true;
+      return false;
+    };
+    const trackers = allTrackers.filter(t => matchFp(t.linkedProfiles));
+    const tasks = allTasks.filter(t => matchFp(t.linkedProfiles));
+    const expenses = allExpenses.filter(e => matchFp(e.linkedProfiles));
+    const habits = allHabits.filter(h => matchFp(h.linkedProfiles || []));
+    const obligations = allObligations.filter(o => matchFp(o.linkedProfiles));
     return generateInsights(profiles, trackers, tasks, expenses, habits, obligations, journal);
   }
 

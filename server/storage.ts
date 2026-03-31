@@ -1239,6 +1239,7 @@ export class MemStorage implements IStorage {
     const goal: Goal = {
       id: randomUUID(), ...data, current: 0, status: "active",
       milestones: (data.milestones || []).map(m => ({ ...m, reached: false })),
+      linkedProfiles: (data as any).linkedProfiles || [],
       createdAt: now, updatedAt: now,
     };
     this.goals.set(goal.id, goal);

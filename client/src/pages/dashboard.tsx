@@ -1029,10 +1029,11 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
   );
 }
 
-function GoalsSection() {
+function GoalsSection({ profileId }: { profileId?: string }) {
+  const profileParam = profileId ? `?profileId=${profileId}` : "";
   const { data: goals = [], isLoading } = useQuery<GoalItem[]>({
-    queryKey: ["/api/goals"],
-    queryFn: () => apiRequest("GET", "/api/goals").then(r => r.json()),
+    queryKey: ["/api/goals", profileId || "all"],
+    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
   const [editGoal, setEditGoal] = useState<GoalItem | null>(null);
   const [creating, setCreating] = useState(false);
@@ -1537,7 +1538,7 @@ export default function DashboardPage() {
         content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
         break;
       case "goals":
-        content = <GoalsSection />;
+        content = <GoalsSection profileId={resolvedFilterId} />;
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
