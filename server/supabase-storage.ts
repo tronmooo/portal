@@ -170,6 +170,7 @@ export class SupabaseStorage implements IStorage {
     const fields = r.fields || {};
     return {
       id: r.id, type: r.type, name: r.name, avatar: r.avatar || undefined,
+      type_key: r.type_key || undefined,
       fields, tags: r.tags || [], notes: r.notes || "",
       documents: r.documents || [], linkedTrackers: r.linked_trackers || [],
       linkedExpenses: r.linked_expenses || [], linkedTasks: r.linked_tasks || [],

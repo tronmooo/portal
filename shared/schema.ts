@@ -157,6 +157,7 @@ export type ProfileType = "person" | "pet" | "vehicle" | "account" | "property" 
 export interface Profile {
   id: string;
   type: ProfileType;
+  type_key?: string; // Registry type key (e.g., 'vehicle', 'mortgage', 'streaming')
   name: string;
   avatar?: string;
   fields: Record<string, any>;

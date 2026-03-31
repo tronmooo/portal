@@ -2910,7 +2910,7 @@ export default function ProfileDetailPage() {
   });
 
   // Fetch type definition from registry (only if the profile has a type_key)
-  const profileTypeKey = (profile as any)?.type_key as string | undefined;
+  const profileTypeKey = profile?.type_key;
   const { data: typeDef } = useQuery<TypeDefinition>({
     queryKey: ["/api/profile-types", profileTypeKey],
     queryFn: async () => {
