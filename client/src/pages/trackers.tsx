@@ -2776,11 +2776,6 @@ export default function TrackersPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
-  const { data: obligations = [] } = useQuery<any[]>({
-    queryKey: ["/api/obligations"],
-    queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
-  });
-
   const { data: allDocuments = [] } = useQuery<Document[]>({
     queryKey: ["/api/documents"],
     queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
@@ -2797,8 +2792,9 @@ export default function TrackersPage() {
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const docFileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadProfileId, setUploadProfileId] = useState<string>("");
   // Unified section filter: which sections to show
-  const [sectionFilter, setSectionFilter] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers" | "obligations">("all");
+  const [sectionFilter, setSectionFilter] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers">("all");
   // Document type filter
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   // Tracker category filter
@@ -2846,16 +2842,20 @@ export default function TrackersPage() {
           reader.readAsDataURL(f);
         });
       const fileData = await toBase64(file);
-      const res = await apiRequest("POST", "/api/upload", {
+      const body: any = {
         fileName: file.name,
         mimeType: file.type,
         fileData,
-      });
+      };
+      if (uploadProfileId && uploadProfileId !== "auto") body.profileId = uploadProfileId;
+      const res = await apiRequest("POST", "/api/upload", body);
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Document uploaded" });
+      toast({ title: "Document uploaded & processing" });
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
     },
     onError: (err: Error) => {
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });
@@ -2942,15 +2942,6 @@ export default function TrackersPage() {
     return true;
   });
 
-  // Filter obligations by profile — don't leak self's obligations to pet/person profiles
-  const filteredObligations = obligations.filter((ob: any) => {
-    if (profileFilter === "everyone") return true;
-    const targetId = resolvedFilter;
-    if (!targetId || targetId === "all") return true;
-    // Only show obligations explicitly linked to this profile
-    return ob.linkedProfiles?.includes(targetId);
-  });
-
   // Group by category
   const grouped = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
     (acc[t.category] = acc[t.category] || []).push(t);
@@ -3015,20 +3006,36 @@ export default function TrackersPage() {
 
       {/* ── Filter Bar ── */}
       <div className="space-y-2" data-testid="filter-bar">
-        {/* Section pills + profile filter (only for documents) */}
+        {/* Profile filter (page level) + Section pills */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Profile filter */}
+          {sortedFilterProfiles.length > 0 && (
+            <Select value={profileFilter} onValueChange={setProfileFilter}>
+              <SelectTrigger className="w-[140px] h-7 text-xs" data-testid="select-profile-filter">
+                <SelectValue placeholder="All" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="me"><span className="flex items-center gap-1.5"><Smile className="h-3 w-3" /> Me</span></SelectItem>
+                <SelectItem value="everyone"><span className="flex items-center gap-1.5"><Users className="h-3 w-3" /> Everyone</span></SelectItem>
+                {sortedFilterProfiles.filter(p => p.type !== "self").map(p => {
+                  const Icon = PROFILE_TYPE_ICONS[p.type] || User;
+                  return <SelectItem key={p.id} value={p.id}><span className="flex items-center gap-1.5"><Icon className="h-3 w-3" /> {p.name}</span></SelectItem>;
+                })}
+              </SelectContent>
+            </Select>
+          )}
+          <div className="h-4 w-px bg-border" />
           {/* Section filter pills */}
-          {(["all", "trackers", "documents", "profiles", "subscriptions", "obligations"] as const).map(s => {
+          {(["all", "trackers", "documents", "profiles", "subscriptions"] as const).map(s => {
             const subCount = (profiles || []).filter(p => p.type === "subscription").length;
             const assetCount = (profiles || []).filter(p => ["vehicle", "asset", "loan", "investment", "account", "property"].includes(p.type)).length;
-            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", subscriptions: "Subscriptions", obligations: "Obligations" };
+            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", subscriptions: "Subscriptions" };
             const counts: Record<string, number> = {
-              all: filteredTrackers.length + filteredDocuments.length + filteredObligations.length + subCount + assetCount,
+              all: filteredTrackers.length + filteredDocuments.length + subCount + assetCount,
               trackers: filteredTrackers.length,
               documents: filteredDocuments.length,
               profiles: assetCount,
               subscriptions: subCount,
-              obligations: filteredObligations.length,
             };
             return (
               <button
@@ -3074,7 +3081,7 @@ export default function TrackersPage() {
         <TrackerSummary trackers={filteredTrackers} />
       )}
 
-      {/* Linked Profiles (child assets, subscriptions, etc.) */}
+      {/* Assets & Vehicles — grouped by type */}
       {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
         const childTypeSet = new Set(["vehicle", "asset", "loan", "investment", "account", "property"]);
         const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
@@ -3085,52 +3092,67 @@ export default function TrackersPage() {
           return pParent === resolvedFilter;
         });
         if (childProfiles.length === 0) return null;
-        const typeIcons: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: CreditCard };
+
+        // Group by type
+        const typeGroups: Record<string, typeof childProfiles> = {};
+        for (const p of childProfiles) {
+          const group = p.type === "vehicle" ? "Vehicles" : p.type === "asset" ? "Assets" : p.type === "property" ? "Properties" : p.type === "loan" ? "Loans" : p.type === "investment" ? "Investments" : "Other";
+          (typeGroups[group] = typeGroups[group] || []).push(p);
+        }
+        const groupOrder = ["Vehicles", "Assets", "Properties", "Loans", "Investments", "Other"];
+        const sortedGroups = Object.entries(typeGroups).sort(([a], [b]) => groupOrder.indexOf(a) - groupOrder.indexOf(b));
+        const typeIcons: Record<string, any> = { vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: CreditCard };
+
         return (
-          <div className="space-y-2">
+          <div className="space-y-3">
             <button onClick={() => toggleSection("profiles")} className="flex items-center gap-1.5 w-full group" data-testid="section-toggle-profiles">
-              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Assets & Linked Profiles ({childProfiles.length})</h2>
+              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Assets & Vehicles ({childProfiles.length})</h2>
               {collapsedSections.has("profiles") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
             </button>
-            {!collapsedSections.has("profiles") && <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {childProfiles.map(child => {
-                const Icon = typeIcons[child.type] || Star;
-                const fields = child.fields || {};
-                const displayFields = Object.entries(fields).filter(([k, v]) => v != null && v !== '' && !k.startsWith('_'));
-                return (
-                  <div key={child.id} className="rounded-lg border bg-card overflow-hidden">
-                    <div className="flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors">
-                      <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                        <Icon className="h-4 w-4 text-primary" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate">{child.name}</p>
-                        <p className="text-[10px] text-muted-foreground capitalize">
-                          {child.type}
-                          {fields.cost ? ` · $${fields.cost}` : ''}
-                          {fields.frequency ? `/${fields.frequency}` : ''}
-                        </p>
-                      </div>
-                      <Link href={`/profiles/${child.id}`}>
-                        <Button variant="outline" size="sm" className="h-7 text-xs shrink-0" data-testid={`button-view-child-${child.id}`}>View</Button>
-                      </Link>
-                    </div>
-                    {displayFields.length > 0 && (
-                      <div className="px-3 pb-2.5 pt-0 border-t border-border/50">
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 pt-2">
-                          {displayFields.slice(0, 6).map(([k, v]) => (
-                            <div key={k} className="flex justify-between items-center">
-                              <span className="text-[10px] text-muted-foreground capitalize">{k.replace(/([A-Z])/g, ' $1').trim()}</span>
-                              <span className="text-[10px] font-medium">{String(v)}</span>
-                            </div>
-                          ))}
+            {!collapsedSections.has("profiles") && sortedGroups.map(([groupName, items]) => (
+              <div key={groupName} className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest pl-1">{groupName} ({items.length})</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {items.map(child => {
+                    const Icon = typeIcons[child.type] || Star;
+                    const fields = child.fields || {};
+                    const displayFields = Object.entries(fields).filter(([k, v]) => v != null && v !== '' && !k.startsWith('_'));
+                    return (
+                      <div key={child.id} className="rounded-lg border bg-card overflow-hidden">
+                        <div className="flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors">
+                          <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                            <Icon className="h-4 w-4 text-primary" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate">{child.name}</p>
+                            <p className="text-[10px] text-muted-foreground capitalize">
+                              {child.type}
+                              {fields.cost ? ` · $${fields.cost}` : ''}
+                              {fields.purchasePrice ? ` · $${fields.purchasePrice}` : ''}
+                            </p>
+                          </div>
+                          <Link href={`/profiles/${child.id}`}>
+                            <Button variant="outline" size="sm" className="h-7 text-xs shrink-0" data-testid={`button-view-child-${child.id}`}>View</Button>
+                          </Link>
                         </div>
+                        {displayFields.length > 0 && (
+                          <div className="px-3 pb-2.5 pt-0 border-t border-border/50">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 pt-2">
+                              {displayFields.slice(0, 6).map(([k, v]) => (
+                                <div key={k} className="flex justify-between items-center">
+                                  <span className="text-[10px] text-muted-foreground capitalize">{k.replace(/([A-Z])/g, ' $1').trim()}</span>
+                                  <span className="text-[10px] font-medium">{String(v)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>}
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         );
       })()}
@@ -3183,63 +3205,31 @@ export default function TrackersPage() {
         );
       })()}
 
-      {/* Active Obligations */}
-      {(sectionFilter === "all" || sectionFilter === "obligations") && filteredObligations.length > 0 && (
-        <div className="space-y-2">
-          <button onClick={() => toggleSection("obligations")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-obligations">
-            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations ({filteredObligations.length})</h2>
-            {collapsedSections.has("obligations") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
-          </button>
-          {!collapsedSections.has("obligations") && <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {filteredObligations.map((ob: any) => {
-              const dueDate = new Date(ob.nextDueDate);
-              const daysUntil = Math.ceil((dueDate.getTime() - Date.now()) / 86400000);
-              return (
-                <div key={ob.id} className={`rounded-lg border p-3 ${daysUntil <= 3 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-card'}`}>
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{ob.name}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        ${ob.amount}/{ob.frequency} · Due {dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        {daysUntil <= 0 ? ' (overdue)' : daysUntil <= 7 ? ` (in ${daysUntil}d)` : ''}
-                      </p>
-                    </div>
-                    <Link href={`/dashboard/obligations`}>
-                      <Button variant="outline" size="sm" className="h-7 text-xs shrink-0">${ob.amount}</Button>
-                    </Link>
-                  </div>
-                </div>
-              );
-            })}
-          </div>}
-        </div>
-      )}
-
       {/* Documents Section */}
       {(sectionFilter === "all" || sectionFilter === "documents") && <div className="space-y-2">
         <div className="flex items-center justify-between">
+          <button onClick={() => toggleSection("documents")} className="flex items-center gap-1.5" data-testid="section-toggle-documents">
+            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({filteredDocuments.length})</h2>
+            {collapsedSections.has("documents") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+          </button>
           <div className="flex items-center gap-2">
-            <button onClick={() => toggleSection("documents")} className="flex items-center gap-1.5" data-testid="section-toggle-documents">
-              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({filteredDocuments.length})</h2>
-              {collapsedSections.has("documents") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
-            </button>
-            {sortedFilterProfiles.length > 0 && (
-              <Select value={profileFilter} onValueChange={setProfileFilter}>
-                <SelectTrigger className="w-[130px] h-6 text-[10px]" data-testid="select-profile-filter">
-                  <SelectValue placeholder="All" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="me"><span className="flex items-center gap-1.5"><User className="h-3 w-3" /> Me</span></SelectItem>
-                  <SelectItem value="everyone"><span className="flex items-center gap-1.5"><Users className="h-3 w-3" /> Everyone</span></SelectItem>
-                  {sortedFilterProfiles.filter(p => p.type !== "self").map(p => {
-                    const Icon = PROFILE_TYPE_ICONS[p.type] || User;
-                    return <SelectItem key={p.id} value={p.id}><span className="flex items-center gap-1.5"><Icon className="h-3 w-3" /> {p.name}</span></SelectItem>;
-                  })}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-          <div className="flex gap-2">
+            {/* Profile selector for upload — link doc to a specific profile */}
+            <Select value={uploadProfileId} onValueChange={setUploadProfileId}>
+              <SelectTrigger className="w-[120px] h-7 text-[10px]" data-testid="select-upload-profile">
+                <SelectValue placeholder="For: Auto-detect" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto"><span className="text-muted-foreground">Auto-detect</span></SelectItem>
+                {(profiles || []).filter(p => ["self", "person", "pet", "vehicle", "asset"].includes(p.type)).sort((a, b) => {
+                  if (a.type === "self") return -1;
+                  if (b.type === "self") return 1;
+                  return a.name.localeCompare(b.name);
+                }).map(p => {
+                  const Icon = PROFILE_TYPE_ICONS[p.type] || User;
+                  return <SelectItem key={p.id} value={p.id}><span className="flex items-center gap-1.5"><Icon className="h-3 w-3" /> {p.type === "self" ? "Me" : p.name}</span></SelectItem>;
+                })}
+              </SelectContent>
+            </Select>
             <input
               ref={docFileInputRef}
               type="file"
@@ -3261,7 +3251,7 @@ export default function TrackersPage() {
               data-testid="button-upload-document-global"
             >
               <Upload className="h-3 w-3" />
-              {docUploadMutation.isPending ? "Uploading..." : "Upload"}
+              {docUploadMutation.isPending ? "Processing..." : "Upload"}
             </Button>
           </div>
         </div>

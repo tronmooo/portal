@@ -376,22 +376,12 @@ Always extract total amounts. Scan entire document including corners and footers
 Use numbers, not strings (1085, not "$1,085").
 
 RULE #4 — MEDICAL/LAB VALUES:
-For ANY measurable health data (blood pressure, glucose, cholesterol, weight, WBC, hemoglobin, platelets, triglycerides, HDL, LDL, A1C, etc.), you MUST create trackerEntries.
-Each tracker entry should have:
-- trackerName: the test/metric name (e.g., "White Blood Cell Count", "Hemoglobin", "Total Cholesterol")
-- values: an object with the value as a number, e.g., {"value": 7.2}
-- unit: the unit of measurement (e.g., "K/uL", "g/dL", "mg/dL")
-- category: "health"
-
-Example for a lab report:
-"trackerEntries": [
-  {"trackerName": "White Blood Cell Count", "values": {"value": 7.2}, "unit": "K/uL", "category": "health"},
-  {"trackerName": "Hemoglobin", "values": {"value": 14.5}, "unit": "g/dL", "category": "health"},
-  {"trackerName": "Platelets", "values": {"value": 250}, "unit": "K/uL", "category": "health"},
-  {"trackerName": "Glucose", "values": {"value": 95}, "unit": "mg/dL", "category": "health"},
-  {"trackerName": "Total Cholesterol", "values": {"value": 105}, "unit": "mg/dL", "category": "health"}
-]
-Do NOT set values to 0. Extract the ACTUAL number from the document.
+For lab reports and medical documents, you MUST scan EVERY row of the results table and create a trackerEntries array.
+Each entry must have: trackerName (string), values (object with "value" key as a number), unit (string), category ("health").
+IMPORTANT: Read the ACTUAL numeric values printed in the document. Do NOT use placeholder or example numbers.
+Do NOT set values to 0. Every trackerEntry must have the real number from the document.
+Format: {"trackerName": "Test Name", "values": {"value": <ACTUAL_NUMBER_FROM_DOCUMENT>}, "unit": "unit", "category": "health"}
+Scan ALL rows in the results table — CBC panels, metabolic panels, lipid panels, etc. Do not stop at 2 values.
 
 RULE #5 — PROFILE MATCHING:
 Only set targetProfile if the document explicitly names a person/vehicle/pet that matches an existing profile. Otherwise null.
@@ -458,6 +448,64 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
     } catch { parsed = {}; }
+
+    // === TWO-PASS LAB EXTRACTION ===
+    // If this is a lab report/medical document but Haiku missed the lab values, do a focused second pass
+    const isLabType = /lab|medical|blood|panel|cbc|metabolic|lipid|results/i.test(parsed.documentType || '') || /lab|medical|blood|panel|results/i.test(parsed.label || '');
+    if (isLabType && (!parsed.trackerEntries || parsed.trackerEntries.length < 3)) {
+      console.log(`[extraction] Lab report detected with only ${parsed.trackerEntries?.length || 0} tracker entries. Running focused second pass...`);
+      try {
+        const labPrompt = `This is a lab report or medical document. Your ONLY job is to extract ALL numeric test results.
+
+Look at EVERY row in the results table. For each test, extract the test name, the numeric result value, and the unit.
+
+Return ONLY a JSON array. Each element: {"trackerName": "<test name>", "values": {"value": <number>}, "unit": "<unit>", "category": "health"}
+
+Rules:
+- Read EVERY line of the results table from top to bottom
+- Only include tests that have a numeric value
+- Use the EXACT numbers printed in the document
+- Common tests: WBC, RBC, Hemoglobin, Hematocrit, Platelets, MCV, MCH, MCHC, Glucose, BUN, Creatinine, Sodium, Potassium, Chloride, CO2, Calcium, Total Protein, Albumin, Bilirubin, ALT, AST, Cholesterol, Triglycerides, HDL, LDL, A1C, TSH
+- Return [] if you cannot read any values
+
+Return ONLY the JSON array, nothing else.`;
+
+        const labResponse = await getClient().messages.create({
+          model: process.env.ANTHROPIC_EXTRACTION_MODEL || process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+          max_tokens: 4096,
+          messages: [{
+            role: "user",
+            content: [
+              ...messageContent,
+              { type: "text", text: labPrompt },
+            ],
+          }],
+        });
+
+        const labText = labResponse.content[0].type === "text" ? labResponse.content[0].text : "[]";
+        try {
+          const arrayMatch = labText.match(/\[[\s\S]*\]/);
+          const labEntries = arrayMatch ? JSON.parse(arrayMatch[0]) : [];
+          if (Array.isArray(labEntries) && labEntries.length > 0) {
+            // Validate entries: must have trackerName, numeric value, unit
+            const validEntries = labEntries.filter((e: any) => 
+              e.trackerName && 
+              typeof e.values?.value === 'number' && 
+              e.values.value !== 0 &&
+              e.unit
+            );
+            if (validEntries.length > (parsed.trackerEntries?.length || 0)) {
+              console.log(`[extraction] Second pass found ${validEntries.length} lab values (vs ${parsed.trackerEntries?.length || 0} from first pass)`);
+              parsed.trackerEntries = validEntries;
+            }
+          }
+        } catch (e) {
+          console.error('[extraction] Failed to parse second-pass lab results:', e);
+        }
+      } catch (e) {
+        console.error('[extraction] Second-pass lab extraction failed:', e);
+      }
+    }
 
     // Date sanity check: if this is a license/ID and expiration looks wrong (same as issue or too close), re-query for dates
     if (parsed.documentType?.includes('license') || parsed.documentType?.includes('passport') || parsed.documentType?.includes('registration')) {
