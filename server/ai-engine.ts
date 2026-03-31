@@ -1596,14 +1596,19 @@ When logging to an existing tracker, check its field names in the EXISTING DATA 
 - Weight tracker has fields [weight] → send {"weight": 183}, NOT {"value": 183}
 - If you need to store extra data that doesn't match a field, use the "notes" parameter instead
 
-MULTI-PROFILE AWARENESS — CRITICAL:
-The system manages data for MULTIPLE people and pets. Each person/pet has their own tasks, expenses, trackers, events, documents, subscriptions, and assets. Data must NEVER cross between profiles.
+MULTI-PROFILE AWARENESS — CRITICAL (ZERO TOLERANCE FOR DATA LEAKS):
+The system manages data for MULTIPLE people, pets, vehicles, and assets. Each entity has its own tasks, expenses, trackers, events, documents, subscriptions, and assets. Data must ABSOLUTELY NEVER cross between profiles.
 
-When the user mentions a specific person, pet, or entity, you MUST:
-1. Set "forProfile" on ALL tool calls involving that person/pet
-2. Use get_profile_data to retrieve a specific person's full data when asked
-3. Use get_summary with forProfile to get stats filtered to that person
-4. Use search with forProfile to search within a person's data
+DATA ISOLATION RULES:
+1. ALWAYS set "forProfile" with the EXACT FULL NAME of the target profile on EVERY tool call.
+2. If the user says "Craig Isolation Test's blood pressure", forProfile MUST be "Craig Isolation Test" — NOT just "Craig".
+3. NEVER use a partial name that could match multiple profiles. Use the FULL profile name.
+4. If unsure which profile the user means, ASK instead of guessing.
+5. Data for Person A must NEVER appear under Person B, Pet C, or Vehicle D.
+6. When creating trackers, tasks, expenses, events, goals, or habits for a specific entity, the forProfile field is MANDATORY.
+7. Use get_profile_data to retrieve a specific person's full data when asked.
+8. Use get_summary with forProfile to get stats filtered to that person.
+9. Use search with forProfile to search within a person's data.
 
 PROFILE RESOLUTION:
 - "Mom's iPhone" → resolve Mom as the profile, iPhone as a child asset under Mom
@@ -2071,13 +2076,16 @@ async function executeTool(name: string, input: any): Promise<any> {
       return storage.updateEvent(event.id, input.changes);
     }
 
-    case "create_habit":
-      return storage.createHabit({
+    case "create_habit": {
+      const habit = await storage.createHabit({
         name: input.name,
         frequency: input.frequency || "daily",
         icon: input.icon,
         color: input.color,
       });
+      await autoLinkToProfiles("habit", habit.id, input.name || "", input.forProfile);
+      return habit;
+    }
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
@@ -2260,7 +2268,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         const found = habits.find(h => h.name.toLowerCase().includes(habitId.toLowerCase()));
         habitId = found?.id || undefined;
       }
-      return storage.createGoal({
+      const goal = await storage.createGoal({
         title: input.title,
         type: input.type,
         target: input.target,
@@ -2271,6 +2279,17 @@ async function executeTool(name: string, input: any): Promise<any> {
         habitId,
         category: input.category,
       });
+      // Link goal to profile (via tracker's profile or explicit name)
+      if (trackerId) {
+        const trackers = await storage.getTrackers();
+        const linkedTracker = trackers.find(t => t.id === trackerId);
+        if (linkedTracker?.linkedProfiles?.[0]) {
+          await autoLinkToProfiles("goal", goal.id, input.title || "", undefined);
+        }
+      } else {
+        await autoLinkToProfiles("goal", goal.id, input.title || "", input.forProfile);
+      }
+      return goal;
     }
 
     case "get_goal_progress": {
@@ -2804,7 +2823,14 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
     // (unless there's an exact tie at the top, then take both)
     scored.sort((a, b) => b.score - a.score);
     const topScore = scored[0]?.score || 0;
-    const bestMatches = scored.filter(s => s.score === topScore && s.score >= 10);
+    // When explicit name is given, require higher confidence to prevent wrong matches
+    const minScore = explicitProfileName ? 30 : 10;
+    const bestMatches = scored.filter(s => s.score === topScore && s.score >= minScore);
+    if (explicitProfileName && bestMatches.length > 1) {
+      // Ambiguous match with explicit name — log warning and take none (link to self)
+      logger.warn("ai", `Ambiguous profile match for "${explicitProfileName}": ${bestMatches.map(m => `${profiles.find(p => p.id === m.id)?.name}(${m.score})`).join(", ")} — skipping to avoid data leak`);
+      bestMatches.length = 0; // Clear — will fall through to self-link
+    }
 
     for (const match of bestMatches) {
       matchedNonSelfIds.push(match.id);
