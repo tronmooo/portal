@@ -2700,7 +2700,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "health": return (profile.relatedTrackers || []).some((t: any) => 
           ['health','fitness','weight','sleep','wellness','nutrition','blood'].some(c => 
             (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)));
-        case "trackers": return true; // Linked tab always prominent — it's the hub for docs, trackers, and child profiles
+        case "trackers": return (profile.relatedDocuments || []).length > 0; // Documents tab — show if docs exist
         case "finances": return (profile.relatedExpenses || []).length > 0;
         case "tasks": return (profile.relatedTasks || []).length > 0;
         case "documents": return (profile.relatedDocuments || []).length > 0;
@@ -2969,91 +2969,62 @@ export default function ProfileDetailPage() {
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
                   <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
+                  {/* Child profiles (assets, subscriptions, vehicles) on Overview */}
+                  {(profile.childProfiles || []).length > 0 && (
+                    <div className="mt-4">
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Linked</p>
+                      <div className="space-y-1.5">
+                        {(profile.childProfiles || []).map((child: any) => {
+                          const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2 };
+                          const Icon = iconMap[child.type] || Link2;
+                          return (
+                            <Link key={child.id} href={`/profiles/${child.id}`}>
+                              <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer">
+                                <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                                  <Icon className="h-3.5 w-3.5 text-primary" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-medium truncate">{child.name}</p>
+                                  <p className="text-[10px] text-muted-foreground capitalize">{child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : ''}</p>
+                                </div>
+                                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              </div>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {/* Non-health trackers on Overview for non-person profiles */}
+                  {profile.type !== "self" && profile.type !== "person" && profile.relatedTrackers.length > 0 && (
+                    <div className="mt-4">
+                      <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                    </div>
+                  )}
                 </TabsContent>
               )}
 
               {tabValues.has("health") && (
                 <TabsContent value="health" className="mt-4 px-1 sm:px-0">
                   <HealthTabView profile={profile} onChanged={handleSaved} />
+                  {/* Health-related trackers */}
+                  {profile.relatedTrackers.length > 0 && (
+                    <div className="mt-4">
+                      <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                    </div>
+                  )}
                 </TabsContent>
               )}
 
               {tabValues.has("trackers") && (
                 <TabsContent value="trackers" className="mt-4 px-1 sm:px-0">
-                  {/* Filter pills for Linked tab */}
-                  {(() => {
-                    const childCount = (profile.childProfiles || []).length;
-                    const trackerCount = profile.relatedTrackers.length;
-                    const docCount = profile.relatedDocuments.length;
-                    const total = childCount + trackerCount + docCount;
-                    // Only show filter pills if there are items in multiple sections
-                    const nonEmptySections = [childCount > 0, trackerCount > 0, docCount > 0].filter(Boolean).length;
-                    if (nonEmptySections <= 1) return null;
-                    return (
-                      <div className="flex items-center gap-1 mb-3 flex-wrap" data-testid="linked-tab-filters">
-                        <button onClick={() => setLinkedFilter("all")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({total})</button>
-                        {childCount > 0 && <button onClick={() => setLinkedFilter("profiles")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "profiles" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Assets ({childCount})</button>}
-                        {trackerCount > 0 && <button onClick={() => setLinkedFilter("trackers")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "trackers" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Trackers ({trackerCount})</button>}
-                        {docCount > 0 && <button onClick={() => setLinkedFilter("documents")} className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${linkedFilter === "documents" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Documents ({docCount})</button>}
-                      </div>
-                    );
-                  })()}
-                  {/* Child profiles (assets, subscriptions, loans nested under this profile) */}
-                  {(linkedFilter === "all" || linkedFilter === "profiles") && (profile.childProfiles || []).length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">Linked Profiles</p>
-                      <div className="space-y-2">
-                        {(profile.childProfiles || []).map(child => {
-                          const childFields = Object.entries(child.fields || {}).filter(([k, v]) => v != null && v !== '' && !k.startsWith('_'));
-                          const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2 };
-                          const Icon = iconMap[child.type] || Link2;
-                          return (
-                            <div key={child.id} className="rounded-lg border bg-card overflow-hidden">
-                              <div className="flex items-center gap-3 p-3">
-                                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                                  <Icon className="h-4 w-4 text-primary" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium">{child.name}</p>
-                                  <p className="text-[10px] text-muted-foreground capitalize">{child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : ''}{child.fields?.frequency ? `/${child.fields.frequency}` : ''}</p>
-                                </div>
-                                <Link href={`/profiles/${child.id}`}>
-                                  <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0">View</Button>
-                                </Link>
-                              </div>
-                              {childFields.length > 0 && (
-                                <div className="px-3 pb-2.5 border-t border-border/50">
-                                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pt-2">
-                                    {childFields.slice(0, 6).map(([k, v]) => (
-                                      <div key={k} className="flex justify-between items-center">
-                                        <span className="text-[10px] text-muted-foreground capitalize">{k.replace(/([A-Z])/g, ' $1').trim()}</span>
-                                        <span className="text-[10px] font-medium">{String(v)}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {/* Trackers */}
-                  {(linkedFilter === "all" || linkedFilter === "trackers") && (
-                    <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
-                  )}
-                  {/* Documents — always show with upload capability */}
-                  {(linkedFilter === "all" || linkedFilter === "documents") && (
-                    <div className="mt-4">
-                      <DocumentsTab
-                        documents={profile.relatedDocuments}
-                        profileId={profile.id}
-                        childProfiles={profile.childProfiles}
-                        onUploaded={handleSaved}
-                      />
-                    </div>
-                  )}
+                  {/* Documents tab — ONLY documents, no trackers or child profiles */}
+                  <DocumentsTab
+                    documents={profile.relatedDocuments}
+                    profileId={profile.id}
+                    childProfiles={profile.childProfiles}
+                    onUploaded={handleSaved}
+                  />
                 </TabsContent>
               )}
 
