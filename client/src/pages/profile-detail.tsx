@@ -110,8 +110,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { Skeleton } from "@/components/ui/skeleton";
-import DynamicProfileDetail from "@/components/registry/DynamicProfileDetail";
-import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
+// DynamicProfileDetail import removed — registry system not yet integrated (see registry/index.ts)
 
 // ============================================================
 // HELPERS
@@ -2059,11 +2058,31 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           <div className="space-y-3 py-2">
             <div>
               <label className="text-xs font-medium text-muted-foreground">Description</label>
-              <Input className="mt-1" value={expDesc} onChange={e => setExpDesc(e.target.value)} placeholder="e.g. Vet visit" data-testid="input-expense-desc" />
+              <Input
+                className={`mt-1 ${showAddExpense && expDesc.trim() === "" ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                value={expDesc}
+                onChange={e => setExpDesc(e.target.value)}
+                placeholder="e.g. Vet visit"
+                data-testid="input-expense-desc"
+              />
+              {showAddExpense && expDesc.trim() === "" && (
+                <p className="text-xs text-destructive mt-1">Description is required</p>
+              )}
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Amount ($)</label>
-              <Input className="mt-1" type="number" step="0.01" value={expAmount} onChange={e => setExpAmount(e.target.value)} placeholder="0.00" data-testid="input-expense-amount" />
+              <Input
+                className={`mt-1 ${showAddExpense && (expAmount === "" || Number(expAmount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                type="number"
+                step="0.01"
+                value={expAmount}
+                onChange={e => setExpAmount(e.target.value)}
+                placeholder="0.00"
+                data-testid="input-expense-amount"
+              />
+              {showAddExpense && (expAmount === "" || Number(expAmount) <= 0) && (
+                <p className="text-xs text-destructive mt-1">Amount must be greater than 0</p>
+              )}
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Category</label>
@@ -2085,7 +2104,11 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddExpense(false)}>Cancel</Button>
-            <Button onClick={() => createExpenseMutation.mutate()} disabled={createExpenseMutation.isPending || !expDesc || !expAmount} data-testid="button-save-expense">
+            <Button
+              onClick={() => createExpenseMutation.mutate()}
+              disabled={createExpenseMutation.isPending || !expDesc.trim() || !expAmount || Number(expAmount) <= 0}
+              data-testid="button-save-expense"
+            >
               {createExpenseMutation.isPending ? "Saving..." : "Add Expense"}
             </Button>
           </DialogFooter>
@@ -4010,18 +4033,6 @@ export default function ProfileDetailPage() {
     enabled: !!id,
     staleTime: 0,
     refetchOnMount: "always",
-  });
-
-  // Fetch type definition from registry (only if the profile has a type_key)
-  const profileTypeKey = profile?.type_key;
-  const { data: typeDef } = useQuery<TypeDefinition>({
-    queryKey: ["/api/profile-types", profileTypeKey],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/profile-types/${profileTypeKey}`);
-      return res.json();
-    },
-    enabled: !!profileTypeKey,
-    staleTime: 1000 * 60 * 10, // 10 min — type defs rarely change
   });
 
   const deleteMutation = useMutation({

@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus } from "lucide-react";
+import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { Obligation } from "@shared/schema";
 
@@ -106,7 +106,7 @@ export default function ObligationsPage() {
   const { id: profileId, name: profileName } = getDashboardProfileFilter();
   const profileParam = profileId ? `?profileId=${profileId}` : "";
 
-  const { data: obligations = [], isLoading } = useQuery<Obligation[]>({
+  const { data: obligations = [], isLoading, error, refetch } = useQuery<Obligation[]>({
     queryKey: ["/api/obligations", profileId || "all"],
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
@@ -243,8 +243,16 @@ export default function ObligationsPage() {
       </div>
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map(i => <div key={i} className="h-24 rounded-lg bg-muted animate-pulse" />)}
+        <div className="p-4 space-y-3">
+          <div className="h-8 w-48 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+        </div>
+      ) : error ? (
+        <div className="p-4 text-center">
+          <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+          <p className="text-sm text-destructive">Failed to load data</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
         </div>
       ) : sorted.length === 0 ? (
         <div className="text-center py-12">

@@ -297,21 +297,28 @@ export default function TasksPage() {
   const { id: profileId, name: profileName } = getDashboardProfileFilter();
   const profileParam = profileId ? `?profileId=${profileId}` : "";
 
-  const { data: tasks, isLoading } = useQuery<Task[]>({
+  const { data: tasks, isLoading, error, refetch } = useQuery<Task[]>({
     queryKey: ["/api/tasks", profileId || "all"],
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
   });
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-4">
-        <div className="h-8 w-40 rounded skeleton-shimmer" />
-        {[...Array(3)].map((_, i) => (
-          <div key={i} className="h-20 rounded-lg skeleton-shimmer" />
-        ))}
+      <div className="p-4 space-y-3">
+        <div className="h-8 w-48 rounded skeleton-shimmer" />
+        <div className="h-20 rounded skeleton-shimmer" />
+        <div className="h-20 rounded skeleton-shimmer" />
       </div>
     );
   }
+
+  if (error) return (
+    <div className="p-4 text-center">
+      <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+      <p className="text-sm text-destructive">Failed to load data</p>
+      <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
+    </div>
+  );
 
   const activeTasks = (tasks || []).filter(t => t.status !== "done");
   const completedTasks = (tasks || []).filter(t => t.status === "done");

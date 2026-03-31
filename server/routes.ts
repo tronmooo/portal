@@ -664,7 +664,7 @@ export async function registerRoutes(
   }));
 
   // ---- Profiles ----
-  app.get("/api/profiles", asyncHandler(async (req, res) => { const items = await storage.getProfiles(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/profiles", asyncHandler(async (req, res) => { const items = await storage.getProfiles(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
   app.get("/api/profiles/:id", asyncHandler(async (req, res) => {
     const profile = await storage.getProfile(req.params.id);
     if (!profile) return res.status(404).json({ error: "Not found" });
@@ -948,7 +948,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Trackers ----
-  app.get("/api/trackers", asyncHandler(async (req, res) => { const items = await storage.getTrackers(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/trackers", asyncHandler(async (req, res) => { const items = await storage.getTrackers(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);
     if (!tracker) return res.status(404).json({ error: "Not found" });
@@ -1063,7 +1063,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return lp.includes(fp) || (isSelf && lp.length === 0);
       });
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
   }));
   app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
     const tasks = await storage.getTasks();
@@ -1122,7 +1122,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.query.to && typeof req.query.to === "string") {
       items = items.filter(e => e.date <= (req.query.to as string));
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
   }));
   app.get("/api/expenses/:id", asyncHandler(async (req, res) => {
     const expense = await storage.getExpense(req.params.id);
@@ -1135,6 +1135,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     if (!req.body.description || typeof req.body.description !== "string" || !req.body.description.trim()) {
       return res.status(400).json({ error: "Description required" });
+    }
+    const ALLOWED_EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general", "education", "shopping", "insurance", "travel", "subscription", "utility", "other"];
+    if (req.body.category !== undefined && !ALLOWED_EXPENSE_CATEGORIES.includes(req.body.category)) {
+      return res.status(400).json({ error: `Category must be one of: ${ALLOWED_EXPENSE_CATEGORIES.join(", ")}` });
+    }
+    if (req.body.date !== undefined) {
+      const parsed_date = new Date(req.body.date);
+      if (isNaN(parsed_date.getTime())) {
+        return res.status(400).json({ error: "Date must be a valid date" });
+      }
     }
     req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
@@ -1160,7 +1170,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Events ----
-  app.get("/api/events", asyncHandler(async (req, res) => { const items = await storage.getEvents(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/events", asyncHandler(async (req, res) => { const items = await storage.getEvents(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
   app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: "Not found" });
@@ -1203,7 +1213,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Documents ----
-  app.get("/api/documents", asyncHandler(async (req, res) => { const items = await storage.getDocuments(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/documents", asyncHandler(async (req, res) => { const items = await storage.getDocuments(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
@@ -1268,7 +1278,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return lp.includes(fp) || (isSelf && lp.length === 0);
       });
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
   }));
   app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
@@ -1315,7 +1325,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return lp.includes(fp) || (isSelf && lp.length === 0);
       });
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
   }));
   app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
@@ -1356,7 +1366,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Artifacts ----
-  app.get("/api/artifacts", asyncHandler(async (req, res) => { const items = await storage.getArtifacts(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/artifacts", asyncHandler(async (req, res) => { const items = await storage.getArtifacts(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
   app.get("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const artifact = await storage.getArtifact(req.params.id);
     if (!artifact) return res.status(404).json({ error: "Not found" });
@@ -1400,7 +1410,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // Journal entries are personal — only show for self profile
       if (!isSelf) { items = []; }
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
   }));
   app.post("/api/journal", asyncHandler(async (req, res) => {
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
@@ -1468,7 +1478,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Domains ----
-  app.get("/api/domains", asyncHandler(async (req, res) => { const items = await storage.getDomains(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/domains", asyncHandler(async (req, res) => { const items = await storage.getDomains(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
   app.post("/api/domains", asyncHandler(async (req, res) => {
     const parsed = insertDomainSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
@@ -2584,7 +2594,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
           return false;
         });
       }
-      res.json(goals);
+      res.json(goals.slice(0, 500));
     } catch (err: any) {
       console.error("Goals error:", err);
       res.status(500).json({ error: "Failed to get goals" });
@@ -2607,8 +2617,13 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
         return res.status(400).json({ error: "Goal title required" });
       }
-      if (!req.body.target || typeof req.body.target !== "number" || req.body.target <= 0) {
-        return res.status(400).json({ error: "Target must be greater than 0" });
+      if (req.body.target !== null && req.body.target !== undefined) {
+        if (typeof req.body.target !== "number" || req.body.target <= 0) {
+          return res.status(400).json({ error: "Target must be greater than 0" });
+        }
+      }
+      if (req.body.unit !== undefined && typeof req.body.unit !== "string") {
+        return res.status(400).json({ error: "Unit must be a string" });
       }
       const parsed = insertGoalSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.message });

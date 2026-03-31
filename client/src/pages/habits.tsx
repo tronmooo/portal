@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2 } from "lucide-react";
+import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { Habit } from "@shared/schema";
 import { useState } from "react";
@@ -142,7 +142,7 @@ export default function HabitsPage() {
   const { id: profileId, name: profileName } = getDashboardProfileFilter();
   const profileParam = profileId ? `?profileId=${profileId}` : "";
 
-  const { data: habits = [], isLoading } = useQuery<Habit[]>({
+  const { data: habits = [], isLoading, error, refetch } = useQuery<Habit[]>({
     queryKey: ["/api/habits", profileId || "all"],
     queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()),
   });
@@ -218,8 +218,16 @@ export default function HabitsPage() {
       )}
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
+        <div className="p-4 space-y-3">
+          <div className="h-8 w-48 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+        </div>
+      ) : error ? (
+        <div className="p-4 text-center">
+          <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+          <p className="text-sm text-destructive">Failed to load data</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
         </div>
       ) : habits.length === 0 ? (
         <div className="text-center py-12">

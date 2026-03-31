@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -38,7 +38,7 @@ export default function FinancePage() {
   const { toast } = useToast();
   const { id: profileId, name: profileName } = getDashboardProfileFilter();
   const profileParam = profileId ? `?profileId=${profileId}` : "";
-  const { data: expenses, isLoading } = useQuery<Expense[]>({
+  const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", profileId || "all"],
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
   });
@@ -67,12 +67,21 @@ export default function FinancePage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-4">
-        <div className="h-8 w-40 rounded skeleton-shimmer" />
-        <div className="h-48 rounded-lg skeleton-shimmer" />
+      <div className="p-4 space-y-3">
+        <div className="h-8 w-48 rounded skeleton-shimmer" />
+        <div className="h-20 rounded skeleton-shimmer" />
+        <div className="h-20 rounded skeleton-shimmer" />
       </div>
     );
   }
+
+  if (error) return (
+    <div className="p-4 text-center">
+      <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+      <p className="text-sm text-destructive">Failed to load data</p>
+      <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
+    </div>
+  );
 
   const filtered = filterCategory === "all" ? (expenses || []) : (expenses || []).filter(e => e.category === filterCategory);
   const total = filtered.reduce((s, e) => s + e.amount, 0);

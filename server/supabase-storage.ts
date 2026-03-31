@@ -975,6 +975,28 @@ export class SupabaseStorage implements IStorage {
       values = normalizedValues;
     }
 
+    // Dedup check: reject entries with same values logged within 5 minutes
+    const recentEntries = await this.supabase
+      .from("tracker_entries")
+      .select("id, entry_values, timestamp")
+      .eq("tracker_id", data.trackerId)
+      .eq("user_id", this.userId)
+      .gte("timestamp", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+      .order("timestamp", { ascending: false })
+      .limit(5);
+    if (recentEntries.data) {
+      const isDup = recentEntries.data.some(e =>
+        JSON.stringify(e.entry_values) === JSON.stringify(values)
+      );
+      if (isDup) {
+        // Return the existing entry instead of creating a duplicate
+        const existing = recentEntries.data.find(e =>
+          JSON.stringify(e.entry_values) === JSON.stringify(values)
+        );
+        return existing ? this.rowToTrackerEntry(existing) : null;
+      }
+    }
+
     const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), validated };
     const id = randomUUID();
     const ts = new Date().toISOString();
@@ -1466,6 +1488,14 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createDocument(data: any): Promise<Document> {
+    // TODO (Supabase Storage migration): This method attempts to upload file data
+    // to a Supabase Storage bucket named 'documents'. The bucket must be created
+    // manually in the Supabase dashboard (Storage > New bucket > "documents",
+    // set to private). Until the bucket exists, uploads will fail and the code
+    // automatically falls back to storing base64 in the file_data DB column.
+    // Once the bucket is created, new documents will use storage_path instead
+    // of file_data, and the backfill route POST /api/cleanup/migrate-documents-to-storage
+    // can be used to migrate existing base64 records.
     const id = randomUUID();
     const now = new Date().toISOString();
     let storagePath: string | null = null;

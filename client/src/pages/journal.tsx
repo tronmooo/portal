@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2 } from "lucide-react";
+import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
 import { useState } from "react";
@@ -143,7 +143,7 @@ export default function JournalPage() {
   const { id: profileId, name: profileName } = getDashboardProfileFilter();
   const profileParam = profileId ? `?profileId=${profileId}` : "";
 
-  const { data: entries = [], isLoading } = useQuery<JournalEntry[]>({
+  const { data: entries = [], isLoading, error, refetch } = useQuery<JournalEntry[]>({
     queryKey: ["/api/journal", profileId || "all"],
     queryFn: () => apiRequest("GET", `/api/journal${profileParam}`).then(r => r.json()),
   });
@@ -264,8 +264,16 @@ export default function JournalPage() {
       )}
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
+        <div className="p-4 space-y-3">
+          <div className="h-8 w-48 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+        </div>
+      ) : error ? (
+        <div className="p-4 text-center">
+          <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+          <p className="text-sm text-destructive">Failed to load data</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
         </div>
       ) : (
         <div className="grid gap-4">
