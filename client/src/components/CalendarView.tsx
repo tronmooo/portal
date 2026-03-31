@@ -707,7 +707,7 @@ export default function CalendarView() {
   const [detailItem, setDetailItem] = useState<CalendarTimelineItem | null>(null);
   const [editEvent, setEditEvent] = useState<CalendarEvent | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
-  const [profileFilter, setProfileFilter] = useState<string>("me");
+  const [profileFilter, setProfileFilter] = useState<string>("all");
   const [syncing, setSyncing] = useState(false);
   const { toast } = useToast();
 
@@ -748,7 +748,7 @@ export default function CalendarView() {
     return toLocalDateStr(d);
   }, [viewYear, viewMonth]);
 
-  const { data: timelineItems = [] } = useQuery<CalendarTimelineItem[]>({
+  const { data: timelineItems = [], isLoading: timelineLoading } = useQuery<CalendarTimelineItem[]>({
     queryKey: ["/api/calendar/timeline", startDate, endDate],
     queryFn: () =>
       apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}`).then(r => r.json()),

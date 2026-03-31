@@ -686,16 +686,25 @@ function BatchAttachmentPanel({
 }
 
 // ── Main chat page ────────────────────────────────────────────────────────────
+// Module-level chat history cache — persists across navigation without localStorage
+const WELCOME_MSG: ChatMessage = {
+  id: "welcome",
+  role: "assistant",
+  content: "Welcome to Portol. I'm your AI assistant \u2014 tell me what to log, track, create, or find. I can handle multiple things at once.\n\nTry something like: \"I ate a chicken sandwich, ran 2 miles, and spent $12 on lunch\"\n\nYou can also upload photos or documents \u2014 I'll extract data and route it to the right profile.",
+  timestamp: new Date().toISOString(),
+};
+let _chatCache: ChatMessage[] = [WELCOME_MSG];
+
 export default function ChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "Welcome to Portol. I'm your AI assistant — tell me what to log, track, create, or find. I can handle multiple things at once.\n\nTry something like: \"I ate a chicken sandwich, ran 2 miles, and spent $12 on lunch\"\n\nYou can also upload photos or documents — I'll extract data and route it to the right profile.",
-      timestamp: new Date().toISOString(),
-    },
-  ]);
+  const [messages, setMessagesRaw] = useState<ChatMessage[]>(_chatCache);
+  // Wrap setMessages to also persist to module-level cache
+  const setMessages = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+    setMessagesRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      _chatCache = next; // Persist across navigation
+      return next;
+    });
+  };
   const [input, setInput] = useState("");
 
   // Attachments: array supports both single and batch
