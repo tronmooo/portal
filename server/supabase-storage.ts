@@ -22,6 +22,17 @@ import {
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 
+// ---- MIME type → file extension helper ----
+function getExtension(mimeType: string): string {
+  const map: Record<string, string> = {
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif',
+    'image/webp': 'webp', 'image/heic': 'heic', 'application/pdf': 'pdf',
+    'text/plain': 'txt', 'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  };
+  return map[mimeType] || 'bin';
+}
+
 // ---- Streak calculator (timezone-aware) ----
 function calculateStreak(checkins: { date: string }[]): { current: number; longest: number } {
   if (checkins.length === 0) return { current: 0, longest: 0 };
@@ -1504,21 +1515,20 @@ export class SupabaseStorage implements IStorage {
     // Upload to Supabase Storage if we have base64 file data
     if (data.fileData && data.fileData.length > 0) {
       try {
-        const safeName = (data.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
-        const path = `${this.userId}/${id}/${safeName}`;
+        const storagePath2 = `${this.userId}/${id}.${getExtension(data.mimeType)}`;
         const buffer = Buffer.from(data.fileData, 'base64');
         const { error: uploadError } = await this.supabase.storage
           .from('documents')
-          .upload(path, buffer, {
-            contentType: data.mimeType || 'application/octet-stream',
-            upsert: false,
+          .upload(storagePath2, buffer, {
+            contentType: data.mimeType,
+            upsert: true,
           });
         if (!uploadError) {
-          storagePath = path;
-          fileDataForDB = ""; // Don't store base64 in DB row since it's in Storage now
+          storagePath = storagePath2;
+          fileDataForDB = ""; // Don't store base64 when we have storage
         } else {
-          console.error(`[Storage] Upload failed for ${id}, falling back to DB:`, uploadError.message);
-          // Fall back to storing base64 in DB
+          console.error('Storage upload failed, falling back to base64:', uploadError.message);
+          // Keep file_data as-is (base64 fallback)
         }
       } catch (err: any) {
         console.error(`[Storage] Upload exception for ${id}:`, err.message);

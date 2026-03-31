@@ -589,6 +589,7 @@ export interface Document {
   mimeType: string; // "image/jpeg", "application/pdf", etc.
   fileData: string; // base64 encoded file data (legacy — new docs use storagePath)
   storagePath?: string; // Supabase Storage path (new docs)
+  storage_path?: string; // DB column alias (snake_case)
   extractedData: Record<string, any>;
   linkedProfiles: string[];
   tags: string[];
