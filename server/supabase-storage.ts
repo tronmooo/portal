@@ -248,6 +248,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
       currentStreak: r.current_streak || 0, longestStreak: r.longest_streak || 0,
+      linkedProfiles: r.linked_profiles || [],
       checkins, createdAt: r.created_at,
     };
   }
@@ -1639,6 +1640,7 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
       target_days: data.targetDays || null, current_streak: 0, longest_streak: 0,
+      linked_profiles: data.linkedProfiles || [],
       created_at: now,
     });
     if (error) throw error;
@@ -1676,6 +1678,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("habits").update({
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
+      linked_profiles: merged.linkedProfiles || [],
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     return this.getHabit(id);
@@ -2236,7 +2239,7 @@ export class SupabaseStorage implements IStorage {
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const expenses = allExpenses.filter(e => matchesProfile(e.linkedProfiles));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
-    const habits = allHabits; // Habits are global (not profile-specific yet)
+    const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
     const now = new Date();
     const thisMonth = now.getMonth();
@@ -2283,7 +2286,7 @@ export class SupabaseStorage implements IStorage {
       this.getProfiles(), this.getEvents(), this.getArtifacts(), this.getMemories(),
     ]);
     const profiles = profileList;
-    const events = fp ? allEvents.filter(e => e.linkedProfiles.includes(fp)) : allEvents;
+    const events = allEvents.filter(e => matchesProfile(e.linkedProfiles));
 
     return {
       totalProfiles: profiles.length,
@@ -2351,8 +2354,9 @@ export class SupabaseStorage implements IStorage {
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));
     const allEvents = rawEvents.filter(e => matchesProfileEnhanced(e.linkedProfiles));
+    const filteredDocuments = documents.filter(d => matchesProfileEnhanced(d.linkedProfiles));
     const expiringDocs: any[] = [];
-    for (const doc of documents) {
+    for (const doc of filteredDocuments) {
       const ed = doc.extractedData || {};
       const dateFields = ['expiration_date', 'expirationDate', 'expiry', 'expires', 'exp_date', 'expiration', 'valid_until', 'validUntil', 'end_date', 'endDate', 'renewal_date', 'renewalDate'];
       for (const key of Object.keys(ed)) {
@@ -2427,7 +2431,7 @@ export class SupabaseStorage implements IStorage {
       financeSnapshot: { totalMonthlySpend, lastMonthTotal, spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0, spendByCategory, upcomingBills, monthlyObligationTotal: Math.round(monthlyObligationTotal) },
       overdueTasks,
       todaysEvents,
-      totalDocuments: documents.length,
+      totalDocuments: filteredDocuments.length,
     };
   }
 

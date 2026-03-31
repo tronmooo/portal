@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS habits (
   target_days JSONB DEFAULT '[]'::jsonb,
   current_streak INTEGER DEFAULT 0,
   longest_streak INTEGER DEFAULT 0,
+  linked_profiles JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 

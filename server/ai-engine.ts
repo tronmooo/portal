@@ -3021,6 +3021,14 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       }
       break;
     }
+    case "habit": {
+      const habit = await storage.getHabit(entityId);
+      if (habit && !habit.linkedProfiles.includes(profileId)) {
+        habit.linkedProfiles.push(profileId);
+        await storage.updateHabit(entityId, { linkedProfiles: habit.linkedProfiles } as any);
+      }
+      break;
+    }
   }
 }
 

@@ -275,6 +275,7 @@ export interface Habit {
   targetDays?: number[]; // 0=Sun..6=Sat for custom frequency
   currentStreak: number;
   longestStreak: number;
+  linkedProfiles: string[];
   checkins: HabitCheckin[];
   createdAt: string;
 }
@@ -293,6 +294,7 @@ export const insertHabitSchema = z.object({
   color: z.string().optional(),
   frequency: z.enum(["daily", "weekly", "custom"]).default("daily"),
   targetDays: z.array(z.number().min(0).max(6)).optional(),
+  linkedProfiles: z.array(z.string()).optional(),
 });
 
 export type InsertHabit = z.infer<typeof insertHabitSchema>;

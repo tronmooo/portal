@@ -1082,7 +1082,7 @@ export class MemStorage implements IStorage {
   async getHabits() { return Array.from(this.habits.values()); }
   async getHabit(id: string) { return this.habits.get(id); }
   async createHabit(data: InsertHabit): Promise<Habit> {
-    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
+    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", currentStreak: 0, longestStreak: 0, linkedProfiles: data.linkedProfiles || [], checkins: [], createdAt: new Date().toISOString() };
     this.habits.set(habit.id, habit);
     this.logActivity("habit", `Created habit: ${habit.name}`);
     return habit;
@@ -1288,12 +1288,21 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Dashboard ----
-  async getStats(): Promise<DashboardStats> {
-    const tasks = Array.from(this.tasks.values());
-    const expenses = Array.from(this.expenses.values());
-    const trackers = Array.from(this.trackers.values());
-    const habits = Array.from(this.habits.values());
-    const obligations = Array.from(this.obligations.values());
+  async getStats(filterProfileId?: string): Promise<DashboardStats> {
+    const allProfiles = Array.from(this.profiles.values());
+    const fp = filterProfileId;
+    const isSelfFilter = fp && allProfiles.find(p => p.id === fp)?.type === "self";
+    const matchesProfile = (linkedProfiles: string[]) => {
+      if (!fp) return true;
+      if (linkedProfiles.includes(fp)) return true;
+      if (isSelfFilter && linkedProfiles.length === 0) return true;
+      return false;
+    };
+    const tasks = Array.from(this.tasks.values()).filter(t => matchesProfile(t.linkedProfiles));
+    const expenses = Array.from(this.expenses.values()).filter(e => matchesProfile(e.linkedProfiles));
+    const trackers = Array.from(this.trackers.values()).filter(t => matchesProfile(t.linkedProfiles));
+    const habits = Array.from(this.habits.values()).filter(h => matchesProfile(h.linkedProfiles));
+    const obligations = Array.from(this.obligations.values()).filter(o => matchesProfile(o.linkedProfiles));
     const journalEntries = Array.from(this.journal.values());
     const now = new Date();
     const thisMonth = now.getMonth();
