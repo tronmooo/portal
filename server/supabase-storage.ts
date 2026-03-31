@@ -559,7 +559,9 @@ export class SupabaseStorage implements IStorage {
   async updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined> {
     const existing = await this.getProfile(id);
     if (!existing) return undefined;
-    const merged = { ...existing, ...data };
+    // IMPORTANT: Deep merge fields to prevent losing existing fields when updating one field
+    const mergedFields = data.fields ? { ...existing.fields, ...data.fields } : existing.fields;
+    const merged = { ...existing, ...data, fields: mergedFields };
     const now = new Date().toISOString();
     const updateData: any = {
       type: merged.type, name: merged.name, avatar: merged.avatar || null,
