@@ -2877,41 +2877,8 @@ export default function TrackersPage() {
 
       {/* ── Filter Bar ── */}
       <div className="space-y-2" data-testid="filter-bar">
-        {/* Row 1: Owner filter + section pills */}
+        {/* Section pills + profile filter (only for documents) */}
         <div className="flex items-center gap-2 flex-wrap">
-          {sortedFilterProfiles.length > 0 && (
-            <Select value={profileFilter} onValueChange={setProfileFilter}>
-              <SelectTrigger className="w-[180px] h-8 text-xs" data-testid="select-profile-filter">
-                <SelectValue placeholder="All profiles" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="me" data-testid="filter-profile-me">
-                  <span className="flex items-center gap-2">
-                    <User className="h-3.5 w-3.5" /> Me
-                  </span>
-                </SelectItem>
-                <SelectItem value="everyone" data-testid="filter-profile-everyone">
-                  <span className="flex items-center gap-2">
-                    <Users className="h-3.5 w-3.5" /> Everyone
-                  </span>
-                </SelectItem>
-                {sortedFilterProfiles.filter(p => p.type !== "self").map(p => {
-                  const Icon = PROFILE_TYPE_ICONS[p.type] || User;
-                  const count = countForProfile(p.id);
-                  return (
-                    <SelectItem key={p.id} value={p.id} data-testid={`filter-profile-${p.id}`}>
-                      <span className="flex items-center gap-2">
-                        <Icon className="h-3.5 w-3.5" />
-                        {p.name}
-                        <span className="text-muted-foreground text-xs">({count})</span>
-                      </span>
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-          )}
-          <div className="h-5 w-px bg-border" />
           {/* Section filter pills */}
           {(["all", "trackers", "documents", "profiles", "obligations"] as const).map(s => {
             const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", obligations: "Obligations" };
@@ -2968,7 +2935,7 @@ export default function TrackersPage() {
 
       {/* Linked Profiles (child assets, subscriptions, etc.) */}
       {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
-        const childTypeSet = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+        const childTypeSet = new Set(["vehicle", "asset", "loan", "investment", "account", "property"]);
         const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
@@ -3027,11 +2994,51 @@ export default function TrackersPage() {
         );
       })()}
 
-      {/* Active Obligations / Subscriptions */}
+      {/* Subscriptions Section (separate from assets) */}
+      {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
+        const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
+        const subs = (profiles || []).filter(p => {
+          if (p.type !== "subscription") return false;
+          if (isShowAll) return true;
+          const pParent = p.fields?._parentProfileId || p.parentProfileId;
+          return pParent === resolvedFilter;
+        });
+        if (subs.length === 0) return null;
+        return (
+          <div className="space-y-2">
+            <button onClick={() => toggleSection("subscriptions")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-subscriptions">
+              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subscriptions ({subs.length})</h2>
+              {collapsedSections.has("subscriptions") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+            </button>
+            {!collapsedSections.has("subscriptions") && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {subs.map(sub => {
+                  const fields = sub.fields || {};
+                  const cost = fields.cost || fields.amount || fields.price;
+                  const freq = fields.frequency || fields.billing || "monthly";
+                  return (
+                    <Link key={sub.id} href={`/profiles/${sub.id}`}>
+                      <div className="rounded-lg border bg-card p-2.5 hover:bg-muted/30 cursor-pointer transition-colors text-center" data-testid={`sub-card-${sub.id}`}>
+                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-1.5">
+                          <CreditCard className="h-3.5 w-3.5 text-primary" />
+                        </div>
+                        <p className="text-xs font-medium truncate">{sub.name}</p>
+                        {cost && <p className="text-[10px] text-muted-foreground">${cost}/{String(freq).slice(0, 3)}</p>}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Active Obligations */}
       {(sectionFilter === "all" || sectionFilter === "obligations") && filteredObligations.length > 0 && (
         <div className="space-y-2">
           <button onClick={() => toggleSection("obligations")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-obligations">
-            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations & Subscriptions ({filteredObligations.length})</h2>
+            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations ({filteredObligations.length})</h2>
             {collapsedSections.has("obligations") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
           </button>
           {!collapsedSections.has("obligations") && <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -3062,10 +3069,27 @@ export default function TrackersPage() {
       {/* Documents Section */}
       {(sectionFilter === "all" || sectionFilter === "documents") && <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <button onClick={() => toggleSection("documents")} className="flex items-center gap-1.5" data-testid="section-toggle-documents">
-            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({filteredDocuments.length})</h2>
-            {collapsedSections.has("documents") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => toggleSection("documents")} className="flex items-center gap-1.5" data-testid="section-toggle-documents">
+              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({filteredDocuments.length})</h2>
+              {collapsedSections.has("documents") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+            </button>
+            {sortedFilterProfiles.length > 0 && (
+              <Select value={profileFilter} onValueChange={setProfileFilter}>
+                <SelectTrigger className="w-[130px] h-6 text-[10px]" data-testid="select-profile-filter">
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="me"><span className="flex items-center gap-1.5"><User className="h-3 w-3" /> Me</span></SelectItem>
+                  <SelectItem value="everyone"><span className="flex items-center gap-1.5"><Users className="h-3 w-3" /> Everyone</span></SelectItem>
+                  {sortedFilterProfiles.filter(p => p.type !== "self").map(p => {
+                    const Icon = PROFILE_TYPE_ICONS[p.type] || User;
+                    return <SelectItem key={p.id} value={p.id}><span className="flex items-center gap-1.5"><Icon className="h-3 w-3" /> {p.name}</span></SelectItem>;
+                  })}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           <div className="flex gap-2">
             <input
               ref={docFileInputRef}
@@ -3196,60 +3220,52 @@ export default function TrackersPage() {
           </Button>
         </div>
       ) : viewMode === "table" ? (
-        <div className="border rounded-lg overflow-hidden" data-testid="tracker-table">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-muted/50 border-b">
-                <th className="text-left p-3 font-medium min-w-[150px]">Tracker</th>
-                <th className="text-left p-3 font-medium">Category</th>
-                <th className="text-left p-3 font-medium">Latest Value</th>
-                <th className="text-left p-3 font-medium">Last Updated</th>
-                <th className="text-left p-3 font-medium">Entries</th>
-                <th className="text-left p-3 font-medium">Linked To</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTrackers.map((tracker) => {
-                const lastEntry = tracker.entries[tracker.entries.length - 1];
-                const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
-                // Parse values if stored as JSON string
-                const rawValues = lastEntry?.values;
-                const parsedValues = typeof rawValues === 'string' ? (() => { try { return JSON.parse(rawValues); } catch { return null; } })() : rawValues;
-                const latestValue = parsedValues?.[primaryField]
-                  ?? (parsedValues ? Object.values(parsedValues).find(v => typeof v === 'number') : null)
-                  ?? (parsedValues ? Object.values(parsedValues).find(v => v !== null && v !== undefined && v !== '') : null);
-                const unit = tracker.unit || "";
-                const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
-                return (
-                  <tr
-                    key={tracker.id}
-                    className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
-                    data-testid={`tracker-row-${tracker.id}`}
-                    onClick={() => setSelectedTrackerId(tracker.id)}
-                  >
-                    <td className="p-3 font-medium">{tracker.name}</td>
-                    <td className="p-3">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-muted">{tracker.category}</span>
-                    </td>
-                    <td className="p-3 font-mono tabular-nums">
-                      {latestValue != null ? `${latestValue} ${unit}` : "—"}
-                    </td>
-                    <td className="p-3 text-muted-foreground">
-                      {lastEntry ? new Date(lastEntry.timestamp).toLocaleDateString() : "—"}
-                    </td>
-                    <td className="p-3 text-muted-foreground">{tracker.entries.length}</td>
-                    <td className="p-3">
-                      {linkedProfile ? (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                          {linkedProfile.name}
-                        </span>
-                      ) : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="space-y-1.5" data-testid="tracker-table">
+          {filteredTrackers.map((tracker) => {
+            const lastEntry = tracker.entries[tracker.entries.length - 1];
+            const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
+            const rawValues = lastEntry?.values;
+            const parsedValues = typeof rawValues === 'string' ? (() => { try { return JSON.parse(rawValues); } catch { return null; } })() : rawValues;
+            const latestValue = parsedValues?.[primaryField]
+              ?? (parsedValues ? Object.values(parsedValues).find(v => typeof v === 'number') : null)
+              ?? (parsedValues ? Object.values(parsedValues).find(v => v !== null && v !== undefined && v !== '') : null);
+            const unit = tracker.unit || "";
+            const spec = detectSpecialization(tracker);
+            // Dynamic secondary info based on tracker type
+            let secondaryInfo = "";
+            if (spec === "weight" && tracker.entries.length >= 2) {
+              const prev = tracker.entries[tracker.entries.length - 2]?.values?.[primaryField];
+              if (prev != null && latestValue != null) {
+                const diff = Number(latestValue) - Number(prev);
+                secondaryInfo = diff > 0 ? `+${diff.toFixed(1)}` : diff < 0 ? `${diff.toFixed(1)}` : "no change";
+              }
+            } else if (spec === "bp" && parsedValues) {
+              secondaryInfo = `${parsedValues.systolic || ""}/${parsedValues.diastolic || ""}`;
+            } else if (spec === "running" && parsedValues) {
+              secondaryInfo = parsedValues.distance ? `${parsedValues.distance} mi` : "";
+            } else if (tracker.entries.length > 0) {
+              secondaryInfo = `${tracker.entries.length} entries`;
+            }
+            return (
+              <div
+                key={tracker.id}
+                className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/30 cursor-pointer transition-colors"
+                data-testid={`tracker-row-${tracker.id}`}
+                onClick={() => setSelectedTrackerId(tracker.id)}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{tracker.name}</p>
+                  {secondaryInfo && <p className="text-[10px] text-muted-foreground">{secondaryInfo}</p>}
+                </div>
+                <div className="text-right shrink-0 ml-3">
+                  <p className="text-sm font-bold tabular-nums">
+                    {latestValue != null ? `${typeof latestValue === 'number' ? latestValue.toFixed(1) : latestValue}` : "—"}
+                  </p>
+                  {unit && <p className="text-[10px] text-muted-foreground">{unit}</p>}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
         sortedCats.map((cat) => (

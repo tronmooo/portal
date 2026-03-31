@@ -43,17 +43,17 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
   });
 
   return (
-    <Card data-testid={`card-journal-${entry.id}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <div className={`p-1.5 rounded-lg ${mood.bg}`}>
-              <MoodIcon className="h-4 w-4" style={{ color: mood.color }} />
+    <Card data-testid={`card-journal-${entry.id}`} className="overflow-hidden">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl ${mood.bg}`}>
+              <MoodIcon className="h-5 w-5" style={{ color: mood.color }} />
             </div>
             <div>
-              <span className="text-sm font-medium" style={{ color: mood.color }}>{mood.label}</span>
-              <p className="text-[10px] text-muted-foreground">
-                {dateObj.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+              <span className="text-base font-semibold" style={{ color: mood.color }}>{mood.label}</span>
+              <p className="text-xs text-muted-foreground">
+                {dateObj.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
               </p>
             </div>
           </div>
@@ -96,7 +96,7 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
         </div>
 
         {entry.content && (
-          <p className="text-sm text-foreground/80 mb-2 whitespace-pre-wrap">{entry.content}</p>
+          <p className="text-base leading-relaxed text-foreground/90 mb-3 whitespace-pre-wrap">{entry.content}</p>
         )}
 
         {entry.highlights && entry.highlights.length > 0 && (
@@ -169,7 +169,7 @@ export default function JournalPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24">
+    <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24 max-w-2xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3 mb-4">
@@ -264,7 +264,7 @@ export default function JournalPage() {
           {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
         </div>
       ) : (
-        <div className="grid gap-3">
+        <div className="grid gap-4">
           {entries.map(entry => (
             <JournalCard key={entry.id} entry={entry} />
           ))}
