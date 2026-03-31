@@ -628,52 +628,9 @@ Return ONLY the JSON array, nothing else.`;
       }
     }
 
-    // Auto-create calendar events/alerts for expiration dates found in the document
-    const dateFields: Array<{key: string, label: string}> = [
-      {key: 'expirationDate', label: 'Expiration'},
-      {key: 'registrationExpiration', label: 'Registration Expires'},
-      {key: 'warrantyExpiration', label: 'Warranty Expires'},
-      {key: 'policyExpiration', label: 'Policy Expires'},
-      {key: 'newExpDate', label: 'New Expiration'},
-      {key: 'dueDate', label: 'Due Date'},
-      {key: 'paymentDueDate', label: 'Payment Due'},
-      {key: 'followUpDate', label: 'Follow-Up'},
-      {key: 'nextAppointmentDate', label: 'Next Appointment'},
-      {key: 'vaccineDueDate', label: 'Vaccine Due'},
-      {key: 'renewalDate', label: 'Renewal'},
-    ];
-    for (const {key, label} of dateFields) {
-      const dateVal = parsed.extractedData?.[key];
-      // Only create alerts for real dates (year 2020-2035, not dollar amounts misread as dates)
-      if (dateVal && typeof dateVal === 'string' && dateVal.match(/^20[2-3]\d-\d{2}-\d{2}/)) {
-        try {
-          const docLabel = parsed.label || fileName;
-          const eventTitle = `${label}: ${docLabel}`;
-          // Link alert to both the asset profile and the self profile
-          const alertProfiles: string[] = [];
-          if (existingProfileId) alertProfiles.push(existingProfileId);
-          const allProfiles = await storage.getProfiles();
-          const selfP = allProfiles.find(p => p.type === 'self');
-          if (selfP && selfP.id !== existingProfileId) alertProfiles.push(selfP.id);
-
-          const evt = await storage.createEvent({
-            title: eventTitle,
-            date: dateVal.slice(0, 10),
-            allDay: true,
-            category: 'other',
-            description: `Auto-created from document: ${docLabel}`,
-            tags: ['from-document', 'expiration-alert'],
-            linkedProfiles: alertProfiles,
-            linkedDocuments: [document.id],
-          });
-          // Link the event to profiles via junction tables too
-          for (const pId of alertProfiles) {
-            try { await storage.linkProfileTo(pId, 'event', evt.id); } catch { /* */ }
-          }
-          savedItems.push(`📅 ${label} alert: ${dateVal.slice(0,10)}`);
-        } catch { /* non-critical */ }
-      }
-    }
+    // NOTE: Calendar events are NO LONGER auto-created from extracted dates.
+    // Extracted dates are presented in the pending extraction UI for user review.
+    // Users confirm which dates should become calendar events via the review flow.
 
     // 2. Auto-create trackers from extracted health/lab data
     if (parsed.trackerEntries && parsed.trackerEntries.length > 0) {
@@ -708,51 +665,8 @@ Return ONLY the JSON array, nothing else.`;
       }
     }
 
-    // 3. Auto-create calendar events for important dates (expiration, renewal, due dates)
-    if (parsed.extractedData) {
-      const DATE_PATTERNS_CHECK = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/;
-      const EXPIRY_KEYS = /expir|renew|due|validto|validthrough|registrationexpir|coverageend/i;
-      for (const [key, value] of Object.entries(parsed.extractedData)) {
-        const strVal = String(value);
-        if (!DATE_PATTERNS_CHECK.test(strVal) && !/^\d{4}-\d{2}-\d{2}/.test(strVal)) continue;
-        DATE_PATTERNS_CHECK.lastIndex = 0;
-        // Only auto-create events for expiration/renewal/due dates
-        if (!EXPIRY_KEYS.test(key)) continue;
-        const parsedDate = new Date(strVal);
-        if (isNaN(parsedDate.getTime())) continue;
-        const dateStr = parsedDate.toISOString().split("T")[0];
-        // Determine event title
-        const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
-        let eventTitle = `\u26a0\ufe0f ${parsed.label || fileName}`;
-        if (/expir/i.test(key)) eventTitle += " — Expires";
-        else if (/renew/i.test(key)) eventTitle += " — Renewal Due";
-        else if (/due/i.test(key)) eventTitle += " — Due";
-        else eventTitle += ` — ${label}`;
-        try {
-          // Check for duplicate before creating
-          const existingEvents = await storage.getEvents();
-          const isDuplicate = existingEvents.some((e: any) =>
-            e.title === eventTitle && e.date === dateStr
-          );
-          if (!isDuplicate) {
-            await storage.createEvent({
-              title: eventTitle,
-              date: dateStr,
-              allDay: true,
-              color: /expir/i.test(key) ? "#ef4444" : "#f59e0b", // red for expiry, amber for renewal
-              category: "finance",
-              description: `Auto-created from document: ${parsed.label || fileName}`,
-              linkedProfiles: linkedProfiles,
-              linkedDocuments: [document.id],
-              source: "ai",
-            });
-            savedItems.push(`Calendar event: ${eventTitle} on ${dateStr}`);
-          }
-        } catch (err: any) {
-          console.error("Auto-create calendar event failed:", err.message);
-        }
-      }
-    }
+    // Calendar events from extracted dates are NO LONGER auto-created.
+    // Dates are presented in the extraction review UI for user confirmation.
 
     // Build extraction fields list for the pending extraction UI
     const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; suggestedEvent?: string}> = [];

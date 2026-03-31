@@ -16,12 +16,12 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Activity, ListTodo, DollarSign, Calendar, BarChart3, Flame, Brain,
+  Activity, ListTodo, DollarSign, Calendar, BarChart3, Flame,
   CreditCard, BookHeart, Sparkles, Smile, Meh, Frown,
-  TrendingDown, TrendingUp, AlertTriangle, Heart,
+  TrendingUp, AlertTriangle, Heart,
   Check, Clock, MapPin,
   ChevronDown, ChevronUp,
-  ExternalLink, Eye, ShieldAlert,
+  ExternalLink, Eye,
   HeartPulse, ArrowUp, ArrowDown, Minus, FileWarning, CalendarClock,
   Download, UploadCloud,
   EyeOff, GripVertical, Settings, RotateCcw, Target,
@@ -30,7 +30,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type {
-  DashboardStats, Insight, MoodLevel,
+  DashboardStats, MoodLevel,
 } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -84,38 +84,11 @@ const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; 
   terrible:  { icon: Frown,    label: "Terrible",  color: "#8B1A2B", bg: "bg-red-600/10" },
 };
 
-const SEVERITY_CONFIG: Record<string, { color: string; bg: string; border: string }> = {
-  warning:  { color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/30" },
-  negative: { color: "text-red-600 dark:text-red-400", bg: "bg-red-500/10", border: "border-red-500/30" },
-  info:     { color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/30" },
-  positive: { color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10", border: "border-green-500/30" },
-};
-
-const SEVERITY_ICONS: Record<string, any> = {
-  warning: AlertTriangle,
-  negative: ShieldAlert,
-  info: Brain,
-  positive: Check,
-};
-
-const SEVERITY_ORDER: Record<string, number> = { warning: 0, negative: 1, info: 2, positive: 3 };
-
 const ACTIVITY_ICONS: Record<string, any> = {
   tracker_entry: HeartPulse,
   task_completed: Check,
   expense: DollarSign,
 };
-
-function insightRoute(insight: Insight): string {
-  const t = insight.type;
-  if (t.includes("health") || t === "anomaly") return "#/trackers";
-  if (t.includes("spending")) return "#/dashboard/finance";
-  if (t === "obligation_due") return "#/dashboard/obligations";
-  if (t === "streak" || t === "habit_streak") return "#/dashboard/habits";
-  if (t === "mood_trend") return "#/dashboard/journal";
-  if (t === "reminder") return "#/dashboard/tasks";
-  return "#/dashboard";
-}
 
 // ─── Shared UI Components ────────────────────────────────────────────────────
 
@@ -217,91 +190,249 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
   );
 }
 
-// ─── Section: AI Priority Insights ───────────────────────────────────────────
+// ─── Section: Needs Attention ────────────────────────────────────────────────
 
-function InsightsSection({ profileId }: { profileId?: string }) {
-  const [, navigate] = useLocation();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
-  const { data: insights = [], isLoading } = useQuery<Insight[]>({
-    queryKey: ["/api/insights", profileId || "all"],
-    queryFn: () => apiRequest("GET", `/api/insights${profileParam}`).then(r => r.json()),
-  });
+function NeedsAttentionSection({ stats, enhanced, profileId }: { stats: DashboardStats; enhanced: any; profileId?: string }) {
+  const { toast } = useToast();
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
 
-  const sorted = useMemo(() => {
-    const seenTitles = new Set<string>();
-    return [...insights]
-      .filter(insight => {
-        const insightType = insight.type as string;
-        const isExpirationInsight = insightType === "expiring_document" || insightType === "document_expiry" || insightType === "expiration";
-        // Skip expiration alerts for the self/"Me" profile
-        if (isExpirationInsight) {
-          if ((insight as any).profileType === "self") return false;
-        }
-        // Skip bad data: expiration date more than 365 days in the past with out-of-range year
-        if (isExpirationInsight) {
-          const daysUntil = (insight as any).daysUntil;
-          if (typeof daysUntil === "number" && daysUntil < -365) {
-            const expDate = (insight as any).expirationDate ? new Date((insight as any).expirationDate) : null;
-            if (expDate) {
-              const yr = expDate.getFullYear();
-              if (yr < 2020 || yr > 2040) return false;
-            }
-          }
-        }
-        // Deduplicate by title
-        const titleKey = insight.title?.trim().toLowerCase() || "";
-        if (titleKey && seenTitles.has(titleKey)) return false;
-        if (titleKey) seenTitles.add(titleKey);
-        return true;
-      })
-      .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9))
-      .slice(0, 10);
-  }, [insights]);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
 
-  if (isLoading) return (
-    <CollapsibleSection icon={Brain} label="Important Right Now" testId="section-insights">
-      <SkeletonGrid cols={2} rows={2} h="h-16" />
-    </CollapsibleSection>
-  );
+  // Build overdue items from structured data only
+  const overdueTasks: any[] = useMemo(() => {
+    const raw: any[] = enhanced?.overdueTasks || [];
+    return raw.filter((t: any) => !dismissedIds.has(`task-${t.id}`));
+  }, [enhanced, dismissedIds]);
 
-  if (sorted.length === 0) return (
-    <CollapsibleSection icon={Brain} label="Important Right Now" testId="section-insights">
+  const overdueBills: any[] = useMemo(() => {
+    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil < 0);
+    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
+  }, [enhanced, dismissedIds]);
+
+  // Due soon: next 7 days
+  const soonTasks: any[] = useMemo(() => {
+    const raw: any[] = (enhanced?.tasksDueSoon || []).filter((t: any) => {
+      if (!t.dueDate) return false;
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+      return diff >= 0 && diff <= 7;
+    });
+    // Also grab tasks with dueDate in the next 7 days from enhanced.overdueTasks exclusion
+    const allTasks: any[] = enhanced?.upcomingTasks || [];
+    const combined = [...raw, ...allTasks.filter((t: any) => {
+      if (!t.dueDate) return false;
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+      return diff >= 0 && diff <= 7;
+    })];
+    // Dedupe by id
+    const seen = new Set<string>();
+    return combined.filter((t: any) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return !dismissedIds.has(`task-${t.id}`);
+    });
+  }, [enhanced, dismissedIds, now]);
+
+  const soonBills: any[] = useMemo(() => {
+    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
+    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
+  }, [enhanced, dismissedIds]);
+
+  // Upcoming: 8–30 days
+  const upcomingTasks: any[] = useMemo(() => {
+    const allTasks: any[] = enhanced?.upcomingTasks || [];
+    return allTasks.filter((t: any) => {
+      if (!t.dueDate) return false;
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+      return diff >= 8 && diff <= 30;
+    }).filter((t: any) => !dismissedIds.has(`task-${t.id}`));
+  }, [enhanced, dismissedIds, now]);
+
+  const upcomingBills: any[] = useMemo(() => {
+    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil >= 8 && b.daysUntil <= 30);
+    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
+  }, [enhanced, dismissedIds]);
+
+  const totalCount = overdueTasks.length + overdueBills.length + soonTasks.length + soonBills.length + upcomingTasks.length + upcomingBills.length;
+
+  const handleMarkComplete = async (taskId: string) => {
+    try {
+      await apiRequest("PATCH", `/api/tasks/${taskId}`, { status: "done" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Task completed" });
+    } catch {
+      toast({ title: "Failed to complete task", variant: "destructive" });
+    }
+  };
+
+  const handleSnooze = async (taskId: string) => {
+    try {
+      const newDate = new Date();
+      newDate.setDate(newDate.getDate() + 7);
+      await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toISOString().slice(0, 10) });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Task snoozed 7 days" });
+    } catch {
+      toast({ title: "Failed to snooze task", variant: "destructive" });
+    }
+  };
+
+  const dismiss = (key: string) => setDismissedIds(prev => new Set([...prev, key]));
+
+  function AttentionItem({
+    id, title, detail, badge, sourceType, accentClass, borderClass,
+  }: {
+    id: string; title: string; detail: string; badge: string; sourceType: "task" | "bill";
+    accentClass: string; borderClass: string;
+  }) {
+    return (
+      <div className={`flex items-center gap-2 p-2 rounded-lg border ${borderClass} ${accentClass}`}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-medium truncate">{title}</span>
+            <Badge variant="outline" className="text-[9px] px-1 py-0 h-3.5 shrink-0">{badge}</Badge>
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-0.5">{detail}</p>
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0">
+          {sourceType === "task" && (
+            <>
+              <button
+                onClick={() => handleMarkComplete(id)}
+                title="Mark complete"
+                className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600 transition-colors">
+                <Check className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => handleSnooze(id)}
+                title="Snooze 7 days"
+                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600 transition-colors">
+                <Clock className="h-3 w-3" />
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => dismiss(`${sourceType}-${id}`)}
+            title="Dismiss"
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground transition-colors">
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function overdueDetail(item: any, type: "task" | "bill"): string {
+    if (type === "bill") {
+      const days = Math.abs(item.daysUntil);
+      return `${days} day${days !== 1 ? "s" : ""} overdue${item.amount ? ` · ${formatMoney(item.amount)}` : ""}`;
+    }
+    if (!item.dueDate) return "Overdue";
+    const d = new Date(item.dueDate);
+    d.setHours(0, 0, 0, 0);
+    const days = Math.ceil((now.getTime() - d.getTime()) / 86400000);
+    return `${days} day${days !== 1 ? "s" : ""} overdue`;
+  }
+
+  function dueSoonDetail(item: any, type: "task" | "bill"): string {
+    if (type === "bill") {
+      const label = item.daysUntil === 0 ? "Today" : item.daysUntil === 1 ? "Tomorrow" : `in ${item.daysUntil}d`;
+      return `${label}${item.amount ? ` · ${formatMoney(item.amount)}` : ""}`;
+    }
+    if (!item.dueDate) return "Due soon";
+    const d = new Date(item.dueDate);
+    d.setHours(0, 0, 0, 0);
+    const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+    return diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : `in ${diff}d`;
+  }
+
+  function upcomingDetail(item: any, type: "task" | "bill"): string {
+    if (type === "bill") {
+      return `in ${item.daysUntil}d${item.amount ? ` · ${formatMoney(item.amount)}` : ""}`;
+    }
+    if (!item.dueDate) return "Upcoming";
+    const d = new Date(item.dueDate);
+    d.setHours(0, 0, 0, 0);
+    const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+    return `in ${diff}d`;
+  }
+
+  if (totalCount === 0) return (
+    <CollapsibleSection icon={AlertTriangle} label="Needs Attention" testId="section-needs-attention">
       <div className="text-center py-6">
-        <Brain className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground">No insights right now. Everything looks good!</p>
+        <Check className="h-7 w-7 text-green-500/60 mx-auto mb-2" />
+        <p className="text-xs text-muted-foreground">All clear — nothing needs attention right now</p>
       </div>
     </CollapsibleSection>
   );
 
   return (
-    <CollapsibleSection icon={Brain} label="Important Right Now" count={sorted.length} testId="section-insights">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        {sorted.map(insight => {
-          const sev = SEVERITY_CONFIG[insight.severity] || SEVERITY_CONFIG.info;
-          const SevIcon = SEVERITY_ICONS[insight.severity] || Brain;
-          return (
-            <div
-              key={insight.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate(insightRoute(insight).replace("#", ""))}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(insightRoute(insight).replace("#", "")); } }}
-              className={`flex items-start gap-2.5 p-2.5 rounded-lg border ${sev.border} ${sev.bg} cursor-pointer hover:opacity-80 transition-opacity`}
-              data-testid={`insight-${insight.id}`}
-            >
-              <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${sev.bg}`}>
-                <SevIcon className={`h-3 w-3 ${sev.color}`} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium leading-tight">{insight.title}</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">{insight.description}</p>
-              </div>
-              <Badge variant="outline" className={`shrink-0 text-[9px] px-1.5 py-0 h-4 ${sev.color} border-current/30`}>
-                {insight.severity}
-              </Badge>
-            </div>
-          );
-        })}
+    <CollapsibleSection icon={AlertTriangle} label="Needs Attention" count={totalCount} testId="section-needs-attention">
+      <div className="space-y-3">
+        {/* Overdue */}
+        {(overdueTasks.length > 0 || overdueBills.length > 0) && (
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" /> Overdue
+            </p>
+            {overdueTasks.map((t: any) => (
+              <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
+                detail={overdueDetail(t, "task")} badge="Task" sourceType="task"
+                accentClass="bg-red-500/5" borderClass="border-red-500/25" />
+            ))}
+            {overdueBills.map((b: any) => (
+              <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
+                detail={overdueDetail(b, "bill")} badge="Bill" sourceType="bill"
+                accentClass="bg-red-500/5" borderClass="border-red-500/25" />
+            ))}
+          </div>
+        )}
+
+        {/* Due Soon */}
+        {(soonTasks.length > 0 || soonBills.length > 0) && (
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wider flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" /> Due Soon
+            </p>
+            {soonTasks.map((t: any) => (
+              <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
+                detail={dueSoonDetail(t, "task")} badge="Task" sourceType="task"
+                accentClass="bg-amber-500/5" borderClass="border-amber-500/25" />
+            ))}
+            {soonBills.map((b: any) => (
+              <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
+                detail={dueSoonDetail(b, "bill")} badge="Bill" sourceType="bill"
+                accentClass="bg-amber-500/5" borderClass="border-amber-500/25" />
+            ))}
+          </div>
+        )}
+
+        {/* Upcoming */}
+        {(upcomingTasks.length > 0 || upcomingBills.length > 0) && (
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" /> Upcoming
+            </p>
+            {upcomingTasks.map((t: any) => (
+              <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
+                detail={upcomingDetail(t, "task")} badge="Task" sourceType="task"
+                accentClass="bg-blue-500/5" borderClass="border-blue-500/25" />
+            ))}
+            {upcomingBills.map((b: any) => (
+              <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
+                detail={upcomingDetail(b, "bill")} badge="Bill" sourceType="bill"
+                accentClass="bg-blue-500/5" borderClass="border-blue-500/25" />
+            ))}
+          </div>
+        )}
       </div>
     </CollapsibleSection>
   );
@@ -684,16 +815,6 @@ function UpcomingSection({ enhanced, stats }: { enhanced: any; stats: DashboardS
       type: "task", icon: ListTodo, title: t.title,
       detail: t.priority ? `${t.priority} priority` : "Task",
       route: "/dashboard/tasks",
-    });
-  }
-
-  // Expiring documents
-  for (const d of (enhanced?.expiringDocuments || []).slice(0, 5)) {
-    items.push({
-      date: d.expirationDate, daysUntil: d.daysUntil, type: "document",
-      icon: FileWarning, title: d.documentName,
-      detail: d.status === "expired" ? "Expired" : `Expires ${fmtDate(d.expirationDate)}`,
-      route: "/dashboard/artifacts",
     });
   }
 
@@ -1270,7 +1391,7 @@ interface DashboardSection {
 }
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
-  { id: "insights", label: "Important Right Now", icon: Brain, visible: true, column: "full" },
+  { id: "needs-attention", label: "Needs Attention", icon: AlertTriangle, visible: true, column: "full" },
   { id: "today", label: "Today", icon: Calendar, visible: true, column: "full" },
   { id: "kpis", label: "Key Metrics", icon: BarChart3, visible: true, column: "full" },
   { id: "upcoming", label: "Coming Up", icon: CalendarClock, visible: true, column: "full" },
@@ -1528,8 +1649,8 @@ export default function DashboardPage() {
   function renderSection(id: string) {
     let content: React.ReactNode = null;
     switch (id) {
-      case "insights":
-        content = <InsightsSection profileId={resolvedFilterId} />;
+      case "needs-attention":
+        content = stats ? <NeedsAttentionSection stats={stats} enhanced={enhanced} profileId={resolvedFilterId} /> : null;
         break;
       case "today":
         content = <TodaySection enhanced={enhanced} stats={stats} />;
