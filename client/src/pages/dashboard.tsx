@@ -929,6 +929,196 @@ function ObligationsSection({ data }: { data: any[] }) {
   );
 }
 
+// ─── Section: Goals ─────────────────────────────────────────────────────────
+
+interface GoalItem {
+  id: string; title: string; type: string; target: number; current: number;
+  unit: string; status: string; deadline?: string; trackerId?: string;
+  startValue?: number; milestones: any[]; createdAt: string;
+}
+
+function GoalProgressBar({ goal }: { goal: GoalItem }) {
+  const pct = goal.target > 0 ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
+  const isComplete = goal.status === "completed" || pct >= 100;
+  const daysLeft = goal.deadline ? Math.ceil((new Date(goal.deadline).getTime() - Date.now()) / 86400000) : null;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium truncate">{goal.title}</span>
+        <span className="text-[10px] text-muted-foreground shrink-0 ml-2">
+          {isComplete ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 inline" /> : `${pct}%`}
+        </span>
+      </div>
+      <Progress value={pct} className="h-1.5" />
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>{goal.current} / {goal.target} {goal.unit}</span>
+        {daysLeft != null && daysLeft > 0 && <span>{daysLeft}d left</span>}
+        {daysLeft != null && daysLeft <= 0 && goal.status === "active" && <span className="text-destructive">overdue</span>}
+      </div>
+    </div>
+  );
+}
+
+function GoalsSection() {
+  const { data: goals = [], isLoading } = useQuery<GoalItem[]>({
+    queryKey: ["/api/goals"],
+    queryFn: () => apiRequest("GET", "/api/goals").then(r => r.json()),
+  });
+  const [editGoal, setEditGoal] = useState<GoalItem | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [formTitle, setFormTitle] = useState("");
+  const [formTarget, setFormTarget] = useState("");
+  const [formUnit, setFormUnit] = useState("");
+  const [formDeadline, setFormDeadline] = useState("");
+  const [formType, setFormType] = useState("custom");
+  const { toast } = useToast();
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setCreating(false); resetForm();
+      toast({ title: "Goal created" });
+    },
+    onError: (e: Error) => toast({ title: "Failed to create goal", description: e.message, variant: "destructive" }),
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, data).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setEditGoal(null); resetForm();
+      toast({ title: "Goal updated" });
+    },
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setEditGoal(null);
+      toast({ title: "Goal deleted" });
+    },
+  });
+
+  const resetForm = () => { setFormTitle(""); setFormTarget(""); setFormUnit(""); setFormDeadline(""); setFormType("custom"); };
+  const openEdit = (g: GoalItem) => { setEditGoal(g); setFormTitle(g.title); setFormTarget(String(g.target)); setFormUnit(g.unit); setFormDeadline(g.deadline || ""); setFormType(g.type); };
+  const openCreate = () => { resetForm(); setCreating(true); };
+
+  const handleSave = () => {
+    if (!formTitle.trim() || !formTarget) return;
+    const payload = { title: formTitle.trim(), type: formType, target: Number(formTarget), unit: formUnit || "units", deadline: formDeadline || undefined };
+    if (editGoal) updateMutation.mutate({ id: editGoal.id, ...payload });
+    else createMutation.mutate(payload);
+  };
+
+  const activeGoals = goals.filter(g => g.status === "active");
+  const completedGoals = goals.filter(g => g.status === "completed");
+
+  if (isLoading) return <CollapsibleSection icon={Target} label="Goals" testId="section-goals"><div className="h-16 bg-muted animate-pulse rounded-lg" /></CollapsibleSection>;
+
+  return (
+    <>
+      <CollapsibleSection icon={Target} label="Goals" count={activeGoals.length} testId="section-goals">
+        {activeGoals.length === 0 && completedGoals.length === 0 ? (
+          <div className="text-center py-4">
+            <Target className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-xs text-muted-foreground">No goals yet</p>
+            <Button size="sm" variant="outline" className="mt-2 h-7 text-xs" onClick={openCreate} data-testid="btn-create-first-goal">
+              <Target className="h-3 w-3 mr-1" /> Set a Goal
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {activeGoals.map(g => (
+              <div key={g.id} className="cursor-pointer hover:bg-muted/30 rounded-lg p-2 -mx-2 transition-colors" onClick={() => openEdit(g)} data-testid={`goal-card-${g.id}`}>
+                <GoalProgressBar goal={g} />
+              </div>
+            ))}
+            {completedGoals.length > 0 && (
+              <div className="pt-2 border-t">
+                <p className="text-[10px] text-muted-foreground mb-1">{completedGoals.length} completed</p>
+                {completedGoals.slice(0, 3).map(g => (
+                  <div key={g.id} className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+                    <CheckCircle2 className="h-3 w-3 text-green-500" />
+                    <span className="line-through">{g.title}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={openCreate} data-testid="btn-add-goal">
+              <Target className="h-3 w-3 mr-1" /> Add Goal
+            </Button>
+          </div>
+        )}
+      </CollapsibleSection>
+
+      {/* Create / Edit Goal Dialog */}
+      <Dialog open={creating || !!editGoal} onOpenChange={v => { if (!v) { setCreating(false); setEditGoal(null); resetForm(); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">{editGoal ? "Edit Goal" : "Create Goal"}</DialogTitle>
+            <DialogDescription className="text-xs">Set a measurable target to track your progress</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-xs">Title</Label>
+              <Input value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="e.g., Lose 10 lbs" className="h-8 text-sm" data-testid="input-goal-title" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Target</Label>
+                <Input type="number" value={formTarget} onChange={e => setFormTarget(e.target.value)} placeholder="10" className="h-8 text-sm" data-testid="input-goal-target" />
+              </div>
+              <div>
+                <Label className="text-xs">Unit</Label>
+                <Input value={formUnit} onChange={e => setFormUnit(e.target.value)} placeholder="lbs, miles, $" className="h-8 text-sm" data-testid="input-goal-unit" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Type</Label>
+                <Select value={formType} onValueChange={setFormType}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="custom">Custom</SelectItem>
+                    <SelectItem value="weight_loss">Weight Loss</SelectItem>
+                    <SelectItem value="weight_gain">Weight Gain</SelectItem>
+                    <SelectItem value="savings">Savings</SelectItem>
+                    <SelectItem value="spending_limit">Spending Limit</SelectItem>
+                    <SelectItem value="fitness_distance">Fitness Distance</SelectItem>
+                    <SelectItem value="fitness_frequency">Fitness Frequency</SelectItem>
+                    <SelectItem value="tracker_target">Tracker Target</SelectItem>
+                    <SelectItem value="habit_streak">Habit Streak</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Deadline</Label>
+                <Input type="date" value={formDeadline} onChange={e => setFormDeadline(e.target.value)} className="h-8 text-xs" data-testid="input-goal-deadline" />
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            {editGoal && (
+              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => deleteMutation.mutate(editGoal.id)} disabled={deleteMutation.isPending} data-testid="btn-delete-goal">
+                <Trash2 className="h-3 w-3 mr-1" /> Delete
+              </Button>
+            )}
+            {editGoal && editGoal.status === "active" && (
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => updateMutation.mutate({ id: editGoal.id, status: "completed" })} data-testid="btn-complete-goal">
+                <Check className="h-3 w-3 mr-1" /> Complete
+              </Button>
+            )}
+            <Button size="sm" className="h-7 text-xs" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending} data-testid="btn-save-goal">
+              {editGoal ? "Update" : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+
 // ─── Section: Recent Activity ────────────────────────────────────────────────
 
 function ActivitySection({ activities }: { activities: DashboardStats["recentActivity"] }) {
@@ -987,6 +1177,7 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "trends", label: "Trends", icon: TrendingUp, visible: true, column: "full" },
   { id: "health", label: "Health", icon: HeartPulse, visible: true, column: "left" },
   { id: "obligations", label: "Bills & Subscriptions", icon: CreditCard, visible: true, column: "left" },
+  { id: "goals", label: "Goals", icon: Target, visible: true, column: "right" },
   { id: "activity", label: "Recent Activity", icon: Activity, visible: true, column: "right" },
 ];
 
@@ -1248,6 +1439,9 @@ export default function DashboardPage() {
         break;
       case "obligations":
         content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
+        break;
+      case "goals":
+        content = <GoalsSection />;
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;

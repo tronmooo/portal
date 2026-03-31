@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1731,6 +1732,9 @@ function generateDynamicTabs(tracker: Tracker): DynamicTab[] {
     tabs.push({ id: "insights", label: "Insights", icon: Lightbulb });
   }
 
+  // Goals tab always shows
+  tabs.push({ id: "goals", label: "Goals", icon: Target });
+
   return tabs;
 }
 
@@ -2459,6 +2463,137 @@ function InsightsTabContent({ tracker, primaryField }: { tracker: Tracker; prima
   );
 }
 
+// -- Goals Tab Content (inside tracker detail)
+function GoalsTabContent({ tracker }: { tracker: Tracker }) {
+  const { data: allGoals = [] } = useQuery<any[]>({
+    queryKey: ["/api/goals"],
+    queryFn: () => apiRequest("GET", "/api/goals").then(r => r.json()),
+  });
+  const trackerGoals = allGoals.filter(g => g.trackerId === tracker.id);
+  const [creating, setCreating] = useState(false);
+  const [editGoal, setEditGoal] = useState<any>(null);
+  const [formTitle, setFormTitle] = useState("");
+  const [formTarget, setFormTarget] = useState("");
+  const [formUnit, setFormUnit] = useState(tracker.unit || "");
+  const [formDeadline, setFormDeadline] = useState("");
+  const { toast } = useToast();
+
+  // Auto-suggest goal type from tracker
+  const suggestType = () => {
+    const name = tracker.name.toLowerCase();
+    const cat = tracker.category.toLowerCase();
+    if (name.includes("weight")) return "weight_loss";
+    if (name.includes("run") || name.includes("distance") || cat === "fitness") return "fitness_distance";
+    if (name.includes("saving") || cat === "finance") return "savings";
+    if (name.includes("sleep") || name.includes("bp") || cat === "health") return "tracker_target";
+    return "tracker_target";
+  };
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setCreating(false); resetForm();
+      toast({ title: "Goal created" });
+    },
+    onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, data).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setEditGoal(null); resetForm();
+      toast({ title: "Goal updated" });
+    },
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setEditGoal(null);
+      toast({ title: "Goal deleted" });
+    },
+  });
+
+  const resetForm = () => { setFormTitle(""); setFormTarget(""); setFormUnit(tracker.unit || ""); setFormDeadline(""); };
+  const openCreate = () => { resetForm(); setCreating(true); };
+  const openEdit = (g: any) => { setEditGoal(g); setFormTitle(g.title); setFormTarget(String(g.target)); setFormUnit(g.unit); setFormDeadline(g.deadline || ""); };
+
+  const handleSave = () => {
+    if (!formTitle.trim() || !formTarget) return;
+    const payload = {
+      title: formTitle.trim(), type: suggestType(), target: Number(formTarget),
+      unit: formUnit || tracker.unit || "units", deadline: formDeadline || undefined,
+      trackerId: tracker.id,
+    };
+    if (editGoal) updateMutation.mutate({ id: editGoal.id, ...payload });
+    else createMutation.mutate(payload);
+  };
+
+  return (
+    <div className="px-5 py-4 space-y-4">
+      {trackerGoals.length === 0 && !creating ? (
+        <div className="text-center py-6">
+          <Target className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No goals for this tracker yet</p>
+          <Button size="sm" variant="outline" className="mt-3 h-8 text-xs" onClick={openCreate} data-testid="btn-create-tracker-goal">
+            <Target className="h-3 w-3 mr-1" /> Create Goal
+          </Button>
+        </div>
+      ) : (
+        <>
+          {trackerGoals.map(g => {
+            const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
+            const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
+            return (
+              <div key={g.id} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => openEdit(g)} data-testid={`tracker-goal-${g.id}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">{g.title}</span>
+                  <Badge variant={g.status === "completed" ? "default" : "secondary"} className="text-[10px] capitalize">{g.status}</Badge>
+                </div>
+                <Progress value={pct} className="h-2" />
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <span>{g.current} / {g.target} {g.unit} ({pct}%)</span>
+                  {daysLeft != null && daysLeft > 0 && <span>{daysLeft} days left</span>}
+                </div>
+              </div>
+            );
+          })}
+          <Button size="sm" variant="outline" className="w-full h-8 text-xs" onClick={openCreate} data-testid="btn-add-tracker-goal">
+            <Plus className="h-3 w-3 mr-1" /> Add Goal
+          </Button>
+        </>
+      )}
+
+      {/* Create/Edit Goal inline form */}
+      {(creating || editGoal) && (
+        <div className="rounded-lg border p-3 space-y-3 bg-muted/20">
+          <p className="text-xs font-medium">{editGoal ? "Edit Goal" : "New Goal"}</p>
+          <Input value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="Goal title" className="h-8 text-sm" data-testid="input-tracker-goal-title" />
+          <div className="grid grid-cols-3 gap-2">
+            <Input type="number" value={formTarget} onChange={e => setFormTarget(e.target.value)} placeholder="Target" className="h-8 text-sm" data-testid="input-tracker-goal-target" />
+            <Input value={formUnit} onChange={e => setFormUnit(e.target.value)} placeholder="Unit" className="h-8 text-sm" />
+            <Input type="date" value={formDeadline} onChange={e => setFormDeadline(e.target.value)} className="h-8 text-xs" />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" className="h-7 text-xs flex-1" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending} data-testid="btn-save-tracker-goal">
+              {editGoal ? "Update" : "Create"}
+            </Button>
+            {editGoal && (
+              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate(editGoal.id)} data-testid="btn-delete-tracker-goal">
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setCreating(false); setEditGoal(null); resetForm(); }}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // -- Main TrackerDetailDialog
 function TrackerDetailDialog({
   tracker,
@@ -2566,6 +2701,9 @@ function TrackerDetailDialog({
                 </TabsContent>
                 <TabsContent value="insights" className="mt-0">
                   <InsightsTabContent tracker={tracker} primaryField={primaryField} />
+                </TabsContent>
+                <TabsContent value="goals" className="mt-0">
+                  <GoalsTabContent tracker={tracker} />
                 </TabsContent>
               </div>
             </Tabs>
