@@ -240,10 +240,11 @@ export default function JournalPage() {
           </div>
 
           <Textarea
-            placeholder="What's on your mind today?"
+            placeholder="What's on your mind today? Write as much as you want..."
             value={content}
             onChange={e => setContent(e.target.value)}
-            rows={3}
+            rows={12}
+            className="min-h-[250px] text-base leading-relaxed resize-y"
             data-testid="input-journal-content"
           />
 
