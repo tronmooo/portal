@@ -127,11 +127,18 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  // Bust response cache on write — scoped to the requesting user to avoid thrashing other users' caches
-  app.use("/api", (req, _res, next) => {
+  // Rate limit all write operations (POST/PATCH/DELETE) — 60 writes per minute per user
+  app.use("/api", (req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
-      const uid = (req as AuthenticatedRequest).userId;
-      if (uid) {
+      const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+      // Skip rate limit for chat and upload (they have their own stricter limits)
+      if (!req.path.startsWith("/chat") && !req.path.startsWith("/upload")) {
+        if (rateLimit(`write:${uid}`, 60)) {
+          return res.status(429).json({ error: "Too many requests. Please slow down." });
+        }
+      }
+      // Bust response cache on write
+      if (uid !== "anon") {
         bustCache(`stats:${uid}`);
         bustCache(`profile-detail:`);
         bustCache(`dashboard-enhanced:`);
@@ -1041,7 +1048,23 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Expenses ----
-  app.get("/api/expenses", asyncHandler(async (req, res) => { const items = await storage.getExpenses(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); } }));
+  app.get("/api/expenses", asyncHandler(async (req, res) => {
+    let items = await storage.getExpenses();
+    // Server-side filtering
+    if (req.query.category && typeof req.query.category === "string") {
+      items = items.filter(e => e.category === req.query.category);
+    }
+    if (req.query.profileId && typeof req.query.profileId === "string") {
+      items = items.filter(e => e.linkedProfiles?.includes(req.query.profileId as string));
+    }
+    if (req.query.from && typeof req.query.from === "string") {
+      items = items.filter(e => e.date >= (req.query.from as string));
+    }
+    if (req.query.to && typeof req.query.to === "string") {
+      items = items.filter(e => e.date <= (req.query.to as string));
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items); }
+  }));
   app.get("/api/expenses/:id", asyncHandler(async (req, res) => {
     const expense = await storage.getExpense(req.params.id);
     if (!expense) return res.status(404).json({ error: "Not found" });

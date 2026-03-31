@@ -2512,16 +2512,87 @@ function EditProfileDialog({
     },
   });
 
-  const editableFieldKeys = Object.entries(profile.fields)
+  // Type-specific suggested fields that should always be available for editing
+  const SUGGESTED_FIELDS: Record<string, { key: string; label: string; placeholder: string }[]> = {
+    pet: [
+      { key: "species", label: "Species", placeholder: "Dog, Cat, Bird..." },
+      { key: "breed", label: "Breed", placeholder: "Golden Retriever, Tabby..." },
+      { key: "age", label: "Age", placeholder: "3 years" },
+      { key: "weight", label: "Weight", placeholder: "45 lbs" },
+      { key: "color", label: "Color", placeholder: "Golden, Black..." },
+      { key: "vet", label: "Vet", placeholder: "Dr. Smith" },
+      { key: "microchipId", label: "Microchip ID", placeholder: "" },
+      { key: "birthday", label: "Birthday", placeholder: "YYYY-MM-DD" },
+    ],
+    vehicle: [
+      { key: "make", label: "Make", placeholder: "Honda, Toyota..." },
+      { key: "model", label: "Model", placeholder: "CR-V, Camry..." },
+      { key: "year", label: "Year", placeholder: "2021" },
+      { key: "color", label: "Color", placeholder: "White, Black..." },
+      { key: "VIN", label: "VIN", placeholder: "" },
+      { key: "licensePlate", label: "License Plate", placeholder: "" },
+      { key: "mileage", label: "Mileage", placeholder: "45,000" },
+      { key: "registrationExpiration", label: "Registration Exp.", placeholder: "YYYY-MM-DD" },
+    ],
+    person: [
+      { key: "email", label: "Email", placeholder: "" },
+      { key: "phone", label: "Phone", placeholder: "" },
+      { key: "birthday", label: "Birthday", placeholder: "YYYY-MM-DD" },
+      { key: "address", label: "Address", placeholder: "" },
+      { key: "relationship", label: "Relationship", placeholder: "Spouse, Parent, Friend..." },
+    ],
+    self: [
+      { key: "email", label: "Email", placeholder: "" },
+      { key: "phone", label: "Phone", placeholder: "" },
+      { key: "birthday", label: "Birthday", placeholder: "YYYY-MM-DD" },
+      { key: "address", label: "Address", placeholder: "" },
+      { key: "bloodType", label: "Blood Type", placeholder: "A+, O-..." },
+      { key: "height", label: "Height", placeholder: "5'10\"" },
+      { key: "emergencyContact", label: "Emergency Contact", placeholder: "" },
+    ],
+    subscription: [
+      { key: "cost", label: "Monthly Cost", placeholder: "9.99" },
+      { key: "frequency", label: "Billing Frequency", placeholder: "monthly, yearly" },
+      { key: "renewalDate", label: "Renewal Date", placeholder: "YYYY-MM-DD" },
+      { key: "accountEmail", label: "Account Email", placeholder: "" },
+      { key: "plan", label: "Plan", placeholder: "Premium, Basic..." },
+    ],
+    property: [
+      { key: "address", label: "Address", placeholder: "" },
+      { key: "sqft", label: "Square Feet", placeholder: "1,500" },
+      { key: "bedrooms", label: "Bedrooms", placeholder: "3" },
+      { key: "bathrooms", label: "Bathrooms", placeholder: "2" },
+      { key: "yearBuilt", label: "Year Built", placeholder: "1995" },
+      { key: "purchaseDate", label: "Purchase Date", placeholder: "YYYY-MM-DD" },
+      { key: "purchasePrice", label: "Purchase Price", placeholder: "" },
+    ],
+    loan: [
+      { key: "lender", label: "Lender", placeholder: "" },
+      { key: "principal", label: "Principal", placeholder: "" },
+      { key: "interestRate", label: "Interest Rate", placeholder: "4.5%" },
+      { key: "monthlyPayment", label: "Monthly Payment", placeholder: "" },
+      { key: "startDate", label: "Start Date", placeholder: "YYYY-MM-DD" },
+      { key: "endDate", label: "End Date", placeholder: "YYYY-MM-DD" },
+    ],
+  };
+
+  // Merge existing fields + suggested fields for this type
+  const existingFieldKeys = Object.entries(profile.fields)
     .filter(([_, v]) => v != null && typeof v !== "object")
     .map(([k]) => k);
+  const suggested = SUGGESTED_FIELDS[profile.type] || [];
+  const allFieldKeys = [...new Set([...existingFieldKeys, ...suggested.map(s => s.key)])];
+  // Initialize fields state with suggested fields that are empty
+  for (const sf of suggested) {
+    if (!(sf.key in fields)) fields[sf.key] = "";
+  }
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto" data-testid="dialog-edit-profile">
+      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-profile">
         <DialogHeader>
-          <DialogTitle>Edit Profile</DialogTitle>
-          <DialogDescription>Update profile details below.</DialogDescription>
+          <DialogTitle>Edit {profile.type === "self" ? "My Profile" : profile.name}</DialogTitle>
+          <DialogDescription className="capitalize">{profile.type} profile</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div>
@@ -2533,26 +2604,31 @@ function EditProfileDialog({
               data-testid="input-profile-name"
             />
           </div>
+          {allFieldKeys.filter(k => !k.startsWith("_")).map(key => {
+            const sg = suggested.find(s => s.key === key);
+            return (
+              <div key={key}>
+                <label className="text-xs font-medium text-muted-foreground">{sg?.label || formatKey(key)}</label>
+                <Input
+                  className="mt-1"
+                  value={fields[key] ?? ""}
+                  placeholder={sg?.placeholder || ""}
+                  onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
+                  data-testid={`input-field-${key}`}
+                />
+              </div>
+            );
+          })}
           <div>
             <label className="text-xs font-medium text-muted-foreground">Notes</label>
             <Input
               className="mt-1"
               value={notes}
+              placeholder="Any additional notes..."
               onChange={e => setNotes(e.target.value)}
               data-testid="input-profile-notes"
             />
           </div>
-          {editableFieldKeys.map(key => (
-            <div key={key}>
-              <label className="text-xs font-medium text-muted-foreground">{formatKey(key)}</label>
-              <Input
-                className="mt-1"
-                value={fields[key] ?? ""}
-                onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
-                data-testid={`input-field-${key}`}
-              />
-            </div>
-          ))}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} data-testid="button-cancel-edit-profile">Cancel</Button>
