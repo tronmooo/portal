@@ -48,6 +48,7 @@ import {
   Eye,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   AlertCircle,
   ArrowLeft,
   Pencil,
@@ -62,6 +63,23 @@ import {
   CreditCard,
   ExternalLink,
   Plus,
+  Wrench,
+  Navigation,
+  Home,
+  Building,
+  Users,
+  PawPrint,
+  TrendingUp,
+  Shield,
+  RefreshCw,
+  Car,
+  MapPin,
+  Stethoscope,
+  Pill,
+  BarChart2,
+  Landmark,
+  BadgeCheck,
+  AlertTriangle,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -152,6 +170,1012 @@ function formatTimeAgo(date: Date): string {
   const diffHr = Math.floor(diffMin / 60);
   if (diffHr < 24) return `${diffHr}h ago`;
   return `${Math.floor(diffHr / 24)}d ago`;
+}
+
+// ─────────────────────────────────────────────
+// Category detection
+// ─────────────────────────────────────────────
+
+function getTypeCategory(typeDef: TypeDefinition): string {
+  const typeKey = (typeDef.type_key ?? "").toLowerCase();
+  const label = (typeDef.label ?? "").toLowerCase();
+  const category = (typeDef.category ?? "").toLowerCase();
+  const combined = `${typeKey} ${label} ${category}`;
+  if (combined.includes("vehicle") || combined.includes("car") || combined.includes("truck") || combined.includes("motorcycle") || combined.includes("boat")) return "vehicle";
+  if (combined.includes("property") || combined.includes("home") || combined.includes("real estate") || combined.includes("house") || combined.includes("apartment") || combined.includes("condo")) return "property";
+  if (combined.includes("pet") || combined.includes("dog") || combined.includes("cat") || combined.includes("animal")) return "pet";
+  if (combined.includes("person") || combined.includes("contact") || combined.includes("self") || combined.includes("family") || combined.includes("friend")) return "person";
+  if (combined.includes("liabilit") || combined.includes("loan") || combined.includes("debt") || combined.includes("mortgage") || combined.includes("credit")) return "liability";
+  if (combined.includes("subscription") || combined.includes("service") || combined.includes("saas")) return "subscription";
+  if (combined.includes("insurance") || combined.includes("policy")) return "insurance";
+  if (combined.includes("investment") || combined.includes("stock") || combined.includes("brokerage") || combined.includes("portfolio") || combined.includes("crypto")) return "investment";
+  return "generic";
+}
+
+// ─────────────────────────────────────────────
+// Computed field helpers
+// ─────────────────────────────────────────────
+
+function computeFields(profile: any): Record<string, any> {
+  const docs: any[] = profile.relatedDocuments ?? profile.documents ?? [];
+  const expenses: any[] = profile.relatedExpenses ?? profile.expenses ?? [];
+  const tasks: any[] = profile.relatedTasks ?? profile.tasks ?? [];
+  const timeline: any[] = profile.timeline ?? profile.recentActivity ?? [];
+  const fields = profile.fields ?? {};
+
+  const now = Date.now();
+  const oneDay = 1000 * 60 * 60 * 24;
+
+  // Documents
+  const docCount = docs.length;
+  const expiringDocs = docs.filter((d) => {
+    const exp = d.extractedData?.expirationDate || d.extractedData?.expiry || d.extractedData?.expiration;
+    if (!exp) return false;
+    const expDate = new Date(exp as string);
+    if (isNaN(expDate.getTime())) return false;
+    const diff = (expDate.getTime() - now) / oneDay;
+    return diff >= 0 && diff <= 30;
+  }).length;
+  const recentUploads = docs.filter((d) => {
+    const created = new Date(d.createdAt);
+    return (now - created.getTime()) / oneDay <= 7;
+  }).length;
+
+  // Expenses
+  const totalSpent = expenses.reduce((sum: number, e: any) => {
+    const amt = parseFloat(e.amount ?? e.value ?? 0);
+    return sum + (isNaN(amt) ? 0 : amt);
+  }, 0);
+  const fuelCosts = expenses
+    .filter((e: any) => {
+      const desc = ((e.description ?? e.category ?? e.title ?? "") as string).toLowerCase();
+      return desc.includes("fuel") || desc.includes("gas") || desc.includes("petrol");
+    })
+    .reduce((sum: number, e: any) => sum + parseFloat(e.amount ?? e.value ?? 0), 0);
+
+  // Equity
+  const marketValue = parseFloat(fields.market_value ?? fields.current_value ?? fields.value ?? 0);
+  const loanBalance = parseFloat(fields.loan_balance ?? fields.balance ?? 0);
+  const equity = marketValue - loanBalance;
+
+  // Mileage-based cost per mile
+  const mileage = parseFloat(fields.mileage ?? fields.odometer ?? 0);
+  const costPerMile = mileage > 0 ? totalSpent / mileage : null;
+
+  // Tasks / Maintenance
+  const maintenanceTasks = tasks.filter((t: any) => {
+    const title = ((t.title ?? t.name ?? "") as string).toLowerCase();
+    return title.includes("service") || title.includes("oil") || title.includes("maintenan") || title.includes("inspect") || title.includes("repair") || title.includes("check");
+  });
+  const lastServiceTask = maintenanceTasks
+    .filter((t: any) => t.completedAt || t.dueDate)
+    .sort((a: any, b: any) => new Date(b.completedAt ?? b.dueDate).getTime() - new Date(a.completedAt ?? a.dueDate).getTime())[0];
+  const nextDueTask = tasks
+    .filter((t: any) => !t.completedAt && t.dueDate && new Date(t.dueDate).getTime() > now)
+    .sort((a: any, b: any) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+
+  const lastServiceDate = lastServiceTask
+    ? new Date(lastServiceTask.completedAt ?? lastServiceTask.dueDate)
+    : null;
+
+  // Trips this week
+  const oneWeekAgo = now - 7 * oneDay;
+  const tripsThisWeek = timeline.filter((e: any) => {
+    const ts = new Date(e.timestamp ?? e.date ?? 0).getTime();
+    const type = (e.type ?? "").toLowerCase();
+    return ts >= oneWeekAgo && (type.includes("trip") || type.includes("drive") || type.includes("travel"));
+  }).length;
+
+  // Service visits
+  const serviceVisits = timeline.filter((e: any) => {
+    const type = ((e.type ?? e.title ?? "") as string).toLowerCase();
+    return type.includes("service") || type.includes("maintenan") || type.includes("inspect");
+  }).length;
+
+  // Upcoming events
+  const upcomingEvents = tasks.filter((t: any) => !t.completedAt && t.dueDate && new Date(t.dueDate).getTime() > now).length;
+
+  // Last active
+  const lastActive = timeline.length > 0
+    ? new Date(timeline.reduce((latest: any, e: any) => {
+        const ts = new Date(e.timestamp ?? e.date ?? 0).getTime();
+        return ts > new Date(latest.timestamp ?? latest.date ?? 0).getTime() ? e : latest;
+      }, timeline[0]).timestamp ?? timeline[0].date)
+    : null;
+
+  // Rental income
+  const rentalIncome = expenses
+    .filter((e: any) => {
+      const desc = ((e.description ?? e.category ?? e.title ?? "") as string).toLowerCase();
+      return desc.includes("rent") || desc.includes("income") || desc.includes("revenue");
+    })
+    .reduce((sum: number, e: any) => sum + parseFloat(e.amount ?? e.value ?? 0), 0);
+
+  // Vet / health visits
+  const vetVisits = timeline.filter((e: any) => {
+    const type = ((e.type ?? e.title ?? "") as string).toLowerCase();
+    return type.includes("vet") || type.includes("health") || type.includes("doctor") || type.includes("medical");
+  }).length;
+
+  // Loan payments
+  const monthlyPayment = parseFloat(fields.monthly_payment ?? fields.payment ?? 0);
+  const totalLoan = parseFloat(fields.loan_amount ?? fields.original_amount ?? fields.principal ?? 0);
+  const paidOff = totalLoan > 0 && loanBalance >= 0 ? Math.round(((totalLoan - loanBalance) / totalLoan) * 100) : null;
+
+  // Next billing
+  const nextBilling = fields.next_billing_date ?? fields.renewal_date ?? fields.next_payment_date ?? null;
+
+  // Claims
+  const claims = expenses.filter((e: any) => {
+    const desc = ((e.description ?? e.category ?? e.title ?? "") as string).toLowerCase();
+    return desc.includes("claim");
+  }).length;
+
+  return {
+    _docCount: docCount,
+    _expiringDocs: expiringDocs > 0 ? `${expiringDocs} expiring soon` : "None",
+    _recentUploads: recentUploads,
+    _totalSpent: totalSpent,
+    _fuelCosts: fuelCosts,
+    _equity: equity,
+    _costPerMile: costPerMile,
+    _tripsThisWeek: tripsThisWeek,
+    _lastService: lastServiceDate,
+    _nextDue: nextDueTask ? (nextDueTask.title ?? "Task due") + " · " + new Date(nextDueTask.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : null,
+    _serviceVisits: serviceVisits,
+    _upcomingEvents: upcomingEvents,
+    _lastActive: lastActive,
+    _rentalIncome: rentalIncome,
+    _vetVisits: vetVisits,
+    _paidOffPct: paidOff !== null ? `${paidOff}%` : null,
+    _monthlyPayment: monthlyPayment || null,
+    _loanBalance: loanBalance || null,
+    _nextBilling: nextBilling,
+    _claims: claims,
+    _taskCount: tasks.length,
+  };
+}
+
+// ─────────────────────────────────────────────
+// Widget field formatters
+// ─────────────────────────────────────────────
+
+type FieldFormat = "currency" | "number" | "relative" | "date" | "percent" | "text";
+
+interface WidgetField {
+  label: string;
+  key: string;
+  format?: FieldFormat;
+  status?: (val: any) => "ok" | "warn" | "error" | null;
+}
+
+interface WidgetDef {
+  title: string;
+  subtitle: string;
+  icon: React.ElementType;
+  color: string; // Tailwind color class for icon bg
+  tab?: string; // tab key to navigate to
+  fields: WidgetField[];
+}
+
+function formatWidgetValue(val: any, format?: FieldFormat): string {
+  if (val == null || val === "" || val === 0 && format === "currency") return "—";
+  if (format === "currency") {
+    const num = Number(val);
+    if (!isNaN(num) && num !== 0) return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(num);
+    return "—";
+  }
+  if (format === "number") {
+    const num = Number(val);
+    if (!isNaN(num)) return new Intl.NumberFormat("en-US").format(num);
+    return String(val);
+  }
+  if (format === "relative" && val instanceof Date) {
+    if (isNaN(val.getTime())) return "—";
+    const diffDays = Math.floor((Date.now() - val.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 30) return `${diffDays}d ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+    return `${Math.floor(diffDays / 365)}yr ago`;
+  }
+  if (format === "date" && val) {
+    try {
+      const d = new Date(val);
+      if (!isNaN(d.getTime())) return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } catch { /* */ }
+  }
+  if (format === "percent") return `${val}%`;
+  if (val === null || val === undefined) return "—";
+  return String(val) || "—";
+}
+
+// ─────────────────────────────────────────────
+// WIDGET_CONFIGS
+// ─────────────────────────────────────────────
+
+const WIDGET_CONFIGS: Record<string, WidgetDef[]> = {
+  vehicle: [
+    {
+      title: "Service & Condition",
+      subtitle: "Maintenance, inspections, repairs",
+      icon: Wrench,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "maintenance",
+      fields: [
+        { label: "Mileage", key: "mileage", format: "number" },
+        { label: "Condition", key: "condition" },
+        { label: "Last service", key: "_lastService", format: "relative" },
+        { label: "Next due", key: "_nextDue" },
+      ],
+    },
+    {
+      title: "Finance & Loans",
+      subtitle: "Payments, equity, cost/mile",
+      icon: DollarSign,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "finance",
+      fields: [
+        { label: "Total spent", key: "_totalSpent", format: "currency" },
+        { label: "Equity", key: "_equity", format: "currency" },
+        { label: "Cost / mile", key: "_costPerMile", format: "currency" },
+        { label: "Fuel costs", key: "_fuelCosts", format: "currency" },
+      ],
+    },
+    {
+      title: "Title & Docs",
+      subtitle: "Registration, insurance, title",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "Usage & Trips",
+      subtitle: "Mileage, fuel, trips",
+      icon: Navigation,
+      color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+      tab: "activity",
+      fields: [
+        { label: "Trips this week", key: "_tripsThisWeek", format: "number" },
+        { label: "Total miles", key: "total_miles", format: "number" },
+        { label: "Odometer", key: "odometer", format: "number" },
+      ],
+    },
+  ],
+  property: [
+    {
+      title: "Maintenance",
+      subtitle: "Condition, inspections, systems",
+      icon: Wrench,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "maintenance",
+      fields: [
+        { label: "Condition", key: "condition" },
+        { label: "Last inspection", key: "last_inspection_date", format: "date" },
+        { label: "Open tasks", key: "_taskCount", format: "number" },
+        { label: "Service visits", key: "_serviceVisits", format: "number" },
+      ],
+    },
+    {
+      title: "Mortgage & Equity",
+      subtitle: "Payments, equity, rental income",
+      icon: Landmark,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "finance",
+      fields: [
+        { label: "Current value", key: "market_value", format: "currency" },
+        { label: "Equity", key: "_equity", format: "currency" },
+        { label: "Total spent", key: "_totalSpent", format: "currency" },
+        { label: "Rental income", key: "_rentalIncome", format: "currency" },
+      ],
+    },
+    {
+      title: "Deeds & Contracts",
+      subtitle: "Documents, title, permits",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "Property Activity",
+      subtitle: "Service visits, upcoming, last active",
+      icon: Activity,
+      color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+      tab: "activity",
+      fields: [
+        { label: "Service visits", key: "_serviceVisits", format: "number" },
+        { label: "Upcoming tasks", key: "_upcomingEvents", format: "number" },
+        { label: "Last active", key: "_lastActive", format: "relative" },
+      ],
+    },
+  ],
+  person: [
+    {
+      title: "Health Summary",
+      subtitle: "Medical, conditions, medications",
+      icon: Stethoscope,
+      color: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+      tab: "health",
+      fields: [
+        { label: "Blood type", key: "blood_type" },
+        { label: "Allergies", key: "allergies" },
+        { label: "Primary care", key: "primary_physician" },
+        { label: "Last checkup", key: "last_checkup_date", format: "date" },
+      ],
+    },
+    {
+      title: "Finance",
+      subtitle: "Income, expenses, accounts",
+      icon: DollarSign,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "finance",
+      fields: [
+        { label: "Total spent", key: "_totalSpent", format: "currency" },
+        { label: "Documents", key: "_docCount", format: "number" },
+      ],
+    },
+    {
+      title: "Documents",
+      subtitle: "IDs, records, certificates",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "Activity",
+      subtitle: "Events, notes, interactions",
+      icon: Activity,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "activity",
+      fields: [
+        { label: "Upcoming events", key: "_upcomingEvents", format: "number" },
+        { label: "Last active", key: "_lastActive", format: "relative" },
+      ],
+    },
+  ],
+  pet: [
+    {
+      title: "Health & Vet",
+      subtitle: "Checkups, vaccinations, meds",
+      icon: Stethoscope,
+      color: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+      tab: "health",
+      fields: [
+        { label: "Species", key: "species" },
+        { label: "Breed", key: "breed" },
+        { label: "Vet visits", key: "_vetVisits", format: "number" },
+        { label: "Last vet visit", key: "last_vet_date", format: "date" },
+      ],
+    },
+    {
+      title: "Care Schedule",
+      subtitle: "Feeding, grooming, exercise",
+      icon: Calendar,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "care",
+      fields: [
+        { label: "Open tasks", key: "_taskCount", format: "number" },
+        { label: "Upcoming", key: "_upcomingEvents", format: "number" },
+        { label: "Next due", key: "_nextDue" },
+      ],
+    },
+    {
+      title: "Documents",
+      subtitle: "Records, vaccination, license",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "Activity",
+      subtitle: "Walks, events, interactions",
+      icon: Activity,
+      color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+      tab: "activity",
+      fields: [
+        { label: "Last active", key: "_lastActive", format: "relative" },
+        { label: "Total expenses", key: "_totalSpent", format: "currency" },
+      ],
+    },
+  ],
+  liability: [
+    {
+      title: "Payment Schedule",
+      subtitle: "Monthly payments, due dates",
+      icon: Calendar,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "payments",
+      fields: [
+        { label: "Monthly payment", key: "monthly_payment", format: "currency" },
+        { label: "Interest rate", key: "interest_rate", format: "percent" },
+        { label: "Next due", key: "_nextDue" },
+        { label: "Next billing", key: "_nextBilling", format: "date" },
+      ],
+    },
+    {
+      title: "Payoff Progress",
+      subtitle: "Balance, equity, paid off",
+      icon: TrendingUp,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "finance",
+      fields: [
+        { label: "Current balance", key: "balance", format: "currency" },
+        { label: "Original amount", key: "loan_amount", format: "currency" },
+        { label: "Paid off", key: "_paidOffPct" },
+        { label: "Total paid", key: "_totalSpent", format: "currency" },
+      ],
+    },
+    {
+      title: "Documents",
+      subtitle: "Agreements, statements, notices",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "History",
+      subtitle: "Payment history, activity",
+      icon: Activity,
+      color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+      tab: "activity",
+      fields: [
+        { label: "Last active", key: "_lastActive", format: "relative" },
+        { label: "Upcoming tasks", key: "_upcomingEvents", format: "number" },
+      ],
+    },
+  ],
+  subscription: [
+    {
+      title: "Billing",
+      subtitle: "Cost, cycle, next payment",
+      icon: CreditCard,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "billing",
+      fields: [
+        { label: "Amount", key: "amount", format: "currency" },
+        { label: "Frequency", key: "billing_cycle" },
+        { label: "Next billing", key: "_nextBilling", format: "date" },
+        { label: "Total paid", key: "_totalSpent", format: "currency" },
+      ],
+    },
+    {
+      title: "Plan Details",
+      subtitle: "Tier, features, limits",
+      icon: BadgeCheck,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "details",
+      fields: [
+        { label: "Plan", key: "plan" },
+        { label: "Status", key: "status" },
+        { label: "Category", key: "category" },
+        { label: "Provider", key: "provider" },
+      ],
+    },
+    {
+      title: "Documents",
+      subtitle: "Receipts, contracts, invoices",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "History",
+      subtitle: "Renewals, changes, activity",
+      icon: RefreshCw,
+      color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+      tab: "activity",
+      fields: [
+        { label: "Last active", key: "_lastActive", format: "relative" },
+        { label: "Upcoming", key: "_upcomingEvents", format: "number" },
+      ],
+    },
+  ],
+  insurance: [
+    {
+      title: "Coverage",
+      subtitle: "Limits, deductible, premium",
+      icon: Shield,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "coverage",
+      fields: [
+        { label: "Premium", key: "premium", format: "currency" },
+        { label: "Deductible", key: "deductible", format: "currency" },
+        { label: "Coverage limit", key: "coverage_limit", format: "currency" },
+        { label: "Policy type", key: "policy_type" },
+      ],
+    },
+    {
+      title: "Claims",
+      subtitle: "Filed claims, status, amounts",
+      icon: AlertTriangle,
+      color: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+      tab: "claims",
+      fields: [
+        { label: "Claims filed", key: "_claims", format: "number" },
+        { label: "Total claimed", key: "_totalSpent", format: "currency" },
+      ],
+    },
+    {
+      title: "Documents",
+      subtitle: "Policy, cards, correspondence",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "Renewal",
+      subtitle: "Dates, changes, history",
+      icon: RefreshCw,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "activity",
+      fields: [
+        { label: "Next renewal", key: "renewal_date", format: "date" },
+        { label: "Last active", key: "_lastActive", format: "relative" },
+      ],
+    },
+  ],
+  investment: [
+    {
+      title: "Performance",
+      subtitle: "Value, returns, gains",
+      icon: TrendingUp,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "performance",
+      fields: [
+        { label: "Current value", key: "current_value", format: "currency" },
+        { label: "Cost basis", key: "cost_basis", format: "currency" },
+        { label: "Return %", key: "return_pct", format: "percent" },
+        { label: "Equity", key: "_equity", format: "currency" },
+      ],
+    },
+    {
+      title: "Holdings",
+      subtitle: "Positions, allocation, type",
+      icon: BarChart2,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "holdings",
+      fields: [
+        { label: "Account type", key: "account_type" },
+        { label: "Institution", key: "institution" },
+        { label: "Ticker", key: "ticker" },
+        { label: "Shares", key: "shares" },
+      ],
+    },
+    {
+      title: "Documents",
+      subtitle: "Statements, tax docs, agreements",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "Activity",
+      subtitle: "Transactions, events, notes",
+      icon: Activity,
+      color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+      tab: "activity",
+      fields: [
+        { label: "Last active", key: "_lastActive", format: "relative" },
+        { label: "Total invested", key: "_totalSpent", format: "currency" },
+      ],
+    },
+  ],
+  generic: [
+    {
+      title: "Details",
+      subtitle: "Key information",
+      icon: FileText,
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      tab: "overview",
+      fields: [
+        { label: "Status", key: "status" },
+        { label: "Category", key: "category" },
+        { label: "Created", key: "created_at", format: "date" },
+      ],
+    },
+    {
+      title: "Finance",
+      subtitle: "Costs, payments, expenses",
+      icon: DollarSign,
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      tab: "finance",
+      fields: [
+        { label: "Total spent", key: "_totalSpent", format: "currency" },
+      ],
+    },
+    {
+      title: "Documents",
+      subtitle: "Files, records, uploads",
+      icon: FileText,
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      tab: "documents",
+      fields: [
+        { label: "Total documents", key: "_docCount", format: "number" },
+        { label: "Expiring soon", key: "_expiringDocs" },
+        { label: "Recent uploads", key: "_recentUploads", format: "number" },
+      ],
+    },
+    {
+      title: "Activity",
+      subtitle: "Events, notes, timeline",
+      icon: Activity,
+      color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+      tab: "activity",
+      fields: [
+        { label: "Last active", key: "_lastActive", format: "relative" },
+        { label: "Upcoming tasks", key: "_upcomingEvents", format: "number" },
+      ],
+    },
+  ],
+};
+
+// ─────────────────────────────────────────────
+// ProfileOverviewHeader
+// ─────────────────────────────────────────────
+
+function getHeaderConfig(typeDef: TypeDefinition, category: string): {
+  primaryField: string | null;
+  primaryLabel: string;
+  secondaryField: string | null;
+  secondaryLabel: string;
+  valueField: string | null;
+  valueLabel: string;
+  valueFormat: FieldFormat;
+  badgeField: string | null;
+  badgeLabel: string;
+} {
+  switch (category) {
+    case "vehicle":
+      return {
+        primaryField: "make", primaryLabel: "Make",
+        secondaryField: "model", secondaryLabel: "Model",
+        valueField: "current_value", valueLabel: "Current Value", valueFormat: "currency",
+        badgeField: "year", badgeLabel: "Year",
+      };
+    case "property":
+      return {
+        primaryField: "address", primaryLabel: "Address",
+        secondaryField: "property_type", secondaryLabel: "Type",
+        valueField: "market_value", valueLabel: "Market Value", valueFormat: "currency",
+        badgeField: "property_type", badgeLabel: "Type",
+      };
+    case "person":
+      return {
+        primaryField: "relationship", primaryLabel: "Relationship",
+        secondaryField: "email", secondaryLabel: "Email",
+        valueField: null, valueLabel: "", valueFormat: "text",
+        badgeField: "relationship", badgeLabel: "Relationship",
+      };
+    case "pet":
+      return {
+        primaryField: "species", primaryLabel: "Species",
+        secondaryField: "breed", secondaryLabel: "Breed",
+        valueField: null, valueLabel: "", valueFormat: "text",
+        badgeField: "species", badgeLabel: "Species",
+      };
+    case "liability":
+      return {
+        primaryField: "lender", primaryLabel: "Lender",
+        secondaryField: "loan_type", secondaryLabel: "Type",
+        valueField: "balance", valueLabel: "Balance", valueFormat: "currency",
+        badgeField: "loan_type", badgeLabel: "Type",
+      };
+    case "subscription":
+      return {
+        primaryField: "provider", primaryLabel: "Provider",
+        secondaryField: "billing_cycle", secondaryLabel: "Cycle",
+        valueField: "amount", valueLabel: "Amount", valueFormat: "currency",
+        badgeField: "billing_cycle", badgeLabel: "Cycle",
+      };
+    case "insurance":
+      return {
+        primaryField: "insurer", primaryLabel: "Insurer",
+        secondaryField: "policy_type", secondaryLabel: "Policy Type",
+        valueField: "premium", valueLabel: "Premium", valueFormat: "currency",
+        badgeField: "policy_type", badgeLabel: "Policy",
+      };
+    case "investment":
+      return {
+        primaryField: "institution", primaryLabel: "Institution",
+        secondaryField: "account_type", secondaryLabel: "Account Type",
+        valueField: "current_value", valueLabel: "Current Value", valueFormat: "currency",
+        badgeField: "account_type", badgeLabel: "Account",
+      };
+    default:
+      return {
+        primaryField: "type", primaryLabel: "Type",
+        secondaryField: "category", secondaryLabel: "Category",
+        valueField: null, valueLabel: "", valueFormat: "text",
+        badgeField: "status", badgeLabel: "Status",
+      };
+  }
+}
+
+function getCategoryIcon(category: string): React.ElementType {
+  const icons: Record<string, React.ElementType> = {
+    vehicle: Car,
+    property: Home,
+    person: Users,
+    pet: PawPrint,
+    liability: Landmark,
+    subscription: RefreshCw,
+    insurance: Shield,
+    investment: TrendingUp,
+    generic: FileText,
+  };
+  return icons[category] ?? FileText;
+}
+
+function getCategoryLabel(category: string): string {
+  const labels: Record<string, string> = {
+    vehicle: "Asset · Vehicle",
+    property: "Asset · Property",
+    person: "Contact · Person",
+    pet: "Asset · Pet",
+    liability: "Liability",
+    subscription: "Subscription",
+    insurance: "Insurance",
+    investment: "Investment",
+    generic: "Profile",
+  };
+  return labels[category] ?? "Profile";
+}
+
+function getConditionBadgeClass(condition: string | undefined): string {
+  if (!condition) return "";
+  const c = condition.toLowerCase();
+  if (c.includes("excel") || c.includes("new") || c.includes("great")) return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30";
+  if (c.includes("good")) return "bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30";
+  if (c.includes("fair") || c.includes("ok")) return "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30";
+  if (c.includes("poor") || c.includes("bad")) return "bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30";
+  return "bg-secondary text-secondary-foreground";
+}
+
+function ProfileOverviewHeader({
+  profile,
+  typeDef,
+  onEdit,
+}: {
+  profile: any;
+  typeDef: TypeDefinition;
+  onEdit: () => void;
+}) {
+  const fields = profile.fields ?? {};
+  const category = getTypeCategory(typeDef);
+  const config = getHeaderConfig(typeDef, category);
+  const CategoryIcon = getCategoryIcon(category);
+  const categoryLabel = getCategoryLabel(category);
+
+  const primaryVal = config.primaryField ? (fields[config.primaryField] ?? null) : null;
+  const secondaryVal = config.secondaryField ? (fields[config.secondaryField] ?? null) : null;
+  const valueVal = config.valueField ? (fields[config.valueField] ?? null) : null;
+  const badgeVal = config.badgeField ? (fields[config.badgeField] ?? null) : null;
+  const condition = fields.condition ?? null;
+
+  const subtitle = [primaryVal, secondaryVal].filter(Boolean).join(" · ") || typeDef.label;
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="h-1.5 w-full bg-gradient-to-r from-primary/60 via-primary/30 to-transparent" />
+      <CardContent className="p-4">
+        <div className="flex items-start gap-4">
+          {/* Icon */}
+          <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+            <CategoryIcon className="h-6 w-6 text-primary" />
+          </div>
+
+          {/* Main info */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold leading-tight truncate">{profile.name}</h2>
+                {subtitle && subtitle !== typeDef.label && (
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">{subtitle}</p>
+                )}
+                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                  <Badge variant="secondary" className="text-[10px] font-medium">
+                    {categoryLabel}
+                  </Badge>
+                  {badgeVal && badgeVal !== secondaryVal && (
+                    <Badge variant="outline" className="text-[10px]">
+                      {String(badgeVal)}
+                    </Badge>
+                  )}
+                  {condition && (
+                    <Badge variant="outline" className={`text-[10px] ${getConditionBadgeClass(condition)}`}>
+                      {condition}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1 shrink-0"
+                onClick={onEdit}
+              >
+                <Edit className="h-3 w-3" />
+                Edit
+              </Button>
+            </div>
+
+            {/* Key value + parent link */}
+            {(valueVal || profile.parentProfile) && (
+              <div className="mt-3 flex items-center gap-4 flex-wrap">
+                {valueVal && (
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{config.valueLabel}</p>
+                    <p className="text-sm font-semibold tabular-nums">
+                      {formatWidgetValue(valueVal, config.valueFormat)}
+                    </p>
+                  </div>
+                )}
+                {profile.parentProfile && (
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Linked Profile</p>
+                    <Link href={`/profiles/${profile.parentProfile.id}`}>
+                      <a className="text-xs text-primary hover:underline flex items-center gap-1">
+                        <ExternalLink className="h-3 w-3" />
+                        {profile.parentProfile.name}
+                      </a>
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Notes snippet */}
+        {profile.notes && (
+          <p className="mt-3 text-xs text-muted-foreground line-clamp-2 border-t border-border pt-3">
+            {profile.notes}
+          </p>
+        )}
+
+        {/* Tags */}
+        {profile.tags && profile.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-3">
+            {profile.tags.map((tag: string) => (
+              <Badge key={tag} variant="outline" className="text-[10px]">
+                {tag}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────
+// SummaryWidgetGrid
+// ─────────────────────────────────────────────
+
+function SummaryWidgetGrid({
+  profile,
+  typeDef,
+  onNavigateTab,
+  availableTabs,
+}: {
+  profile: any;
+  typeDef: TypeDefinition;
+  onNavigateTab: (tab: string) => void;
+  availableTabs: string[];
+}) {
+  const category = getTypeCategory(typeDef);
+  const widgets = WIDGET_CONFIGS[category] ?? WIDGET_CONFIGS["generic"];
+  const computed = React.useMemo(() => computeFields(profile), [profile]);
+  const fields = { ...(profile.fields ?? {}), ...computed };
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {widgets.map((widget) => {
+        const Icon = widget.icon;
+        // Resolve the target tab: find a tab whose key or label matches
+        const targetTab = widget.tab
+          ? availableTabs.find((t) =>
+              t === widget.tab ||
+              t.toLowerCase().includes((widget.tab ?? "").toLowerCase()) ||
+              (widget.tab ?? "").toLowerCase().includes(t.toLowerCase())
+            ) ?? null
+          : null;
+
+        return (
+          <div
+            key={widget.title}
+            className="rounded-xl border bg-card p-4 cursor-pointer hover:bg-muted/30 transition-colors relative group"
+            onClick={() => targetTab && onNavigateTab(targetTab)}
+            role={targetTab ? "button" : undefined}
+            tabIndex={targetTab ? 0 : undefined}
+            onKeyDown={(e) => {
+              if (targetTab && (e.key === "Enter" || e.key === " ")) onNavigateTab(targetTab);
+            }}
+          >
+            {/* Top row: icon + title + chevron */}
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${widget.color}`}>
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold leading-tight">{widget.title}</p>
+                  <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">{widget.subtitle}</p>
+                </div>
+              </div>
+              {targetTab && (
+                <ChevronRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors shrink-0 mt-0.5" />
+              )}
+            </div>
+
+            {/* Key-value rows */}
+            <div className="space-y-0">
+              {widget.fields.map((field, i) => {
+                const rawVal = fields[field.key];
+                const displayVal = formatWidgetValue(rawVal, field.format);
+                const isEmpty = displayVal === "—";
+                return (
+                  <div
+                    key={field.key}
+                    className={`flex items-center justify-between py-1.5 ${
+                      i < widget.fields.length - 1 ? "border-b border-border/60" : ""
+                    }`}
+                  >
+                    <span className="text-xs text-muted-foreground">{field.label}</span>
+                    <span className={`text-xs font-medium tabular-nums ${
+                      isEmpty ? "text-muted-foreground/50" : ""
+                    }`}>
+                      {displayVal}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -256,36 +1280,21 @@ function OverviewTab({
   profile,
   typeDef,
   onChanged,
+  onNavigateTab,
+  availableTabs,
 }: {
   profile: any;
   typeDef: TypeDefinition;
   onChanged: () => void;
+  onNavigateTab: (tab: string) => void;
+  availableTabs: string[];
 }) {
   const [editing, setEditing] = useState(false);
   const [editValues, setEditValues] = useState<Record<string, any>>(profile.fields ?? {});
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
-  const fields = profile.fields ?? {};
   const fieldSchema: FieldDef[] = typeDef.field_schema ?? [];
-
-  // Build a lookup of field defs by key for formatting
-  const fieldDefMap = React.useMemo(() => {
-    const map: Record<string, FieldDef> = {};
-    for (const f of fieldSchema) map[f.key] = f;
-    return map;
-  }, [fieldSchema]);
-
-  // Group visible fields by their schema group
-  const schemaFields = fieldSchema.filter((f) => {
-    const val = fields[f.key];
-    return val !== undefined && val !== null && val !== "";
-  });
-
-  // Fields that exist in data but not in schema
-  const extraFieldKeys = Object.keys(fields).filter(
-    (k) => !fieldDefMap[k] && fields[k] != null && fields[k] !== "" && typeof fields[k] !== "object" && !k.startsWith("_")
-  );
 
   const handleSave = async () => {
     setSaving(true);
@@ -309,41 +1318,19 @@ function OverviewTab({
 
   return (
     <div className="space-y-4">
-      {/* Profile header card */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg font-semibold truncate">{profile.name}</h2>
-                <Badge variant="secondary" className="text-xs capitalize shrink-0">
-                  {typeDef.label}
-                </Badge>
-              </div>
-              {profile.parentProfile && (
-                <Link href={`/profiles/${profile.parentProfile.id}`}>
-                  <a className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
-                    <ExternalLink className="h-3 w-3" />
-                    {profile.parentProfile.name}
-                  </a>
-                </Link>
-              )}
-            </div>
-            {!editing && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs gap-1 shrink-0"
-                onClick={() => { setEditValues(profile.fields ?? {}); setEditing(true); }}
-              >
-                <Edit className="h-3 w-3" />
-                Edit
-              </Button>
-            )}
-          </div>
-        </CardHeader>
+      {/* Hero header card */}
+      <ProfileOverviewHeader
+        profile={profile}
+        typeDef={typeDef}
+        onEdit={() => { setEditValues(profile.fields ?? {}); setEditing(true); }}
+      />
 
-        {editing ? (
+      {/* Edit form — shown inline when editing */}
+      {editing && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold">Edit Details</CardTitle>
+          </CardHeader>
           <CardContent className="pt-0">
             <DynamicProfileForm
               fieldSchema={fieldSchema}
@@ -360,77 +1347,17 @@ function OverviewTab({
               </Button>
             </div>
           </CardContent>
-        ) : null}
-      </Card>
-
-      {/* Schema fields — displayed as clean key-value grid */}
-      {!editing && schemaFields.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Details</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
-              {schemaFields.map((field) => (
-                <div key={field.key} className="flex items-baseline justify-between py-2 border-b border-border last:border-0 gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">{field.label}</span>
-                  <span className="text-sm font-medium text-right">
-                    {formatValue(fields[field.key], field)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
         </Card>
       )}
 
-      {/* Extra fields (in data but not in schema) — inline-editable */}
-      {!editing && extraFieldKeys.length > 0 && (
-        <Card>
-          <CardHeader className="py-2 px-4">
-            <CardTitle className="text-xs font-semibold">Other Details</CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-3 pt-0">
-            <div className="space-y-0">
-              {extraFieldKeys.map((key) => (
-                <InlineEditField
-                  key={key}
-                  profileId={profile.id}
-                  fieldKey={key}
-                  fieldValue={String(fields[key])}
-                  allFields={fields}
-                  onSaved={onChanged}
-                />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Notes */}
-      {profile.notes && (
-        <Card>
-          <CardHeader className="py-2 px-4">
-            <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
-              <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-              Notes
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-3 pt-0">
-            <p className="text-xs text-muted-foreground whitespace-pre-wrap">{profile.notes}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Tags */}
-      {profile.tags && profile.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {profile.tags.map((tag: string) => (
-            <Badge key={tag} variant="outline" className="text-xs">
-              {tag}
-            </Badge>
-          ))}
-        </div>
+      {/* Summary widget grid — shown when not editing */}
+      {!editing && (
+        <SummaryWidgetGrid
+          profile={profile}
+          typeDef={typeDef}
+          onNavigateTab={onNavigateTab}
+          availableTabs={availableTabs}
+        />
       )}
     </div>
   );
@@ -796,12 +1723,21 @@ export default function DynamicProfileDetail({
       ];
 
   const defaultTab = allTabs[0]?.key ?? "overview";
+  const [activeTab, setActiveTab] = useState(defaultTab);
 
   const documents = profile.relatedDocuments ?? profile.documents ?? [];
   const timeline = profile.timeline ?? profile.recentActivity ?? [];
 
+  const tabKeys = allTabs.map((t) => t.key);
+
+  const handleNavigateTab = (targetTab: string) => {
+    if (tabKeys.includes(targetTab)) {
+      setActiveTab(targetTab);
+    }
+  };
+
   return (
-    <Tabs defaultValue={defaultTab} className="w-full">
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
       <TabsList className="flex flex-wrap h-auto gap-1 mb-4">
         {allTabs.map((tab) => (
           <TabsTrigger key={tab.key} value={tab.key} className="text-xs">
@@ -815,7 +1751,13 @@ export default function DynamicProfileDetail({
           <div className="space-y-6">
             {/* Main tab content */}
             {tab.engine === null ? (
-              <OverviewTab profile={profile} typeDef={typeDef} onChanged={onChanged} />
+              <OverviewTab
+                profile={profile}
+                typeDef={typeDef}
+                onChanged={onChanged}
+                onNavigateTab={handleNavigateTab}
+                availableTabs={tabKeys}
+              />
             ) : (
               <EngineTab profile={profile} tab={tab} onChanged={onChanged} />
             )}

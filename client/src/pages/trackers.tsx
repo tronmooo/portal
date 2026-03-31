@@ -3233,15 +3233,41 @@ export default function TrackersPage() {
             </Button>
           </div>
         </div>
-        {!collapsedSections.has("documents") && allDocuments.length > 3 && (
-          <input
-            type="text"
-            placeholder="Search documents..."
-            value={docSearch}
-            onChange={e => setDocSearch(e.target.value)}
-            className="w-full h-8 px-3 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            data-testid="input-search-documents-global"
-          />
+        {!collapsedSections.has("documents") && (
+          <div className="space-y-2">
+            {allDocuments.length > 3 && (
+              <input
+                type="text"
+                placeholder="Search documents..."
+                value={docSearch}
+                onChange={e => setDocSearch(e.target.value)}
+                className="w-full h-8 px-3 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                data-testid="input-search-documents-global"
+              />
+            )}
+            {docTypes.length > 1 && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  onClick={() => setDocTypeFilter("all")}
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                  data-testid="filter-doctype-all"
+                >All ({filteredDocuments.length})</button>
+                {docTypes.map(t => {
+                  const count = allDocuments.filter(d => d.type === t).length;
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setDocTypeFilter(t)}
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                      data-testid={`filter-doctype-${t}`}
+                    >
+                      {t.replace(/_/g, " ")} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
         {!collapsedSections.has("documents") && (filteredDocuments.length === 0 ? (
           <div className="rounded-lg border bg-card p-6 text-center">
