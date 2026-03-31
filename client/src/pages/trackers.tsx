@@ -3051,29 +3051,7 @@ export default function TrackersPage() {
           })}
         </div>
 
-        {/* Row 2: Contextual sub-filters (shown based on section) */}
-        {(sectionFilter === "all" || sectionFilter === "documents") && docTypes.length > 1 && (
-          <div className="flex items-center gap-1 flex-wrap">
-            <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mr-1">Doc Type:</span>
-            <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid="filter-doctype-all">All</button>
-            {docTypes.map(t => (
-              <button key={t} onClick={() => setDocTypeFilter(t)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid={`filter-doctype-${t}`}>
-                {t.replace(/_/g, " ")}
-              </button>
-            ))}
-          </div>
-        )}
-        {(sectionFilter === "all" || sectionFilter === "trackers") && allTrackerCats.length > 1 && (
-          <div className="flex items-center gap-1 flex-wrap">
-            <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mr-1">Category:</span>
-            <button onClick={() => setTrackerCatFilter("all")} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${trackerCatFilter === "all" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid="filter-trackercat-all">All</button>
-            {allTrackerCats.map(c => (
-              <button key={c} onClick={() => setTrackerCatFilter(c)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${trackerCatFilter === c ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`} data-testid={`filter-trackercat-${c}`}>
-                {c}
-              </button>
-            ))}
-          </div>
-        )}
+
       </div>
 
       {/* Summary cards */}
