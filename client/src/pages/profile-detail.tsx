@@ -423,6 +423,7 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
 // INFO TAB — Universal with type-specific enrichments
 // ============================================================
 
+// Legacy InlineEditField (used internally by old field lists)
 function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
   profileId: string; fieldKey: string; fieldValue: string; allFields: Record<string, any>;
 }) {
@@ -522,6 +523,176 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
   );
 }
 
+// ── Inline-editable field row for grouped sections ──
+function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
+  profileId: string;
+  fieldKey: string;
+  label: string;
+  value: any;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value ?? ""));
+  const { toast } = useToast();
+
+  const save = async () => {
+    try {
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, {
+        fields: { [fieldKey]: draft },
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onSaved();
+      setEditing(false);
+    } catch {
+      toast({ title: "Failed to save", variant: "destructive" });
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div
+        className="flex items-center justify-between py-2 border-b border-border/30 last:border-0 group cursor-pointer hover:bg-muted/20 px-2 -mx-2 rounded"
+        onClick={() => { setDraft(String(value ?? "")); setEditing(true); }}
+      >
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-xs font-medium">
+          {value != null && value !== ""
+            ? String(value)
+            : <span className="text-muted-foreground/40 italic">tap to add</span>}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 py-1.5 px-2 -mx-2 bg-muted/20 rounded">
+      <span className="text-xs text-muted-foreground shrink-0 w-24">{label}</span>
+      <Input
+        className="h-7 text-xs flex-1"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        autoFocus
+      />
+      <Button size="sm" className="h-6 text-[10px] px-2" onClick={save}>Save</Button>
+      <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1" onClick={() => setEditing(false)}>✕</Button>
+    </div>
+  );
+}
+
+// ── Field groups by profile type ──
+const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label: string }[] }[]> = {
+  vehicle: [
+    { title: "Vehicle Identity", fields: [
+      { key: "make", label: "Make" }, { key: "model", label: "Model" }, { key: "year", label: "Year" },
+      { key: "trim", label: "Trim" }, { key: "vin", label: "VIN" }, { key: "licensePlate", label: "License Plate" },
+      { key: "color", label: "Color" },
+    ]},
+    { title: "Purchase & Value", fields: [
+      { key: "purchaseDate", label: "Purchase Date" }, { key: "purchasePrice", label: "Purchase Price" },
+      { key: "currentValue", label: "Current Value" }, { key: "mileage", label: "Mileage" },
+    ]},
+    { title: "Status", fields: [
+      { key: "condition", label: "Condition" }, { key: "location", label: "Location" },
+      { key: "insurance", label: "Insurance" }, { key: "registration", label: "Registration Exp" },
+    ]},
+  ],
+  person: [
+    { title: "Contact Info", fields: [
+      { key: "phone", label: "Phone" }, { key: "email", label: "Email" }, { key: "address", label: "Address" },
+    ]},
+    { title: "Personal Details", fields: [
+      { key: "birthday", label: "Birthday" }, { key: "relationship", label: "Relationship" },
+      { key: "bloodType", label: "Blood Type" }, { key: "height", label: "Height" }, { key: "weight", label: "Weight" },
+    ]},
+    { title: "Emergency", fields: [
+      { key: "emergencyContact", label: "Emergency Contact" }, { key: "allergies", label: "Allergies" },
+      { key: "medications", label: "Medications" },
+    ]},
+  ],
+  pet: [
+    { title: "Pet Identity", fields: [
+      { key: "species", label: "Species" }, { key: "breed", label: "Breed" }, { key: "color", label: "Color" },
+      { key: "birthday", label: "Birthday" }, { key: "gender", label: "Gender" },
+    ]},
+    { title: "Health & Care", fields: [
+      { key: "weight", label: "Weight" }, { key: "microchip", label: "Microchip #" },
+      { key: "vetName", label: "Vet" }, { key: "vetPhone", label: "Vet Phone" },
+      { key: "diet", label: "Diet" }, { key: "allergies", label: "Allergies" },
+    ]},
+  ],
+  self: [
+    { title: "Personal Details", fields: [
+      { key: "dateOfBirth", label: "Date of Birth" }, { key: "height", label: "Height" },
+      { key: "weight", label: "Weight" }, { key: "bloodType", label: "Blood Type" },
+      { key: "sex", label: "Sex" },
+    ]},
+    { title: "Contact & Location", fields: [
+      { key: "phone", label: "Phone" }, { key: "email", label: "Email" },
+      { key: "address", label: "Address" }, { key: "state", label: "State" },
+    ]},
+  ],
+  loan: [
+    { title: "Loan Details", fields: [
+      { key: "lender", label: "Lender" }, { key: "loanBalance", label: "Balance" },
+      { key: "interestRate", label: "Interest Rate" }, { key: "monthlyPayment", label: "Monthly Payment" },
+      { key: "originalAmount", label: "Original Amount" },
+    ]},
+    { title: "Status", fields: [
+      { key: "remainingBalance", label: "Remaining" }, { key: "startDate", label: "Start Date" },
+      { key: "maturityDate", label: "Maturity Date" },
+    ]},
+  ],
+  subscription: [
+    { title: "Subscription Details", fields: [
+      { key: "provider", label: "Provider" }, { key: "cost", label: "Cost" },
+      { key: "frequency", label: "Frequency" }, { key: "plan", label: "Plan" },
+      { key: "service", label: "Service" },
+    ]},
+    { title: "Status", fields: [
+      { key: "startDate", label: "Start Date" }, { key: "renewalDate", label: "Renewal Date" },
+      { key: "autoRenew", label: "Auto-Renew" },
+    ]},
+  ],
+  asset: [
+    { title: "Asset Details", fields: [
+      { key: "brand", label: "Brand" }, { key: "model", label: "Model" },
+      { key: "purchaseDate", label: "Purchase Date" }, { key: "purchasePrice", label: "Purchase Price" },
+      { key: "currentValue", label: "Current Value" }, { key: "serialNumber", label: "Serial #" },
+    ]},
+    { title: "Status", fields: [
+      { key: "condition", label: "Condition" }, { key: "location", label: "Location" },
+      { key: "warranty", label: "Warranty Until" },
+    ]},
+  ],
+  insurance: [
+    { title: "Policy", fields: [
+      { key: "provider", label: "Provider" }, { key: "premium", label: "Premium" },
+      { key: "deductible", label: "Deductible" }, { key: "coverageLimit", label: "Coverage Limit" },
+      { key: "policyNumber", label: "Policy #" },
+    ]},
+    { title: "Status", fields: [
+      { key: "renewalDate", label: "Renewal Date" }, { key: "startDate", label: "Start Date" },
+    ]},
+  ],
+  property: [
+    { title: "Location", fields: [
+      { key: "address", label: "Address" }, { key: "city", label: "City" },
+      { key: "state", label: "State" }, { key: "zip", label: "ZIP" },
+    ]},
+    { title: "Details", fields: [
+      { key: "bedrooms", label: "Bedrooms" }, { key: "bathrooms", label: "Bathrooms" },
+      { key: "sqFt", label: "Sq Ft" }, { key: "yearBuilt", label: "Year Built" },
+    ]},
+    { title: "Value", fields: [
+      { key: "purchasePrice", label: "Purchase Price" }, { key: "currentValue", label: "Current Value" },
+    ]},
+  ],
+};
+
 function InfoTab({
   profile,
   onEdit,
@@ -532,6 +703,7 @@ function InfoTab({
   const [addingField, setAddingField] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const { toast } = useToast();
 
   const saveCustomFieldMutation = useMutation({
@@ -553,53 +725,224 @@ function InfoTab({
     },
   });
 
-  const fields = Object.entries(profile.fields).filter(([_, v]) => v != null && v !== "" && typeof v !== "object");
+  const toggleSection = (title: string) => {
+    setCollapsedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(title)) next.delete(title); else next.add(title);
+      return next;
+    });
+  };
 
-  // Separate identity fields from internal/system fields
-  const identityFieldKeys = new Set(['phone', 'email', 'birthday', 'relationship', 'bloodType', 'allergies', 'height', 'weight', 'breed', 'species', 'color', 'microchipId', 'make', 'model', 'year', 'vin', 'mileage', 'licensePlate', 'address', 'website', 'social', 'employer', 'title', 'gender', 'age']);
-  const identityFields = fields.filter(([k]) => identityFieldKeys.has(k));
-  const otherFields = fields.filter(([k]) => !identityFieldKeys.has(k) && !k.startsWith('_'));
+  // ── Key value for header display ──
+  const keyValueEntry = (() => {
+    const f = profile.fields;
+    if (f.current_value != null) return { label: "Value", value: typeof f.current_value === "number" ? formatCurrency(f.current_value) : String(f.current_value) };
+    if (f.currentValue != null) return { label: "Value", value: typeof f.currentValue === "number" ? formatCurrency(f.currentValue) : String(f.currentValue) };
+    if (f.loan_balance != null) return { label: "Balance", value: typeof f.loan_balance === "number" ? formatCurrency(f.loan_balance) : String(f.loan_balance) };
+    if (f.loanBalance != null) return { label: "Balance", value: typeof f.loanBalance === "number" ? formatCurrency(f.loanBalance) : String(f.loanBalance) };
+    if (f.cost != null) return { label: "Cost", value: typeof f.cost === "number" ? formatCurrency(f.cost) : String(f.cost) };
+    if (f.premium != null) return { label: "Premium", value: typeof f.premium === "number" ? formatCurrency(f.premium) : String(f.premium) };
+    return null;
+  })();
+
+  // ── Summary subtitle fields ──
+  const subtitleParts: string[] = (() => {
+    const f = profile.fields;
+    const t = profile.type;
+    const parts: string[] = [];
+    if (t === "vehicle") {
+      if (f.year) parts.push(String(f.year));
+      if (f.make) parts.push(String(f.make));
+      if (f.model) parts.push(String(f.model));
+    } else if (t === "pet") {
+      if (f.species) parts.push(String(f.species));
+      if (f.breed) parts.push(String(f.breed));
+    } else if (t === "person" || t === "self") {
+      if (f.relationship) parts.push(String(f.relationship));
+      if (f.email) parts.push(String(f.email));
+    } else if (t === "loan") {
+      if (f.lender) parts.push(String(f.lender));
+      if (f.interestRate) parts.push(`${f.interestRate}% APR`);
+    } else if (t === "subscription") {
+      if (f.provider) parts.push(String(f.provider));
+      if (f.frequency) parts.push(String(f.frequency));
+    } else if (t === "property") {
+      if (f.address) parts.push(String(f.address));
+      if (f.city) parts.push(String(f.city));
+    } else if (t === "asset") {
+      if (f.brand) parts.push(String(f.brand));
+      if (f.model) parts.push(String(f.model));
+    }
+    return parts.slice(0, 3);
+  })();
+
+  // ── Stats from related data ──
+  const docsCount = (profile.relatedDocuments || []).length;
+  const expensesTotal = (profile.relatedExpenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const openTasksCount = (profile.relatedTasks || []).filter((t: any) => t.status !== "done" && t.status !== "completed").length;
+  const trackersCount = (profile.relatedTrackers || []).length;
+
+  // ── Field groups ──
+  const groups = FIELD_GROUPS[profile.type] ?? [];
+  const groupedKeys = new Set(groups.flatMap(g => g.fields.map(f => f.key)));
+  const extraFields = Object.entries(profile.fields).filter(
+    ([k, v]) => !groupedKeys.has(k) && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
+  );
+
+  const handleSaved = () => {};
 
   return (
     <div className="space-y-3">
-      {/* ── 1. Core Identity Card ── */}
-      <Card>
-        <CardHeader className="pb-2 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-semibold">Identity</CardTitle>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onEdit} data-testid="button-edit-profile">
-            <Edit className="h-3 w-3" /> Edit
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {identityFields.length > 0 ? (
-            <div className="space-y-0">
-              {identityFields.map(([key, val]) => (
-                <InlineEditField key={key} profileId={profile.id} fieldKey={key} fieldValue={String(val)} allFields={profile.fields} />
-              ))}
+      {/* ── 1. Profile Header Card ── */}
+      <Card className={`bg-gradient-to-br ${profileGradient(profile.type)} border-0`}>
+        <CardContent className="p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${profileAccent(profile.type)}`}>
+                {profileIcon(profile.type)}
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-sm leading-tight truncate">{profile.name}</h3>
+                {subtitleParts.length > 0 && (
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">{subtitleParts.join(" · ")}</p>
+                )}
+                <Badge variant="secondary" className={`text-[10px] mt-1 capitalize ${profileAccent(profile.type)}`}>
+                  {profile.type}
+                </Badge>
+              </div>
             </div>
-          ) : (
-            <p className="text-sm text-muted-foreground py-3 text-center">No identity details yet. Add info via chat or the edit button.</p>
-          )}
+            <div className="flex flex-col items-end gap-1.5 shrink-0">
+              {keyValueEntry && (
+                <div className="text-right">
+                  <p className="text-[10px] text-muted-foreground">{keyValueEntry.label}</p>
+                  <p className="text-base font-bold leading-tight">{keyValueEntry.value}</p>
+                </div>
+              )}
+              <Button variant="outline" size="sm" className="h-7 text-xs gap-1 bg-background/60" onClick={onEdit} data-testid="button-edit-profile">
+                <Edit className="h-3 w-3" /> Edit
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
-      {/* ── 2. Additional Details (non-identity fields) ── */}
-      {otherFields.length > 0 && (
+      {/* ── 2. Mini Stats Row ── */}
+      <div className="grid grid-cols-4 gap-2">
+        <Card className="p-2.5 text-center">
+          <p className="text-base font-bold">{docsCount}</p>
+          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+            <FileText className="h-2.5 w-2.5" /> Docs
+          </p>
+        </Card>
+        <Card className="p-2.5 text-center">
+          <p className="text-base font-bold">
+            {expensesTotal > 0 ? `$${expensesTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "0"}
+          </p>
+          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+            <DollarSign className="h-2.5 w-2.5" /> Spent
+          </p>
+        </Card>
+        <Card className="p-2.5 text-center">
+          <p className="text-base font-bold">{openTasksCount}</p>
+          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+            <ListTodo className="h-2.5 w-2.5" /> Tasks
+          </p>
+        </Card>
+        <Card className="p-2.5 text-center">
+          <p className="text-base font-bold">{trackersCount}</p>
+          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+            <Activity className="h-2.5 w-2.5" /> Trackers
+          </p>
+        </Card>
+      </div>
+
+      {/* ── 3. Grouped Field Sections (type-aware) ── */}
+      {groups.length > 0 ? (
+        groups.map(group => {
+          const isCollapsed = collapsedSections.has(group.title);
+          return (
+            <Card key={group.title}>
+              <button
+                className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 transition-colors"
+                onClick={() => toggleSection(group.title)}
+              >
+                <span className="text-xs font-semibold">{group.title}</span>
+                {isCollapsed ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+              {!isCollapsed && (
+                <CardContent className="px-4 pb-3 pt-0">
+                  {group.fields.map(({ key, label }) => (
+                    <GroupedInlineField
+                      key={key}
+                      profileId={profile.id}
+                      fieldKey={key}
+                      label={label}
+                      value={profile.fields[key]}
+                      onSaved={handleSaved}
+                    />
+                  ))}
+                </CardContent>
+              )}
+            </Card>
+          );
+        })
+      ) : (
+        // Fallback: flat list for unknown types
+        Object.entries(profile.fields)
+          .filter(([k, v]) => !k.startsWith("_") && v != null && v !== "" && typeof v !== "object")
+          .length > 0 && (
+          <Card>
+            <CardHeader className="py-2.5 px-4">
+              <CardTitle className="text-xs font-semibold">Details</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-3 pt-0">
+              {Object.entries(profile.fields)
+                .filter(([k, v]) => !k.startsWith("_") && v != null && v !== "" && typeof v !== "object")
+                .map(([key, val]) => (
+                  <GroupedInlineField
+                    key={key}
+                    profileId={profile.id}
+                    fieldKey={key}
+                    label={formatKey(key)}
+                    value={val}
+                    onSaved={handleSaved}
+                  />
+                ))}
+            </CardContent>
+          </Card>
+        )
+      )}
+
+      {/* ── 4. Extra / Other Fields (not covered by group config) ── */}
+      {groups.length > 0 && extraFields.length > 0 && (
         <Card>
-          <CardHeader className="py-2 px-3">
-            <CardTitle className="text-xs font-semibold">Other Details</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-2.5 pt-0">
-            <div className="space-y-0">
-              {otherFields.map(([key, val]) => (
-                <InlineEditField key={key} profileId={profile.id} fieldKey={key} fieldValue={String(val)} allFields={profile.fields} />
+          <button
+            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 transition-colors"
+            onClick={() => toggleSection("__other__")}
+          >
+            <span className="text-xs font-semibold">Other</span>
+            {collapsedSections.has("__other__")
+              ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+              : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+          </button>
+          {!collapsedSections.has("__other__") && (
+            <CardContent className="px-4 pb-3 pt-0">
+              {extraFields.map(([key, val]) => (
+                <GroupedInlineField
+                  key={key}
+                  profileId={profile.id}
+                  fieldKey={key}
+                  label={formatKey(key)}
+                  value={val}
+                  onSaved={handleSaved}
+                />
               ))}
-            </div>
-          </CardContent>
+            </CardContent>
+          )}
         </Card>
       )}
 
-      {/* ── 3. Add Custom Field ── */}
+      {/* ── 5. Add Custom Field ── */}
       {addingField ? (
         <Card>
           <CardContent className="p-3 space-y-2">
@@ -623,21 +966,52 @@ function InfoTab({
         </Button>
       )}
 
-      {/* ── 4. Notes ── */}
+      {/* ── 6. Child Profiles ── */}
+      {(profile.childProfiles || []).length > 0 && (
+        <Card>
+          <CardHeader className="py-2.5 px-4">
+            <CardTitle className="text-xs font-semibold">Linked Profiles</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
+            {(profile.childProfiles || []).map((child: any) => {
+              const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Package, loan: Wallet, investment: TrendingUp, property: Home, person: User, pet: PawPrint };
+              const ChildIcon = iconMap[child.type] || Link2;
+              return (
+                <Link key={child.id} href={`/profiles/${child.id}`}>
+                  <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer">
+                    <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      <ChildIcon className="h-3.5 w-3.5 text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{child.name}</p>
+                      <p className="text-[10px] text-muted-foreground capitalize">
+                        {child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : child.fields?.currentValue ? ` · $${child.fields.currentValue}` : ""}
+                      </p>
+                    </div>
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  </div>
+                </Link>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── 7. Notes ── */}
       {profile.notes && (
         <Card>
-          <CardHeader className="py-2 px-3">
+          <CardHeader className="py-2 px-4">
             <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
               <FileText className="h-3.5 w-3.5 text-muted-foreground" /> Notes
             </CardTitle>
           </CardHeader>
-          <CardContent className="px-3 pb-2.5 pt-0">
+          <CardContent className="px-4 pb-3 pt-0">
             <p className="text-xs text-muted-foreground whitespace-pre-wrap">{profile.notes}</p>
           </CardContent>
         </Card>
       )}
 
-      {/* ── 5. Tags ── */}
+      {/* ── 8. Tags ── */}
       {profile.tags.length > 0 && (
         <Card>
           <CardContent className="p-3">
@@ -3063,32 +3437,6 @@ export default function ProfileDetailPage() {
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
                   <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
-                  {/* Child profiles (assets, subscriptions, vehicles) on Overview */}
-                  {(profile.childProfiles || []).length > 0 && (
-                    <div className="mt-4">
-                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Linked</p>
-                      <div className="space-y-1.5">
-                        {(profile.childProfiles || []).map((child: any) => {
-                          const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2 };
-                          const Icon = iconMap[child.type] || Link2;
-                          return (
-                            <Link key={child.id} href={`/profiles/${child.id}`}>
-                              <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer">
-                                <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                                  <Icon className="h-3.5 w-3.5 text-primary" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-medium truncate">{child.name}</p>
-                                  <p className="text-[10px] text-muted-foreground capitalize">{child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : ''}</p>
-                                </div>
-                                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              </div>
-                            </Link>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
                   {/* Non-health trackers on Overview for non-person profiles */}
                   {profile.type !== "self" && profile.type !== "person" && profile.relatedTrackers.length > 0 && (
                     <div className="mt-4">
