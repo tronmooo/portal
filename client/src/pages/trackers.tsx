@@ -2779,9 +2779,9 @@ export default function TrackersPage() {
   }
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
-  // Show all person/pet/vehicle profiles in filter — not just ones with linked trackers
+  // Show self, person, and pet profiles in filter (not vehicles/assets)
   const profilesWithTrackers = (profiles || []).filter(p =>
-    ["self", "person", "pet", "vehicle"].includes(p.type)
+    ["self", "person", "pet"].includes(p.type)
   );
 
   // Sort so "self" (Me) comes first
@@ -2802,6 +2802,15 @@ export default function TrackersPage() {
     // Category filter
     if (trackerCatFilter !== "all" && t.category !== trackerCatFilter) return false;
     return true;
+  });
+
+  // Filter obligations by profile — don't leak self's obligations to pet/person profiles
+  const filteredObligations = obligations.filter((ob: any) => {
+    if (profileFilter === "everyone") return true;
+    const targetId = resolvedFilter;
+    if (!targetId || targetId === "all") return true;
+    // Only show obligations explicitly linked to this profile
+    return ob.linkedProfiles?.includes(targetId);
   });
 
   // Group by category
@@ -2907,11 +2916,11 @@ export default function TrackersPage() {
           {(["all", "trackers", "documents", "profiles", "obligations"] as const).map(s => {
             const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", obligations: "Obligations" };
             const counts: Record<string, number> = {
-              all: filteredTrackers.length + filteredDocuments.length + obligations.length,
+              all: filteredTrackers.length + filteredDocuments.length + filteredObligations.length,
               trackers: filteredTrackers.length,
               documents: filteredDocuments.length,
               profiles: 0, // computed below
-              obligations: obligations.length,
+              obligations: filteredObligations.length,
             };
             return (
               <button
@@ -3019,14 +3028,14 @@ export default function TrackersPage() {
       })()}
 
       {/* Active Obligations / Subscriptions */}
-      {(sectionFilter === "all" || sectionFilter === "obligations") && obligations.length > 0 && (
+      {(sectionFilter === "all" || sectionFilter === "obligations") && filteredObligations.length > 0 && (
         <div className="space-y-2">
           <button onClick={() => toggleSection("obligations")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-obligations">
-            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations & Subscriptions ({obligations.length})</h2>
+            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Obligations & Subscriptions ({filteredObligations.length})</h2>
             {collapsedSections.has("obligations") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
           </button>
           {!collapsedSections.has("obligations") && <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {obligations.map((ob: any) => {
+            {filteredObligations.map((ob: any) => {
               const dueDate = new Date(ob.nextDueDate);
               const daysUntil = Math.ceil((dueDate.getTime() - Date.now()) / 86400000);
               return (
