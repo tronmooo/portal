@@ -963,7 +963,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         priority: { type: "string", enum: ["low", "medium", "high"], description: "Priority level" },
         dueDate: { type: "string", description: "Due date (YYYY-MM-DD)" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
-        forProfile: { type: "string", description: "Name of the profile this task belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
+        forProfile: { type: "string", description: "Name of an EXISTING profile to link this task to (e.g. 'Max', 'Mom', 'Tesla'). Only set this if the person/entity already exists as a profile. If the user just mentions someone by name in the task (e.g. 'return book to Sarah'), put the name in the title instead — do NOT create a profile for them." },
       },
       required: ["title"],
     },
@@ -1623,6 +1623,22 @@ BEHAVIOR:
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - When searching, use the search tool to find relevant data before answering.
+
+PROFILE CREATION — CRITICAL RULE:
+NEVER create a profile unless the user EXPLICITLY asks to create one. Phrases that mean "create a profile":
+- "create a profile for Hop"
+- "add Hop as a person/pet/contact"
+- "track Hop" (meaning track them as a person)
+- "add my brother Hop"
+
+Phrases that do NOT mean "create a profile" — just include the name in the task/event/expense title:
+- "return stethoscope to Hop" → create_task with title "Return stethoscope to Hop". Do NOT create a profile for Hop.
+- "collect $50 from Hop" → create_task with title "Collect $50 from Hop". Do NOT create a profile.
+- "buy gift for Sarah" → create_task with title "Buy gift for Sarah". Do NOT create a profile.
+- "call Hop about dinner" → create_task with title "Call Hop about dinner".
+- "$30 dinner with Hop" → create_expense with description "Dinner with Hop".
+
+The rule is simple: if the user is describing an ACTION (task, expense, event) that MENTIONS a person, just put the name in the title. Only use forProfile if that person ALREADY EXISTS as a profile. If they don't exist as a profile, leave forProfile empty — the task will be linked to the self (Me) profile automatically.
 
 TOOL CHOICE RULES — CRITICAL:
 CRITICAL ROUTING RULES (NEVER VIOLATE):
