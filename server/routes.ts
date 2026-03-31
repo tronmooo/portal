@@ -677,6 +677,14 @@ export async function registerRoutes(
     if (dup) {
       return res.status(409).json({ error: `A ${req.body.type} profile named "${dup.name}" already exists`, existingId: dup.id });
     }
+    // Auto-assign child-type profiles to self profile if no parent specified
+    const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+    if (childTypes.has(req.body.type) && !req.body.parentProfileId) {
+      const selfProfile = existing.find(p => p.type === "self");
+      if (selfProfile) {
+        req.body.parentProfileId = selfProfile.id;
+      }
+    }
     const parsed = insertProfileSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(await storage.createProfile(parsed.data));

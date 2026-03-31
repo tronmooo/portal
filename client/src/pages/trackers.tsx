@@ -3169,6 +3169,14 @@ export default function TrackersPage() {
                     </Link>
                   );
                 })}
+                <Link href="/profiles">
+                  <div className="rounded-lg border border-dashed bg-muted/10 p-2.5 hover:bg-muted/30 cursor-pointer transition-colors text-center" data-testid="btn-add-subscription">
+                    <div className="h-8 w-8 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-1.5">
+                      <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                    </div>
+                    <p className="text-xs text-muted-foreground">Add</p>
+                  </div>
+                </Link>
               </div>
             )}
           </div>

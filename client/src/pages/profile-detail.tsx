@@ -1667,10 +1667,11 @@ function TrackersTab({
   const [entryValue, setEntryValue] = useState("");
   const [entryNotes, setEntryNotes] = useState("");
 
-  // All trackers for linking
+  // All trackers for linking — always refetch to include newly created trackers
   const { data: allTrackers } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers"],
     queryFn: async () => { const res = await apiRequest("GET", "/api/trackers"); return res.json(); },
+    staleTime: 0, // Always refetch when dialog opens
   });
 
   const linkedIds = new Set(trackers.map(t => t.id));
