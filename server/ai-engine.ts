@@ -2729,74 +2729,95 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
     const selfProfile = profiles.find(p => p.type === "self");
     const matchedNonSelfIds: string[] = [];
 
+    // SCORING-BASED MATCHING: score each profile and pick the BEST match only.
+    // This prevents "Craig" from matching both "Craig Isolation Test" AND "Craig Rent Obligation".
+    const scored: Array<{ id: string; score: number }> = [];
+
     for (const profile of profiles) {
       const name = profile.name.toLowerCase();
-      if (name.length < 2) continue; // Skip very short names
-      if (profile.type === "self") continue; // Skip self — handled separately
+      if (name.length < 2) continue;
+      if (profile.type === "self") continue;
 
-      let matched = false;
+      let score = 0;
 
-      // 1. Explicit profile name match (from forProfile parameter)
+      // 1. Explicit profile name match (from forProfile parameter) — highest priority
       if (explicitProfileName) {
-        const explicit = explicitProfileName.toLowerCase();
-        if (name === explicit || name.includes(explicit) || explicit.includes(name)) {
-          matched = true;
+        const explicit = explicitProfileName.toLowerCase().trim();
+        // Exact match → 100 points
+        if (name === explicit) {
+          score += 100;
         }
-        // Also match first significant word (e.g. "Tesla" matches "Tesla Model 3")
-        const explicitWords = explicit.split(/\s+/).filter(w => w.length > 2);
-        const nameWords = name.split(/\s+/).filter(w => w.length > 2);
-        if (explicitWords.some(w => nameWords.includes(w))) {
-          matched = true;
+        // Full name contained in explicit or vice versa → 50 points
+        else if (name.includes(explicit) || explicit.includes(name)) {
+          score += 50;
         }
-      }
-
-      // 2. Text-based matching: full name match OR significant word match
-      if (!matched && lower) {
-        // Full name in text
-        if (lower.includes(name)) {
-          matched = true;
-        }
-        // Word-level match: any significant word (3+ chars) from profile name appears in text
-        if (!matched) {
+        // Word overlap scoring: count how many words match (not just "any single word")
+        else {
+          const explicitWords = explicit.split(/\s+/).filter(w => w.length > 2);
           const nameWords = name.split(/\s+/).filter(w => w.length > 2);
-          // Skip common words that would cause false matches
-          const skipWords = new Set(["the", "and", "for", "new", "old", "my", "our", "dr.", "auto", "self"]);
-          const significantWords = nameWords.filter(w => !skipWords.has(w));
-          if (significantWords.length > 0 && significantWords.some(w => {
-            // Word boundary match to avoid partial matches like "max" in "maximum"
-            const regex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
-            return regex.test(lower);
-          })) {
-            matched = true;
+          const skipWords = new Set(["the", "and", "for", "new", "old", "my", "our", "dr.", "auto", "self", "test", "isolation"]);
+          let wordMatches = 0;
+          for (const ew of explicitWords) {
+            if (skipWords.has(ew)) continue;
+            if (nameWords.includes(ew)) wordMatches++;
+          }
+          // Only count if majority of significant words match (not just one)
+          const significantExplicit = explicitWords.filter(w => !skipWords.has(w)).length;
+          if (wordMatches > 0 && significantExplicit > 0) {
+            const overlapRatio = wordMatches / significantExplicit;
+            if (overlapRatio >= 0.5) {
+              score += Math.round(overlapRatio * 30);
+            }
           }
         }
       }
 
-      if (matched) {
-        matchedNonSelfIds.push(profile.id);
-        // 1. Create entity_link record
-        const relationship = entityType === "expense" ? "paid_for" : "related_to";
-        try {
-          await storage.createEntityLink({
-            sourceType: entityType,
-            sourceId: entityId,
-            targetType: "profile",
-            targetId: profile.id,
-            relationship,
-            confidence: 0.7,
-          });
-        } catch (e) { /* ignore duplicate link errors */ }
-
-        // 2. Update profile's linked arrays (linkedTrackers, linkedExpenses, etc.)
-        try {
-          await storage.linkProfileTo(profile.id, entityType, entityId);
-        } catch (e) { console.error("linkProfileTo failed:", e); }
-
-        // 3. Update the entity's own linkedProfiles array
-        try {
-          await updateEntityLinkedProfiles(entityType, entityId, profile.id);
-        } catch (e) { console.error("updateEntityLinkedProfiles failed:", e); }
+      // 2. Text-based matching — only if no explicit name was provided
+      if (score === 0 && !explicitProfileName && lower) {
+        // Full name in text → strong match
+        if (lower.includes(name)) {
+          score += 40;
+        }
+        // Word overlap — require majority match, not just one word
+        else {
+          const nameWords = name.split(/\s+/).filter(w => w.length > 2);
+          const skipWords = new Set(["the", "and", "for", "new", "old", "my", "our", "dr.", "auto", "self", "track", "log", "add", "create"]);
+          const significantWords = nameWords.filter(w => !skipWords.has(w));
+          let wordMatches = 0;
+          for (const w of significantWords) {
+            const regex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
+            if (regex.test(lower)) wordMatches++;
+          }
+          // Require at least 50% of significant words to match
+          if (significantWords.length > 0 && wordMatches / significantWords.length >= 0.5) {
+            score += Math.round((wordMatches / significantWords.length) * 20);
+          }
+        }
       }
+
+      if (score > 0) {
+        scored.push({ id: profile.id, score });
+      }
+    }
+
+    // Sort by score descending and pick ONLY the best match
+    // (unless there's an exact tie at the top, then take both)
+    scored.sort((a, b) => b.score - a.score);
+    const topScore = scored[0]?.score || 0;
+    const bestMatches = scored.filter(s => s.score === topScore && s.score >= 10);
+
+    for (const match of bestMatches) {
+      matchedNonSelfIds.push(match.id);
+      const relationship = entityType === "expense" ? "paid_for" : "related_to";
+      try {
+        await storage.createEntityLink({
+          sourceType: entityType, sourceId: entityId,
+          targetType: "profile", targetId: match.id,
+          relationship, confidence: Math.min(1, match.score / 100),
+        });
+      } catch (e) { /* ignore duplicate link errors */ }
+      try { await storage.linkProfileTo(match.id, entityType, entityId); } catch (e) { console.error("linkProfileTo failed:", e); }
+      try { await updateEntityLinkedProfiles(entityType, entityId, match.id); } catch (e) { console.error("updateEntityLinkedProfiles failed:", e); }
     }
 
     // If no profile matched at all, link to self (so the item shows up in YOUR profile)
