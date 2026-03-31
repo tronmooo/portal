@@ -1,5 +1,6 @@
 import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
+import { createClient } from "@supabase/supabase-js";
 
 // Augment Express Request with auth middleware userId
 interface AuthenticatedRequest extends Request {
@@ -629,6 +630,35 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(500).json({ error: "Failed to get calendar status" });
     }
+  }));
+
+  // ---- Profile Type Definitions (Registry) ----
+  app.get("/api/profile-types", asyncHandler(async (_req, res) => {
+    const sb = createClient(
+      process.env.VITE_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const { data, error } = await sb
+      .from("profile_type_definitions")
+      .select("*")
+      .order("category")
+      .order("sort_order");
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  }));
+
+  app.get("/api/profile-types/:typeKey", asyncHandler(async (req, res) => {
+    const sb = createClient(
+      process.env.VITE_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const { data, error } = await sb
+      .from("profile_type_definitions")
+      .select("*")
+      .eq("type_key", req.params.typeKey)
+      .single();
+    if (error) return res.status(404).json({ error: "Type not found" });
+    res.json(data);
   }));
 
   // ---- Profiles ----

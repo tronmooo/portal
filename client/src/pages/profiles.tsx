@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
+import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
+import DynamicProfileForm from "@/components/registry/DynamicProfileForm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -714,9 +717,24 @@ function TypeSpecificFields({
   }
 }
 
-// ─── Create Profile Dialog ───────────────────────────────────────────────────
+// ─── Helper: map registry category/type_key → legacy profile type ────────────
 
-const EMPTY_FIELDS: Record<string, any> = {};
+function mapTypeKeyToLegacyType(typeKey: string, category: string): ProfileType {
+  // people category
+  if (category === "people") {
+    if (typeKey === "self") return "self" as ProfileType;
+    if (typeKey === "pet") return "pet";
+    return "person";
+  }
+  if (category === "liabilities") return "loan";
+  if (category === "subscriptions") return "subscription";
+  if (category === "investments") return "investment";
+  if (category === "property") return "property" as ProfileType;
+  // assets, insurance → asset
+  return "asset";
+}
+
+// ─── Create Profile Dialog ───────────────────────────────────────────────────
 
 function CreateProfileDialog({
   open,
@@ -726,23 +744,19 @@ function CreateProfileDialog({
   onClose: () => void;
 }) {
   const { toast } = useToast();
+  // Step 1: pick a type; Step 2: fill details
+  const [step, setStep] = useState<1 | 2>(1);
+  const [selectedTypeKey, setSelectedTypeKey] = useState<string | undefined>(undefined);
+  const [selectedTypeDef, setSelectedTypeDef] = useState<TypeDefinition | null>(null);
+
+  // Step-2 state
   const [name, setName] = useState("");
-  const [type, setType] = useState<ProfileType>("person");
   const [fields, setFields] = useState<Record<string, any>>({});
   const [tagsInput, setTagsInput] = useState("");
   const [notes, setNotes] = useState("");
 
-  const handleFieldChange = (k: string, v: any) => {
-    setFields((prev) => ({ ...prev, [k]: v }));
-  };
-
-  const handleTypeChange = (newType: ProfileType) => {
-    setType(newType);
-    setFields({});
-  };
-
   const createMutation = useMutation({
-    mutationFn: async (payload: InsertProfile) => {
+    mutationFn: async (payload: InsertProfile & { type_key?: string }) => {
       const res = await apiRequest("POST", "/api/profiles", payload);
       return res.json();
     },
@@ -762,12 +776,35 @@ function CreateProfileDialog({
   });
 
   const handleClose = () => {
+    setStep(1);
+    setSelectedTypeKey(undefined);
+    setSelectedTypeDef(null);
     setName("");
-    setType("person");
     setFields({});
     setTagsInput("");
     setNotes("");
     onClose();
+  };
+
+  const handleTypeSelect = (typeKey: string, typeDef: TypeDefinition) => {
+    setSelectedTypeKey(typeKey);
+    setSelectedTypeDef(typeDef);
+  };
+
+  const handleNext = () => {
+    if (!selectedTypeKey || !selectedTypeDef) {
+      toast({ title: "Please select a profile type", variant: "destructive" });
+      return;
+    }
+    setStep(2);
+  };
+
+  const handleBack = () => {
+    setStep(1);
+    setName("");
+    setFields({});
+    setTagsInput("");
+    setNotes("");
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -776,34 +813,9 @@ function CreateProfileDialog({
       toast({ title: "Name is required", variant: "destructive" });
       return;
     }
-    // Email validation
-    const emailFields = ["email", "loginEmail"];
-    for (const key of emailFields) {
-      if (fields[key] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields[key])) {
-        toast({ title: "Invalid email", description: `Enter a valid email address for ${key}`, variant: "destructive" });
-        return;
-      }
-    }
-    // Phone validation
-    const phoneFields = ["phone", "vetPhone"];
-    for (const key of phoneFields) {
-      if (fields[key] && !/^\+?[\d\s()-]{7,15}$/.test(fields[key])) {
-        toast({ title: "Invalid phone", description: `Enter a valid phone number for ${key}`, variant: "destructive" });
-        return;
-      }
-    }
-    // Blood type validation
-    if (fields.bloodType && !["A+","A-","B+","B-","AB+","AB-","O+","O-"].includes(fields.bloodType)) {
-      toast({ title: "Invalid blood type", description: "Use A+, A-, B+, B-, AB+, AB-, O+, or O-", variant: "destructive" });
+    if (!selectedTypeDef) {
+      toast({ title: "Profile type is required", variant: "destructive" });
       return;
-    }
-    // Birthday validation
-    if (fields.birthday) {
-      const d = new Date(fields.birthday);
-      if (isNaN(d.getTime()) || d > new Date()) {
-        toast({ title: "Invalid date", description: "Enter a valid date that is not in the future", variant: "destructive" });
-        return;
-      }
     }
     const tags = tagsInput
       .split(",")
@@ -812,7 +824,16 @@ function CreateProfileDialog({
     const cleanFields = Object.fromEntries(
       Object.entries(fields).filter(([_, v]) => v !== "" && v !== null && v !== undefined)
     );
-    createMutation.mutate({ type, name: name.trim(), fields: cleanFields, tags, notes });
+    const legacyType = mapTypeKeyToLegacyType(selectedTypeDef.type_key, selectedTypeDef.category);
+    createMutation.mutate({
+      type: legacyType,
+      // @ts-ignore — type_key is stored as extra field on the profile
+      type_key: selectedTypeDef.type_key,
+      name: name.trim(),
+      fields: cleanFields,
+      tags,
+      notes,
+    });
   };
 
   return (
@@ -822,103 +843,117 @@ function CreateProfileDialog({
         data-testid="dialog-create-profile"
       >
         <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-          <DialogTitle>Create Profile</DialogTitle>
+          <DialogTitle>
+            {step === 1 ? "Choose Profile Type" : "Create Profile"}
+          </DialogTitle>
+          {step === 2 && selectedTypeDef && (
+            <p className="text-sm text-muted-foreground">{selectedTypeDef.label}</p>
+          )}
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
-         <div className="flex-1 overflow-y-auto px-6 space-y-4 pb-4" style={{WebkitOverflowScrolling: 'touch'}}>
-          {/* Name */}
-          <FieldRow label="Name *" id="profile-name">
-            <Input
-              id="profile-name"
-              data-testid="input-profile-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Enter name"
-              autoFocus
-            />
-          </FieldRow>
-
-          {/* Type selector */}
-          <FieldRow label="Type" id="profile-type">
-            <Select
-              value={type}
-              onValueChange={(v) => handleTypeChange(v as ProfileType)}
-            >
-              <SelectTrigger id="profile-type" data-testid="select-profile-type">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PROFILE_TYPES.map((t) => (
-                  <SelectItem key={t} value={t} data-testid={`option-type-${t}`}>
-                    {TYPE_LABELS[t] || t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FieldRow>
-
-          {/* Divider */}
-          {PROFILE_TYPES.includes(type) && (
-            <div className="border-t pt-3">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
-                {TYPE_LABELS[type]} Details
-              </p>
-              <div className="space-y-3">
-                <TypeSpecificFields
-                  type={type}
-                  fields={fields}
-                  onChange={handleFieldChange}
+        {step === 1 ? (
+          <>
+            <div className="flex-1 overflow-y-auto px-6 py-4" style={{ WebkitOverflowScrolling: "touch" }}>
+              <ProfileTypeSelector
+                onSelect={handleTypeSelect}
+                selectedKey={selectedTypeKey}
+              />
+            </div>
+            <DialogFooter className="px-6 py-3 border-t shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleClose}
+                data-testid="btn-cancel-create-profile"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleNext}
+                disabled={!selectedTypeKey}
+                data-testid="btn-next-create-profile"
+              >
+                Next
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
+            <div className="flex-1 overflow-y-auto px-6 space-y-4 pb-4" style={{ WebkitOverflowScrolling: "touch" }}>
+              {/* Name */}
+              <FieldRow label="Name *" id="profile-name">
+                <Input
+                  id="profile-name"
+                  data-testid="input-profile-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Enter name"
+                  autoFocus
                 />
+              </FieldRow>
+
+              {/* Dynamic fields from schema */}
+              {selectedTypeDef && selectedTypeDef.field_schema && selectedTypeDef.field_schema.length > 0 && (
+                <div className="border-t pt-3">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                    {selectedTypeDef.label} Details
+                  </p>
+                  <DynamicProfileForm
+                    fieldSchema={selectedTypeDef.field_schema}
+                    values={fields}
+                    onChange={setFields}
+                    disabled={createMutation.isPending}
+                  />
+                </div>
+              )}
+
+              {/* Tags */}
+              <div className="border-t pt-3 space-y-3">
+                <FieldRow label="Tags" id="profile-tags">
+                  <Input
+                    id="profile-tags"
+                    data-testid="input-profile-tags"
+                    value={tagsInput}
+                    onChange={(e) => setTagsInput(e.target.value)}
+                    placeholder="family, important, review (comma-separated)"
+                  />
+                </FieldRow>
+
+                {/* Notes */}
+                <FieldRow label="Notes" id="profile-notes">
+                  <Textarea
+                    id="profile-notes"
+                    data-testid="textarea-profile-notes"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Any additional notes..."
+                    rows={3}
+                  />
+                </FieldRow>
               </div>
             </div>
-          )}
 
-          {/* Tags */}
-          <div className="border-t pt-3 space-y-3">
-            <FieldRow label="Tags" id="profile-tags">
-              <Input
-                id="profile-tags"
-                data-testid="input-profile-tags"
-                value={tagsInput}
-                onChange={(e) => setTagsInput(e.target.value)}
-                placeholder="family, important, review (comma-separated)"
-              />
-            </FieldRow>
-
-            {/* Notes */}
-            <FieldRow label="Notes" id="profile-notes">
-              <Textarea
-                id="profile-notes"
-                data-testid="textarea-profile-notes"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Any additional notes..."
-                rows={3}
-              />
-            </FieldRow>
-          </div>
-
-          </div>{/* end scroll area */}
-          <DialogFooter className="px-6 py-3 border-t shrink-0">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleClose}
-              data-testid="btn-cancel-create-profile"
-              disabled={createMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              data-testid="btn-submit-create-profile"
-              disabled={createMutation.isPending}
-            >
-              {createMutation.isPending ? "Creating…" : "Create Profile"}
-            </Button>
-          </DialogFooter>
-        </form>
+            <DialogFooter className="px-6 py-3 border-t shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleBack}
+                data-testid="btn-back-create-profile"
+                disabled={createMutation.isPending}
+              >
+                Back
+              </Button>
+              <Button
+                type="submit"
+                data-testid="btn-submit-create-profile"
+                disabled={createMutation.isPending}
+              >
+                {createMutation.isPending ? "Creating…" : "Create Profile"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

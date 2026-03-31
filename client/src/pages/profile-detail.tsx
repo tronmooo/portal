@@ -104,6 +104,8 @@ import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { Skeleton } from "@/components/ui/skeleton";
+import DynamicProfileDetail from "@/components/registry/DynamicProfileDetail";
+import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
 
 // ============================================================
 // HELPERS
@@ -2907,6 +2909,18 @@ export default function ProfileDetailPage() {
     refetchOnMount: "always",
   });
 
+  // Fetch type definition from registry (only if the profile has a type_key)
+  const profileTypeKey = (profile as any)?.type_key as string | undefined;
+  const { data: typeDef } = useQuery<TypeDefinition>({
+    queryKey: ["/api/profile-types", profileTypeKey],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profile-types/${profileTypeKey}`);
+      return res.json();
+    },
+    enabled: !!profileTypeKey,
+    staleTime: 1000 * 60 * 10, // 10 min — type defs rarely change
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("DELETE", `/api/profiles/${id}`);
@@ -3024,9 +3038,19 @@ export default function ProfileDetailPage() {
         <AISummaryCard profileId={id} profileType={profile.type} />
       </div>
 
-      {/* Type-specific Tabs */}
+      {/* Type-specific Tabs — use DynamicProfileDetail when registry type is available */}
       <div className="px-4 md:px-6 pb-6">
-        {(() => {
+        {typeDef ? (
+          <div className="mt-4">
+            <DynamicProfileDetail
+              profile={profile}
+              typeDef={typeDef}
+              onChanged={handleSaved}
+            />
+          </div>
+        ) : (
+        /* Legacy hardcoded tab system */
+        (() => {
           const tabs = getTabsForType(profile.type, profile);
           const tabValues = new Set(tabs.map(t => t.value));
           return (
@@ -3153,7 +3177,8 @@ export default function ProfileDetailPage() {
               )}
             </Tabs>
           );
-        })()}
+        })()
+        )}
       </div>
 
       {/* Edit Dialog */}
