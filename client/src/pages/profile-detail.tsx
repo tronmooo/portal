@@ -2572,106 +2572,110 @@ function EditProfileDialog({
 // Type-specific tab configurations — each profile type gets its own relevant tabs
 type TabDef = { value: string; label: string; testId: string };
 
-// Dynamic entity-specific tab configs — each entity type gets tabs that make sense for it
+// Context-aware tab configs — each profile type gets tabs that reflect its life, not a generic database
 const ENTITY_TABS: Record<string, TabDef[]> = {
   // Person / Self — full life hub
   person: [
-    { value: "info", label: "Profile", testId: "tab-info" },
+    { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   self: [
-    { value: "info", label: "Profile", testId: "tab-info" },
+    { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health", testId: "tab-health" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Pet — health + care focused
   pet: [
-    { value: "info", label: "Profile", testId: "tab-info" },
-    { value: "health", label: "Health", testId: "tab-health" },
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "health", label: "Health & Vet", testId: "tab-health" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "tasks", label: "Reminders", testId: "tab-tasks" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
   ],
   // Vehicle — maintenance + cost focused
   vehicle: [
-    { value: "info", label: "Profile", testId: "tab-info" },
-    { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
+    { value: "finances", label: "Costs", testId: "tab-finances" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Loan — payment focused
   loan: [
-    { value: "info", label: "Profile", testId: "tab-info" },
+    { value: "info", label: "Overview", testId: "tab-info" },
     { value: "finances", label: "Payments", testId: "tab-finances" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Investment
   investment: [
-    { value: "info", label: "Profile", testId: "tab-info" },
+    { value: "info", label: "Overview", testId: "tab-info" },
     { value: "finances", label: "Performance", testId: "tab-finances" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Subscription
   subscription: [
-    { value: "info", label: "Profile", testId: "tab-info" },
+    { value: "info", label: "Overview", testId: "tab-info" },
     { value: "finances", label: "Billing", testId: "tab-finances" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "History", testId: "tab-timeline" },
   ],
   // Medical provider
   medical: [
-    { value: "info", label: "Profile", testId: "tab-info" },
-    { value: "health", label: "Health", testId: "tab-health" },
-    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "health", label: "Records", testId: "tab-health" },
+    { value: "finances", label: "Billing", testId: "tab-finances" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "Visits", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Property / Home
   property: [
-    { value: "info", label: "Profile", testId: "tab-info" },
-    { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Costs", testId: "tab-finances" },
+    { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   ],
   // Asset (laptop, device, etc.)
   asset: [
-    { value: "info", label: "Profile", testId: "tab-info" },
-    { value: "finances", label: "Expenses", testId: "tab-finances" },
-    { value: "trackers", label: "Linked", testId: "tab-trackers" },
-    { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "tasks", label: "Tasks", testId: "tab-tasks" },
-    { value: "timeline", label: "Timeline", testId: "tab-timeline" },
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Costs", testId: "tab-finances" },
+    { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "History", testId: "tab-timeline" },
+  ],
+  // Account
+  account: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Transactions", testId: "tab-finances" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "History", testId: "tab-timeline" },
   ],
 };
 
 // Fallback for any type not explicitly defined
 const DEFAULT_TABS: TabDef[] = [
-  { value: "info", label: "Profile", testId: "tab-info" },
+  { value: "info", label: "Overview", testId: "tab-info" },
   { value: "finances", label: "Finance", testId: "tab-finances" },
+  { value: "trackers", label: "Documents", testId: "tab-trackers" },
+  { value: "timeline", label: "Activity", testId: "tab-timeline" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
-  { value: "trackers", label: "Linked", testId: "tab-trackers" },
-  { value: "timeline", label: "Timeline", testId: "tab-timeline" },
 ];
 
 function getTabsForType(type: string, profile?: any): TabDef[] {
@@ -2709,7 +2713,12 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
     if (hasData) {
       withData.push(tab);
     } else {
-      withoutData.push(tab);
+      // Hide truly empty low-value tabs; keep high-value ones with CTAs
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "health"];
+      if (alwaysShow.includes(tab.value)) {
+        withoutData.push(tab);
+      }
+      // Notes and timeline are hidden when empty
     }
   }
   
