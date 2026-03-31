@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 // endpoint directly via URL redirect.
 import { apiRequest } from "./queryClient";
 import { queryClient } from "./queryClient";
+import { clearChatCache } from "@/pages/chat";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -269,11 +270,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 2. Clear ALL React Query cache — prevents data leaking between users
     queryClient.clear();
 
-    // 3. Clear React state
+    // 3. Clear module-level chat history cache
+    clearChatCache();
+
+    // 4. Clear React state
     setUser(null);
     setSession(null);
 
-    // 4. Notify the server (best-effort)
+    // 5. Notify the server (best-effort)
     fetch(`${API_BASE}/api/auth/signout`, { method: "POST" }).catch(() => {});
   }, []);
 

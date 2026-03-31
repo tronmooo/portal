@@ -290,6 +290,58 @@ CREATE TABLE IF NOT EXISTS entity_links (
 );
 
 -- ============================================================
+-- JUNCTION TABLES (profile ↔ entity many-to-many links)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS profile_trackers (
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  tracker_id UUID NOT NULL REFERENCES trackers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, tracker_id)
+);
+
+CREATE TABLE IF NOT EXISTS profile_expenses (
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  expense_id UUID NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, expense_id)
+);
+
+CREATE TABLE IF NOT EXISTS profile_tasks (
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, task_id)
+);
+
+CREATE TABLE IF NOT EXISTS profile_events (
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS profile_documents (
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, document_id)
+);
+
+CREATE TABLE IF NOT EXISTS profile_obligations (
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  obligation_id UUID NOT NULL REFERENCES obligations(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, obligation_id)
+);
+
+CREATE TABLE IF NOT EXISTS profile_artifacts (
+  profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  artifact_id UUID NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  PRIMARY KEY (profile_id, artifact_id)
+);
+
+-- ============================================================
 -- PREFERENCES (key-value settings per user)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS preferences (
@@ -350,9 +402,16 @@ ALTER TABLE domains ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domain_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE entity_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE preferences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_trackers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_obligations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_artifacts ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies — authenticated users see only their own data
-DO $$ 
+DO $$
 DECLARE
   t TEXT;
 BEGIN
@@ -360,7 +419,10 @@ BEGIN
     'profiles','trackers','tracker_entries','tasks','expenses','events',
     'habits','habit_checkins','obligations','obligation_payments',
     'artifacts','journal_entries','memories','documents','goals',
-    'domains','domain_entries','entity_links','preferences'
+    'domains','domain_entries','entity_links','preferences',
+    'profile_trackers','profile_expenses','profile_tasks',
+    'profile_events','profile_documents','profile_obligations',
+    'profile_artifacts'
   ]) LOOP
     EXECUTE format('
       CREATE POLICY "Users can view own %1$s" ON %1$s

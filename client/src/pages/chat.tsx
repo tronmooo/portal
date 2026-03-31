@@ -696,6 +696,11 @@ const WELCOME_MSG: ChatMessage = {
 };
 let _chatCache: ChatMessage[] = [WELCOME_MSG];
 
+/** Clear module-level chat cache — must be called on sign-out to prevent data leakage between users */
+export function clearChatCache() {
+  _chatCache = [WELCOME_MSG];
+}
+
 export default function ChatPage() {
   const [messages, setMessagesRaw] = useState<ChatMessage[]>(_chatCache);
   // Wrap setMessages to also persist to module-level cache

@@ -140,7 +140,7 @@ export async function registerRoutes(
       // Bust response cache on write
       if (uid !== "anon") {
         bustCache(`stats:${uid}`);
-        bustCache(`profile-detail:`);
+        bustCache(`profile-detail:${uid}:`);
         bustCache(`dashboard-enhanced:`);
       } else {
         bustAllCaches();
@@ -639,7 +639,8 @@ export async function registerRoutes(
     res.json(profile);
   }));
   app.get("/api/profiles/:id/detail", asyncHandler(async (req, res) => {
-    const cacheKey = `profile-detail:${req.params.id}`;
+    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const cacheKey = `profile-detail:${userId}:${req.params.id}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
     const detail = await storage.getProfileDetail(req.params.id);
