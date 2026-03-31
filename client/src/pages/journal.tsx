@@ -12,7 +12,7 @@ import {
 import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
@@ -40,7 +40,7 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
       toast({ title: "Entry deleted" });
     },
-    onError: () => toast({ title: "Failed to delete entry", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to delete entry", description: err.message, variant: "destructive" }),
   });
 
   return (
@@ -135,6 +135,7 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
 }
 
 export default function JournalPage() {
+  useEffect(() => { document.title = "Journal — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [mood, setMood] = useState<MoodLevel | null>(null);
@@ -159,8 +160,9 @@ export default function JournalPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
       setMood(null); setContent(""); setEnergy(3); setShowCreate(false);
+      toast({ title: "Journal entry saved" });
     },
-    onError: () => toast({ title: "Failed to create journal entry", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create journal entry", description: err.message, variant: "destructive" }),
   });
 
   // 7-day mood strip

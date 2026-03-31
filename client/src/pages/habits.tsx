@@ -12,7 +12,7 @@ import {
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { Habit } from "@shared/schema";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
@@ -26,14 +26,14 @@ function HabitCard({ habit }: { habit: Habit }) {
 
   const checkinMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); },
-    onError: () => toast({ title: "Failed to check in", variant: "destructive" }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: "Checked in!" }); },
+    onError: (err: Error) => toast({ title: "Failed to check in", description: err.message, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: "Habit deleted" }); },
-    onError: () => toast({ title: "Failed to delete habit", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to delete habit", description: err.message, variant: "destructive" }),
   });
 
   // Build last 14 days grid
@@ -136,6 +136,7 @@ function HabitCard({ habit }: { habit: Habit }) {
 }
 
 export default function HabitsPage() {
+  useEffect(() => { document.title = "Habits — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -154,8 +155,8 @@ export default function HabitsPage() {
 
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); setNewName(""); setShowCreate(false); },
-    onError: () => toast({ title: "Failed to create habit", variant: "destructive" }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); setNewName(""); setShowCreate(false); toast({ title: "Habit created" }); },
+    onError: (err: Error) => toast({ title: "Failed to create habit", description: err.message, variant: "destructive" }),
   });
 
   // Summary stats

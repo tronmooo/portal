@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -655,6 +655,7 @@ function PageSkeleton() {
 // ─── Document Detail Page ─────────────────────────────────────────────────────
 
 export default function DocumentDetailPage() {
+  useEffect(() => { document.title = "Document — Portol"; }, []);
   const [, params] = useRoute("/documents/:id");
   const [, navigate] = useLocation();
   const { toast } = useToast();

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +35,7 @@ const categoryColors: Record<string, string> = {
 const EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general"];
 
 export default function FinancePage() {
+  useEffect(() => { document.title = "Finance — Portol"; }, []);
   const { toast } = useToast();
   const { id: profileId, name: profileName } = getDashboardProfileFilter();
   const profileParam = profileId ? `?profileId=${profileId}` : "";
@@ -62,6 +63,9 @@ export default function FinancePage() {
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
       toast({ title: "Expense added" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to add expense", description: err.message, variant: "destructive" });
     },
   });
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getDashboardProfileFilter } from "@/lib/profileFilter";
@@ -30,8 +30,12 @@ function ObligationCard({ ob }: { ob: Obligation }) {
 
   const payMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/obligations"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
-    onError: () => toast({ title: "Failed to record payment", variant: "destructive" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Payment recorded" });
+    },
+    onError: (err: Error) => toast({ title: "Failed to record payment", description: err.message, variant: "destructive" }),
   });
 
   return (
@@ -96,6 +100,7 @@ function ObligationCard({ ob }: { ob: Obligation }) {
 }
 
 export default function ObligationsPage() {
+  useEffect(() => { document.title = "Bills — Portol"; }, []);
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -120,7 +125,7 @@ export default function ObligationsPage() {
       setAddOpen(false);
       setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing");
     },
-    onError: () => toast({ title: "Failed to create obligation", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create obligation", description: err.message, variant: "destructive" }),
   });
 
   const sorted = [...obligations].sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime());

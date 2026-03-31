@@ -36,7 +36,7 @@ import {
 import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task } from "@shared/schema";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -198,7 +198,7 @@ function TaskItem({
       invalidateTaskQueries();
       toast({ title: task.status === "done" ? "Task reopened" : "Task completed" });
     },
-    onError: () => toast({ title: "Failed to update task", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to update task", description: err.message, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -207,7 +207,7 @@ function TaskItem({
       invalidateTaskQueries();
       toast({ title: "Task deleted" });
     },
-    onError: () => toast({ title: "Failed to delete task", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to delete task", description: err.message, variant: "destructive" }),
   });
 
   return (
@@ -292,6 +292,7 @@ function TaskItem({
 // ── Tasks Page ───────────────────────────────────────────────────────────────
 
 export default function TasksPage() {
+  useEffect(() => { document.title = "Tasks — Portol"; }, []);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const { id: profileId, name: profileName } = getDashboardProfileFilter();

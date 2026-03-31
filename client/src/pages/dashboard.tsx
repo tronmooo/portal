@@ -1525,6 +1525,7 @@ function CustomizeDialog({
 // ─── Main Dashboard ──────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  useEffect(() => { document.title = "Dashboard — Portol"; }, []);
   const { toast } = useToast();
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);

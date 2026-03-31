@@ -31,6 +31,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 export default function SettingsPage() {
+  useEffect(() => { document.title = "Settings — Portol"; }, []);
   const { user, signOut } = useAuth();
   const { theme, toggle } = useTheme();
   const { toast } = useToast();

@@ -702,6 +702,7 @@ export function clearChatCache() {
 }
 
 export default function ChatPage() {
+  useEffect(() => { document.title = "Chat — Portol"; }, []);
   const [messages, setMessagesRaw] = useState<ChatMessage[]>(_chatCache);
   // Wrap setMessages to also persist to module-level cache
   const setMessages = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {

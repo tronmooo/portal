@@ -1,8 +1,10 @@
+import { useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { AlertCircle, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 
 export default function NotFound() {
+  useEffect(() => { document.title = "Not Found — Portol"; }, []);
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
       <Card className="w-full max-w-md mx-4">

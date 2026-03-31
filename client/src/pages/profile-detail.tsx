@@ -4020,6 +4020,8 @@ export default function ProfileDetailPage() {
   const id = (params as { id?: string } | null)?.id || "";
   const { toast } = useToast();
 
+  useEffect(() => { document.title = "Profile — Portol"; }, []);
+
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");

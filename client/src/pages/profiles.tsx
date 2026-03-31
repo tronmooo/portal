@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
 import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
@@ -1086,6 +1086,7 @@ function ProfileCard({
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function ProfilesPage() {
+  useEffect(() => { document.title = "Profiles — Portol"; }, []);
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);

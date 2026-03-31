@@ -1,8 +1,10 @@
+import { useEffect } from "react";
 import CalendarView from "@/components/CalendarView";
 import { ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 
 export default function CalendarPage() {
+  useEffect(() => { document.title = "Calendar — Portol"; }, []);
   return (
     <div className="h-full overflow-y-auto pb-24" data-testid="calendar-page">
       <div className="p-4 md:p-6">

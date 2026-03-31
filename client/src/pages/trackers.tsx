@@ -2767,6 +2767,7 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
 };
 
 export default function TrackersPage() {
+  useEffect(() => { document.title = "Trackers — Portol"; }, []);
   const { data: trackers, isLoading } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers"],
   });

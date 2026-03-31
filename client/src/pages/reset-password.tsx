@@ -9,6 +9,7 @@ import { AlertCircle, CheckCircle2, Loader2, Shield, ArrowLeft } from "lucide-re
 import { Link } from "wouter";
 
 export default function ResetPasswordPage() {
+  useEffect(() => { document.title = "Reset Password — Portol"; }, []);
   const [, setLocation] = useLocation();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
