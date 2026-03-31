@@ -1273,6 +1273,1056 @@ function InlineEditField({
 }
 
 // ─────────────────────────────────────────────
+// InlineField — lightweight per-field inline edit
+// ─────────────────────────────────────────────
+
+function InlineField({
+  label,
+  value,
+  fieldKey,
+  profileId,
+  allFields,
+  onSaved,
+}: {
+  label: string;
+  value: string;
+  fieldKey: string;
+  profileId: string;
+  allFields: Record<string, any>;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+  const { toast } = useToast();
+
+  const save = async () => {
+    const trimmed = draft.trim();
+    if (trimmed === (value || "")) { setEditing(false); return; }
+    try {
+      const num = Number(trimmed);
+      const parsed = trimmed !== "" && !isNaN(num) ? num : trimmed;
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, {
+        fields: { ...allFields, [fieldKey]: parsed },
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      setEditing(false);
+      onSaved();
+    } catch {
+      toast({ title: "Failed to update field", variant: "destructive" });
+      setDraft(value || "");
+      setEditing(false);
+    }
+  };
+
+  React.useEffect(() => { setDraft(value || ""); }, [value]);
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2 py-1 border-b border-border/50 last:border-0">
+        <span className="text-xs text-muted-foreground shrink-0 min-w-[90px]">{label}</span>
+        <Input
+          className="h-6 text-xs flex-1"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") { setDraft(value || ""); setEditing(false); }
+          }}
+          autoFocus
+        />
+        <Button size="sm" className="h-6 text-[10px] px-2" onClick={save}>Save</Button>
+        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => { setDraft(value || ""); setEditing(false); }}>
+          <X className="h-3 w-3" />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0 group cursor-pointer hover:bg-muted/30 -mx-2 px-2 rounded transition-colors"
+      onClick={() => setEditing(true)}
+    >
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium tabular-nums group-hover:text-primary transition-colors">
+        {value || <span className="text-muted-foreground/40">—</span>}
+      </span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ExpandableSection
+// ─────────────────────────────────────────────
+
+interface ExpandableSectionProps {
+  title: string;
+  subtitle: string;
+  icon: React.ElementType;
+  iconColor: string;
+  badge?: { label: string; color: string };
+  summaryItems: { label: string; value: string }[];
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}
+
+function ExpandableSection({
+  title,
+  subtitle,
+  icon: Icon,
+  iconColor,
+  badge,
+  summaryItems,
+  children,
+  defaultOpen = false,
+}: ExpandableSectionProps) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className="rounded-xl border bg-card overflow-hidden">
+      {/* Header — always visible */}
+      <button
+        type="button"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors text-left"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        {/* Icon */}
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${iconColor}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+
+        {/* Title + subtitle */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold leading-tight">{title}</p>
+            {badge && (
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border ${badge.color}`}>
+                {badge.label}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-tight mt-0.5 truncate">{subtitle}</p>
+        </div>
+
+        {/* Summary pills — shown when collapsed */}
+        {!open && summaryItems.length > 0 && (
+          <div className="hidden sm:flex items-center gap-3 shrink-0">
+            {summaryItems.slice(0, 3).map((item) => (
+              <div key={item.label} className="text-right">
+                <p className="text-[10px] text-muted-foreground leading-tight">{item.label}</p>
+                <p className="text-xs font-semibold tabular-nums leading-tight">{item.value || "—"}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Chevron */}
+        <div className="shrink-0 ml-1">
+          {open ? (
+            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          )}
+        </div>
+      </button>
+
+      {/* Expanded content */}
+      {open && (
+        <div className="border-t border-border">
+          <div className="px-4 py-3 space-y-1">
+            {children}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// QuickActionBar — ghost buttons shown at bottom of expanded section
+// ─────────────────────────────────────────────
+
+function QuickActionBar({ actions }: { actions: { label: string; icon: React.ElementType; onClick: () => void }[] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-2 mt-1 border-t border-border/50">
+      {actions.map((action) => {
+        const ActionIcon = action.icon;
+        return (
+          <button
+            key={action.label}
+            type="button"
+            onClick={action.onClick}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-2 py-1 rounded-md border border-dashed border-border hover:border-border/80 hover:bg-muted/40 transition-colors"
+          >
+            <ActionIcon className="h-3 w-3" />
+            {action.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ExpandableProfileSections
+// ─────────────────────────────────────────────
+
+function ExpandableProfileSections({
+  profile,
+  typeDef,
+  onChanged,
+}: {
+  profile: any;
+  typeDef: TypeDefinition;
+  onChanged: () => void;
+}) {
+  const category = getTypeCategory(typeDef);
+  const computed = React.useMemo(() => computeFields(profile), [profile]);
+  const fields: Record<string, any> = { ...(profile.fields ?? {}), ...computed };
+  const allProfileFields = profile.fields ?? {};
+  const profileId = String(profile.id);
+
+  const docs: any[] = profile.relatedDocuments ?? profile.documents ?? [];
+  const expenses: any[] = profile.relatedExpenses ?? profile.expenses ?? [];
+  const tasks: any[] = profile.relatedTasks ?? profile.tasks ?? [];
+  const trackers: any[] = profile.relatedTrackers ?? profile.trackers ?? [];
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const toBase64 = (f: File): Promise<string> =>
+        new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res((reader.result as string).split(",")[1]);
+          reader.onerror = rej;
+          reader.readAsDataURL(f);
+        });
+      const fileData = await toBase64(file);
+      const res = await apiRequest("POST", "/api/upload", {
+        fileName: file.name,
+        mimeType: file.type,
+        fileData,
+        profileId,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Document uploaded" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const fmt = (key: string, format?: FieldFormat): string => {
+    const val = fields[key];
+    return formatWidgetValue(val, format);
+  };
+
+  // Helper: age from birthday
+  const computeAge = (birthdayField: string): string => {
+    const bday = fields[birthdayField];
+    if (!bday) return "—";
+    try {
+      const d = new Date(bday as string);
+      if (isNaN(d.getTime())) return "—";
+      const ageDiff = Date.now() - d.getTime();
+      const ageDate = new Date(ageDiff);
+      return String(Math.abs(ageDate.getUTCFullYear() - 1970));
+    } catch { return "—"; }
+  };
+
+  const openTaskCount = tasks.filter((t: any) => !t.completedAt).length;
+  const overdueTaskCount = tasks.filter((t: any) => !t.completedAt && t.dueDate && new Date(t.dueDate).getTime() < Date.now()).length;
+  const expiringDocCount = docs.filter((d: any) => {
+    const exp = d.extractedData?.expirationDate || d.extractedData?.expiry || d.extractedData?.expiration;
+    if (!exp) return false;
+    const expDate = new Date(exp as string);
+    if (isNaN(expDate.getTime())) return false;
+    const diff = (expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+    return diff >= 0 && diff <= 30;
+  }).length;
+
+  const monthlyExpenses = expenses.length > 0
+    ? computed._totalSpent / Math.max(1, Math.ceil((Date.now() - Math.min(...expenses.map((e: any) => new Date(e.date ?? e.createdAt ?? Date.now()).getTime()))) / (1000 * 60 * 60 * 24 * 30)))
+    : 0;
+
+  // ── section builder helpers ──
+
+  function fieldsBlock(fieldList: { key: string; label: string }[]) {
+    return (
+      <div>
+        {fieldList.map(({ key, label }) => (
+          <InlineField
+            key={key}
+            label={label}
+            value={formatValue(allProfileFields[key])}
+            fieldKey={key}
+            profileId={profileId}
+            allFields={allProfileFields}
+            onSaved={onChanged}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  function expensesList() {
+    if (expenses.length === 0) {
+      return <p className="text-xs text-muted-foreground py-2">No expenses recorded.</p>;
+    }
+    return (
+      <div className="space-y-1">
+        {expenses.slice(0, 8).map((e: any, i: number) => {
+          const amt = parseFloat(e.amount ?? e.value ?? 0);
+          return (
+            <div key={e.id ?? i} className="flex items-center justify-between py-1 border-b border-border/50 last:border-0">
+              <span className="text-xs truncate flex-1">{e.description ?? e.title ?? e.category ?? "Expense"}</span>
+              <span className="text-xs font-semibold tabular-nums ml-3 shrink-0">
+                {isNaN(amt) ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amt)}
+              </span>
+            </div>
+          );
+        })}
+        {expenses.length > 8 && (
+          <p className="text-xs text-muted-foreground pt-1">+{expenses.length - 8} more</p>
+        )}
+      </div>
+    );
+  }
+
+  function tasksList() {
+    const open = tasks.filter((t: any) => !t.completedAt);
+    if (open.length === 0) {
+      return <p className="text-xs text-muted-foreground py-2">No open tasks.</p>;
+    }
+    return (
+      <div className="space-y-1">
+        {open.slice(0, 6).map((t: any, i: number) => (
+          <div key={t.id ?? i} className="flex items-center gap-2 py-1 border-b border-border/50 last:border-0">
+            <div className="w-3 h-3 rounded-full border border-muted-foreground/50 shrink-0" />
+            <span className="text-xs flex-1 truncate">{t.title ?? t.name ?? "Task"}</span>
+            {t.dueDate && (
+              <span className={`text-[10px] shrink-0 ${
+                new Date(t.dueDate).getTime() < Date.now() ? "text-destructive" : "text-muted-foreground"
+              }`}>
+                {new Date(t.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </span>
+            )}
+          </div>
+        ))}
+        {open.length > 6 && (
+          <p className="text-xs text-muted-foreground pt-1">+{open.length - 6} more</p>
+        )}
+      </div>
+    );
+  }
+
+  function docsList() {
+    if (docs.length === 0) {
+      return <p className="text-xs text-muted-foreground py-2">No documents attached.</p>;
+    }
+    return (
+      <div className="space-y-1">
+        {docs.slice(0, 6).map((d: any, i: number) => (
+          <div key={d.id ?? i} className="flex items-center gap-2 py-1 border-b border-border/50 last:border-0">
+            <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-xs flex-1 truncate">{d.name ?? "Document"}</span>
+            {d.type && (
+              <Badge variant="secondary" className="text-[10px] capitalize shrink-0">{d.type}</Badge>
+            )}
+          </div>
+        ))}
+        {docs.length > 6 && (
+          <p className="text-xs text-muted-foreground pt-1">+{docs.length - 6} more</p>
+        )}
+      </div>
+    );
+  }
+
+  function trackersList() {
+    if (trackers.length === 0) {
+      return <p className="text-xs text-muted-foreground py-2">No health trackers.</p>;
+    }
+    return (
+      <div className="space-y-1">
+        {trackers.slice(0, 5).map((t: any, i: number) => (
+          <div key={t.id ?? i} className="flex items-center justify-between py-1 border-b border-border/50 last:border-0">
+            <span className="text-xs flex-1 truncate">{t.name ?? t.type ?? "Tracker"}</span>
+            <span className="text-xs font-semibold tabular-nums ml-3 shrink-0">
+              {t.latestValue ?? t.value ?? "—"}
+              {t.unit ? ` ${t.unit}` : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ── upload trigger ──
+  const uploadAction = { label: "Upload Document", icon: Upload, onClick: () => fileInputRef.current?.click() };
+
+  // ── build sections by category ──
+  let sections: React.ReactNode = null;
+
+  if (category === "vehicle") {
+    const vinLast4 = (fields.vin as string)?.slice(-4);
+    sections = (
+      <>
+        <ExpandableSection
+          title="Identity & Details"
+          subtitle="Make, model, year, VIN, specifications"
+          icon={Car}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Make / Model", value: [fields.make, fields.model].filter(Boolean).join(" ") },
+            { label: "Year", value: fmt("year") },
+            { label: "VIN (last 4)", value: vinLast4 ?? "—" },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "make", label: "Make" },
+            { key: "model", label: "Model" },
+            { key: "year", label: "Year" },
+            { key: "trim", label: "Trim" },
+            { key: "vin", label: "VIN" },
+            { key: "license_plate", label: "License Plate" },
+            { key: "mileage", label: "Mileage" },
+            { key: "color", label: "Color" },
+            { key: "location", label: "Location" },
+            { key: "purchase_date", label: "Purchase Date" },
+            { key: "purchase_price", label: "Purchase Price" },
+            { key: "current_value", label: "Current Value" },
+            { key: "condition", label: "Condition" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Service & Maintenance"
+          subtitle="Service history, repairs, next due"
+          icon={Wrench}
+          iconColor="bg-amber-500/10 text-amber-600 dark:text-amber-400"
+          summaryItems={[
+            { label: "Condition", value: fmt("condition") },
+            { label: "Last Service", value: computed._lastService ? formatWidgetValue(computed._lastService, "relative") : "—" },
+            { label: "Next Due", value: computed._nextDue ?? "—" },
+          ]}
+        >
+          {tasksList()}
+          <QuickActionBar actions={[
+            { label: "Add Service Record", icon: Plus, onClick: () => {} },
+            uploadAction,
+          ]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Finance & Costs"
+          subtitle="Expenses, fuel, equity"
+          icon={DollarSign}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          summaryItems={[
+            { label: "Total Spent", value: formatWidgetValue(computed._totalSpent, "currency") },
+            { label: "Monthly Avg", value: formatWidgetValue(monthlyExpenses, "currency") },
+            { label: "Fuel Costs", value: formatWidgetValue(computed._fuelCosts, "currency") },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[
+            { label: "Add Expense", icon: Plus, onClick: () => {} },
+          ]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents"
+          subtitle="Registration, insurance, title"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+            { label: "Expiring Soon", value: expiringDocCount > 0 ? String(expiringDocCount) : "None" },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Insurance & Registration"
+          subtitle="Policy details, registration status"
+          icon={Shield}
+          iconColor="bg-rose-500/10 text-rose-600 dark:text-rose-400"
+          summaryItems={[
+            { label: "Insured", value: fields.insurance_policy ? "Yes" : "—" },
+            { label: "Registered", value: fields.registration_exp ? fmt("registration_exp") : "—" },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "insurance_policy", label: "Policy Number" },
+            { key: "insurance_provider", label: "Insurer" },
+            { key: "registration_exp", label: "Registration Exp" },
+            { key: "insurance_exp", label: "Insurance Exp" },
+          ])}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+      </>
+    );
+  } else if (category === "person") {
+    const age = computeAge("birthday");
+    const contact = [fields.phone, fields.email].filter(Boolean).join(" · ") || "—";
+    sections = (
+      <>
+        <ExpandableSection
+          title="Personal Info"
+          subtitle="Contact, relationship, identification"
+          icon={Users}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Relationship", value: fmt("relationship") },
+            { label: "Age", value: age },
+            { label: "Contact", value: contact },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "birthday", label: "Birthday" },
+            { key: "phone", label: "Phone" },
+            { key: "email", label: "Email" },
+            { key: "address", label: "Address" },
+            { key: "blood_type", label: "Blood Type" },
+            { key: "height", label: "Height" },
+            { key: "weight", label: "Weight" },
+            { key: "relationship", label: "Relationship" },
+            { key: "emergency_contact", label: "Emergency Contact" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Health & Wellness"
+          subtitle="Trackers, checkups, medications"
+          icon={Stethoscope}
+          iconColor="bg-rose-500/10 text-rose-600 dark:text-rose-400"
+          summaryItems={[
+            { label: "Trackers", value: String(trackers.length) },
+            { label: "Last Checkup", value: fmt("last_checkup_date") },
+            { label: "Medications", value: fields.medications ? "Yes" : "—" },
+          ]}
+        >
+          {trackersList()}
+          <QuickActionBar actions={[
+            { label: "Add Tracker", icon: Plus, onClick: () => {} },
+            { label: "Log Entry", icon: Activity, onClick: () => {} },
+          ]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Finance"
+          subtitle="Shared expenses, debts, spending"
+          icon={DollarSign}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          summaryItems={[
+            { label: "Total Spent", value: formatWidgetValue(computed._totalSpent, "currency") },
+            { label: "Expenses", value: String(expenses.length) },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[{ label: "Add Expense", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents & IDs"
+          subtitle="Passports, licenses, records"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+            { label: "Expiring Soon", value: expiringDocCount > 0 ? String(expiringDocCount) : "None" },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Tasks & Reminders"
+          subtitle="Open tasks, due dates, overdue"
+          icon={ListTodo}
+          iconColor="bg-orange-500/10 text-orange-600 dark:text-orange-400"
+          summaryItems={[
+            { label: "Open Tasks", value: String(openTaskCount) },
+            { label: "Overdue", value: overdueTaskCount > 0 ? String(overdueTaskCount) : "None" },
+          ]}
+        >
+          {tasksList()}
+          <QuickActionBar actions={[{ label: "Add Task", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+      </>
+    );
+  } else if (category === "pet") {
+    const age = computeAge("birthday");
+    sections = (
+      <>
+        <ExpandableSection
+          title="Pet Info"
+          subtitle="Species, breed, identification"
+          icon={PawPrint}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Species", value: fmt("species") },
+            { label: "Breed", value: fmt("breed") },
+            { label: "Age", value: age !== "—" ? `${age} yrs` : "—" },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "species", label: "Species" },
+            { key: "breed", label: "Breed" },
+            { key: "birthday", label: "Birthday" },
+            { key: "weight", label: "Weight" },
+            { key: "color", label: "Color" },
+            { key: "microchip", label: "Microchip ID" },
+            { key: "vet_name", label: "Vet Name" },
+            { key: "vet_phone", label: "Vet Phone" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Health & Vet"
+          subtitle="Visits, vaccinations, medications"
+          icon={Stethoscope}
+          iconColor="bg-rose-500/10 text-rose-600 dark:text-rose-400"
+          summaryItems={[
+            { label: "Last Vet Visit", value: fmt("last_vet_date") },
+            { label: "Vaccinations", value: fields.vaccinations ? "Up to date" : "—" },
+            { label: "Weight", value: fields.weight ? `${fields.weight}` : "—" },
+          ]}
+        >
+          {trackersList()}
+          <QuickActionBar actions={[
+            { label: "Log Vet Visit", icon: Plus, onClick: () => {} },
+            { label: "Log Entry", icon: Activity, onClick: () => {} },
+          ]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Care & Costs"
+          subtitle="Food, grooming, supplies"
+          icon={DollarSign}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          summaryItems={[
+            { label: "Monthly Cost", value: formatWidgetValue(monthlyExpenses, "currency") },
+            { label: "Total Spent", value: formatWidgetValue(computed._totalSpent, "currency") },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[{ label: "Add Expense", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents"
+          subtitle="Vaccination records, vet records"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+      </>
+    );
+  } else if (category === "property") {
+    sections = (
+      <>
+        <ExpandableSection
+          title="Property Details"
+          subtitle="Address, type, size, financials"
+          icon={Home}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Address", value: fmt("address") },
+            { label: "Type", value: fmt("property_type") },
+            { label: "Sq Ft", value: fmt("sq_ft") },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "address", label: "Address" },
+            { key: "property_type", label: "Property Type" },
+            { key: "bedrooms", label: "Bedrooms" },
+            { key: "bathrooms", label: "Bathrooms" },
+            { key: "sq_ft", label: "Sq Ft" },
+            { key: "year_built", label: "Year Built" },
+            { key: "lot_size", label: "Lot Size" },
+            { key: "purchase_price", label: "Purchase Price" },
+            { key: "current_value", label: "Current Value" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Maintenance"
+          subtitle="Condition, inspections, open items"
+          icon={Wrench}
+          iconColor="bg-amber-500/10 text-amber-600 dark:text-amber-400"
+          summaryItems={[
+            { label: "Condition", value: fmt("condition") },
+            { label: "Last Inspection", value: fmt("last_inspection_date") },
+            { label: "Open Items", value: String(openTaskCount) },
+          ]}
+        >
+          {tasksList()}
+          <QuickActionBar actions={[
+            { label: "Add Maintenance", icon: Plus, onClick: () => {} },
+          ]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Mortgage & Finance"
+          subtitle="Equity, payments, expenses"
+          icon={Landmark}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          summaryItems={[
+            { label: "Equity", value: formatWidgetValue(computed._equity, "currency") },
+            { label: "Monthly Payment", value: formatWidgetValue(computed._monthlyPayment, "currency") },
+            { label: "Total Spent", value: formatWidgetValue(computed._totalSpent, "currency") },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "loan_balance", label: "Loan Balance" },
+            { key: "monthly_payment", label: "Monthly Payment" },
+            { key: "interest_rate", label: "Interest Rate" },
+            { key: "lender", label: "Lender" },
+          ])}
+          <div className="mt-2">
+            {expensesList()}
+          </div>
+          <QuickActionBar actions={[{ label: "Add Expense", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents & Contracts"
+          subtitle="Deed, permits, insurance, title"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+            { label: "Expiring Soon", value: expiringDocCount > 0 ? String(expiringDocCount) : "None" },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+      </>
+    );
+  } else if (category === "liability") {
+    const balance = parseFloat(fields.balance ?? fields.loan_balance ?? 0);
+    const rate = fields.interest_rate;
+    const payment = fields.monthly_payment;
+    sections = (
+      <>
+        <ExpandableSection
+          title="Loan Details"
+          subtitle="Balance, rate, payment schedule"
+          icon={Landmark}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Balance", value: formatWidgetValue(balance, "currency") },
+            { label: "Rate", value: rate ? `${rate}%` : "—" },
+            { label: "Monthly Payment", value: formatWidgetValue(payment, "currency") },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "lender", label: "Lender" },
+            { key: "loan_type", label: "Loan Type" },
+            { key: "loan_amount", label: "Original Amount" },
+            { key: "balance", label: "Current Balance" },
+            { key: "interest_rate", label: "Interest Rate" },
+            { key: "monthly_payment", label: "Monthly Payment" },
+            { key: "start_date", label: "Start Date" },
+            { key: "end_date", label: "End Date" },
+            { key: "next_payment_date", label: "Next Payment" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Payment History"
+          subtitle="Payments made, months remaining"
+          icon={CreditCard}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          summaryItems={[
+            { label: "Total Paid", value: formatWidgetValue(computed._totalSpent, "currency") },
+            { label: "Paid Off", value: computed._paidOffPct ?? "—" },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[{ label: "Add Payment", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents"
+          subtitle="Loan agreements, statements"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+      </>
+    );
+  } else if (category === "subscription") {
+    sections = (
+      <>
+        <ExpandableSection
+          title="Plan Details"
+          subtitle="Provider, cost, billing cycle"
+          icon={RefreshCw}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Cost / Cycle", value: [formatWidgetValue(fields.amount, "currency"), fields.billing_cycle].filter(Boolean).join(" / ") || "—" },
+            { label: "Next Billing", value: computed._nextBilling ? formatWidgetValue(computed._nextBilling, "date") : "—" },
+            { label: "Status", value: fmt("status") },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "provider", label: "Provider" },
+            { key: "plan", label: "Plan" },
+            { key: "amount", label: "Amount" },
+            { key: "billing_cycle", label: "Billing Cycle" },
+            { key: "status", label: "Status" },
+            { key: "category", label: "Category" },
+            { key: "start_date", label: "Start Date" },
+            { key: "next_billing_date", label: "Next Billing" },
+            { key: "website", label: "Website" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Billing History"
+          subtitle="Past payments, total spent"
+          icon={DollarSign}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          summaryItems={[
+            { label: "Total Spent", value: formatWidgetValue(computed._totalSpent, "currency") },
+            { label: "Payments", value: String(expenses.length) },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[{ label: "Add Expense", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+      </>
+    );
+  } else if (category === "insurance") {
+    sections = (
+      <>
+        <ExpandableSection
+          title="Policy Details"
+          subtitle="Coverage, premium, deductible"
+          icon={Shield}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Premium", value: formatWidgetValue(fields.premium, "currency") },
+            { label: "Deductible", value: formatWidgetValue(fields.deductible, "currency") },
+            { label: "Coverage Limit", value: formatWidgetValue(fields.coverage_limit, "currency") },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "insurer", label: "Insurer" },
+            { key: "policy_type", label: "Policy Type" },
+            { key: "policy_number", label: "Policy Number" },
+            { key: "premium", label: "Premium" },
+            { key: "deductible", label: "Deductible" },
+            { key: "coverage_limit", label: "Coverage Limit" },
+            { key: "start_date", label: "Start Date" },
+            { key: "renewal_date", label: "Renewal Date" },
+            { key: "status", label: "Status" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Claims & History"
+          subtitle="Filed claims, amounts, status"
+          icon={AlertTriangle}
+          iconColor="bg-amber-500/10 text-amber-600 dark:text-amber-400"
+          summaryItems={[
+            { label: "Claims Filed", value: String(computed._claims) },
+            { label: "Total Claimed", value: formatWidgetValue(computed._totalSpent, "currency") },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[{ label: "Log Claim", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents"
+          subtitle="Policy documents, cards"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+      </>
+    );
+  } else if (category === "investment") {
+    const currentValue = parseFloat(fields.current_value ?? fields.value ?? 0);
+    const costBasis = parseFloat(fields.cost_basis ?? fields.purchase_price ?? 0);
+    const returnAmt = currentValue - costBasis;
+    const returnPct = costBasis > 0 ? ((returnAmt / costBasis) * 100).toFixed(1) : null;
+    sections = (
+      <>
+        <ExpandableSection
+          title="Account Details"
+          subtitle="Institution, account type, positions"
+          icon={TrendingUp}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Current Value", value: formatWidgetValue(currentValue, "currency") },
+            { label: "Return", value: returnPct ? `${returnPct}%` : "—" },
+            { label: "Total Return", value: returnAmt ? formatWidgetValue(returnAmt, "currency") : "—" },
+          ]}
+        >
+          {fieldsBlock([
+            { key: "institution", label: "Institution" },
+            { key: "account_type", label: "Account Type" },
+            { key: "ticker", label: "Ticker" },
+            { key: "shares", label: "Shares" },
+            { key: "cost_basis", label: "Cost Basis" },
+            { key: "current_value", label: "Current Value" },
+            { key: "return_pct", label: "Return %" },
+            { key: "open_date", label: "Open Date" },
+          ])}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Performance"
+          subtitle="Total return, contributions, history"
+          icon={BarChart2}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          summaryItems={[
+            { label: "Total Return", value: returnAmt ? formatWidgetValue(returnAmt, "currency") : "—" },
+            { label: "Contributions", value: formatWidgetValue(computed._totalSpent, "currency") },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[{ label: "Add Contribution", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents"
+          subtitle="Statements, tax docs, agreements"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+      </>
+    );
+  } else {
+    // generic
+    sections = (
+      <>
+        <ExpandableSection
+          title="Details"
+          subtitle="Key information and fields"
+          icon={FileText}
+          iconColor="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          defaultOpen
+          summaryItems={[
+            { label: "Status", value: fmt("status") },
+            { label: "Category", value: fmt("category") },
+          ]}
+        >
+          {Object.keys(allProfileFields).length > 0 ? (
+            fieldsBlock(
+              Object.keys(allProfileFields).map((key) => ({ key, label: formatKey(key) }))
+            )
+          ) : (
+            <p className="text-xs text-muted-foreground py-2">No fields configured for this profile type.</p>
+          )}
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Finance"
+          subtitle="Expenses, costs, payments"
+          icon={DollarSign}
+          iconColor="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          summaryItems={[
+            { label: "Total Spent", value: formatWidgetValue(computed._totalSpent, "currency") },
+          ]}
+        >
+          {expensesList()}
+          <QuickActionBar actions={[{ label: "Add Expense", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Documents"
+          subtitle="Files, records, uploads"
+          icon={FileText}
+          iconColor="bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          summaryItems={[
+            { label: "Total Docs", value: String(docs.length) },
+          ]}
+        >
+          {docsList()}
+          <QuickActionBar actions={[uploadAction]} />
+        </ExpandableSection>
+
+        <ExpandableSection
+          title="Tasks & Reminders"
+          subtitle="Open tasks, due dates"
+          icon={ListTodo}
+          iconColor="bg-orange-500/10 text-orange-600 dark:text-orange-400"
+          summaryItems={[
+            { label: "Open Tasks", value: String(openTaskCount) },
+            { label: "Overdue", value: overdueTaskCount > 0 ? String(overdueTaskCount) : "None" },
+          ]}
+        >
+          {tasksList()}
+          <QuickActionBar actions={[{ label: "Add Task", icon: Plus, onClick: () => {} }]} />
+        </ExpandableSection>
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        accept="image/*,application/pdf,.doc,.docx,.txt"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) uploadMutation.mutate(file);
+          e.target.value = "";
+        }}
+      />
+      {sections}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // OverviewTab
 // ─────────────────────────────────────────────
 
@@ -1350,13 +2400,12 @@ function OverviewTab({
         </Card>
       )}
 
-      {/* Summary widget grid — shown when not editing */}
+      {/* Expandable profile sections — shown when not editing */}
       {!editing && (
-        <SummaryWidgetGrid
+        <ExpandableProfileSections
           profile={profile}
           typeDef={typeDef}
-          onNavigateTab={onNavigateTab}
-          availableTabs={availableTabs}
+          onChanged={onChanged}
         />
       )}
     </div>
