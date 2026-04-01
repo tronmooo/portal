@@ -1540,6 +1540,7 @@ BEHAVIOR:
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 actions, you MUST execute exactly 10 tool calls. Do not merge or skip any.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
+- TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - When searching, use the search tool to find relevant data before answering.
@@ -1571,7 +1572,7 @@ DATA CLASSIFICATION RULES (NEVER VIOLATE):
 CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "X owes me $Y" or "collect $Y from X" or "X owes me $Y for Z" → ALWAYS create_task with title like "Collect $Y from X for Z" and forProfile: "X". NEVER EVER use save_memory for debts/money owed. This applies to ALL variations: "owes me", "owes us", "I lent X $Y", "X hasn't paid me back".
 - "My blood type is X" or personal health info (allergies, height, weight, etc.) → ALWAYS update_profile on the self/Me profile with fields: { bloodType: "O+" } (or the appropriate field). NEVER use save_memory for profile-level data. Same for any profile: "Mom's blood type", "Max's breed".
-- "X's birthday is Y" → create_event (yearly recurring) AND update_profile to set birthday field on X's profile.
+- "X's birthday is Y" → ALWAYS do BOTH: (1) update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. (2) create_event with title: "🎂 X's Birthday", date: Y (with correct year), recurrence: "yearly". Do NOT ask for confirmation. Just do it.
 - save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event.
 - save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type (e.g., "Remember that I prefer window seats", "I'm vegetarian").
 
@@ -1895,8 +1896,23 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_profile": {
       const profiles = await storage.getProfiles();
-      const profile = profiles.find(p => p.name.toLowerCase().includes((input.name || "").toLowerCase()));
-      if (!profile) return null;
+      const searchName = (input.name || "").toLowerCase().trim();
+      let profile = profiles.find(p => p.name.toLowerCase() === searchName)
+        || profiles.find(p => p.name.toLowerCase().includes(searchName));
+      
+      // If profile not found, auto-create it as a person (don't silently fail)
+      if (!profile) {
+        const newProfile = await storage.createProfile({
+          name: input.name,
+          type: "person",
+          fields: input.changes?.fields || {},
+          tags: input.changes?.tags || [],
+          notes: input.changes?.notes || "",
+        });
+        logger.info(`Auto-created profile "${input.name}" for update_profile (was not found)`);
+        return newProfile;
+      }
+      
       const changes: any = {};
       if (input.changes.fields) changes.fields = { ...profile.fields, ...input.changes.fields };
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
@@ -1908,7 +1924,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "delete_profile": {
       const profiles = await storage.getProfiles();
       const profile = profiles.find(p => p.name.toLowerCase().includes((input.name || "").toLowerCase()));
-      if (!profile) return null;
+      if (!profile) return { error: "Profile not found: " + (input.name || "unknown") };
       await storage.deleteProfile(profile.id);
       return { deleted: true, name: profile.name, id: profile.id };
     }
@@ -1937,14 +1953,14 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "complete_task": {
       const tasks = await storage.getTasks();
       const task = tasks.find(t => t.title.toLowerCase().includes((input.title || "").toLowerCase()) && t.status !== "done");
-      if (!task) return null;
+      if (!task) return { error: "Task not found: " + (input.title || "unknown") };
       return storage.updateTask(task.id, { status: "done" });
     }
 
     case "delete_task": {
       const tasks = await storage.getTasks();
       const task = tasks.find(t => t.title.toLowerCase().includes((input.title || "").toLowerCase()));
-      if (!task) return null;
+      if (!task) return { error: "Task not found: " + (input.title || "unknown") };
       await storage.deleteTask(task.id);
       return { deleted: true, title: task.title, id: task.id };
     }
@@ -2049,7 +2065,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "delete_expense": {
       const expenses = await storage.getExpenses();
       const expense = expenses.find(e => e.description.toLowerCase().includes((input.description || "").toLowerCase()));
-      if (!expense) return null;
+      if (!expense) return { error: "Expense not found: " + (input.description || "unknown") };
       await storage.deleteExpense(expense.id);
       return { deleted: true, description: expense.description, id: expense.id };
     }
@@ -2078,7 +2094,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "update_event": {
       const events = await storage.getEvents();
       const event = events.find(e => e.title.toLowerCase().includes((input.title || "").toLowerCase()));
-      if (!event) return null;
+      if (!event) return { error: "Event not found: " + (input.title || "unknown") };
       return storage.updateEvent(event.id, input.changes);
     }
 
@@ -2096,7 +2112,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "checkin_habit": {
       const habits = await storage.getHabits();
       const habit = habits.find(h => h.name.toLowerCase().includes((input.name || "").toLowerCase()));
-      if (!habit) return null;
+      if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       return storage.checkinHabit(habit.id);
     }
 
@@ -2178,7 +2194,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "pay_obligation": {
       const obligations = await storage.getObligations();
       const ob = obligations.find(o => o.name.toLowerCase().includes((input.name || "").toLowerCase()));
-      if (!ob) return null;
+      if (!ob) return { error: "Obligation not found: " + (input.name || "unknown") };
       return storage.payObligation(ob.id, parseFloat(input.amount) || ob.amount, input.method, input.confirmationNumber);
     }
 
@@ -2337,7 +2353,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "update_goal": {
       const goals = await storage.getGoals();
       const goal = goals.find(g => g.title.toLowerCase().includes((input.title || "").toLowerCase()));
-      if (!goal) return null;
+      if (!goal) return { error: "Goal not found: " + (input.title || "unknown") };
       const changes: any = {};
       if (input.status) changes.status = input.status;
       if (input.target) changes.target = input.target;
