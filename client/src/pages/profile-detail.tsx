@@ -2770,18 +2770,22 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     return tracker.fields?.find((f: any) => f.isPrimary)?.name || tracker.fields?.[0]?.name || "value";
   }
 
-  function getLatestValue(tracker: any): number | null {
+  function getLatestValue(tracker: any): number | string | null {
     const pf = getPrimaryField(tracker);
     const sorted = [...(tracker.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     const v = sorted[0]?.values?.[pf];
-    return v != null ? Number(v) : null;
+    if (v == null) return null;
+    const num = Number(v);
+    return isNaN(num) ? String(v) : num;
   }
 
   function getPrevValue(tracker: any): number | null {
     const pf = getPrimaryField(tracker);
     const sorted = [...(tracker.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     const v = sorted[1]?.values?.[pf];
-    return v != null ? Number(v) : null;
+    if (v == null) return null;
+    const num = Number(v);
+    return isNaN(num) ? null : num;
   }
 
   function get7DayAvg(tracker: any): number | null {
@@ -4104,9 +4108,9 @@ export default function ProfileDetailPage() {
           const tabs = getTabsForType(profile.type, profile);
           const tabValues = new Set(tabs.map(t => t.value));
           return (
-            <Tabs defaultValue="info" className="mt-4">
-              <div className="overflow-x-auto -mx-4 px-4 pb-1 sticky top-0 z-20 bg-background border-b border-border/50" style={{WebkitOverflowScrolling: 'touch'}}>
-                <TabsList className="inline-flex h-9 w-max gap-1 p-1">
+            <Tabs defaultValue="info" className="mt-3">
+              <div className="overflow-x-auto pb-1 border-b border-border/50 -mx-1 px-1" style={{WebkitOverflowScrolling: 'touch'}}>
+                <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
                   {tabs.map(tab => (
                     <TabsTrigger
                       key={tab.value}
