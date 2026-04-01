@@ -4,7 +4,6 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getProfileFilter, setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +14,14 @@ import { Progress } from "@/components/ui/progress";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+} from "@/components/ui/sheet";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import {
   Activity, ListTodo, DollarSign, Calendar, BarChart3, Flame,
@@ -28,14 +35,7 @@ import {
   EyeOff, GripVertical, Settings, RotateCcw, Target,
   Trash2, Pencil, FileText, CheckCircle2, X,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import type {
-  DashboardStats, MoodLevel,
-} from "@shared/schema";
+import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -52,6 +52,7 @@ function timeAgo(ts: string): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
+  if (days === 1) return "Yesterday";
   return `${days}d ago`;
 }
 
@@ -150,7 +151,6 @@ function MiniStat({
   );
 }
 
-// Tailwind can't compile dynamic class names — use a static map
 const MD_GRID_COLS: Record<number, string> = { 2: "md:grid-cols-2", 3: "md:grid-cols-3", 4: "md:grid-cols-4", 5: "md:grid-cols-5", 6: "md:grid-cols-6" };
 
 function SkeletonGrid({ cols = 4, rows = 1, h = "h-14" }: { cols?: number; rows?: number; h?: string }) {
@@ -181,344 +181,6 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
   );
 }
 
-// ─── Section: Needs Attention ────────────────────────────────────────────────
-
-function NeedsAttentionSection({ stats, enhanced, profileId }: { stats: DashboardStats; enhanced: any; profileId?: string }) {
-  const { toast } = useToast();
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-
-  // Build overdue items from structured data only
-  const overdueTasks: any[] = useMemo(() => {
-    const raw: any[] = enhanced?.overdueTasks || [];
-    return raw.filter((t: any) => !dismissedIds.has(`task-${t.id}`));
-  }, [enhanced, dismissedIds]);
-
-  const overdueBills: any[] = useMemo(() => {
-    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil < 0);
-    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
-  }, [enhanced, dismissedIds]);
-
-  // Due soon: next 7 days
-  const soonTasks: any[] = useMemo(() => {
-    const raw: any[] = (enhanced?.tasksDueSoon || []).filter((t: any) => {
-      if (!t.dueDate) return false;
-      const d = new Date(t.dueDate);
-      d.setHours(0, 0, 0, 0);
-      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
-      return diff >= 0 && diff <= 7;
-    });
-    // Also grab tasks with dueDate in the next 7 days from enhanced.overdueTasks exclusion
-    const allTasks: any[] = enhanced?.upcomingTasks || [];
-    const combined = [...raw, ...allTasks.filter((t: any) => {
-      if (!t.dueDate) return false;
-      const d = new Date(t.dueDate);
-      d.setHours(0, 0, 0, 0);
-      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
-      return diff >= 0 && diff <= 7;
-    })];
-    // Dedupe by id
-    const seen = new Set<string>();
-    return combined.filter((t: any) => {
-      if (seen.has(t.id)) return false;
-      seen.add(t.id);
-      return !dismissedIds.has(`task-${t.id}`);
-    });
-  }, [enhanced, dismissedIds, now]);
-
-  const soonBills: any[] = useMemo(() => {
-    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
-    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
-  }, [enhanced, dismissedIds]);
-
-  // Upcoming: 8–30 days
-  const upcomingTasks: any[] = useMemo(() => {
-    const allTasks: any[] = enhanced?.upcomingTasks || [];
-    return allTasks.filter((t: any) => {
-      if (!t.dueDate) return false;
-      const d = new Date(t.dueDate);
-      d.setHours(0, 0, 0, 0);
-      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
-      return diff >= 8 && diff <= 30;
-    }).filter((t: any) => !dismissedIds.has(`task-${t.id}`));
-  }, [enhanced, dismissedIds, now]);
-
-  const upcomingBills: any[] = useMemo(() => {
-    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil >= 8 && b.daysUntil <= 30);
-    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
-  }, [enhanced, dismissedIds]);
-
-  const totalCount = overdueTasks.length + overdueBills.length + soonTasks.length + soonBills.length + upcomingTasks.length + upcomingBills.length;
-
-  const handleMarkComplete = async (taskId: string) => {
-    try {
-      await apiRequest("PATCH", `/api/tasks/${taskId}`, { status: "done" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Task completed" });
-    } catch {
-      toast({ title: "Failed to complete task", variant: "destructive" });
-    }
-  };
-
-  const handleSnooze = async (taskId: string) => {
-    try {
-      const newDate = new Date();
-      newDate.setDate(newDate.getDate() + 7);
-      await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toISOString().slice(0, 10) });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Task snoozed 7 days" });
-    } catch {
-      toast({ title: "Failed to snooze task", variant: "destructive" });
-    }
-  };
-
-  const dismiss = (key: string) => setDismissedIds(prev => new Set([...prev, key]));
-
-  function AttentionItem({
-    id, title, detail, badge, sourceType, accentColor,
-  }: {
-    id: string; title: string; detail: string; badge: string; sourceType: "task" | "bill";
-    accentColor: string;
-  }) {
-    return (
-      <div className="flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5" style={{ borderLeftColor: accentColor }}>
-        <span className="text-[10px] font-medium truncate flex-1 leading-tight">{title}</span>
-        <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{detail}</span>
-        <div className="flex items-center shrink-0 ml-0.5">
-          {sourceType === "task" && (
-            <>
-              <button onClick={() => handleMarkComplete(id)} title="Complete"
-                className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
-                <Check className="h-2.5 w-2.5" />
-              </button>
-              <button onClick={() => handleSnooze(id)} title="Snooze"
-                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
-                <Clock className="h-2.5 w-2.5" />
-              </button>
-            </>
-          )}
-          <button onClick={() => dismiss(`${sourceType}-${id}`)} title="Dismiss"
-            className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
-            <X className="h-2 w-2" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  function overdueDetail(item: any, type: "task" | "bill"): string {
-    if (type === "bill") {
-      const days = Math.abs(item.daysUntil);
-      return `${days} day${days !== 1 ? "s" : ""} overdue${item.amount ? ` · ${formatMoney(item.amount)}` : ""}`;
-    }
-    if (!item.dueDate) return "Overdue";
-    const d = new Date(item.dueDate);
-    d.setHours(0, 0, 0, 0);
-    const days = Math.ceil((now.getTime() - d.getTime()) / 86400000);
-    return `${days} day${days !== 1 ? "s" : ""} overdue`;
-  }
-
-  function dueSoonDetail(item: any, type: "task" | "bill"): string {
-    if (type === "bill") {
-      const label = item.daysUntil === 0 ? "Today" : item.daysUntil === 1 ? "Tomorrow" : `in ${item.daysUntil}d`;
-      return `${label}${item.amount ? ` · ${formatMoney(item.amount)}` : ""}`;
-    }
-    if (!item.dueDate) return "Due soon";
-    const d = new Date(item.dueDate);
-    d.setHours(0, 0, 0, 0);
-    const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
-    return diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : `in ${diff}d`;
-  }
-
-  function upcomingDetail(item: any, type: "task" | "bill"): string {
-    if (type === "bill") {
-      return `in ${item.daysUntil}d${item.amount ? ` · ${formatMoney(item.amount)}` : ""}`;
-    }
-    if (!item.dueDate) return "Upcoming";
-    const d = new Date(item.dueDate);
-    d.setHours(0, 0, 0, 0);
-    const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
-    return `in ${diff}d`;
-  }
-
-  if (totalCount === 0) return (
-    <CollapsibleSection icon={AlertTriangle} label="Needs Attention" testId="section-needs-attention">
-      <div className="text-center py-6">
-        <Check className="h-7 w-7 text-green-500/60 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground">All clear — nothing needs attention right now</p>
-      </div>
-    </CollapsibleSection>
-  );
-
-  return (
-    <CollapsibleSection icon={AlertTriangle} label="Needs Attention" count={totalCount} testId="section-needs-attention">
-      <div className="space-y-2">
-        {/* Overdue */}
-        {(overdueTasks.length > 0 || overdueBills.length > 0) && (
-          <div>
-            <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider flex items-center gap-1 mb-0.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" /> Overdue ({overdueTasks.length + overdueBills.length})
-            </p>
-            <div className="divide-y divide-border/30">
-              {overdueTasks.map((t: any) => (
-                <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
-                  detail={overdueDetail(t, "task")} badge="Task" sourceType="task"
-                  accentColor="#ef4444" />
-              ))}
-              {overdueBills.map((b: any) => (
-                <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
-                  detail={overdueDetail(b, "bill")} badge="Bill" sourceType="bill"
-                  accentColor="#ef4444" />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Due Soon */}
-        {(soonTasks.length > 0 || soonBills.length > 0) && (
-          <div>
-            <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wider flex items-center gap-1 mb-0.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" /> Due Soon ({soonTasks.length + soonBills.length})
-            </p>
-            <div className="divide-y divide-border/30">
-              {soonTasks.map((t: any) => (
-                <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
-                  detail={dueSoonDetail(t, "task")} badge="Task" sourceType="task"
-                  accentColor="#f59e0b" />
-              ))}
-              {soonBills.map((b: any) => (
-                <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
-                  detail={dueSoonDetail(b, "bill")} badge="Bill" sourceType="bill"
-                  accentColor="#f59e0b" />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Upcoming */}
-        {(upcomingTasks.length > 0 || upcomingBills.length > 0) && (
-          <div>
-            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider flex items-center gap-1 mb-0.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" /> Upcoming ({upcomingTasks.length + upcomingBills.length})
-            </p>
-            <div className="divide-y divide-border/30">
-              {upcomingTasks.map((t: any) => (
-                <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
-                  detail={upcomingDetail(t, "task")} badge="Task" sourceType="task"
-                  accentColor="#3b82f6" />
-              ))}
-              {upcomingBills.map((b: any) => (
-                <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
-                  detail={upcomingDetail(b, "bill")} badge="Bill" sourceType="bill"
-                  accentColor="#3b82f6" />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-// ─── Section: Today ──────────────────────────────────────────────────────────
-
-function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStats | undefined }) {
-  const [, navigate] = useLocation();
-  const events: any[] = enhanced?.todaysEvents || [];
-  const overdueTasks: any[] = enhanced?.overdueTasks || [];
-  const tasksDueToday: any[] = enhanced?.tasksDueToday || [];
-  const todayBills: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil === 0);
-
-  const hasSchedule = events.length > 0;
-  const hasDue = overdueTasks.length > 0 || tasksDueToday.length > 0 || todayBills.length > 0;
-
-  if (!hasSchedule && !hasDue) return (
-    <CollapsibleSection icon={Calendar} label="Today" testId="section-today">
-      <div className="text-center py-4">
-        <Calendar className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
-        <p className="text-[10px] text-muted-foreground">Nothing scheduled for today</p>
-      </div>
-    </CollapsibleSection>
-  );
-
-  return (
-    <CollapsibleSection icon={Calendar} label="Today" testId="section-today"
-      sub={new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        {/* Schedule */}
-        <div>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Schedule</p>
-          {events.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground py-1">No events today</p>
-          ) : (
-            <div className="divide-y divide-border/30">
-              {events.map((ev: any) => (
-                <div key={ev.id}
-                  onClick={() => navigate("/calendar")}
-                  className="flex items-center gap-1.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors rounded px-1 -mx-1">
-                  <Clock className="h-3 w-3 text-primary shrink-0" />
-                  <span className="text-[10px] font-medium text-primary tabular-nums shrink-0 w-10">
-                    {ev.time || "All day"}
-                  </span>
-                  <span className="text-[11px] truncate flex-1">{ev.title}</span>
-                  {ev.location && (
-                    <span className="text-[9px] text-muted-foreground flex items-center gap-0.5 shrink-0">
-                      <MapPin className="h-2 w-2" />{ev.location}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Due Items */}
-        <div>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Needs Attention</p>
-          <div className="divide-y divide-border/30">
-            {/* Tasks due today */}
-            {tasksDueToday.length > 0 && tasksDueToday.slice(0, 4).map((t: any) => (
-              <div key={`today-${t.id}`}
-                onClick={() => navigate("/dashboard/tasks")}
-                className="flex items-center gap-1.5 py-1.5 border-l-2 border-primary/60 pl-2 cursor-pointer hover:bg-muted/40 transition-colors">
-                <Target className="h-3 w-3 text-primary shrink-0" />
-                <span className="text-[11px] truncate flex-1">{t.title}</span>
-                <span className="text-[9px] text-primary/70 shrink-0">Today</span>
-              </div>
-            ))}
-            {/* Overdue tasks */}
-            {overdueTasks.length > 0 && overdueTasks.slice(0, 4).map((t: any) => (
-              <div key={t.id}
-                onClick={() => navigate("/dashboard/tasks")}
-                className="flex items-center gap-1.5 py-1.5 border-l-2 border-red-500/60 pl-2 cursor-pointer hover:bg-muted/40 transition-colors">
-                <ListTodo className="h-3 w-3 text-red-500 shrink-0" />
-                <span className="text-[11px] truncate flex-1">{t.title}</span>
-                <span className="text-[9px] text-red-500/70 shrink-0">Overdue</span>
-              </div>
-            ))}
-            {todayBills.map((b: any) => (
-              <div key={b.id}
-                onClick={() => navigate("/dashboard/obligations")}
-                className="flex items-center gap-1.5 py-1.5 border-l-2 border-amber-500/60 pl-2 cursor-pointer hover:bg-muted/40 transition-colors">
-                <CreditCard className="h-3 w-3 text-amber-500 shrink-0" />
-                <span className="text-[11px] truncate flex-1">{b.name}</span>
-                <span className="text-[10px] font-medium text-amber-600 shrink-0">{formatMoney(b.amount)}</span>
-              </div>
-            ))}
-          </div>
-          {overdueTasks.length === 0 && tasksDueToday.length === 0 && todayBills.length === 0 && (
-            <p className="text-[10px] text-muted-foreground py-1">All clear — nothing due today</p>
-          )}
-        </div>
-      </div>
-    </CollapsibleSection>
-  );
-}
-
 // ─── Section: KPI Stats ──────────────────────────────────────────────────────
 
 function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any }) {
@@ -531,12 +193,11 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
   const spendTrend: "up" | "down" | "flat" = finSnap?.spendTrend > 0 ? "up" : finSnap?.spendTrend < 0 ? "down" : "flat";
 
   const moodConf = stats.currentMood ? MOOD_CONFIG[stats.currentMood] : null;
-  const MoodIcon = moodConf?.icon || Meh;
 
   return (
     <>
-      <CollapsibleSection icon={BarChart3} label="Key Metrics" testId="section-kpis">
-        <div className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-6 gap-1.5">
+      <div className="rounded-lg border border-border/40 bg-card px-2 py-2" data-testid="section-kpis">
+        <div className="grid grid-cols-3 lg:grid-cols-6 gap-1.5">
           <MiniStat icon={ListTodo} label="Open Tasks" value={stats.activeTasks}
             onClick={() => setPopup("tasks")} />
           <MiniStat icon={DollarSign} label="Monthly Spend" value={formatMoney(stats.monthlySpend)}
@@ -559,7 +220,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
             color={enhanced?.expiringDocuments?.some((d: any) => d.status === 'expired') ? '#A13544' : enhanced?.expiringDocuments?.length > 0 ? '#BB653B' : undefined}
             onClick={() => setPopup("docs")} />
         </div>
-      </CollapsibleSection>
+      </div>
 
       {/* Spending Breakdown Popup */}
       <Dialog open={popup === "spending"} onOpenChange={() => setPopup(null)}>
@@ -781,152 +442,267 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
-// ─── Section: Upcoming ───────────────────────────────────────────────────────
+// ─── Section: Action Required (replaces NeedsAttention) ──────────────────────
 
-function UpcomingSection({ enhanced, stats }: { enhanced: any; stats: DashboardStats | undefined }) {
-  const [, navigate] = useLocation();
+function ActionRequiredSection({ stats, enhanced, profileId }: { stats: DashboardStats; enhanced: any; profileId?: string }) {
+  const { toast } = useToast();
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [sheetOpen, setSheetOpen] = useState(false);
 
-  // Merge upcoming items into a timeline
-  const items: { date: string; daysUntil: number; type: string; icon: any; title: string; detail: string; route: string }[] = [];
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
 
-  // Upcoming bills (next 14 days)
-  for (const b of (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil > 0 && b.daysUntil <= 14)) {
-    items.push({
-      date: b.dueDate, daysUntil: b.daysUntil, type: "bill",
-      icon: CreditCard, title: b.name, detail: formatMoney(b.amount),
-      route: "/dashboard/obligations",
+  const overdueTasks: any[] = useMemo(() => {
+    const raw: any[] = enhanced?.overdueTasks || [];
+    return raw.filter((t: any) => !dismissedIds.has(`task-${t.id}`));
+  }, [enhanced, dismissedIds]);
+
+  const overdueBills: any[] = useMemo(() => {
+    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil < 0);
+    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
+  }, [enhanced, dismissedIds]);
+
+  const soonTasks: any[] = useMemo(() => {
+    const raw: any[] = (enhanced?.tasksDueSoon || []).filter((t: any) => {
+      if (!t.dueDate) return false;
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+      return diff >= 0 && diff <= 7;
     });
+    const allTasks: any[] = enhanced?.upcomingTasks || [];
+    const combined = [...raw, ...allTasks.filter((t: any) => {
+      if (!t.dueDate) return false;
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+      return diff >= 0 && diff <= 7;
+    })];
+    const seen = new Set<string>();
+    return combined.filter((t: any) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return !dismissedIds.has(`task-${t.id}`);
+    });
+  }, [enhanced, dismissedIds, now]);
+
+  const soonBills: any[] = useMemo(() => {
+    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
+    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
+  }, [enhanced, dismissedIds]);
+
+  const handleMarkComplete = async (taskId: string) => {
+    try {
+      await apiRequest("PATCH", `/api/tasks/${taskId}`, { status: "done" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Task completed" });
+    } catch {
+      toast({ title: "Failed to complete task", variant: "destructive" });
+    }
+  };
+
+  const handleSnooze = async (taskId: string) => {
+    try {
+      const newDate = new Date();
+      newDate.setDate(newDate.getDate() + 7);
+      await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toISOString().slice(0, 10) });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Task snoozed 7 days" });
+    } catch {
+      toast({ title: "Failed to snooze task", variant: "destructive" });
+    }
+  };
+
+  const dismiss = (key: string) => setDismissedIds(prev => new Set([...prev, key]));
+
+  // Build all items sorted by urgency
+  const allItems: Array<{
+    id: string; title: string; detail: string; sourceType: "task" | "bill"; accentColor: string;
+  }> = useMemo(() => {
+    const items: Array<{ id: string; title: string; detail: string; sourceType: "task" | "bill"; accentColor: string; sortKey: number }> = [];
+
+    // Overdue tasks (most urgent first = oldest overdue first)
+    for (const t of overdueTasks) {
+      const d = t.dueDate ? new Date(t.dueDate) : new Date(0);
+      d.setHours(0, 0, 0, 0);
+      const days = Math.ceil((now.getTime() - d.getTime()) / 86400000);
+      items.push({
+        id: t.id, title: t.title,
+        detail: `${days} day${days !== 1 ? "s" : ""} overdue`,
+        sourceType: "task", accentColor: "#ef4444",
+        sortKey: -days,
+      });
+    }
+    // Overdue bills
+    for (const b of overdueBills) {
+      const days = Math.abs(b.daysUntil);
+      items.push({
+        id: b.id, title: b.name,
+        detail: `${days} day${days !== 1 ? "s" : ""} overdue${b.amount ? ` · ${formatMoney(b.amount)}` : ""}`,
+        sourceType: "bill", accentColor: "#ef4444",
+        sortKey: -days,
+      });
+    }
+    // Due soon tasks
+    for (const t of soonTasks) {
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+      const label = diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : `in ${diff}d`;
+      items.push({
+        id: t.id, title: t.title,
+        detail: label,
+        sourceType: "task", accentColor: "#f59e0b",
+        sortKey: diff + 1000,
+      });
+    }
+    // Due soon bills
+    for (const b of soonBills) {
+      const label = b.daysUntil === 0 ? "Today" : b.daysUntil === 1 ? "Tomorrow" : `in ${b.daysUntil}d`;
+      items.push({
+        id: b.id, title: b.name,
+        detail: `${label}${b.amount ? ` · ${formatMoney(b.amount)}` : ""}`,
+        sourceType: "bill", accentColor: "#f59e0b",
+        sortKey: b.daysUntil + 1000,
+      });
+    }
+
+    items.sort((a, b) => a.sortKey - b.sortKey);
+    return items;
+  }, [overdueTasks, overdueBills, soonTasks, soonBills, now]);
+
+  const totalCount = allItems.length;
+  const visibleItems = allItems.slice(0, 5);
+  const hiddenCount = Math.max(0, totalCount - 5);
+
+  function AttentionItem({ id, title, detail, sourceType, accentColor }: {
+    id: string; title: string; detail: string; sourceType: "task" | "bill"; accentColor: string;
+  }) {
+    return (
+      <div className="flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5" style={{ borderLeftColor: accentColor }}>
+        <span className="text-[10px] font-medium truncate flex-1 leading-tight">{title}</span>
+        <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{detail}</span>
+        <div className="flex items-center shrink-0 ml-0.5">
+          {sourceType === "task" && (
+            <>
+              <button onClick={() => handleMarkComplete(id)} title="Complete"
+                className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
+                <Check className="h-2.5 w-2.5" />
+              </button>
+              <button onClick={() => handleSnooze(id)} title="Snooze"
+                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
+                <Clock className="h-2.5 w-2.5" />
+              </button>
+            </>
+          )}
+          <button onClick={() => dismiss(`${sourceType}-${id}`)} title="Dismiss"
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
+            <X className="h-2 w-2" />
+          </button>
+        </div>
+      </div>
+    );
   }
 
-  // Overdue tasks
-  for (const t of (enhanced?.overdueTasks || []).slice(0, 5)) {
-    items.push({
-      date: t.dueDate, daysUntil: Math.ceil((new Date(t.dueDate).getTime() - Date.now()) / 86400000),
-      type: "task", icon: ListTodo, title: t.title,
-      detail: t.priority ? `${t.priority} priority` : "Task",
-      route: "/dashboard/tasks",
-    });
-  }
-
-  items.sort((a, b) => a.daysUntil - b.daysUntil);
-  const capped = items.slice(0, 12);
-
-  if (capped.length === 0) return (
-    <CollapsibleSection icon={CalendarClock} label="Coming Up" testId="section-upcoming">
-      <div className="text-center py-4">
-        <CalendarClock className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground">Nothing coming up in the next 2 weeks</p>
+  if (totalCount === 0) return (
+    <CollapsibleSection icon={AlertTriangle} label="Action Required" testId="section-needs-attention">
+      <div className="text-center py-6">
+        <Check className="h-7 w-7 text-green-500/60 mx-auto mb-2" />
+        <p className="text-xs text-muted-foreground">All clear — nothing needs attention right now</p>
       </div>
     </CollapsibleSection>
   );
 
   return (
-    <CollapsibleSection icon={CalendarClock} label="Coming Up" count={capped.length} testId="section-upcoming">
-      <div className="space-y-1">
-        {capped.map((item, i) => {
-          const urgent = item.daysUntil <= 0;
-          const soon = item.daysUntil <= 3 && item.daysUntil > 0;
-          return (
-            <div key={`${item.type}-${i}`}
-              onClick={() => navigate(item.route)}
-              className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors ${
-                urgent ? "bg-red-500/5 border-l-2 border-red-500 pl-2" : ""
-              }`}>
-              {!urgent && (
-                <Badge variant="outline" className={`shrink-0 text-[9px] px-1.5 py-0.5 h-5 min-w-[48px] justify-center tabular-nums ${
-                  soon ? "border-amber-500/40 text-amber-500" : ""
-                }`}>
-                  {item.daysUntil === 0 ? "Today" : `${item.daysUntil}d`}
-                </Badge>
-              )}
-              <item.icon className={`h-3 w-3 shrink-0 ${urgent ? "text-red-500" : "text-muted-foreground"}`} />
-              <span className="text-xs truncate flex-1">{item.title}</span>
-              <span className={`text-[10px] shrink-0 ${urgent ? "text-red-500" : "text-muted-foreground"}`}>{item.detail}</span>
+    <>
+      <CollapsibleSection icon={AlertTriangle} label="Action Required" count={totalCount} testId="section-needs-attention">
+        <div className="divide-y divide-border/30">
+          {visibleItems.map((item) => (
+            <AttentionItem key={`${item.sourceType}-${item.id}`} {...item} />
+          ))}
+        </div>
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => setSheetOpen(true)}
+            className="mt-1.5 w-full text-center text-[10px] text-primary hover:underline py-1"
+          >
+            +{hiddenCount} more item{hiddenCount !== 1 ? "s" : ""} need attention
+          </button>
+        )}
+      </CollapsibleSection>
+
+      {/* Full list sheet */}
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle className="text-sm flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              All Action Items
+              <Badge variant="secondary">{totalCount}</Badge>
+            </SheetTitle>
+            <SheetDescription className="text-xs">All items that need your attention</SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="h-[calc(100vh-120px)] mt-4">
+            <div className="space-y-0.5 pr-2">
+              {allItems.map((item) => (
+                <AttentionItem key={`sheet-${item.sourceType}-${item.id}`} {...item} />
+              ))}
             </div>
-          );
-        })}
-      </div>
-    </CollapsibleSection>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 
-// ─── Section: Trends ─────────────────────────────────────────────────────────
+// ─── Section: Today's Schedule ────────────────────────────────────────────────
 
-function TrendsSection({ stats, enhanced }: { stats: DashboardStats; enhanced: any }) {
-  const finSnap = enhanced?.financeSnapshot;
-  const healthSnap: any[] = enhanced?.healthSnapshot || [];
+function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStats | undefined }) {
+  const [, navigate] = useLocation();
+  const events: any[] = enhanced?.todaysEvents || [];
 
-  // Spending trend
-  const spendChange = finSnap?.spendTrend || 0;
-  const spendDir: "up" | "down" | "flat" = spendChange > 0 ? "up" : spendChange < 0 ? "down" : "flat";
-
-  // Top health tracker
-  const topHealth = healthSnap[0];
+  const VISIBLE = 5;
+  const visibleEvents = events.slice(0, VISIBLE);
+  const hiddenCount = Math.max(0, events.length - VISIBLE);
 
   return (
-    <CollapsibleSection icon={TrendingUp} label="Trends" testId="section-trends">
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-        {/* Spending */}
-        <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-          <p className="text-[10px] text-muted-foreground">Spending</p>
-          <div className="flex items-center gap-1">
-            <p className="text-sm font-bold tabular-nums">{formatMoney(finSnap?.totalMonthlySpend || 0)}</p>
-            <span className={`text-[10px] font-medium ${
-              spendDir === "up" ? "text-red-500" : spendDir === "down" ? "text-green-500" : "text-muted-foreground"
-            }`}>
-              {spendDir === "up" ? "↑" : spendDir === "down" ? "↓" : "→"}
-            </span>
-          </div>
-          <span className={`text-[10px] ${spendDir === "up" ? "text-red-500" : spendDir === "down" ? "text-green-500" : "text-muted-foreground"}`}>
-            {spendChange !== 0 ? `${spendChange > 0 ? "+" : ""}${spendChange}%` : "No change"} vs last month
-          </span>
+    <CollapsibleSection icon={Calendar} label="Today's Schedule" testId="section-today"
+      sub={new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}>
+      {events.length === 0 ? (
+        <div className="text-center py-4">
+          <Calendar className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
+          <p className="text-[10px] text-muted-foreground">No events today</p>
         </div>
-
-        {/* Health */}
-        {topHealth && (
-          <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-            <p className="text-[10px] text-muted-foreground">{topHealth.name}</p>
-            <div className="flex items-center gap-1">
-              <p className="text-sm font-bold tabular-nums">{topHealth.latestValue}</p>
-              {topHealth.unit && <span className="text-[10px] text-muted-foreground">{topHealth.unit}</span>}
-              <span className={`text-[10px] font-medium ${
-                topHealth.trend === "up" ? "text-green-500" :
-                topHealth.trend === "down" ? "text-red-500" : "text-muted-foreground"
-              }`}>
-                {topHealth.trend === "up" ? "↑" : topHealth.trend === "down" ? "↓" : "→"}
+      ) : (
+        <div className="divide-y divide-border/30">
+          {visibleEvents.map((ev: any) => (
+            <div key={ev.id}
+              onClick={() => navigate("/calendar")}
+              className="flex items-center gap-1.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors rounded px-1 -mx-1">
+              <Clock className="h-3 w-3 text-primary shrink-0" />
+              <span className="text-[10px] font-medium text-primary tabular-nums shrink-0 w-10">
+                {ev.time || "All day"}
               </span>
+              <span className="text-[11px] truncate flex-1">{ev.title}</span>
+              {ev.location && (
+                <span className="text-[9px] text-muted-foreground flex items-center gap-0.5 shrink-0">
+                  <MapPin className="h-2 w-2" />{ev.location}
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground">7-day avg: {topHealth.average}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Habits */}
-        <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-          <p className="text-[10px] text-muted-foreground">Habits Today</p>
-          <p className="text-sm font-bold tabular-nums">{stats.habitCompletionRate}%</p>
-          <Progress value={stats.habitCompletionRate} className="h-1" />
+          ))}
+          {hiddenCount > 0 && (
+            <button
+              onClick={() => navigate("/calendar")}
+              className="w-full text-center text-[10px] text-primary hover:underline py-1.5"
+            >
+              +{hiddenCount} more event{hiddenCount !== 1 ? "s" : ""}
+            </button>
+          )}
         </div>
-
-        {/* Mood */}
-        {stats.currentMood && (
-          <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-            <p className="text-[10px] text-muted-foreground">Current Mood</p>
-            <div className="flex items-center gap-1.5">
-              {(() => { const m = MOOD_CONFIG[stats.currentMood!]; const MI = m.icon; return <MI className="h-4 w-4" style={{ color: m.color }} />; })()}
-              <p className="text-sm font-bold">{MOOD_CONFIG[stats.currentMood].label}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Journal */}
-        <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-          <p className="text-[10px] text-muted-foreground">Journal Streak</p>
-          <p className="text-sm font-bold tabular-nums">{stats.journalStreak} days</p>
-          <p className="text-[10px] text-muted-foreground">{stats.totalHabits} habits tracked</p>
-        </div>
-      </div>
+      )}
     </CollapsibleSection>
   );
 }
@@ -937,6 +713,8 @@ function HealthSection({ data }: { data: any[] }) {
   const [, navigate] = useLocation();
   const [selectedTracker, setSelectedTracker] = useState<any>(null);
 
+  const filteredData = (data || []).filter((item: any) => !/test/i.test(item.name)).slice(0, 4);
+
   if (!data || data.length === 0) return (
     <CollapsibleSection icon={HeartPulse} label="Health" testId="section-health">
       <div className="text-center py-4">
@@ -946,13 +724,11 @@ function HealthSection({ data }: { data: any[] }) {
     </CollapsibleSection>
   );
 
-  const filteredData = data.filter((item: any) => !/test/i.test(item.name));
-
   return (
     <>
       <CollapsibleSection icon={HeartPulse} label="Health" count={filteredData.length} testId="section-health">
         <div className="grid grid-cols-2 gap-2">
-          {filteredData.slice(0, 6).map((item: any) => (
+          {filteredData.map((item: any) => (
             <div key={item.trackerId}
               onClick={() => setSelectedTracker(item)}
               className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
@@ -962,11 +738,6 @@ function HealthSection({ data }: { data: any[] }) {
                   <span className="text-sm font-bold tabular-nums">{item.latestValue}</span>
                   {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
                   <TrendIcon trend={item.trend} />
-                  {item.trendValue > 0 && (
-                    <span className={`text-[10px] ${item.trend === "up" ? "text-green-500" : item.trend === "down" ? "text-red-500" : "text-muted-foreground"}`}>
-                      {item.trendValue}
-                    </span>
-                  )}
                 </div>
               </div>
               <span className="text-[9px] text-muted-foreground">avg: {item.average}</span>
@@ -1031,6 +802,13 @@ function ObligationsSection({ data }: { data: any[] }) {
     onError: () => toast({ title: "Failed to delete obligation", variant: "destructive" }),
   });
 
+  // Group bills by timeframe
+  const overdueBills = (data || []).filter((b: any) => b.daysUntil < 0);
+  const thisWeekBills = (data || []).filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
+  const thisMonthBills = (data || []).filter((b: any) => b.daysUntil > 7 && b.daysUntil <= 30);
+
+  const monthlyTotal = (data || []).reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
+
   if (!data || data.length === 0) return (
     <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions" testId="section-obligations">
       <div className="text-center py-4">
@@ -1040,29 +818,47 @@ function ObligationsSection({ data }: { data: any[] }) {
     </CollapsibleSection>
   );
 
-  return (
-    <>
-      <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions" count={data.length} testId="section-obligations">
-        <div className="space-y-1">
-          {data.slice(0, 8).map((bill: any) => {
-            const urgent = bill.daysUntil <= 3;
-            const soon = bill.daysUntil <= 7;
-            return (
+  function BillGroup({ title, bills, color }: { title: string; bills: any[]; color: string }) {
+    const [expanded, setExpanded] = useState(false);
+    if (bills.length === 0) return null;
+    const groupTotal = bills.reduce((s: number, b: any) => s + (b.amount || 0), 0);
+    return (
+      <div className="space-y-0.5">
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="w-full flex items-center gap-1.5 py-1 text-left hover:bg-muted/30 rounded px-1 -mx-1 transition-colors"
+        >
+          <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
+          <span className="text-[10px] font-semibold flex-1" style={{ color }}>{title}</span>
+          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{bills.length} · {formatMoney(groupTotal)}</span>
+          {expanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+        </button>
+        {expanded && (
+          <div className="divide-y divide-border/30 pl-3">
+            {bills.map((bill: any) => (
               <div key={bill.id}
                 onClick={() => setSelectedBill(bill)}
-                className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors ${urgent ? "bg-red-500/5 border border-red-500/20" : soon ? "bg-amber-500/5 border border-amber-500/20" : "bg-muted/40"}`}>
-                <CreditCard className={`h-3 w-3 shrink-0 ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs truncate">{bill.name}</p>
-                  <p className={`text-[10px] ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
-                    {daysUntilStr(bill.daysUntil)}
-                    {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
-                  </p>
-                </div>
-                <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+                className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-muted/40 rounded transition-colors">
+                <span className="text-[10px] truncate flex-1">{bill.name}</span>
+                {bill.autopay && <span className="text-[9px] text-green-500 shrink-0">autopay</span>}
+                <span className="text-[10px] font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
               </div>
-            );
-          })}
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions"
+        sub={`Monthly Total: ${formatMoney(monthlyTotal)}`}
+        count={data.length} testId="section-obligations">
+        <div className="space-y-1">
+          <BillGroup title="Overdue" bills={overdueBills} color="#ef4444" />
+          <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" />
+          <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" />
         </div>
         <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
       </CollapsibleSection>
@@ -1303,7 +1099,6 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   );
 }
 
-
 // ─── Section: Recent Activity ────────────────────────────────────────────────
 
 function ActivitySection({ activities }: { activities: DashboardStats["recentActivity"] }) {
@@ -1314,11 +1109,10 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
     expense: "/dashboard/finance",
   };
 
-  // Filter out empty descriptions
   const validActivities = (activities || []).filter(item => {
     const desc = item.description?.trim();
     return desc && desc.length > 0;
-  }).slice(0, 10);
+  }).slice(0, 5);
 
   if (validActivities.length === 0) return (
     <CollapsibleSection icon={Activity} label="Recent Activity" testId="section-activity">
@@ -1329,7 +1123,6 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
     </CollapsibleSection>
   );
 
-  // Group by hour bucket
   type ActivityItem = (typeof validActivities)[0];
   const groups: { hourLabel: string; items: ActivityItem[] }[] = [];
   for (const item of validActivities) {
@@ -1381,15 +1174,13 @@ interface DashboardSection {
 }
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
-  { id: "needs-attention", label: "Needs Attention", icon: AlertTriangle, visible: true, column: "full" },
-  { id: "today", label: "Today", icon: Calendar, visible: true, column: "full" },
-  { id: "kpis", label: "Key Metrics", icon: BarChart3, visible: true, column: "full" },
-  { id: "upcoming", label: "Coming Up", icon: CalendarClock, visible: true, column: "full" },
-  { id: "trends", label: "Trends", icon: TrendingUp, visible: true, column: "full" },
-  { id: "health", label: "Health", icon: HeartPulse, visible: true, column: "left" },
-  { id: "obligations", label: "Bills & Subscriptions", icon: CreditCard, visible: true, column: "left" },
-  { id: "goals", label: "Goals", icon: Target, visible: true, column: "right" },
-  { id: "activity", label: "Recent Activity", icon: Activity, visible: true, column: "right" },
+  { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
+  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
+  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
+  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left" },
+  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "right" },
+  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
+  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
 ];
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
@@ -1398,7 +1189,15 @@ function parseSavedLayout(saved: string | null): DashboardSection[] | null {
     const parsed = JSON.parse(saved) as DashboardSection[];
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
     const iconMap = new Map(DEFAULT_SECTIONS.map(s => [s.id, s.icon]));
-    return parsed.map(s => ({ ...s, icon: iconMap.get(s.id) || Activity })).filter(s => iconMap.has(s.id));
+    // Filter out removed sections (upcoming, trends) and add new ones if missing
+    const validIds = new Set(DEFAULT_SECTIONS.map(s => s.id));
+    const filtered = parsed.filter(s => validIds.has(s.id));
+    // Add any new default sections not present in saved layout
+    const savedIds = new Set(filtered.map(s => s.id));
+    for (const def of DEFAULT_SECTIONS) {
+      if (!savedIds.has(def.id)) filtered.push({ ...def });
+    }
+    return filtered.map(s => ({ ...s, icon: iconMap.get(s.id) || Activity }));
   } catch {
     return null;
   }
@@ -1517,6 +1316,7 @@ function CustomizeDialog({
 export default function DashboardPage() {
   useEffect(() => { document.title = "Dashboard — Portol"; }, []);
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -1533,7 +1333,6 @@ export default function DashboardPage() {
   const statsProfileParam = filterIds.length > 0 ? '?profileIds=' + filterIds.join(',') : '';
 
   // Compute resolvedFilterId for backward compat with child components that take a single profileId
-  // When mode is "everyone" or multiple selected, pass undefined (show all)
   const resolvedFilterId = filterMode === "everyone" ? undefined : (filterIds.length === 1 ? filterIds[0] : undefined);
 
   // Sync profile filter to module-level state for backward compat with sub-pages
@@ -1583,10 +1382,7 @@ export default function DashboardPage() {
 
   const handleExport = async () => {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
       const res = await apiRequest("GET", "/api/export");
-      clearTimeout(timeout);
       const data = await res.json();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -1628,30 +1424,24 @@ export default function DashboardPage() {
   function renderSection(id: string) {
     let content: React.ReactNode = null;
     switch (id) {
-      case "needs-attention":
-        content = stats ? <NeedsAttentionSection stats={stats} enhanced={enhanced} profileId={resolvedFilterId} /> : null;
-        break;
-      case "today":
-        content = <TodaySection enhanced={enhanced} stats={stats} />;
-        break;
       case "kpis":
         content = statsLoading ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
           stats ? <KPISection stats={stats} enhanced={enhanced} /> : null;
         break;
-      case "upcoming":
-        content = <UpcomingSection enhanced={enhanced} stats={stats} />;
+      case "today":
+        content = <TodaySection enhanced={enhanced} stats={stats} />;
         break;
-      case "trends":
-        content = stats ? <TrendsSection stats={stats} enhanced={enhanced} /> : null;
+      case "needs-attention":
+        content = stats ? <ActionRequiredSection stats={stats} enhanced={enhanced} profileId={resolvedFilterId} /> : null;
         break;
       case "health":
         content = <HealthSection data={enhanced?.healthSnapshot || []} />;
         break;
-      case "obligations":
-        content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
-        break;
       case "goals":
         content = <GoalsSection profileId={resolvedFilterId} />;
+        break;
+      case "obligations":
+        content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
@@ -1747,7 +1537,7 @@ export default function DashboardPage() {
       <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}
         sections={sections} onSave={(layout) => saveMutation.mutate(layout)} />
 
-      {/* Full-width sections */}
+      {/* Full-width sections (kpis always renders first if visible) */}
       {fullWidthSections.map(s => (
         <div key={s.id}>{renderSection(s.id)}</div>
       ))}
