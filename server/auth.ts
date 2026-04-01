@@ -286,6 +286,34 @@ export function registerAuthRoutes(app: Express) {
     res.json({ success: true });
   });
 
+  // Change password (authenticated)
+  app.post("/api/auth/change-password", async (req: Request, res: Response) => {
+    const supabase = getSupabaseAuth();
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Not authenticated" });
+    const token = authHeader.split(" ")[1];
+
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    // Get user ID from token
+    const { data: { user }, error: getUserErr } = await supabase.auth.getUser(token);
+    if (getUserErr || !user) return res.status(401).json({ error: "Invalid session" });
+
+    // Use admin API to update password
+    const { error } = await supabase.auth.admin.updateUserById(
+      user.id,
+      { password: newPassword }
+    );
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   // Forgot password — sends a reset link email via Supabase
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
     const supabase = getSupabaseAuth();

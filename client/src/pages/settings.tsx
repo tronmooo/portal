@@ -47,6 +47,10 @@ export default function SettingsPage() {
   const [lastImport, setLastImport] = useState<string | null>(null);
   const [lastCsvImport, setLastCsvImport] = useState<string | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
 
   // Fetch stats for data summary
   const { data: stats } = useQuery<any>({
@@ -214,6 +218,81 @@ export default function SettingsPage() {
                   <p className="text-[10px] text-muted-foreground">Trackers</p>
                 </div>
               </div>
+            </div>
+
+            <Separator />
+
+            {/* Change Password */}
+            <div className="space-y-2">
+              <div>
+                <Label className="text-sm font-medium">Change Password</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">Update your account password</p>
+              </div>
+              {showPasswordForm ? (
+                <div className="space-y-2 pl-0">
+                  <Input
+                    type="password"
+                    placeholder="New password (min 6 characters)"
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    className="h-8 text-sm"
+                    data-testid="input-new-password"
+                  />
+                  <Input
+                    type="password"
+                    placeholder="Confirm new password"
+                    value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                    className="h-8 text-sm"
+                    data-testid="input-confirm-password"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      disabled={!newPassword || newPassword.length < 6 || newPassword !== confirmPassword || changingPassword}
+                      onClick={async () => {
+                        setChangingPassword(true);
+                        try {
+                          const res = await fetch('/api/auth/change-password', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionStorage.getItem('portol_session') ? JSON.parse(sessionStorage.getItem('portol_session')!).access_token : ''}` },
+                            body: JSON.stringify({ newPassword }),
+                          });
+                          if (res.ok) {
+                            toast({ title: 'Password updated', description: 'Your password has been changed successfully.' });
+                            setShowPasswordForm(false);
+                            setNewPassword('');
+                            setConfirmPassword('');
+                          } else {
+                            const data = await res.json();
+                            toast({ title: 'Failed', description: data.error || 'Could not change password', variant: 'destructive' });
+                          }
+                        } catch {
+                          toast({ title: 'Error', description: 'Failed to change password', variant: 'destructive' });
+                        } finally {
+                          setChangingPassword(false);
+                        }
+                      }}
+                      data-testid="button-save-password"
+                    >
+                      {changingPassword ? 'Saving...' : 'Save Password'}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => { setShowPasswordForm(false); setNewPassword(''); setConfirmPassword(''); }}>
+                      Cancel
+                    </Button>
+                  </div>
+                  {newPassword && newPassword.length < 6 && (
+                    <p className="text-[10px] text-destructive">Password must be at least 6 characters</p>
+                  )}
+                  {confirmPassword && newPassword !== confirmPassword && (
+                    <p className="text-[10px] text-destructive">Passwords don't match</p>
+                  )}
+                </div>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => setShowPasswordForm(true)} data-testid="button-change-password">
+                  <Lock className="h-3.5 w-3.5 mr-1.5" /> Change Password
+                </Button>
+              )}
             </div>
 
             <Separator />

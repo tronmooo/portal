@@ -10,8 +10,11 @@ import { MobileBottomNav } from "@/components/mobile-nav";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Settings, Calendar } from "lucide-react";
+import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
 import { Loader2 } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   CommandSearch,
   CommandSearchProvider,
@@ -81,6 +84,37 @@ function SettingsButton() {
     <Button variant="ghost" size="icon" onClick={() => navigate("/settings")} className="h-8 w-8" title="Settings" aria-label="Open settings" data-testid="button-settings-header">
       <Settings className="h-4 w-4" />
     </Button>
+  );
+}
+
+function ProfileButton() {
+  const { user, signOut } = useAuth();
+  const [, navigate] = useLocation();
+  const initial = user?.email?.charAt(0).toUpperCase() || "?";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" title="Account" data-testid="button-profile-avatar">
+          <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
+            {initial}
+          </div>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <div className="px-2 py-1.5 text-xs text-muted-foreground truncate">{user?.email}</div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => navigate("/settings")} data-testid="menu-settings">
+          <Settings className="h-3.5 w-3.5 mr-2" /> Settings
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => navigate("/settings")} data-testid="menu-change-password">
+          <Lock className="h-3.5 w-3.5 mr-2" /> Change Password
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={signOut} className="text-red-500" data-testid="menu-signout">
+          <LogOut className="h-3.5 w-3.5 mr-2" /> Sign Out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -177,7 +211,7 @@ function App() {
                           <CalendarButton />
                           <SettingsButton />
                         </div>
-                        <ThemeToggle />
+                        <ProfileButton />
                       </div>
                     </header>
                     <main className="flex-1 overflow-hidden pb-[60px] md:pb-0">
