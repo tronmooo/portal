@@ -525,10 +525,16 @@ Return ONLY the JSON array, nothing else.`;
     let existingProfileId: string | undefined;
 
     if (profileId) {
-      const explicitProfile = await storage.getProfile(profileId);
-      if (explicitProfile) {
-        linkedProfiles = [profileId];
-        existingProfileId = profileId;
+      // Support comma-separated profile IDs for multi-select linking
+      const profileIds = profileId.split(",").filter(Boolean);
+      const validIds: string[] = [];
+      for (const pid of profileIds) {
+        const p = await storage.getProfile(pid);
+        if (p) validIds.push(pid);
+      }
+      if (validIds.length > 0) {
+        linkedProfiles = validIds;
+        existingProfileId = validIds[0];
       }
     } else if (parsed.targetProfile?.name) {
       const profiles = await storage.getProfiles();

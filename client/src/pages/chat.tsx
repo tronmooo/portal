@@ -407,40 +407,44 @@ function AttachmentPanel({
             </button>
           </div>
 
-          {/* Profile selector */}
+          {/* Profile selector — multi-select checkboxes */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">
-              Link to profile
+              Link to profiles
             </label>
-            <Select
-              value={selectedProfileId}
-              onValueChange={onProfileChange}
-              disabled={profilesLoading || isSending}
-            >
-              <SelectTrigger
-                className="w-full h-9 text-sm"
-                data-testid="select-link-profile"
-              >
-                <SelectValue placeholder="Don't link to a profile" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none" data-testid="select-profile-none">
-                  Don't link to a profile
-                </SelectItem>
-                {profiles.map((profile) => (
-                  <SelectItem
+            <div className="rounded-lg border border-border max-h-[200px] overflow-y-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
+              {profiles.map((profile) => {
+                const isChecked = selectedProfileId.split(",").filter(Boolean).includes(profile.id);
+                return (
+                  <label
                     key={profile.id}
-                    value={profile.id}
+                    className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors border-b border-border/30 last:border-0 ${isChecked ? "bg-primary/5" : ""}`}
                     data-testid={`select-profile-${profile.id}`}
                   >
-                    <span className="flex items-center gap-2">
-                      {profile.name}
-                      <ProfileTypeBadge type={profile.type} />
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => {
+                        const current = selectedProfileId.split(",").filter(Boolean);
+                        const next = isChecked
+                          ? current.filter(id => id !== profile.id)
+                          : [...current, profile.id];
+                        onProfileChange(next.length > 0 ? next.join(",") : "none");
+                      }}
+                      className="h-4 w-4 rounded border-border accent-primary"
+                      disabled={isSending}
+                    />
+                    <span className="text-sm flex-1">{profile.name}</span>
+                    <ProfileTypeBadge type={profile.type} />
+                  </label>
+                );
+              })}
+            </div>
+            {selectedProfileId !== "none" && selectedProfileId !== "" && (
+              <p className="text-[10px] text-muted-foreground">
+                {selectedProfileId.split(",").filter(Boolean).length} profile(s) selected
+              </p>
+            )}
           </div>
 
           {/* Optional note */}

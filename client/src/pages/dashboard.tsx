@@ -992,6 +992,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   };
 
   const [actionGoal, setActionGoal] = useState<GoalItem | null>(null);
+  const [progressInput, setProgressInput] = useState("");
   const activeGoals = goals.filter(g => g.status === "active");
   const completedGoals = goals.filter(g => g.status === "completed");
 
@@ -1058,50 +1059,101 @@ function GoalsSection({ profileId }: { profileId?: string }) {
       </CollapsibleSection>
 
       {/* Goal Quick Actions Sheet */}
-      <Sheet open={!!actionGoal} onOpenChange={v => { if (!v) setActionGoal(null); }}>
-        <SheetContent side="bottom" className="max-h-[50vh] rounded-t-2xl px-4 pb-8">
-          {actionGoal && (
-            <div className="space-y-4 pt-2">
-              <div>
-                <h3 className="text-sm font-semibold">{actionGoal.title}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {actionGoal.startValue || 0} / {actionGoal.target} {actionGoal.unit}
-                  {actionGoal.deadline && ` · Due ${new Date(actionGoal.deadline).toLocaleDateString()}`}
-                </p>
+      <Sheet open={!!actionGoal} onOpenChange={v => { if (!v) { setActionGoal(null); setProgressInput(""); } }}>
+        <SheetContent side="bottom" className="max-h-[60vh] rounded-t-2xl px-4 pb-8">
+          {actionGoal && (() => {
+            const currentVal = actionGoal.current || actionGoal.startValue || 0;
+            const pct = actionGoal.target > 0 ? Math.min(100, Math.round((currentVal / actionGoal.target) * 100)) : 0;
+            return (
+              <div className="space-y-4 pt-2">
+                {/* Header with progress */}
+                <div>
+                  <h3 className="text-sm font-semibold">{actionGoal.title}</h3>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-xs font-bold tabular-nums">{pct}%</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {currentVal.toLocaleString()} / {actionGoal.target.toLocaleString()} {actionGoal.unit}
+                    {actionGoal.deadline && ` · Due ${new Date(actionGoal.deadline).toLocaleDateString()}`}
+                  </p>
+                </div>
+
+                {/* Progress input — log increment */}
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs font-medium mb-2">Update Progress</p>
+                  <div className="flex gap-2">
+                    <Input
+                      type="number"
+                      placeholder={`Current ${actionGoal.unit} (now: ${currentVal})`}
+                      value={progressInput}
+                      onChange={e => setProgressInput(e.target.value)}
+                      className="h-9 text-sm flex-1"
+                      data-testid="input-goal-progress"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-9 px-3"
+                      disabled={!progressInput || updateMutation.isPending}
+                      onClick={() => {
+                        const val = Number(progressInput);
+                        if (!isNaN(val)) {
+                          updateMutation.mutate({ id: actionGoal.id, current: val });
+                          setProgressInput("");
+                          setActionGoal(null);
+                        }
+                      }}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                  {/* Quick increment buttons */}
+                  <div className="flex gap-1.5 mt-2">
+                    {[10, 25, 50, 100, 500, 1000].filter(n => n <= actionGoal.target).slice(0, 4).map(inc => (
+                      <Button
+                        key={inc}
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-[10px] flex-1"
+                        onClick={() => {
+                          updateMutation.mutate({ id: actionGoal.id, current: Math.min(currentVal + inc, actionGoal.target) });
+                          setActionGoal(null);
+                        }}
+                      >
+                        +{inc >= 1000 ? `${inc/1000}k` : inc}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action buttons */}
+                <div className="grid grid-cols-3 gap-2">
+                  <Button
+                    className="h-9 text-xs gap-1.5"
+                    onClick={() => { updateMutation.mutate({ id: actionGoal.id, status: "completed" }); setActionGoal(null); }}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Complete
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-9 text-xs gap-1.5"
+                    onClick={() => { setActionGoal(null); openEdit(actionGoal); }}
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    className="h-9 text-xs gap-1.5"
+                    onClick={() => { deleteMutation.mutate(actionGoal.id); setActionGoal(null); }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </Button>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  className="h-10 text-sm gap-2"
-                  onClick={() => { updateMutation.mutate({ id: actionGoal.id, status: "completed" }); setActionGoal(null); }}
-                  data-testid="btn-goal-complete"
-                >
-                  <CheckCircle2 className="h-4 w-4" /> Mark Complete
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-10 text-sm gap-2"
-                  onClick={() => { setActionGoal(null); openEdit(actionGoal); }}
-                  data-testid="btn-goal-edit"
-                >
-                  <Pencil className="h-4 w-4" /> Edit Goal
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-10 text-sm gap-2"
-                  onClick={() => { updateMutation.mutate({ id: actionGoal.id, status: "abandoned" }); setActionGoal(null); }}
-                >
-                  <X className="h-4 w-4" /> Abandon
-                </Button>
-                <Button
-                  variant="destructive"
-                  className="h-10 text-sm gap-2"
-                  onClick={() => { deleteMutation.mutate(actionGoal.id); setActionGoal(null); }}
-                >
-                  <Trash2 className="h-4 w-4" /> Delete
-                </Button>
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </SheetContent>
       </Sheet>
 
