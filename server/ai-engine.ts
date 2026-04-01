@@ -1560,6 +1560,7 @@ DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
 - HABITS vs TRACKERS: Habits are binary daily actions (did it / didn't). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
+- GOALS + HABITS: When creating a daily or recurring goal tied to a tracker (e.g., "run every day", "drink 8 glasses of water daily", "meditate 10 min daily"), ALSO create a companion habit via create_habit so the user gets daily check-in tracking. The goal tracks progress toward the target; the habit tracks daily consistency. Always do BOTH calls when the goal implies a daily action.
 
 CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "X owes me $Y" or "collect $Y from X" or "X owes me $Y for Z" → ALWAYS create_task with title like "Collect $Y from X for Z" and forProfile: "X". NEVER EVER use save_memory for debts/money owed. This applies to ALL variations: "owes me", "owes us", "I lent X $Y", "X hasn't paid me back".
@@ -2287,6 +2288,32 @@ async function executeTool(name: string, input: any): Promise<any> {
         }
       } else {
         await autoLinkToProfiles("goal", goal.id, input.title || "", input.forProfile);
+      }
+
+      // Auto-create companion habit for daily/frequency-based goals
+      // (e.g., "run every day", "drink water daily", "meditate 10 min")
+      const dailyTypes = ["fitness_frequency", "habit_streak", "tracker_target"];
+      const titleLower = (input.title || "").toLowerCase();
+      const impliesDaily = dailyTypes.includes(input.type) ||
+        titleLower.includes("daily") || titleLower.includes("every day") ||
+        titleLower.includes("per day") || (input.unit || "").toLowerCase().includes("day");
+      if (impliesDaily && !habitId) {
+        try {
+          // Check if a matching habit already exists
+          const existingHabits = await storage.getHabits();
+          const alreadyExists = existingHabits.some(h =>
+            h.name.toLowerCase().includes(titleLower.split(" ").slice(0, 2).join(" ")) ||
+            titleLower.includes(h.name.toLowerCase())
+          );
+          if (!alreadyExists) {
+            const habit = await storage.createHabit({ name: input.title, frequency: "daily" });
+            // Link the habit to the goal
+            await storage.updateGoal(goal.id, { habitId: habit.id });
+            logger.info(`Auto-created companion habit "${input.title}" for goal ${goal.id}`);
+          }
+        } catch (e) {
+          logger.warn("Failed to auto-create companion habit for goal:", e);
+        }
       }
       return goal;
     }
