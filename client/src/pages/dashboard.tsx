@@ -991,6 +991,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
     else createMutation.mutate(payload);
   };
 
+  const [actionGoal, setActionGoal] = useState<GoalItem | null>(null);
   const activeGoals = goals.filter(g => g.status === "active");
   const completedGoals = goals.filter(g => g.status === "completed");
 
@@ -1008,29 +1009,101 @@ function GoalsSection({ profileId }: { profileId?: string }) {
             </Button>
           </div>
         ) : (
-          <div className="space-y-3">
-            {activeGoals.map(g => (
-              <div key={g.id} className="cursor-pointer hover:bg-muted/30 rounded-lg p-2 -mx-2 transition-colors" onClick={() => openEdit(g)} data-testid={`goal-card-${g.id}`}>
-                <GoalProgressBar goal={g} />
-              </div>
-            ))}
+          <div className="space-y-1">
+            {activeGoals.map(g => {
+              const pct = g.target > 0 ? Math.min(100, Math.round(((g.startValue || 0) / g.target) * 100)) : 0;
+              const daysLeft = g.deadline ? Math.max(0, Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000)) : null;
+              return (
+                <div key={g.id} className="flex items-center gap-2 py-1.5 group" data-testid={`goal-card-${g.id}`}>
+                  {/* Tap to mark complete */}
+                  <button
+                    className="h-5 w-5 rounded-full border-2 border-primary/40 flex items-center justify-center shrink-0 hover:bg-green-500/20 hover:border-green-500 active:scale-90 transition-all"
+                    onClick={() => updateMutation.mutate({ id: g.id, status: "completed" })}
+                    title="Mark complete"
+                  >
+                    <Check className="h-2.5 w-2.5 text-transparent group-hover:text-green-500" />
+                  </button>
+                  {/* Goal info — tap to open actions */}
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActionGoal(g)}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium truncate">{g.title}</span>
+                      <span className="text-[10px] text-muted-foreground tabular-nums ml-2 shrink-0">{pct}%</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                      {daysLeft !== null && <span className="text-[9px] text-muted-foreground shrink-0">{daysLeft}d left</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
             {completedGoals.length > 0 && (
-              <div className="pt-2 border-t">
-                <p className="text-[10px] text-muted-foreground mb-1">{completedGoals.length} completed</p>
-                {completedGoals.slice(0, 3).map(g => (
-                  <div key={g.id} className="flex items-center gap-2 py-1 text-xs">
-                    <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
-                    <span className="text-muted-foreground/80">{g.title}</span>
+              <div className="pt-1.5 mt-1 border-t border-border/30">
+                <p className="text-[9px] text-muted-foreground mb-0.5">{completedGoals.length} completed</p>
+                {completedGoals.slice(0, 2).map(g => (
+                  <div key={g.id} className="flex items-center gap-1.5 py-0.5 text-[10px] text-muted-foreground/60">
+                    <CheckCircle2 className="h-3 w-3 text-green-500/60 shrink-0" />
+                    <span className="line-through truncate">{g.title}</span>
                   </div>
                 ))}
               </div>
             )}
-            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={openCreate} data-testid="btn-add-goal">
+            <Button size="sm" variant="outline" className="w-full h-7 text-xs mt-1" onClick={openCreate} data-testid="btn-add-goal">
               <Target className="h-3 w-3 mr-1" /> Add Goal
             </Button>
           </div>
         )}
       </CollapsibleSection>
+
+      {/* Goal Quick Actions Sheet */}
+      <Sheet open={!!actionGoal} onOpenChange={v => { if (!v) setActionGoal(null); }}>
+        <SheetContent side="bottom" className="max-h-[50vh] rounded-t-2xl px-4 pb-8">
+          {actionGoal && (
+            <div className="space-y-4 pt-2">
+              <div>
+                <h3 className="text-sm font-semibold">{actionGoal.title}</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {actionGoal.startValue || 0} / {actionGoal.target} {actionGoal.unit}
+                  {actionGoal.deadline && ` · Due ${new Date(actionGoal.deadline).toLocaleDateString()}`}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  className="h-10 text-sm gap-2"
+                  onClick={() => { updateMutation.mutate({ id: actionGoal.id, status: "completed" }); setActionGoal(null); }}
+                  data-testid="btn-goal-complete"
+                >
+                  <CheckCircle2 className="h-4 w-4" /> Mark Complete
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-10 text-sm gap-2"
+                  onClick={() => { setActionGoal(null); openEdit(actionGoal); }}
+                  data-testid="btn-goal-edit"
+                >
+                  <Pencil className="h-4 w-4" /> Edit Goal
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-10 text-sm gap-2"
+                  onClick={() => { updateMutation.mutate({ id: actionGoal.id, status: "abandoned" }); setActionGoal(null); }}
+                >
+                  <X className="h-4 w-4" /> Abandon
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="h-10 text-sm gap-2"
+                  onClick={() => { deleteMutation.mutate(actionGoal.id); setActionGoal(null); }}
+                >
+                  <Trash2 className="h-4 w-4" /> Delete
+                </Button>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* Create / Edit Goal Dialog */}
       <Dialog open={creating || !!editGoal} onOpenChange={v => { if (!v) { setCreating(false); setEditGoal(null); resetForm(); } }}>
