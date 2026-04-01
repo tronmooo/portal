@@ -106,29 +106,26 @@ function CollapsibleSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <Card data-testid={testId}>
-      <CardHeader className="py-2.5 px-3">
-        <div className="flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5 text-primary shrink-0" />
-          <h2 className="text-xs font-semibold">{label}</h2>
-          {count !== undefined && (
-            <Badge variant="secondary" className="text-[10px] h-4 px-1.5">{count}</Badge>
-          )}
-          {sub && <span className="text-[10px] text-muted-foreground ml-1">{sub}</span>}
-          <div className="ml-auto flex items-center gap-1">
-            {headerRight}
-            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:bg-muted rounded-full"
-              onClick={() => setOpen(v => !v)}
-              aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
-              aria-expanded={open}
-              data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}>
-              {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            </Button>
-          </div>
+    <div data-testid={testId} className="rounded-lg border border-border/40 bg-card">
+      <button
+        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left"
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}
+      >
+        <Icon className="h-3 w-3 text-primary shrink-0" />
+        <h2 className="text-[11px] font-semibold">{label}</h2>
+        {count !== undefined && (
+          <span className="text-[9px] text-muted-foreground bg-muted rounded px-1 py-0.5 tabular-nums">{count}</span>
+        )}
+        {sub && <span className="text-[9px] text-muted-foreground ml-0.5 truncate">{sub}</span>}
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          {headerRight}
+          {open ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
         </div>
-      </CardHeader>
-      {open && <CardContent className="px-2 pb-2 pt-0">{children}</CardContent>}
-    </Card>
+      </button>
+      {open && <div className="px-1.5 pb-1.5">{children}</div>}
+    </div>
   );
 }
 
@@ -137,28 +134,18 @@ function MiniStat({
 }: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat" }) {
   return (
     <div
-      className={`flex items-center gap-2 p-2.5 rounded-lg border border-border/50 transition-all duration-200 ${onClick ? "cursor-pointer hover:bg-muted/50 hover:border-primary/30 hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]" : "hover:scale-[1.01]"}`}
+      className={`flex flex-col items-center justify-center p-1.5 rounded-md border border-border/30 min-h-[48px] ${onClick ? "cursor-pointer hover:bg-muted/50 active:scale-95 transition-all" : ""}`}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
-      aria-label={onClick ? `${label}: ${value}${sub ? ` (${sub})` : ""}` : undefined}
-      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
     >
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-primary/8" style={color ? { backgroundColor: `${color}15` } : {}}>
-        <Icon className="h-3.5 w-3.5" style={color ? { color } : { color: "hsl(var(--primary))" }} />
+      <div className="flex items-center gap-0.5">
+        <span className="text-sm font-bold tabular-nums leading-none" style={color ? { color } : {}}>{value}</span>
+        {trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
+        {trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-[10px] text-muted-foreground leading-none mb-0.5">{label}</p>
-        <div className="flex items-center gap-1">
-          <p className="text-sm font-bold tabular-nums leading-none">{value}</p>
-          {trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
-          {trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
-          {trend === "flat" && <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
-        </div>
-      </div>
-      {sub && <span className="text-[9px] text-muted-foreground shrink-0">{sub}</span>}
-      {onClick && <Eye className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" aria-hidden="true" />}
+      <p className="text-[9px] text-muted-foreground leading-tight mt-0.5 text-center truncate w-full">{label}</p>
     </div>
   );
 }
@@ -298,32 +285,25 @@ function NeedsAttentionSection({ stats, enhanced, profileId }: { stats: Dashboar
     accentColor: string;
   }) {
     return (
-      <div className="flex items-center gap-1.5 py-1.5 border-l-2 pl-2 pr-1" style={{ borderLeftColor: accentColor }}>
-        <span className="text-[11px] font-medium truncate flex-1">{title}</span>
-        <span className="text-[10px] text-muted-foreground shrink-0">{detail}</span>
-        <span className="text-[9px] text-muted-foreground/50 shrink-0 w-7 text-center">{badge}</span>
-        <div className="flex items-center gap-0 shrink-0">
+      <div className="flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5" style={{ borderLeftColor: accentColor }}>
+        <span className="text-[10px] font-medium truncate flex-1 leading-tight">{title}</span>
+        <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{detail}</span>
+        <div className="flex items-center shrink-0 ml-0.5">
           {sourceType === "task" && (
             <>
-              <button
-                onClick={() => handleMarkComplete(id)}
-                title="Complete"
-                className="h-6 w-6 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
-                <Check className="h-3 w-3" />
+              <button onClick={() => handleMarkComplete(id)} title="Complete"
+                className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
+                <Check className="h-2.5 w-2.5" />
               </button>
-              <button
-                onClick={() => handleSnooze(id)}
-                title="Snooze"
-                className="h-6 w-6 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
-                <Clock className="h-3 w-3" />
+              <button onClick={() => handleSnooze(id)} title="Snooze"
+                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
+                <Clock className="h-2.5 w-2.5" />
               </button>
             </>
           )}
-          <button
-            onClick={() => dismiss(`${sourceType}-${id}`)}
-            title="Dismiss"
-            className="h-6 w-6 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
-            <X className="h-2.5 w-2.5" />
+          <button onClick={() => dismiss(`${sourceType}-${id}`)} title="Dismiss"
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
+            <X className="h-2 w-2" />
           </button>
         </div>
       </div>
@@ -556,7 +536,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
   return (
     <>
       <CollapsibleSection icon={BarChart3} label="Key Metrics" testId="section-kpis">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+        <div className="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-6 gap-1.5">
           <MiniStat icon={ListTodo} label="Open Tasks" value={stats.activeTasks}
             onClick={() => setPopup("tasks")} />
           <MiniStat icon={DollarSign} label="Monthly Spend" value={formatMoney(stats.monthlySpend)}
@@ -1687,7 +1667,7 @@ export default function DashboardPage() {
   const rightSections = useMemo(() => sections.filter(s => s.visible && s.column === "right"), [sections]);
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden p-3 md:p-4 space-y-2.5 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
+    <div className="h-full overflow-y-auto overflow-x-hidden px-2 py-2 md:p-4 space-y-1.5 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
