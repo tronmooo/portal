@@ -1297,6 +1297,30 @@ export class SupabaseStorage implements IStorage {
     items.length = 0;
     items.push(...finalItems);
 
+    // ── Document expiration dates ──
+    const documents = await this.getDocuments();
+    for (const doc of documents) {
+      const expField = doc.expirationDate || doc.fields?.expirationDate;
+      if (expField) {
+        // Parse date (could be MM/DD/YYYY or YYYY-MM-DD)
+        let expDate: string;
+        if (expField.includes('/')) {
+          const [m, d, y] = expField.split('/');
+          expDate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+        } else {
+          expDate = expField.slice(0, 10);
+        }
+        if (expDate >= startDate && expDate <= endDate) {
+          items.push({
+            id: `doc-expiry-${doc.id}`, type: "event", title: `📄 ${doc.title || doc.name} expires`,
+            date: expDate, allDay: true, color: "#A13544", category: "document",
+            description: `Document expiration`, linkedProfiles: doc.linkedProfiles || [],
+            sourceId: doc.id, meta: { docType: doc.type }
+          });
+        }
+      }
+    }
+
     for (const habit of habits) {
       for (const checkin of habit.checkins) {
         const d = checkin.date;
