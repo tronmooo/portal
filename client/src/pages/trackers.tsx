@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { getProfileFilter } from "@/lib/profileFilter";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -2787,8 +2789,8 @@ export default function TrackersPage() {
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
-  // Default to "me" — only show your personal trackers
-  const [profileFilter, setProfileFilter] = useState<string>("me");
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [docSearch, setDocSearch] = useState("");
@@ -2808,9 +2810,10 @@ export default function TrackersPage() {
     return next;
   });
 
-  // Auto-resolve "me" to the actual self profile ID once profiles load
+  // Find self profile for orphan detection
   const selfProfile = (profiles || []).find(p => p.type === "self");
-  const resolvedFilter = profileFilter === "everyone" ? "all" : profileFilter === "me" ? (selfProfile?.id || "me") : profileFilter;
+  // hasSelf: true when filter includes the self profile (or is everyone)
+  const hasSelf = filterMode === "everyone" || filterIds.includes(selfProfile?.id || "");
 
   // On mount, migrate any unlinked trackers to the "self" profile
   const migrationDone = useRef(false);
@@ -2879,9 +2882,12 @@ export default function TrackersPage() {
 
   // Filter documents by search + type filter + profile filter
   const filteredDocuments = allDocuments.filter(d => {
-    // Profile filter: if filtering by a specific profile, only show their docs
-    if (resolvedFilter !== "all" && profileFilter !== "me") {
-      if (!d.linkedProfiles?.includes(resolvedFilter)) return false;
+    // Profile filter
+    if (filterMode === "selected" && filterIds.length > 0) {
+      const linkedIds = d.linkedProfiles || [];
+      const matchesProfile = linkedIds.some(id => filterIds.includes(id));
+      const isOrphan = hasSelf && linkedIds.length === 0;
+      if (!matchesProfile && !isOrphan) return false;
     }
     // Doc type filter
     if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
@@ -2930,13 +2936,14 @@ export default function TrackersPage() {
     return a.name.localeCompare(b.name);
   });
 
-  // Apply profile filter — for "me", also include orphaned trackers (no linked profiles)
+  // Apply profile filter — when hasSelf, also include orphaned trackers (no linked profiles)
   const filteredTrackers = (trackers || []).filter(t => {
     // Profile filter
-    if (resolvedFilter !== "all") {
-      const matchesProfile = t.linkedProfiles?.includes(resolvedFilter);
-      const isMineOrphan = profileFilter === "me" && (!t.linkedProfiles || t.linkedProfiles.length === 0);
-      if (!matchesProfile && !isMineOrphan) return false;
+    if (filterMode === "selected" && filterIds.length > 0) {
+      const linkedIds = t.linkedProfiles || [];
+      const matchesProfile = linkedIds.some(id => filterIds.includes(id));
+      const isOrphan = hasSelf && linkedIds.length === 0;
+      if (!matchesProfile && !isOrphan) return false;
     }
     // Category filter
     if (trackerCatFilter !== "all" && t.category !== trackerCatFilter) return false;
@@ -3010,21 +3017,10 @@ export default function TrackersPage() {
         {/* Profile filter (page level) + Section pills */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* Profile filter */}
-          {sortedFilterProfiles.length > 0 && (
-            <Select value={profileFilter} onValueChange={setProfileFilter}>
-              <SelectTrigger className="w-[140px] h-7 text-xs" data-testid="select-profile-filter">
-                <SelectValue placeholder="All" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="me"><span className="flex items-center gap-1.5"><Smile className="h-3 w-3" /> Me</span></SelectItem>
-                <SelectItem value="everyone"><span className="flex items-center gap-1.5"><Users className="h-3 w-3" /> Everyone</span></SelectItem>
-                {sortedFilterProfiles.filter(p => p.type !== "self").map(p => {
-                  const Icon = PROFILE_TYPE_ICONS[p.type] || User;
-                  return <SelectItem key={p.id} value={p.id}><span className="flex items-center gap-1.5"><Icon className="h-3 w-3" /> {p.name}</span></SelectItem>;
-                })}
-              </SelectContent>
-            </Select>
-          )}
+          <MultiProfileFilter
+            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            compact
+          />
           <div className="h-4 w-px bg-border" />
           {/* Section filter pills */}
           {(["all", "trackers", "documents", "profiles", "subscriptions"] as const).map(s => {
@@ -3063,12 +3059,12 @@ export default function TrackersPage() {
       {/* Assets & Vehicles — grouped by type */}
       {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
         const childTypeSet = new Set(["vehicle", "asset", "loan", "investment", "account", "property"]);
-        const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
+        const isShowAll = filterMode === "everyone" || hasSelf;
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
           if (isShowAll) return true;
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          return pParent === resolvedFilter;
+          return filterIds.includes(pParent);
         });
         if (childProfiles.length === 0) return null;
 
@@ -3138,12 +3134,12 @@ export default function TrackersPage() {
 
       {/* Subscriptions Section */}
       {(sectionFilter === "all" || sectionFilter === "subscriptions") && (() => {
-        const isShowAll = resolvedFilter === "all" || resolvedFilter === selfProfile?.id;
+        const isShowAll = filterMode === "everyone" || hasSelf;
         const subs = (profiles || []).filter(p => {
           if (p.type !== "subscription") return false;
           if (isShowAll) return true;
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          return pParent === resolvedFilter;
+          return filterIds.includes(pParent);
         });
         if (subs.length === 0) return null;
         return (
@@ -3351,13 +3347,13 @@ export default function TrackersPage() {
         <div className="text-center py-12">
           <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">
-            No trackers linked to {(profiles || []).find(p => p.id === resolvedFilter)?.name || "this profile"}
+            No trackers match the current filter
           </p>
           <Button
             variant="outline"
             size="sm"
             className="mt-3"
-            onClick={() => setProfileFilter("all")}
+            onClick={() => { setFilterMode("everyone"); setFilterIds([]); }}
             data-testid="button-clear-filter"
           >
             Show All Trackers

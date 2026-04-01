@@ -1,0 +1,173 @@
+[
+  {
+    "cat": "Task",
+    "name": "Create",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "✅ **Task created:** \"ZZ5 call dentist\"  \n**Priority:** High  \n**Due date:** April 1, 2026 (tomorrow)  \n\nThe task is now on your Tasks page and Calendar.",
+    "actions": 1,
+    "elapsed": "6.7"
+  },
+  {
+    "cat": "Task",
+    "name": "Complete",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "I'll search for that task first to find the exact match.Got it! Now I'll mark it as complete.✅ **Done!** Marked \"ZZ5 call dentist\" as complete. The task is now removed from your active task list and archived in the Tasks page.",
+    "actions": 2,
+    "elapsed": "6.6"
+  },
+  {
+    "cat": "Task",
+    "name": "Delete",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "I'll search for that task and delete it.Found it! Now I'll delete the task.✓ **Deleted** — \"ZZ5 call dentist\" task removed from Tasks page.",
+    "actions": 2,
+    "elapsed": "6.2"
+  },
+  {
+    "cat": "Tracker",
+    "name": "Create",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "✅ **ZZ5 steps tracker created!**\n\nI've set up a new fitness tracker with a **steps** field (number type). It's ready to log your daily step counts.\n\n📍 Find it in: **Trackers** page → **ZZ5 steps tracker**\n\nYou can start logging entries whenever you want to track your steps!",
+    "actions": 1,
+    "elapsed": "5.5"
+  },
+  {
+    "cat": "Tracker",
+    "name": "Log entry",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "✅ **Logged 8,500 steps** to the ZZ5 steps tracker → visible on the Trackers page.",
+    "actions": 1,
+    "elapsed": "7.2"
+  },
+  {
+    "cat": "Tracker",
+    "name": "Delete",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "Done! I've deleted the **ZZ5 steps tracker** and all its entries from the Trackers page. This action is irreversible.",
+    "actions": 1,
+    "elapsed": "5.9"
+  },
+  {
+    "cat": "Journal",
+    "name": "Create",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "It looks like you already have a journal entry for today (March 31, 2026). Would you like me to update it with this new mood and entry, or keep the existing one? Just let me know!",
+    "actions": 0,
+    "elapsed": "2.8"
+  },
+  {
+    "cat": "Journal",
+    "name": "Delete",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "I'll delete today's journal entry (March 31, 2026).Done! ✓ Deleted today's journal entry (March 31, 2026). You can create a new one whenever you're ready.",
+    "actions": 1,
+    "elapsed": "2.6"
+  },
+  {
+    "cat": "Goal",
+    "name": "Create",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "Done! ✓ **Goal created: \"Read 20 books by December 31st\"**\n\n- **Target:** 20 books\n- **Deadline:** December 31, 2026\n- **Status:** Active (0/20 progress)\n- **Find it:** Goals page\n\nYou have ~9 months to complete this. As you finish each book, just let me know and I'll log your progress toward the goal!",
+    "actions": 1,
+    "elapsed": "3.9"
+  },
+  {
+    "cat": "Goal",
+    "name": "Progress",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "Here's your goal progress:\n\n**Active Goals:**\n\n1. **Read 20 books** — 0/20 books (by Dec 31, 2026)\n   - You haven't started yet — time to pick up that first book!\n\n2. **Save $5000** — $0/$5000 (by Dec 31, 2026)\n   - Two identical savings goals created — you might want to consolidate these\n   - No progress yet\n\n3. **Lose 15 lbs by June 2026** — 0/170 lbs (by June 30, 2026)\n   - Target: 170 lbs | Started at: 185 lbs\n   - You're tracking with your Weight tracker — check in there to log your progress!\n\n4. **Lose weight** — 200/−10 lbs (Status: active)\n   - This goal seems to have unusual values — might need clarification\n\n**Completed Goal:** ✅\n\n5. **Keep Honda CR-V maintenance under $1,000 this year** — Already completed!\n   - You're $100 UNDER budget (spent $900 vs $1000 limit) — great job on maintenance costs!\n\n**Recommendations:**\n- Start logging weight entries to track progress on your weight loss goals\n- Begin your reading habit — aim for 2-3 books/month to hit 20 by year-end\n- Set up a recurring savings plan to hit your $5000 target\n\nWould you like me to help you create a tracker for any of these, set up reminders, or consolidate those duplicate savings goals?",
+    "actions": 1,
+    "elapsed": "7.8"
+  },
+  {
+    "cat": "Goal",
+    "name": "Delete",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "Done! I've deleted your \"Read 20 books\" goal. It's now removed from your Goals page.",
+    "actions": 1,
+    "elapsed": "3.0"
+  },
+  {
+    "cat": "Memory",
+    "name": "Recall",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "Your test favorite drink is **green tea**! ☕",
+    "actions": 1,
+    "elapsed": "2.2"
+  },
+  {
+    "cat": "Memory",
+    "name": "Delete",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "Done! I've deleted the memory about your test favorite drink. It's no longer saved.",
+    "actions": 1,
+    "elapsed": "3.0"
+  },
+  {
+    "cat": "Artifact",
+    "name": "Create checklist",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "✅ Created \"ZZ5 shopping list\" checklist with 4 items (eggs, milk, bread, butter). You can find it in the Documents/Checklists section and check items off as you shop!",
+    "actions": 1,
+    "elapsed": "3.4"
+  },
+  {
+    "cat": "Artifact",
+    "name": "Delete",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "I'll search for the ZZ5 shopping list first to locate it.Found it! Now I'll delete the ZZ5 shopping list.Done! ✓ Deleted the \"ZZ5 shopping list\" checklist (eggs, milk, bread, butter). It's no longer in your Documents/Checklists.",
+    "actions": 2,
+    "elapsed": "10.9"
+  },
+  {
+    "cat": "Navigation",
+    "name": "Dashboard",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "You're now on the **Dashboard**. You can see your overview here — recent activity, quick stats, and links to all your profiles, tasks, events, trackers, expenses, and more. Let me know what you'd like to do!",
+    "actions": 1,
+    "elapsed": "2.8"
+  },
+  {
+    "cat": "MultiIntent",
+    "name": "Compound",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "I'll log your 2-mile walk and create an expense for the latte.Perfect! I've logged both:\n\n1. **Walk logged** → Saved to Walking tracker (2 miles, ~160 calories burned) — visible in Trackers page + your Health tab\n2. **Expense recorded** → $8 latte at ZZ5Cafe saved to Finance page on 3/31/2026\n\nGreat activity today! 🚶‍♂️☕",
+    "actions": 2,
+    "elapsed": "8.2"
+  },
+  {
+    "cat": "Calendar",
+    "name": "Sync",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "I encountered a technical issue with the sync. Here are your options:\n\n1. **Sync via the Dashboard** — Click the \"Sync Google Calendar\" button on your dashboard or calendar view to trigger a manual sync\n2. **Check Configuration** — Your Google Calendar integration may need to be set up or reconfigured in your settings\n3. **Manual Import** — You can also create events directly in Portol, and they can be exported to Google Calendar via the export button\n\nIs there a specific event from your Google Calendar you'd like me to help you add to Portol?",
+    "actions": 1,
+    "elapsed": "4.2"
+  },
+  {
+    "cat": "RecallActions",
+    "name": "Recent",
+    "pass": true,
+    "rateLimit": false,
+    "detail": "You don't have any recent actions recorded in your activity log yet. This is a fresh start! \n\nOnce you start creating tasks, logging expenses, tracking health data, scheduling events, or managing profiles, your recent actions will appear here. What would you like to do first?",
+    "actions": 1,
+    "elapsed": "3.2"
+  }
+]

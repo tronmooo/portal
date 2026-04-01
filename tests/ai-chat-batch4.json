@@ -1,0 +1,114 @@
+[
+  {
+    "cat": "Task",
+    "name": "Create",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Task",
+    "name": "Delete",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Tracker",
+    "name": "Create",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Tracker",
+    "name": "Log",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Tracker",
+    "name": "Delete",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Journal",
+    "name": "Create",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Journal",
+    "name": "Delete",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Goal",
+    "name": "Create",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Goal",
+    "name": "Progress",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Goal",
+    "name": "Delete",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Memory",
+    "name": "Recall",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Memory",
+    "name": "Delete",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "MultiIntent",
+    "name": "Compound",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Navigation",
+    "name": "Navigate",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "RecallActions",
+    "name": "Recent",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Calendar",
+    "name": "Sync",
+    "pass": false,
+    "rateLimit": true,
+    "actions": 0
+  }
+]

@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1530,46 +1531,34 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [profileFilter, setProfileFilter] = useState<string>(() => {
-    const stored = getDashboardProfileFilter();
-    return stored.id ? stored.id : "me";
-  });
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
 
   // Fetch profiles for filter
   const { data: allProfiles = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const primaryProfiles = useMemo(() => allProfiles.filter((p: any) => ["self", "person", "pet"].includes(p.type)), [allProfiles]);
-  const selectedProfileName = useMemo(() => {
-    if (profileFilter === "me") return "Me";
-    if (profileFilter === "everyone") return "Everyone";
-    return allProfiles.find((p: any) => p.id === profileFilter)?.name || "Me";
-  }, [profileFilter, allProfiles]);
 
-  // Resolve the actual profile ID for API calls
-  const selfProfileObj = useMemo(() => allProfiles.find((p: any) => p.type === "self"), [allProfiles]);
-  const resolvedFilterId = useMemo(() => {
-    if (profileFilter === "everyone") return undefined; // no filter = all data
-    if (profileFilter === "me") return selfProfileObj?.id;
-    return profileFilter;
-  }, [profileFilter, selfProfileObj]);
-  const statsProfileParam = useMemo(() => resolvedFilterId ? `?profileId=${resolvedFilterId}` : "", [resolvedFilterId]);
+  // Compute stats profile param for API calls
+  const statsProfileParam = filterIds.length > 0 ? '?profileIds=' + filterIds.join(',') : '';
 
-  // Sync profile filter to module-level state so sub-pages can read it
-  // Only sync when we have a real value (not during initial load when selfProfileObj is undefined)
+  // Compute resolvedFilterId for backward compat with child components that take a single profileId
+  // When mode is "everyone" or multiple selected, pass undefined (show all)
+  const resolvedFilterId = filterMode === "everyone" ? undefined : (filterIds.length === 1 ? filterIds[0] : undefined);
+
+  // Sync profile filter to module-level state for backward compat with sub-pages
   useEffect(() => {
-    if (profileFilter === "me" && !selfProfileObj) return; // Still loading profiles, don't overwrite stored filter
-    setDashboardProfileFilter(resolvedFilterId, selectedProfileName);
-  }, [resolvedFilterId, selectedProfileName, profileFilter, selfProfileObj]);
+    setDashboardProfileFilter(resolvedFilterId, resolvedFilterId ? (allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || "") : "Everyone");
+  }, [resolvedFilterId, allProfiles]);
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ["/api/stats", resolvedFilterId || "all"],
+    queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
   });
 
   const { data: enhanced } = useQuery<any>({
-    queryKey: ["/api/dashboard-enhanced", resolvedFilterId || "all"],
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: async () => {
       try {
         const res = await apiRequest("GET", `/api/dashboard-enhanced${statsProfileParam}`);
@@ -1695,20 +1684,10 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-base font-semibold">Dashboard</h1>
-            <Select value={profileFilter} onValueChange={setProfileFilter}>
-              <SelectTrigger className="w-[120px] h-7 text-xs" data-testid="select-dashboard-profile">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="me">Me</SelectItem>
-                <SelectItem value="everyone">Everyone</SelectItem>
-                {primaryProfiles.filter((p: any) => p.type !== "self").sort((a: any, b: any) => a.name.localeCompare(b.name)).map((p: any) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MultiProfileFilter
+              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              compact
+            />
           </div>
           <p className="text-sm text-muted-foreground">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}

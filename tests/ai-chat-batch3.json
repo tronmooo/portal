@@ -1,0 +1,137 @@
+[
+  {
+    "cat": "Task",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "3.7",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Task",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "3.9",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Tracker",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "2.4",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Tracker",
+    "name": "Log",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.4",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Tracker",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "2.9",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Journal",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.4",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Journal",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "1.0",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Goal",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.5",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Goal",
+    "name": "Check",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.6",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Goal",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.3",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Memory",
+    "name": "Recall",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.3",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Memory",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.5",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "MultiIntent",
+    "name": "Compound",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.3",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "Navigation",
+    "name": "Navigate",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "0.3",
+    "rateLimit": true,
+    "actions": 0
+  },
+  {
+    "cat": "RecallActions",
+    "name": "Recent",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 120/80\" • \"$50 groceries\"\n• \"mood good\" • \"remind me to call mom\"\n• \"open my drivers license\"\nOr refresh and try again.",
+    "elapsed": "1.0",
+    "rateLimit": true,
+    "actions": 0
+  }
+]

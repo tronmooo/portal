@@ -2259,22 +2259,22 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // DASHBOARD
   // ============================================================
-  async getStats(filterProfileId?: string): Promise<DashboardStats> {
+  async getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats> {
     const [allTasks, allExpenses, allTrackers, allHabits, allObligations, journalEntries] = await Promise.all([
       this.getTasks(), this.getExpenses(), this.getTrackers(),
       this.getHabits(), this.getObligations(), this.getJournalEntries(),
     ]);
 
-    // Filter by profile if specified
-    const fp = filterProfileId;
-    // Determine if the filter is for the "self" profile
+    // Multi-select filter support: filterProfileIds takes precedence
+    const fpIds = filterProfileIds || (filterProfileId ? [filterProfileId] : undefined);
     const allProfiles = await this.getProfiles();
-    const isSelfFilter = fp && allProfiles.find(p => p.id === fp)?.type === "self";
+    const selfIds = fpIds ? allProfiles.filter(p => p.type === "self" && fpIds.includes(p.id)).map(p => p.id) : [];
+    const hasSelfFilter = selfIds.length > 0;
     // For self profile: include items linked to self OR items with no profile links (unlinked = self)
     const matchesProfile = (linkedProfiles: string[]) => {
-      if (!fp) return true;
-      if (linkedProfiles.includes(fp)) return true;
-      if (isSelfFilter && linkedProfiles.length === 0) return true;
+      if (!fpIds || fpIds.length === 0) return true;
+      if (linkedProfiles.some(id => fpIds.includes(id))) return true;
+      if (hasSelfFilter && linkedProfiles.length === 0) return true;
       return false;
     };
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
@@ -2371,23 +2371,25 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // ENHANCED DASHBOARD
   // ============================================================
-  async getDashboardEnhanced(filterProfileId?: string): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
-    const fp = filterProfileId;
+    // Multi-select filter support
+    const fpIds = filterProfileIds || (filterProfileId ? [filterProfileId] : undefined);
 
     const [documents, rawTrackers, allProfiles, rawExpenses, rawObligations, rawTasks, rawEvents] = await Promise.all([
       this.getDocuments(), this.getTrackers(), this.getProfiles(),
       this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
     ]);
     // Apply profile filter (self profile also matches unlinked items)
-    const isSelfFilterEnhanced = fp && allProfiles.find(p => p.id === fp)?.type === "self";
+    const selfIds = fpIds ? allProfiles.filter(p => p.type === "self" && fpIds.includes(p.id)).map(p => p.id) : [];
+    const hasSelf = selfIds.length > 0;
     const matchesProfileEnhanced = (linkedProfiles: string[]) => {
-      if (!fp) return true;
-      if (linkedProfiles.includes(fp)) return true;
-      if (isSelfFilterEnhanced && linkedProfiles.length === 0) return true;
+      if (!fpIds || fpIds.length === 0) return true;
+      if (linkedProfiles.some(id => fpIds.includes(id))) return true;
+      if (hasSelf && linkedProfiles.length === 0) return true;
       return false;
     };
     const allTrackers = rawTrackers.filter(t => matchesProfileEnhanced(t.linkedProfiles));
@@ -2417,13 +2419,13 @@ export class SupabaseStorage implements IStorage {
 
     const selfProfile = allProfiles.find(p => p.type === 'self');
     const selfId = selfProfile?.id;
-    const targetProfileId = fp || selfId;
+    const targetProfileId = (fpIds && fpIds.length > 0) ? fpIds[0] : selfId;
     const healthCategories = ['health', 'fitness', 'weight', 'sleep', 'blood_pressure', 'running', 'exercise', 'nutrition', 'wellness'];
     // Health trackers: when filtered by profile, show that profile's trackers. Otherwise show self's.
     const healthTrackers = allTrackers.filter(t => {
       const isHealthCategory = healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c));
       if (!isHealthCategory) return false;
-      if (fp) return true; // Already filtered by profile above
+      if (fpIds && fpIds.length > 0) return true; // Already filtered by profile above
       if (targetProfileId && t.linkedProfiles.includes(targetProfileId)) return true;
       if (t.linkedProfiles.length === 0) return true;
       return false;

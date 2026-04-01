@@ -1,0 +1,107 @@
+[
+  {
+    "cat": "Task",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "6.0"
+  },
+  {
+    "cat": "Task",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.9"
+  },
+  {
+    "cat": "Tracker",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.4"
+  },
+  {
+    "cat": "Tracker",
+    "name": "Log",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "Tracker",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "Journal",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.4"
+  },
+  {
+    "cat": "Journal",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "Goal",
+    "name": "Create",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "Goal",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "Memory",
+    "name": "Save",
+    "pass": true,
+    "detail": "Remembered: \"my test favorite drink is green tea\"",
+    "elapsed": "0.8"
+  },
+  {
+    "cat": "Memory",
+    "name": "Recall",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.5"
+  },
+  {
+    "cat": "Memory",
+    "name": "Delete",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "MultiIntent",
+    "name": "Compound",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "Navigation",
+    "name": "Go to page",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "0.3"
+  },
+  {
+    "cat": "RecallActions",
+    "name": "Recent",
+    "pass": false,
+    "detail": "I couldn't process that right now — the AI is temporarily unavailable. Try simple commands like:\n• \"weight 183\" • \"bp 12",
+    "elapsed": "1.4"
+  }
+]

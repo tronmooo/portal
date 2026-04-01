@@ -1,6 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter } from "@/lib/profileFilter";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -295,12 +296,12 @@ export default function TasksPage() {
   useEffect(() => { document.title = "Tasks — Portol"; }, []);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
-  const { id: profileId, name: profileName } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
 
   const { data: tasks, isLoading, error, refetch } = useQuery<Task[]>({
-    queryKey: ["/api/tasks", profileId || "all"],
-    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
+    queryKey: ["/api/tasks", "all"],
+    queryFn: () => apiRequest("GET", "/api/tasks").then(r => r.json()),
   });
 
   if (isLoading) {
@@ -321,8 +322,14 @@ export default function TasksPage() {
     </div>
   );
 
-  const activeTasks = (tasks || []).filter(t => t.status !== "done");
-  const completedTasks = (tasks || []).filter(t => t.status === "done");
+  // Apply profile filter client-side
+  const profileFilteredTasks = (tasks || []).filter(t => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    const linked = t.linkedProfiles || [];
+    return linked.some(id => filterIds.includes(id)) || linked.length === 0;
+  });
+  const activeTasks = profileFilteredTasks.filter(t => t.status !== "done");
+  const completedTasks = profileFilteredTasks.filter(t => t.status === "done");
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-tasks">
@@ -334,7 +341,11 @@ export default function TasksPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-xl font-semibold" data-testid="text-tasks-title">Tasks{profileId ? ` — ${profileName}` : ""}</h1>
+            <h1 className="text-xl font-semibold" data-testid="text-tasks-title">Tasks</h1>
+            <MultiProfileFilter
+              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              compact
+            />
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
             {activeTasks.length} active, {completedTasks.length} completed
@@ -345,7 +356,7 @@ export default function TasksPage() {
         </Button>
       </div>
 
-      {(!tasks || tasks.length === 0) ? (
+      {profileFilteredTasks.length === 0 ? (
         <div className="text-center py-16">
           <ListTodo className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">No tasks yet.</p>

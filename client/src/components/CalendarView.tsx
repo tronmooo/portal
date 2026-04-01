@@ -697,7 +697,14 @@ function DayAgenda({
 
 // ─── Main Calendar View ───────────────────────────────────────────────────────
 
-export default function CalendarView() {
+interface CalendarViewProps {
+  /** External filter IDs from parent (when provided, overrides internal filter) */
+  externalFilterIds?: string[];
+  /** External filter mode from parent */
+  externalFilterMode?: "everyone" | "selected";
+}
+
+export default function CalendarView({ externalFilterIds, externalFilterMode }: CalendarViewProps = {}) {
   const today = new Date();
   const todayStr = toLocalDateStr(today);
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -757,27 +764,30 @@ export default function CalendarView() {
       apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}`).then(r => r.json()),
   });
 
+  // Determine effective filter: external props take precedence over internal filter
+  const effectiveFilterMode = externalFilterMode ?? (resolvedProfileId ? "selected" : "everyone");
+  const effectiveFilterIds = externalFilterIds ?? (resolvedProfileId ? [resolvedProfileId] : []);
+  const effectiveHasSelf = effectiveFilterMode === "everyone" ||
+    effectiveFilterIds.includes(selfProfile?.id || "") ||
+    (externalFilterMode === undefined && profileFilter === "me");
+
   // Group items by date (with type + profile filtering)
   const itemsByDate = useMemo(() => {
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
       if (filterType !== "all" && item.type !== filterType) continue;
-      // Profile filter: when a specific person/pet is selected, ONLY show their items
-      if (resolvedProfileId) {
+      // Profile filter
+      if (effectiveFilterMode === "selected" && effectiveFilterIds.length > 0) {
         const linked = item.linkedProfiles || [];
-        // Items with no linkedProfiles are considered global (show for "me" only)
-        if (linked.length === 0) {
-          // Only show unlinked items when viewing self
-          if (profileFilter !== "me") continue;
-        } else {
-          if (!linked.includes(resolvedProfileId)) continue;
-        }
+        const matchesProfile = linked.some(id => effectiveFilterIds.includes(id));
+        const isOrphan = effectiveHasSelf && linked.length === 0;
+        if (!matchesProfile && !isOrphan) continue;
       }
       if (!map[item.date]) map[item.date] = [];
       map[item.date].push(item);
     }
     return map;
-  }, [timelineItems, filterType, resolvedProfileId, profileFilter]);
+  }, [timelineItems, filterType, effectiveFilterMode, effectiveFilterIds, effectiveHasSelf]);
 
   const days = useMemo(
     () => getMonthDays(viewYear, viewMonth),

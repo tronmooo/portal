@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter } from "@/lib/profileFilter";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,11 +38,11 @@ const EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
   const { toast } = useToast();
-  const { id: profileId, name: profileName } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
-    queryKey: ["/api/expenses", profileId || "all"],
-    queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
+    queryKey: ["/api/expenses", "all"],
+    queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
   });
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
@@ -87,7 +88,13 @@ export default function FinancePage() {
     </div>
   );
 
-  const filtered = filterCategory === "all" ? (expenses || []) : (expenses || []).filter(e => e.category === filterCategory);
+  // Apply profile filter client-side
+  const profileFiltered = (expenses || []).filter(e => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    const linked = e.linkedProfiles || [];
+    return linked.some(id => filterIds.includes(id)) || linked.length === 0;
+  });
+  const filtered = filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => e.category === filterCategory);
   const total = filtered.reduce((s, e) => s + e.amount, 0);
 
   // Group by category
@@ -96,7 +103,7 @@ export default function FinancePage() {
     return acc;
   }, {});
   const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }));
-  const categories = [...new Set((expenses || []).map(e => e.category))];
+  const categories = [...new Set(profileFiltered.map(e => e.category))];
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
@@ -107,7 +114,11 @@ export default function FinancePage() {
               <ArrowLeft className="w-4 h-4" />
             </button>
           </Link>
-          <h1 className="text-xl font-semibold" data-testid="text-finance-title">Finance{profileId ? ` — ${profileName}` : ""}</h1>
+          <h1 className="text-xl font-semibold" data-testid="text-finance-title">Finance</h1>
+          <MultiProfileFilter
+            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            compact
+          />
           <div className="ml-auto flex items-center gap-2">
             <Select value={filterCategory} onValueChange={setFilterCategory}>
               <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-category-filter">
@@ -168,7 +179,7 @@ export default function FinancePage() {
         <Card>
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Transactions</p>
-            <p className="text-2xl font-semibold mt-1 tabular-nums">{(expenses || []).length}</p>
+            <p className="text-2xl font-semibold mt-1 tabular-nums">{profileFiltered.length}</p>
           </CardContent>
         </Card>
       </div>
@@ -210,7 +221,7 @@ export default function FinancePage() {
           <CardTitle className="text-sm font-semibold">Recent Expenses</CardTitle>
         </CardHeader>
         <CardContent>
-          {(!expenses || expenses.length === 0) ? (
+          {profileFiltered.length === 0 ? (
             <div className="text-center py-10">
               <DollarSign className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">No expenses logged yet.</p>

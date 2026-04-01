@@ -562,19 +562,24 @@ export async function registerRoutes(
 
   // ---- Dashboard ----
   app.get("/api/stats", asyncHandler(async (req, res) => {
+    // Support multi-select: ?profileIds=id1,id2 OR legacy ?profileId=id
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
+    const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = (req as AuthenticatedRequest).userId || "anon";
-    const cacheKey = `stats:${userId}:${profileId || 'all'}`;
+    const cacheKey = `stats:${userId}:${filterIds?.join(",") || 'all'}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
-    const stats = await storage.getStats(profileId);
+    const stats = await storage.getStats(undefined, filterIds);
     setCache(cacheKey, stats, 15000);
     res.json(stats);
   }));
 
   app.get("/api/dashboard-enhanced", asyncHandler(async (req, res) => {
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
-    const data = await storage.getDashboardEnhanced(profileId);
+    const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
+    const data = await storage.getDashboardEnhanced(undefined, filterIds);
     res.json(data);
   }));
 

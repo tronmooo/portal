@@ -2757,8 +2757,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
   const [logOpen, setLogOpen] = useState<string | null>(null); // trackerId
   const [logValue, setLogValue] = useState("");
   const [logNotes, setLogNotes] = useState("");
-  const [quickLogOpen, setQuickLogOpen] = useState<string | null>(null); // tracker name
-  const [quickLogValue, setQuickLogValue] = useState("");
+
 
   // ── filter health trackers ─────────────────────────────────
   const healthCats = ["health", "fitness", "weight", "sleep", "wellness", "nutrition", "medical", "vitals", "diet", "calories", "water", "blood"];
@@ -2889,11 +2888,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     .slice(0, 3)
     .filter((t: any) => (t.entries?.length || 0) >= 2);
 
-  // ── Section 4: Quick log trackers ────────────────────────
-  const quickLogNames = ["Weight", "Blood Pressure", "Calories", "Sleep", "Water"];
-  const quickLogTrackers = quickLogNames
-    .map(name => healthTrackers.find((t: any) => t.name.toLowerCase() === name.toLowerCase()))
-    .filter(Boolean);
+  // Quick log removed — use the inline "Log Entry" form within each tracker card instead
 
   // ── Section 5: AI Health Insights ────────────────────────
   const insights: { key: string; text: string; level: "warn" | "info" | "good" }[] = [];
@@ -3016,58 +3011,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
         </div>
       )}
 
-      {/* ── Section 4: Quick Log ── */}
-      {quickLogTrackers.length > 0 && (
-        <div>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
-            <Plus className="h-3 w-3" /> Quick Log
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {quickLogTrackers.map((t: any) => (
-              <div key={t.id}>
-                {quickLogOpen === t.name ? (
-                  <div className="flex items-center gap-1.5 border rounded-lg px-2 py-1 bg-card">
-                    <span className="text-xs text-muted-foreground">{t.name}</span>
-                    <Input
-                      className="h-6 w-16 text-xs px-1"
-                      type="number"
-                      placeholder={t.unit || "value"}
-                      value={quickLogValue}
-                      onChange={e => setQuickLogValue(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === "Enter" && quickLogValue) {
-                          const pf = getPrimaryField(t);
-                          logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(quickLogValue) }, notes: "" });
-                        }
-                        if (e.key === "Escape") { setQuickLogOpen(null); setQuickLogValue(""); }
-                      }}
-                      autoFocus
-                    />
-                    <Button
-                      size="sm" className="h-6 text-[10px] px-2"
-                      disabled={!quickLogValue || logMutation.isPending}
-                      onClick={() => {
-                        const pf = getPrimaryField(t);
-                        logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(quickLogValue) }, notes: "" });
-                      }}
-                    >
-                      {logMutation.isPending ? "..." : "Save"}
-                    </Button>
-                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => { setQuickLogOpen(null); setQuickLogValue(""); }}>
-                      <Minus className="h-3 w-3" />
-                    </Button>
-                  </div>
-                ) : (
-                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
-                    onClick={() => { setQuickLogOpen(t.name); setQuickLogValue(""); }}>
-                    <Plus className="h-3 w-3" /> {t.name}
-                  </Button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+
 
       {/* ── Section 3: All Trackers (expandable) ── */}
       <div>
@@ -4191,12 +4135,6 @@ export default function ProfileDetailPage() {
               {tabValues.has("health") && (
                 <TabsContent value="health" className="mt-4 px-1 sm:px-0">
                   <HealthTabView profile={profile} onChanged={handleSaved} />
-                  {/* Health-related trackers */}
-                  {profile.relatedTrackers.length > 0 && (
-                    <div className="mt-4">
-                      <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
-                    </div>
-                  )}
                 </TabsContent>
               )}
 
