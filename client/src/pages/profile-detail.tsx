@@ -4127,10 +4127,27 @@ export default function ProfileDetailPage() {
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
                   <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
-                  {/* Non-health trackers on Overview for non-person profiles */}
-                  {profile.type !== "self" && profile.type !== "person" && profile.relatedTrackers.length > 0 && (
+                  {/* All trackers at bottom of Overview */}
+                  {profile.relatedTrackers.length > 0 && (
                     <div className="mt-4">
-                      <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>
+                      <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
+                        {profile.relatedTrackers.map((t: any) => {
+                          const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
+                          const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
+                          const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
+                          return (
+                            <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium truncate">{t.name}</p>
+                                <p className="text-[10px] text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
+                              </div>
+                              <span className="text-sm font-bold tabular-nums">{displayVal}</span>
+                              {t.unit && <span className="text-[10px] text-muted-foreground">{t.unit}</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </TabsContent>

@@ -1355,9 +1355,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
-    const { amount, method, confirmationNumber } = req.body;
+    let { amount, method, confirmationNumber } = req.body;
     if (amount !== undefined && (typeof amount !== "number" || amount <= 0)) {
       return res.status(400).json({ error: "Payment amount must be a positive number" });
+    }
+    // Default to obligation's own amount if none provided
+    if (amount === undefined || amount === null) {
+      const ob = await storage.getObligation(req.params.id);
+      if (!ob) return res.status(404).json({ error: "Obligation not found" });
+      amount = ob.amount;
     }
     const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
