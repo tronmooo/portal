@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
+
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
@@ -101,7 +101,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent className="w-64 p-0" align="start">
+      <PopoverContent className="w-64 p-0 z-50" align="start" sideOffset={4} collisionPadding={16}>
         <div className="p-2 border-b">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-muted-foreground">Filter by Profile</p>
@@ -113,7 +113,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
           </div>
         </div>
 
-        <ScrollArea className="max-h-[300px]">
+        <div className="overflow-y-auto max-h-[60vh] overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
           <div className="p-1.5">
             {/* Everyone option */}
             <button
@@ -162,7 +162,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
               <p className="text-xs text-muted-foreground text-center py-3">No profiles found</p>
             )}
           </div>
-        </ScrollArea>
+        </div>
       </PopoverContent>
     </Popover>
   );
