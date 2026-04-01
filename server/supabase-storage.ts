@@ -2017,7 +2017,7 @@ export class SupabaseStorage implements IStorage {
     const milestones = (data.milestones || []).map(m => ({ ...m, reached: false }));
     const { error } = await this.supabase.from("goals").insert({
       id, user_id: this.userId, title: data.title, type: data.type, target: data.target,
-      current: 0, unit: data.unit, start_value: data.startValue ?? null,
+      current: data.startValue || 0, unit: data.unit, start_value: data.startValue ?? null,
       deadline: data.deadline || null, tracker_id: data.trackerId || null,
       habit_id: data.habitId || null, category: data.category || null,
       status: "active", milestones, created_at: now, updated_at: now,

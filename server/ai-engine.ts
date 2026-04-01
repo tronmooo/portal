@@ -1187,7 +1187,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         type: { type: "string", enum: ["weight_loss", "weight_gain", "savings", "habit_streak", "spending_limit", "fitness_distance", "fitness_frequency", "tracker_target", "custom"], description: "Goal type" },
         target: { type: "number", description: "Target value" },
         unit: { type: "string", description: "Unit of measurement (lbs, $, miles, days, entries)" },
-        startValue: { type: "number", description: "Starting value (for weight goals, current weight)" },
+        startValue: { type: "number", description: "Current progress / starting value. For savings: amount already saved. For weight loss: current weight. For any goal: how much progress has already been made toward the target." },
         deadline: { type: "string", description: "ISO date deadline (YYYY-MM-DD)" },
         trackerId: { type: "string", description: "Linked tracker name (will be resolved to ID)" },
         habitId: { type: "string", description: "Linked habit name (will be resolved to ID)" },
@@ -1543,6 +1543,7 @@ BEHAVIOR:
 - TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
+- BIAS TO ACTION: When the user asks to create, schedule, or add something, DO IT immediately. Do NOT ask for unnecessary details. If they say "schedule a doctor appointment for Mom next week", create a task with title "Schedule doctor appointment for Mom" and due date next week. Don't ask which doctor, what time, etc. — the user can fill in details later. The goal is to capture the intent quickly, not interrogate the user.
 - When searching, use the search tool to find relevant data before answering.
 
 PROFILE CREATION — CRITICAL RULE:
@@ -1897,8 +1898,16 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "update_profile": {
       const profiles = await storage.getProfiles();
       const searchName = (input.name || "").toLowerCase().trim();
-      let profile = profiles.find(p => p.name.toLowerCase() === searchName)
-        || profiles.find(p => p.name.toLowerCase().includes(searchName));
+      // Smart matching: exact name first, then partial. Prefer primary types (vehicle > asset, person > subscription)
+      const typeWeight: Record<string, number> = { self: 10, person: 9, pet: 8, vehicle: 7, property: 6, asset: 5, medical: 4, investment: 3, loan: 2, subscription: 1, account: 1 };
+      let profile = profiles.find(p => p.name.toLowerCase() === searchName);
+      if (!profile) {
+        // Partial match — pick the highest-weight type when multiple match
+        const matches = profiles.filter(p => p.name.toLowerCase().includes(searchName) || searchName.includes(p.name.toLowerCase()));
+        if (matches.length > 0) {
+          profile = matches.sort((a, b) => (typeWeight[b.type] || 0) - (typeWeight[a.type] || 0))[0];
+        }
+      }
       
       // If profile not found, auto-create it as a person (don't silently fail)
       if (!profile) {
