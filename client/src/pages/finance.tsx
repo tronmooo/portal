@@ -40,6 +40,8 @@ export default function FinancePage() {
   const { toast } = useToast();
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const { data: obligations } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", "all"],
     queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
@@ -169,20 +171,50 @@ export default function FinancePage() {
         <p className="text-sm text-muted-foreground mt-0.5">Expense tracking and analysis{filterCategory !== "all" && ` — ${filterCategory}`}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Total Spent</p>
-            <p className="text-2xl font-semibold mt-1 tabular-nums" data-testid="text-total-spent">${total.toFixed(2)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Transactions</p>
-            <p className="text-2xl font-semibold mt-1 tabular-nums">{profileFiltered.length}</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Financial KPIs */}
+      {(() => {
+        const now = new Date();
+        const thisMonth = profileFiltered.filter(e => {
+          const d = new Date(e.date);
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        });
+        const monthTotal = thisMonth.reduce((s, e) => s + e.amount, 0);
+        
+        // Asset values from profiles
+        const assetProfiles = (profiles || []).filter(p => ["vehicle", "asset", "investment", "property"].includes(p.type));
+        const totalAssetValue = assetProfiles.reduce((s, p) => {
+          const val = p.fields?.purchasePrice || p.fields?.cost || p.fields?.value || p.fields?.amount || 0;
+          return s + Number(val);
+        }, 0);
+        
+        // Liabilities from obligations
+        const oblData = obligations || [];
+        const monthlyLiabilities = oblData.reduce((s: number, o: any) => {
+          const amt = Number(o.amount) || 0;
+          return s + (o.frequency === "monthly" ? amt : o.frequency === "yearly" ? amt / 12 : amt);
+        }, 0);
+        
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="rounded-lg border p-2.5">
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Total Spent</p>
+              <p className="text-lg font-bold tabular-nums mt-0.5" data-testid="text-total-spent">${total.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
+            </div>
+            <div className="rounded-lg border p-2.5">
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">This Month</p>
+              <p className="text-lg font-bold tabular-nums mt-0.5">${monthTotal.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
+            </div>
+            <div className="rounded-lg border p-2.5">
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Asset Value</p>
+              <p className="text-lg font-bold tabular-nums mt-0.5 text-green-600">${totalAssetValue.toLocaleString()}</p>
+            </div>
+            <div className="rounded-lg border p-2.5">
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Monthly Bills</p>
+              <p className="text-lg font-bold tabular-nums mt-0.5 text-amber-600">${monthlyLiabilities.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
+            </div>
+          </div>
+        );
+      })()}
 
       {chartData.length > 0 && (
         <Card>

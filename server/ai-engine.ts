@@ -1887,7 +1887,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           if (selfProfile) parentProfileId = selfProfile.id;
         }
       }
-      return storage.createProfile({
+      const newProfile = await storage.createProfile({
         type: input.type || "person",
         name: input.name,
         fields: input.fields || {},
@@ -1895,6 +1895,39 @@ async function executeTool(name: string, input: any): Promise<any> {
         notes: input.notes || "",
         parentProfileId,
       });
+
+      // Auto-create purchase expense for assets/vehicles with a purchase price
+      const purchasePrice = input.fields?.purchasePrice || input.fields?.cost || input.fields?.price;
+      if (purchasePrice && Number(purchasePrice) > 0 && childTypes.includes(input.type || "")) {
+        try {
+          const expCategory = input.type === "vehicle" ? "vehicle" : "shopping";
+          const expense = await storage.createExpense({
+            amount: Number(purchasePrice),
+            category: expCategory,
+            description: `${input.name} purchase`,
+            date: input.fields?.purchaseDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+            vendor: input.fields?.brand || "",
+            tags: ["purchase"],
+          });
+          // Link to both the new asset profile and the self/owner profile
+          const linkIds = [newProfile.id];
+          if (parentProfileId) linkIds.push(parentProfileId);
+          else {
+            const selfP = (await storage.getProfiles()).find(p => p.type === "self");
+            if (selfP) linkIds.push(selfP.id);
+          }
+          await updateEntityLinkedProfiles("expense", expense.id, linkIds[0]);
+          for (const lid of linkIds) {
+            await storage.linkProfileTo(lid, "expense", expense.id).catch(() => {});
+            await updateEntityLinkedProfiles("expense", expense.id, lid).catch(() => {});
+          }
+          logger.info("ai", `Auto-created purchase expense $${purchasePrice} for ${input.name}`);
+        } catch (e) {
+          logger.warn("ai", `Failed to auto-create purchase expense: ${e}`);
+        }
+      }
+
+      return newProfile;
     }
 
     case "update_profile": {
