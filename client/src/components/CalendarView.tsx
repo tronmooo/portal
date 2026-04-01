@@ -835,83 +835,63 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const filteredAgenda = selectedDateItems;
 
   return (
-    <div className="space-y-4" data-testid="calendar-view">
+    <div className="space-y-2" data-testid="calendar-view">
       {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={prevMonth}
-            className="h-8 w-8 p-0"
-            data-testid="btn-prev-month"
-          >
-            <ChevronLeft className="h-4 w-4" />
+      <div className="flex items-center justify-between gap-1">
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7" data-testid="btn-prev-month">
+            <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <h2 className="text-sm font-semibold min-w-[140px] text-center" data-testid="text-month-year">
+          <h2 className="text-xs font-semibold min-w-[100px] text-center" data-testid="text-month-year">
             {fmtMonthYear(viewYear, viewMonth)}
           </h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={nextMonth}
-            className="h-8 w-8 p-0"
-            data-testid="btn-next-month"
-          >
-            <ChevronRight className="h-4 w-4" />
+          <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" data-testid="btn-next-month">
+            <ChevronRight className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={goToday}
-            className="h-7 text-xs ml-1"
-            data-testid="btn-today"
-          >
+          <Button variant="outline" size="sm" onClick={goToday} className="h-6 text-[10px] px-2" data-testid="btn-today">
             Today
           </Button>
         </div>
         <div className="flex items-center gap-1.5">
           <Button
             variant="outline"
-            size="sm"
-            className="h-8 gap-1.5 text-xs"
+            size="icon"
+            className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1.5"
             onClick={handleGcalSync}
             disabled={syncing}
+            title="Sync Google Calendar"
             data-testid="btn-gcal-sync"
           >
             <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
-            {syncing ? "Syncing..." : "Sync GCal"}
-            {!syncing && lastSynced && (
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" title={`Last synced: ${lastSynced.toLocaleTimeString()}`} />
-            )}
+            <span className="hidden sm:inline text-xs">{syncing ? "Syncing..." : "Sync"}</span>
           </Button>
           <Button
-            size="sm"
+            size="icon"
             onClick={() => setAddOpen(true)}
-            className="h-8 gap-1"
+            className="h-7 w-7 sm:w-auto sm:h-7 sm:px-2 sm:gap-1"
             data-testid="btn-add-event-cal"
           >
           <Plus className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Event</span>
+          <span className="hidden sm:inline text-xs">Event</span>
         </Button>
         </div>
       </div>
 
       {/* Type filter pills */}
-      <div className="flex gap-1.5 flex-wrap">
+      <div className="flex gap-1 flex-wrap">
         {[
-          { key: "all", label: "All", color: "#4F98A3" },
-          { key: "event", label: "Events", color: "#4F98A3" },
-          { key: "task", label: "Tasks", color: "#A13544" },
-          { key: "obligation", label: "Bills", color: "#BB653B" },
-          { key: "habit", label: "Habits", color: "#6DAA45" },
+          { key: "all", label: "All" },
+          { key: "event", label: "Events" },
+          { key: "task", label: "Tasks" },
+          { key: "obligation", label: "Bills" },
+          { key: "habit", label: "Habits" },
         ].map(f => (
           <button
             key={f.key}
-            className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+            className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all ${
               filterType === f.key
-                ? "bg-primary text-primary-foreground font-semibold border-transparent shadow-sm"
-                : "border-border text-muted-foreground hover:bg-muted hover:border-foreground/20"
+                ? "bg-primary text-primary-foreground border-transparent"
+                : "border-border/50 text-muted-foreground hover:bg-muted"
             }`}
             onClick={() => setFilterType(f.key)}
             data-testid={`btn-filter-${f.key}`}
@@ -922,14 +902,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       </div>
 
       {/* Calendar Grid */}
-      <Card className="overflow-hidden">
-        <CardContent className="p-0">
+      <div className="rounded-lg border border-border/40 overflow-hidden">
           {/* Weekday header */}
           <div className="grid grid-cols-7 border-b border-border">
             {WEEKDAYS.map(d => (
               <div
                 key={d}
-                className="text-center text-[10px] font-medium text-muted-foreground py-2 uppercase tracking-wider"
+                className="text-center text-[9px] font-medium text-muted-foreground py-1 uppercase tracking-wider"
               >
                 {d}
               </div>
@@ -950,7 +929,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               return (
                 <button
                   key={idx}
-                  className={`relative min-h-[80px] md:min-h-[100px] p-1 border-b border-r border-border/40 transition-all text-left flex flex-col ${
+                  className={`relative min-h-[44px] md:min-h-[100px] p-0.5 md:p-1 border-b border-r border-border/40 transition-all text-left flex flex-col ${
                     day.isCurrentMonth ? "" : "opacity-40"
                   } ${isSelected && !isToday ? "bg-primary/5 ring-1 ring-inset ring-primary/30" : !isSelected && !isToday ? "hover:bg-muted/30" : ""} ${
                     isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/30" : ""
@@ -960,9 +939,9 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                   data-testid={`day-cell-${day.date}`}
                 >
                   <span
-                    className={`text-xs leading-none ${
+                    className={`text-[10px] md:text-xs leading-none ${
                       isToday
-                        ? "font-bold text-primary bg-primary/20 rounded-full w-5 h-5 flex items-center justify-center ring-1 ring-primary/40"
+                        ? "font-bold text-primary bg-primary/20 rounded-full w-4 h-4 md:w-5 md:h-5 flex items-center justify-center text-[9px] md:text-xs"
                         : "font-medium"
                     }`}
                   >
@@ -1009,11 +988,10 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               );
             })}
           </div>
-        </CardContent>
-      </Card>
+      </div>
 
       {/* Selected Day Agenda */}
-      <Card data-testid="section-day-agenda">
+      <div className="rounded-lg border border-border/40" data-testid="section-day-agenda">
         <div className="px-4 pt-3 pb-1 flex items-center justify-between">
           <div>
             <h3 className="text-xs font-semibold">{fmtDateFull(selectedDate)}</h3>
@@ -1033,14 +1011,14 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             <Plus className="h-3 w-3" />Add
           </Button>
         </div>
-        <CardContent className="pt-0 pb-3">
+        <div className="px-3 pb-2">
           <DayAgenda
             date={selectedDate}
             items={filteredAgenda}
             onItemClick={setDetailItem}
           />
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Add Event Dialog */}
       {addOpen && (
