@@ -2965,7 +2965,7 @@ export default function TrackersPage() {
           {/* Section filter pills */}
           {(["all", "trackers", "documents", "profiles", "subscriptions"] as const).map(s => {
             const subCount = (profiles || []).filter(p => p.type === "subscription").length;
-            const assetCount = (profiles || []).filter(p => ["vehicle", "asset", "loan", "investment", "account", "property"].includes(p.type)).length;
+            const assetCount = (profiles || []).filter(p => ["vehicle", "asset", "investment", "property"].includes(p.type)).length;
             const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", subscriptions: "Subscriptions" };
             const counts: Record<string, number> = {
               all: filteredTrackers.length + filteredDocuments.length + subCount + assetCount,
@@ -2998,7 +2998,8 @@ export default function TrackersPage() {
 
       {/* Assets & Vehicles — grouped by type */}
       {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
-        const childTypeSet = new Set(["vehicle", "asset", "loan", "investment", "account", "property"]);
+        // Only show actual assets and vehicles here — NOT loans/obligations (those belong in Bills)
+        const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone" || hasSelf;
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;

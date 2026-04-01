@@ -922,7 +922,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "create_tracker",
-    description: "Create a new tracker. Use smart field definitions: Blood Pressure needs fields [systolic:number, diastolic:number, pulse:number]. Weight needs [weight:number]. Running needs [distance:number, duration:number, pace:number, caloriesBurned:number]. Sleep needs [hours:number, quality:text]. Nutrition needs [calories:number, protein:number, carbs:number, fat:number, sugar:number, fiber:number, item:text]. Medication needs [medication:text, dosage:text, time:text]. Always create compound fields for compound measurements.",
+    description: "Create a new tracker for NUMERIC TIME-SERIES data only. Use smart field definitions: Blood Pressure [systolic:number, diastolic:number, pulse:number]. Weight [weight:number]. Running [distance:number, duration:number, pace:number, caloriesBurned:number]. Sleep [hours:number, quality:text]. Nutrition [calories:number, protein:number, carbs:number, fat:number, sugar:number, fiber:number, item:text]. Do NOT create trackers for: medication (use update_profile), water intake habits (use create_habit), or binary daily actions (use create_habit).",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1555,6 +1555,12 @@ Phrases that do NOT mean "create a profile" — just include the name in the tas
 The rule is simple: if the user is describing an ACTION (task, expense, event) that MENTIONS a person, just put the name in the title. Only use forProfile if that person ALREADY EXISTS as a profile. If they don't exist as a profile, leave forProfile empty — the task will be linked to the self (Me) profile automatically.
 
 TOOL CHOICE RULES — CRITICAL:
+DATA CLASSIFICATION RULES (NEVER VIOLATE):
+- MEDICATION: When a user mentions medication ("take Heartgard", "give Max his meds", "prescribed lisinopril"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker. Medications are profile data, not time-series tracker data.
+- WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
+- HABITS vs TRACKERS: Habits are binary daily actions (did it / didn't). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker.
+- LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
+
 CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "X owes me $Y" or "collect $Y from X" or "X owes me $Y for Z" → ALWAYS create_task with title like "Collect $Y from X for Z" and forProfile: "X". NEVER EVER use save_memory for debts/money owed. This applies to ALL variations: "owes me", "owes us", "I lent X $Y", "X hasn't paid me back".
 - "My blood type is X" or personal health info (allergies, height, weight, etc.) → ALWAYS update_profile on the self/Me profile with fields: { bloodType: "O+" } (or the appropriate field). NEVER use save_memory for profile-level data. Same for any profile: "Mom's blood type", "Max's breed".
