@@ -2150,8 +2150,20 @@ async function executeTool(name: string, input: any): Promise<any> {
         icon: input.icon,
         color: input.color,
       });
-      await autoLinkToProfiles("habit", habit.id, input.name || "", input.forProfile);
-      return habit;
+      // Direct profile linking — don't rely solely on text matching
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const target = profiles.find(p => p.name.toLowerCase() === input.forProfile.toLowerCase().trim())
+          || profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+        if (target) {
+          await storage.updateHabit(habit.id, { linkedProfiles: [target.id] } as any);
+          await storage.linkProfileTo(target.id, "habit", habit.id).catch(() => {});
+          logger.info("ai", `Linked habit "${input.name}" to profile "${target.name}"`);
+        }
+      }
+      // Also run general auto-link for text-based matching
+      await autoLinkToProfiles("habit", habit.id, `${input.name || ""} ${input.forProfile || ""}`, input.forProfile);
+      return await storage.getHabit(habit.id) || habit;
     }
 
     case "checkin_habit": {
@@ -2354,7 +2366,17 @@ async function executeTool(name: string, input: any): Promise<any> {
           await autoLinkToProfiles("goal", goal.id, input.title || "", undefined);
         }
       } else {
-        await autoLinkToProfiles("goal", goal.id, input.title || "", input.forProfile);
+        // Direct profile linking for goals
+        if (input.forProfile) {
+          const targetProfile = (await storage.getProfiles()).find(p => 
+            p.name.toLowerCase() === input.forProfile.toLowerCase().trim() ||
+            p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+          if (targetProfile) {
+            await storage.updateGoal(goal.id, { linkedProfiles: [targetProfile.id] } as any);
+            await storage.linkProfileTo(targetProfile.id, "goal", goal.id).catch(() => {});
+          }
+        }
+        await autoLinkToProfiles("goal", goal.id, `${input.title || ""} ${input.forProfile || ""}`, input.forProfile);
       }
 
       // Auto-create companion habit for daily/frequency-based goals
@@ -3049,6 +3071,54 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       if (ob && !ob.linkedProfiles.includes(profileId)) {
         ob.linkedProfiles.push(profileId);
         await storage.updateObligation(entityId, { linkedProfiles: ob.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "habit": {
+      const habits = await storage.getHabits();
+      const habit = habits.find(h => h.id === entityId);
+      if (habit) {
+        const existing = habit.linkedProfiles || [];
+        if (!existing.includes(profileId)) {
+          existing.push(profileId);
+          await storage.updateHabit(entityId, { linkedProfiles: existing } as any);
+        }
+      }
+      break;
+    }
+    case "goal": {
+      const goals = await storage.getGoals();
+      const goal = goals.find(g => g.id === entityId);
+      if (goal) {
+        const existing = goal.linkedProfiles || [];
+        if (!existing.includes(profileId)) {
+          existing.push(profileId);
+          await storage.updateGoal(entityId, { linkedProfiles: existing } as any);
+        }
+      }
+      break;
+    }
+    case "journal": {
+      const entries = await storage.getJournalEntries();
+      const entry = entries.find(j => j.id === entityId);
+      if (entry) {
+        const existing = entry.linkedProfiles || [];
+        if (!existing.includes(profileId)) {
+          existing.push(profileId);
+          await storage.updateJournalEntry(entityId, { linkedProfiles: existing } as any);
+        }
+      }
+      break;
+    }
+    case "document": {
+      const docs = await storage.getDocuments();
+      const doc = docs.find(d => d.id === entityId);
+      if (doc) {
+        const existing = doc.linkedProfiles || [];
+        if (!existing.includes(profileId)) {
+          existing.push(profileId);
+          await storage.updateDocument(entityId, { linkedProfiles: existing } as any);
+        }
       }
       break;
     }

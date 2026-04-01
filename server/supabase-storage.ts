@@ -260,6 +260,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
       currentStreak: r.current_streak || 0, longestStreak: r.longest_streak || 0,
+      linkedProfiles: r.linked_profiles || [],
       checkins, createdAt: r.created_at,
     };
   }
@@ -1440,7 +1441,7 @@ export class SupabaseStorage implements IStorage {
     }
 
     // ── Document-extracted dates (expiry, renewal, due, appointment) ──────
-    const documents = await this.getDocuments();
+    // documents already fetched above for expiration dates
     const DATE_KEY_RE = /expir|renew|due|valid.until|appoint|next.visit|warranty/i;
     const DATE_VAL_RE = /^\d{4}[-/]\d{2}[-/]\d{2}/;
     for (const doc of documents) {
@@ -1744,6 +1745,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("habits").update({
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
+      linked_profiles: merged.linkedProfiles || existing.linkedProfiles || [],
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     return this.getHabit(id);
@@ -2067,6 +2069,7 @@ export class SupabaseStorage implements IStorage {
     if (data.habitId !== undefined) updates.habit_id = data.habitId;
     if (data.category !== undefined) updates.category = data.category;
     if (data.status !== undefined) updates.status = data.status;
+    if ((data as any).linkedProfiles !== undefined) updates.linked_profiles = (data as any).linkedProfiles;
     if (data.milestones !== undefined) updates.milestones = data.milestones;
     const { error } = await this.supabase.from("goals").update(updates).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
