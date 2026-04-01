@@ -24,12 +24,15 @@ import {
   ChevronDown, ChevronUp,
   ExternalLink, Eye,
   HeartPulse, ArrowUp, ArrowDown, Minus, FileWarning, CalendarClock,
-  Download, UploadCloud,
+  Download, UploadCloud, MoreVertical,
   EyeOff, GripVertical, Settings, RotateCcw, Target,
   Trash2, Pencil, FileText, CheckCircle2, X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type {
   DashboardStats, MoodLevel,
 } from "@shared/schema";
@@ -1694,18 +1697,42 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1"
-            onClick={() => setCustomizeOpen(true)} aria-label="Customize dashboard" data-testid="btn-customize">
-            <Settings className="h-3 w-3" /><span className="hidden sm:inline text-xs">Customize</span>
-          </Button>
-          <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1"
-            onClick={handleExport} aria-label="Export data" data-testid="btn-export">
-            <Download className="h-3 w-3" /><span className="hidden sm:inline text-xs">Export</span>
-          </Button>
-          <Button variant="outline" size="icon" className="h-7 w-7 sm:w-auto sm:px-2 sm:gap-1"
-            onClick={() => setImportOpen(true)} aria-label="Import backup" data-testid="btn-import">
-            <UploadCloud className="h-3 w-3" /><span className="hidden sm:inline text-xs">Import</span>
-          </Button>
+          {/* Desktop: individual buttons */}
+          <div className="hidden sm:flex items-center gap-1.5">
+            <Button variant="outline" size="sm" className="h-7 px-2 gap-1 text-xs"
+              onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
+              <Settings className="h-3 w-3" /> Customize
+            </Button>
+            <Button variant="outline" size="sm" className="h-7 px-2 gap-1 text-xs"
+              onClick={handleExport} data-testid="btn-export">
+              <Download className="h-3 w-3" /> Export
+            </Button>
+            <Button variant="outline" size="sm" className="h-7 px-2 gap-1 text-xs"
+              onClick={() => setImportOpen(true)} data-testid="btn-import">
+              <UploadCloud className="h-3 w-3" /> Import
+            </Button>
+          </div>
+          {/* Mobile: overflow menu */}
+          <div className="sm:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8" data-testid="btn-dashboard-menu">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
+                  <Settings className="h-4 w-4 mr-2" /> Customize
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExport} data-testid="btn-export">
+                  <Download className="h-4 w-4 mr-2" /> Export Data
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setImportOpen(true)} data-testid="btn-import">
+                  <UploadCloud className="h-4 w-4 mr-2" /> Import Backup
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </div>
 

@@ -170,11 +170,13 @@ function App() {
                         <span className="text-sm font-semibold tracking-tight text-foreground">Portol</span>
                       </div>
                       {/* Search trigger — centre-right in header */}
-                      <div className="flex items-center gap-2 flex-1 justify-end mr-1">
+                      <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
                         <NotificationBell />
-                        <CalendarButton />
-                        <SettingsButton />
+                        <div className="hidden md:flex items-center gap-1">
+                          <CalendarButton />
+                          <SettingsButton />
+                        </div>
                         <ThemeToggle />
                       </div>
                     </header>

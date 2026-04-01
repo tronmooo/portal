@@ -897,22 +897,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         </div>
       </div>
 
-      {/* Profile filter + type filter pills */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <Select value={profileFilter} onValueChange={setProfileFilter}>
-          <SelectTrigger className="w-[140px] h-7 text-xs" data-testid="select-calendar-profile">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Everyone</SelectItem>
-            {primaryProfiles.sort((a, b) => a.type === "self" ? -1 : b.type === "self" ? 1 : a.name.localeCompare(b.name)).map(p => (
-              <SelectItem key={p.id} value={p.type === "self" ? "me" : p.id}>
-                {p.type === "self" ? "Me" : p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {/* Type filter pills */}
       <div className="flex gap-1.5 flex-wrap">
         {[
           { key: "all", label: "All", color: "#4F98A3" },
