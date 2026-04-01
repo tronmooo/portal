@@ -921,7 +921,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         trackerName: { type: "string", description: "Name of the tracker (partial match)" },
         values: { type: "object", description: "Key-value pairs to log. Include ALL relevant fields. For nutrition: { calories, protein, carbs, fat, sugar, fiber, item }. For running: { distance, duration, pace, caloriesBurned }. For BP: { systolic, diastolic }. For weight: { weight }. For sleep: { hours, quality }." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
-        forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
+        forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
       },
       required: ["trackerName", "values"],
     },
@@ -946,7 +946,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
           },
           description: "Field definitions",
         },
-        forProfile: { type: "string", description: "Name of the profile this tracker belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
+        forProfile: { type: "string", description: "Name of the profile this tracker belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
       },
       required: ["name"],
     },
@@ -965,7 +965,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         date: { type: "string", description: "Date of the expense in YYYY-MM-DD format. Use today's date if not specified. Use the actual date the expense occurred if the user says 'yesterday', 'last Tuesday', etc." },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
-        forProfile: { type: "string", description: "Name of the profile this expense belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
+        forProfile: { type: "string", description: "REQUIRED when expense is for a specific entity. Set to the EXACT profile name. Examples: 'Mom', 'Rex', 'Honda CR-V 2021', 'iPhone 17 Pro Max', 'Tesla Model S'. ALWAYS set this for expenses tied to any person, pet, vehicle, asset, or subscription. If the user says 'bought X for my iPhone', forProfile MUST be 'iPhone 17 Pro Max' (the full profile name)." },
       },
       required: ["amount", "description"],
     },
@@ -996,7 +996,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         location: { type: "string", description: "Location" },
         description: { type: "string", description: "Description" },
         recurrence: { type: "string", enum: ["none", "daily", "weekly", "biweekly", "monthly", "yearly"], description: "Recurrence pattern" },
-        forProfile: { type: "string", description: "Name of the profile this event belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this when the user mentions a specific person, pet, vehicle, or entity." },
+        forProfile: { type: "string", description: "Name of the profile this event belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
       },
       required: ["title", "date"],
     },
@@ -2043,6 +2043,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_expense": {
+      logger.info("ai", `create_expense input: desc="${input.description}" forProfile="${input.forProfile}" amount=${input.amount}`);
       // Validate amount — reject invalid/zero amounts instead of silently logging $0
       const parsedAmount = typeof input.amount === 'number' && isFinite(input.amount) ? input.amount : parseFloat(input.amount);
       if (!parsedAmount || parsedAmount <= 0) {
@@ -2800,6 +2801,7 @@ async function autoUpdateGoalProgress(trackerId: string, values: Record<string, 
 // ============================================================
 
 async function autoLinkToProfiles(entityType: string, entityId: string, text: string, explicitProfileName?: string): Promise<void> {
+  logger.info("ai", `autoLinkToProfiles: type=${entityType} text="${text?.substring(0, 50)}" explicit="${explicitProfileName}"`);
   if (!text && !explicitProfileName) return;
   try {
     const profiles = await storage.getProfiles();
