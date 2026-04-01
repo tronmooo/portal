@@ -127,7 +127,7 @@ function CollapsibleSection({
           </div>
         </div>
       </CardHeader>
-      {open && <CardContent className="px-3 pb-2.5 pt-0">{children}</CardContent>}
+      {open && <CardContent className="px-2 pb-2 pt-0">{children}</CardContent>}
     </Card>
   );
 }
@@ -292,33 +292,29 @@ function NeedsAttentionSection({ stats, enhanced, profileId }: { stats: Dashboar
   const dismiss = (key: string) => setDismissedIds(prev => new Set([...prev, key]));
 
   function AttentionItem({
-    id, title, detail, badge, sourceType, accentClass, borderClass,
+    id, title, detail, badge, sourceType, accentColor,
   }: {
     id: string; title: string; detail: string; badge: string; sourceType: "task" | "bill";
-    accentClass: string; borderClass: string;
+    accentColor: string;
   }) {
     return (
-      <div className={`flex items-center gap-2 p-2 rounded-lg border ${borderClass} ${accentClass}`}>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs font-medium truncate">{title}</span>
-            <Badge variant="outline" className="text-[9px] px-1 py-0 h-3.5 shrink-0">{badge}</Badge>
-          </div>
-          <p className="text-[10px] text-muted-foreground mt-0.5">{detail}</p>
-        </div>
-        <div className="flex items-center gap-0.5 shrink-0">
+      <div className="flex items-center gap-1.5 py-1.5 border-l-2 pl-2 pr-1" style={{ borderLeftColor: accentColor }}>
+        <span className="text-[11px] font-medium truncate flex-1">{title}</span>
+        <span className="text-[10px] text-muted-foreground shrink-0">{detail}</span>
+        <span className="text-[9px] text-muted-foreground/50 shrink-0 w-7 text-center">{badge}</span>
+        <div className="flex items-center gap-0 shrink-0">
           {sourceType === "task" && (
             <>
               <button
                 onClick={() => handleMarkComplete(id)}
-                title="Mark complete"
-                className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600 transition-colors">
+                title="Complete"
+                className="h-6 w-6 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
                 <Check className="h-3 w-3" />
               </button>
               <button
                 onClick={() => handleSnooze(id)}
-                title="Snooze 7 days"
-                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600 transition-colors">
+                title="Snooze"
+                className="h-6 w-6 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
                 <Clock className="h-3 w-3" />
               </button>
             </>
@@ -326,8 +322,8 @@ function NeedsAttentionSection({ stats, enhanced, profileId }: { stats: Dashboar
           <button
             onClick={() => dismiss(`${sourceType}-${id}`)}
             title="Dismiss"
-            className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground transition-colors">
-            <X className="h-3 w-3" />
+            className="h-6 w-6 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
+            <X className="h-2.5 w-2.5" />
           </button>
         </div>
       </div>
@@ -380,61 +376,67 @@ function NeedsAttentionSection({ stats, enhanced, profileId }: { stats: Dashboar
 
   return (
     <CollapsibleSection icon={AlertTriangle} label="Needs Attention" count={totalCount} testId="section-needs-attention">
-      <div className="space-y-3">
+      <div className="space-y-2">
         {/* Overdue */}
         {(overdueTasks.length > 0 || overdueBills.length > 0) && (
-          <div className="space-y-1.5">
-            <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" /> Overdue
+          <div>
+            <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" /> Overdue ({overdueTasks.length + overdueBills.length})
             </p>
-            {overdueTasks.map((t: any) => (
-              <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
-                detail={overdueDetail(t, "task")} badge="Task" sourceType="task"
-                accentClass="bg-red-500/5" borderClass="border-red-500/25" />
-            ))}
-            {overdueBills.map((b: any) => (
-              <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
-                detail={overdueDetail(b, "bill")} badge="Bill" sourceType="bill"
-                accentClass="bg-red-500/5" borderClass="border-red-500/25" />
-            ))}
+            <div className="divide-y divide-border/30">
+              {overdueTasks.map((t: any) => (
+                <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
+                  detail={overdueDetail(t, "task")} badge="Task" sourceType="task"
+                  accentColor="#ef4444" />
+              ))}
+              {overdueBills.map((b: any) => (
+                <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
+                  detail={overdueDetail(b, "bill")} badge="Bill" sourceType="bill"
+                  accentColor="#ef4444" />
+              ))}
+            </div>
           </div>
         )}
 
         {/* Due Soon */}
         {(soonTasks.length > 0 || soonBills.length > 0) && (
-          <div className="space-y-1.5">
-            <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wider flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" /> Due Soon
+          <div>
+            <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" /> Due Soon ({soonTasks.length + soonBills.length})
             </p>
-            {soonTasks.map((t: any) => (
-              <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
-                detail={dueSoonDetail(t, "task")} badge="Task" sourceType="task"
-                accentClass="bg-amber-500/5" borderClass="border-amber-500/25" />
-            ))}
-            {soonBills.map((b: any) => (
-              <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
-                detail={dueSoonDetail(b, "bill")} badge="Bill" sourceType="bill"
-                accentClass="bg-amber-500/5" borderClass="border-amber-500/25" />
-            ))}
+            <div className="divide-y divide-border/30">
+              {soonTasks.map((t: any) => (
+                <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
+                  detail={dueSoonDetail(t, "task")} badge="Task" sourceType="task"
+                  accentColor="#f59e0b" />
+              ))}
+              {soonBills.map((b: any) => (
+                <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
+                  detail={dueSoonDetail(b, "bill")} badge="Bill" sourceType="bill"
+                  accentColor="#f59e0b" />
+              ))}
+            </div>
           </div>
         )}
 
         {/* Upcoming */}
         {(upcomingTasks.length > 0 || upcomingBills.length > 0) && (
-          <div className="space-y-1.5">
-            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" /> Upcoming
+          <div>
+            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" /> Upcoming ({upcomingTasks.length + upcomingBills.length})
             </p>
-            {upcomingTasks.map((t: any) => (
-              <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
-                detail={upcomingDetail(t, "task")} badge="Task" sourceType="task"
-                accentClass="bg-blue-500/5" borderClass="border-blue-500/25" />
-            ))}
-            {upcomingBills.map((b: any) => (
-              <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
-                detail={upcomingDetail(b, "bill")} badge="Bill" sourceType="bill"
-                accentClass="bg-blue-500/5" borderClass="border-blue-500/25" />
-            ))}
+            <div className="divide-y divide-border/30">
+              {upcomingTasks.map((t: any) => (
+                <AttentionItem key={`task-${t.id}`} id={t.id} title={t.title}
+                  detail={upcomingDetail(t, "task")} badge="Task" sourceType="task"
+                  accentColor="#3b82f6" />
+              ))}
+              {upcomingBills.map((b: any) => (
+                <AttentionItem key={`bill-${b.id}`} id={b.id} title={b.name}
+                  detail={upcomingDetail(b, "bill")} badge="Bill" sourceType="bill"
+                  accentColor="#3b82f6" />
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -466,66 +468,70 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
   return (
     <CollapsibleSection icon={Calendar} label="Today" testId="section-today"
       sub={new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         {/* Schedule */}
-        <div className="space-y-1.5">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Schedule</p>
+        <div>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Schedule</p>
           {events.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground py-2">No events today</p>
+            <p className="text-[10px] text-muted-foreground py-1">No events today</p>
           ) : (
-            events.map((ev: any) => (
-              <div key={ev.id}
-                onClick={() => navigate("/calendar")}
-                className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
-                <Clock className="h-3 w-3 text-primary shrink-0" />
-                <span className="text-[10px] font-medium text-primary tabular-nums shrink-0 w-12">
-                  {ev.time || "All day"}
-                </span>
-                <span className="text-xs truncate flex-1">{ev.title}</span>
-                {ev.location && (
-                  <span className="text-[9px] text-muted-foreground flex items-center gap-0.5 shrink-0">
-                    <MapPin className="h-2 w-2" />{ev.location}
+            <div className="divide-y divide-border/30">
+              {events.map((ev: any) => (
+                <div key={ev.id}
+                  onClick={() => navigate("/calendar")}
+                  className="flex items-center gap-1.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors rounded px-1 -mx-1">
+                  <Clock className="h-3 w-3 text-primary shrink-0" />
+                  <span className="text-[10px] font-medium text-primary tabular-nums shrink-0 w-10">
+                    {ev.time || "All day"}
                   </span>
-                )}
-              </div>
-            ))
+                  <span className="text-[11px] truncate flex-1">{ev.title}</span>
+                  {ev.location && (
+                    <span className="text-[9px] text-muted-foreground flex items-center gap-0.5 shrink-0">
+                      <MapPin className="h-2 w-2" />{ev.location}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
         {/* Due Items */}
-        <div className="space-y-1.5">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Needs Attention</p>
-          {/* Tasks due today */}
-          {tasksDueToday.length > 0 && tasksDueToday.slice(0, 4).map((t: any) => (
-            <div key={`today-${t.id}`}
-              onClick={() => navigate("/dashboard/tasks")}
-              className="flex items-center gap-2 p-2 rounded-lg bg-primary/5 border border-primary/20 cursor-pointer hover:bg-primary/10 transition-colors">
-              <Target className="h-3 w-3 text-primary shrink-0" />
-              <span className="text-xs truncate flex-1">{t.title}</span>
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-primary border-primary/30">Due Today</Badge>
-            </div>
-          ))}
-          {/* Overdue tasks */}
-          {overdueTasks.length > 0 && overdueTasks.slice(0, 4).map((t: any) => (
-            <div key={t.id}
-              onClick={() => navigate("/dashboard/tasks")}
-              className="flex items-center gap-2 p-2 rounded-lg bg-red-500/5 border border-red-500/20 cursor-pointer hover:bg-red-500/10 transition-colors">
-              <ListTodo className="h-3 w-3 text-red-500 shrink-0" />
-              <span className="text-xs truncate flex-1">{t.title}</span>
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-red-500 border-red-500/30">Overdue</Badge>
-            </div>
-          ))}
-          {todayBills.map((b: any) => (
-            <div key={b.id}
-              onClick={() => navigate("/dashboard/obligations")}
-              className="flex items-center gap-2 p-2 rounded-lg bg-amber-500/5 border border-amber-500/20 cursor-pointer hover:bg-amber-500/10 transition-colors">
-              <CreditCard className="h-3 w-3 text-amber-500 shrink-0" />
-              <span className="text-xs truncate flex-1">{b.name}</span>
-              <span className="text-[10px] font-medium text-amber-600">{formatMoney(b.amount)}</span>
-            </div>
-          ))}
+        <div>
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Needs Attention</p>
+          <div className="divide-y divide-border/30">
+            {/* Tasks due today */}
+            {tasksDueToday.length > 0 && tasksDueToday.slice(0, 4).map((t: any) => (
+              <div key={`today-${t.id}`}
+                onClick={() => navigate("/dashboard/tasks")}
+                className="flex items-center gap-1.5 py-1.5 border-l-2 border-primary/60 pl-2 cursor-pointer hover:bg-muted/40 transition-colors">
+                <Target className="h-3 w-3 text-primary shrink-0" />
+                <span className="text-[11px] truncate flex-1">{t.title}</span>
+                <span className="text-[9px] text-primary/70 shrink-0">Today</span>
+              </div>
+            ))}
+            {/* Overdue tasks */}
+            {overdueTasks.length > 0 && overdueTasks.slice(0, 4).map((t: any) => (
+              <div key={t.id}
+                onClick={() => navigate("/dashboard/tasks")}
+                className="flex items-center gap-1.5 py-1.5 border-l-2 border-red-500/60 pl-2 cursor-pointer hover:bg-muted/40 transition-colors">
+                <ListTodo className="h-3 w-3 text-red-500 shrink-0" />
+                <span className="text-[11px] truncate flex-1">{t.title}</span>
+                <span className="text-[9px] text-red-500/70 shrink-0">Overdue</span>
+              </div>
+            ))}
+            {todayBills.map((b: any) => (
+              <div key={b.id}
+                onClick={() => navigate("/dashboard/obligations")}
+                className="flex items-center gap-1.5 py-1.5 border-l-2 border-amber-500/60 pl-2 cursor-pointer hover:bg-muted/40 transition-colors">
+                <CreditCard className="h-3 w-3 text-amber-500 shrink-0" />
+                <span className="text-[11px] truncate flex-1">{b.name}</span>
+                <span className="text-[10px] font-medium text-amber-600 shrink-0">{formatMoney(b.amount)}</span>
+              </div>
+            ))}
+          </div>
           {overdueTasks.length === 0 && tasksDueToday.length === 0 && todayBills.length === 0 && (
-            <p className="text-xs text-muted-foreground py-2">All clear — nothing due today</p>
+            <p className="text-[10px] text-muted-foreground py-1">All clear — nothing due today</p>
           )}
         </div>
       </div>
