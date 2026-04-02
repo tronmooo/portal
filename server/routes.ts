@@ -751,6 +751,9 @@ export async function registerRoutes(
 
   app.post("/api/profiles/:id/unlink", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
+    if (!entityType || !entityId) return res.status(400).json({ error: "entityType and entityId required" });
+    const profile = await storage.getProfile(req.params.id);
+    if (!profile) return res.status(404).json({ error: "Profile not found" });
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
     res.json({ ok: true });
   }));
@@ -2583,14 +2586,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   }));
 
   app.post("/api/entity-links", asyncHandler(async (req, res) => {
-    try {
-      const parsed = insertEntityLinkSchema.parse(req.body);
-      const link = await storage.createEntityLink(parsed);
-      res.json(link);
-    } catch (err: any) {
-      console.error("Create entity link error:", err);
-      res.status(400).json({ error: err.message || "Failed to create entity link" });
-    }
+    const parsed = insertEntityLinkSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    const link = await storage.createEntityLink(parsed.data);
+    res.status(201).json(link);
   }));
 
   app.delete("/api/entity-links/:id", asyncHandler(async (req, res) => {
