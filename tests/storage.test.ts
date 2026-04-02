@@ -477,3 +477,118 @@ describe("Stats with Profile Filtering", () => {
     expect(stats.totalTasks).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ============================================================
+// getDashboardEnhanced (Profile Isolation)
+// ============================================================
+describe("getDashboardEnhanced Profile Filtering", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  it("returns all data when no profileId filter", async () => {
+    await storage.createTask({ title: "Task A", tags: [], linkedProfiles: ["p1"], dueDate: yesterday, status: "todo" });
+    await storage.createTask({ title: "Task B", tags: [], linkedProfiles: ["p2"], dueDate: yesterday, status: "todo" });
+    const dashboard = await storage.getDashboardEnhanced();
+    expect(dashboard.overdueTasks.length).toBe(2);
+  });
+
+  it("filters overdue tasks by profile", async () => {
+    const alex = await storage.createProfile({ type: "person", name: "Alex" });
+    const buddy = await storage.createProfile({ type: "pet", name: "Buddy" });
+    await storage.createTask({ title: "Alex Task", tags: [], linkedProfiles: [alex.id], dueDate: yesterday, status: "todo" });
+    await storage.createTask({ title: "Buddy Task", tags: [], linkedProfiles: [buddy.id], dueDate: yesterday, status: "todo" });
+    await storage.createTask({ title: "Shared Task", tags: [], linkedProfiles: [alex.id, buddy.id], dueDate: yesterday, status: "todo" });
+
+    const alexDashboard = await storage.getDashboardEnhanced(alex.id);
+    const alexTaskTitles = alexDashboard.overdueTasks.map((t: any) => t.title);
+    expect(alexTaskTitles).toContain("Alex Task");
+    expect(alexTaskTitles).toContain("Shared Task");
+    expect(alexTaskTitles).not.toContain("Buddy Task");
+
+    const buddyDashboard = await storage.getDashboardEnhanced(buddy.id);
+    const buddyTaskTitles = buddyDashboard.overdueTasks.map((t: any) => t.title);
+    expect(buddyTaskTitles).toContain("Buddy Task");
+    expect(buddyTaskTitles).toContain("Shared Task");
+    expect(buddyTaskTitles).not.toContain("Alex Task");
+  });
+
+  it("self profile sees unlinked entities", async () => {
+    const self = await storage.createProfile({ type: "self", name: "Me" });
+    const other = await storage.createProfile({ type: "person", name: "Other" });
+    await storage.createTask({ title: "Unlinked Task", tags: [], linkedProfiles: [], dueDate: yesterday, status: "todo" });
+    await storage.createTask({ title: "Other Task", tags: [], linkedProfiles: [other.id], dueDate: yesterday, status: "todo" });
+
+    const selfDashboard = await storage.getDashboardEnhanced(self.id);
+    const selfTaskTitles = selfDashboard.overdueTasks.map((t: any) => t.title);
+    expect(selfTaskTitles).toContain("Unlinked Task");
+    expect(selfTaskTitles).not.toContain("Other Task");
+
+    const otherDashboard = await storage.getDashboardEnhanced(other.id);
+    const otherTaskTitles = otherDashboard.overdueTasks.map((t: any) => t.title);
+    expect(otherTaskTitles).not.toContain("Unlinked Task");
+    expect(otherTaskTitles).toContain("Other Task");
+  });
+
+  it("filters expenses by profile", async () => {
+    const alex = await storage.createProfile({ type: "person", name: "Alex" });
+    await storage.createExpense({ amount: 50, description: "Alex lunch", category: "food", tags: [], linkedProfiles: [alex.id], date: today });
+    await storage.createExpense({ amount: 200, description: "Other expense", category: "auto", tags: [], linkedProfiles: ["other-id"], date: today });
+
+    const dashboard = await storage.getDashboardEnhanced(alex.id);
+    expect(dashboard.financeSnapshot.totalMonthlySpend).toBe(50);
+  });
+
+  it("filters obligations by profile", async () => {
+    const alex = await storage.createProfile({ type: "person", name: "Alex" });
+    const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    await storage.createObligation({ name: "Alex Rent", amount: 1000, frequency: "monthly", category: "housing", status: "active", linkedProfiles: [alex.id], nextDueDate: nextWeek });
+    await storage.createObligation({ name: "Other Bill", amount: 500, frequency: "monthly", category: "utilities", status: "active", linkedProfiles: ["other-id"], nextDueDate: nextWeek });
+
+    const dashboard = await storage.getDashboardEnhanced(alex.id);
+    const billNames = dashboard.financeSnapshot.upcomingBills.map((b: any) => b.name);
+    expect(billNames).toContain("Alex Rent");
+    expect(billNames).not.toContain("Other Bill");
+  });
+
+  it("filters today's events by profile", async () => {
+    const alex = await storage.createProfile({ type: "person", name: "Alex" });
+    await storage.createEvent({ title: "Alex Meeting", date: today, category: "work", source: "manual", recurrence: "none", tags: [], linkedProfiles: [alex.id], linkedDocuments: [] });
+    await storage.createEvent({ title: "Other Event", date: today, category: "personal", source: "manual", recurrence: "none", tags: [], linkedProfiles: ["other-id"], linkedDocuments: [] });
+
+    const dashboard = await storage.getDashboardEnhanced(alex.id);
+    const eventTitles = dashboard.todaysEvents.map((e: any) => e.title);
+    expect(eventTitles).toContain("Alex Meeting");
+    expect(eventTitles).not.toContain("Other Event");
+  });
+
+  it("multi-profile expense appears in both profiles but not others", async () => {
+    const alex = await storage.createProfile({ type: "person", name: "Alex" });
+    const sarah = await storage.createProfile({ type: "person", name: "Sarah" });
+    const buddy = await storage.createProfile({ type: "pet", name: "Buddy" });
+    await storage.createExpense({ amount: 300, description: "Family dinner", category: "food", tags: [], linkedProfiles: [alex.id, sarah.id], date: today });
+
+    const alexDash = await storage.getDashboardEnhanced(alex.id);
+    expect(alexDash.financeSnapshot.totalMonthlySpend).toBe(300);
+    const sarahDash = await storage.getDashboardEnhanced(sarah.id);
+    expect(sarahDash.financeSnapshot.totalMonthlySpend).toBe(300);
+    const buddyDash = await storage.getDashboardEnhanced(buddy.id);
+    expect(buddyDash.financeSnapshot.totalMonthlySpend).toBe(0);
+  });
+});
+
+// ============================================================
+// Calendar Timeline (Profile Filtering)
+// ============================================================
+describe("Calendar Timeline Profile Filtering", () => {
+  it("getCalendarTimeline returns all items", async () => {
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    await storage.createEvent({ title: "Event A", date: tomorrow, category: "work", source: "manual", recurrence: "none", tags: [], linkedProfiles: ["p1"], linkedDocuments: [] });
+    await storage.createEvent({ title: "Event B", date: tomorrow, category: "personal", source: "manual", recurrence: "none", tags: [], linkedProfiles: ["p2"], linkedDocuments: [] });
+
+    const start = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const end = nextWeek;
+    const items = await storage.getCalendarTimeline(start, end);
+    expect(items.length).toBeGreaterThanOrEqual(2);
+  });
+});

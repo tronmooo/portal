@@ -2114,6 +2114,18 @@ async function executeTool(name: string, input: any): Promise<any> {
       });
       // Auto-link: scan description and vendor for profile names + explicit forProfile
       await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
+      // Ensure asset expenses also appear in the main finance dashboard (self profile)
+      if (input.forProfile) {
+        try {
+          const profiles = await storage.getProfiles();
+          const selfProfile = profiles.find(p => p.type === "self");
+          const updatedExpense = await storage.getExpense(newExpense.id);
+          if (selfProfile && updatedExpense && !updatedExpense.linkedProfiles.includes(selfProfile.id)) {
+            await updateEntityLinkedProfiles("expense", newExpense.id, selfProfile.id);
+            await storage.linkProfileTo(selfProfile.id, "expense", newExpense.id);
+          }
+        } catch { /* non-critical */ }
+      }
       return newExpense;
     }
 
@@ -2137,9 +2149,9 @@ async function executeTool(name: string, input: any): Promise<any> {
         recurrence: input.recurrence || "none",
         category: input.category || "personal",
         source: "chat",
-        linkedProfiles: [],
-        linkedDocuments: [],
-        tags: [],
+        linkedProfiles: input.linkedProfiles || [],
+        linkedDocuments: input.linkedDocuments || [],
+        tags: input.tags || [],
       });
       // Auto-link: scan title and description for profile names + explicit forProfile
       await autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`, input.forProfile);
@@ -3062,6 +3074,14 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       if (entry && !entry.linkedProfiles.includes(profileId)) {
         entry.linkedProfiles.push(profileId);
         await storage.updateJournalEntry(entityId, { linkedProfiles: entry.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "artifact": {
+      const artifact = await storage.getArtifact(entityId);
+      if (artifact && !artifact.linkedProfiles.includes(profileId)) {
+        artifact.linkedProfiles.push(profileId);
+        await storage.updateArtifact(entityId, { linkedProfiles: artifact.linkedProfiles } as any);
       }
       break;
     }

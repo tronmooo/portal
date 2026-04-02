@@ -1342,7 +1342,7 @@ export class MemStorage implements IStorage {
     const trackers = Array.from(this.trackers.values()).filter(t => matchesProfile(t.linkedProfiles));
     const habits = Array.from(this.habits.values()).filter(h => matchesProfile(h.linkedProfiles));
     const obligations = Array.from(this.obligations.values()).filter(o => matchesProfile(o.linkedProfiles));
-    const journalEntries = Array.from(this.journal.values());
+    const journalEntries = Array.from(this.journal.values()).filter(j => matchesProfile(j.linkedProfiles));
     const now = new Date();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
@@ -1420,14 +1420,19 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Enhanced Dashboard Data ----
-  async getDashboardEnhanced(): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string): Promise<any> {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
 
+    // Profile filtering helper
+    const allProfiles = Array.from(this.profiles.values());
+    const isSelf = filterProfileId ? allProfiles.find(p => p.id === filterProfileId)?.type === "self" : false;
+    const mp = (linked: string[]) => !filterProfileId || linked.includes(filterProfileId) || (isSelf && linked.length === 0);
+
     // Document expiration alerts — scan extractedData for date fields
-    const documents = Array.from(this.documents.values());
+    const documents = Array.from(this.documents.values()).filter(d => mp(d.linkedProfiles));
     const expiringDocs: any[] = [];
     for (const doc of documents) {
       const ed = doc.extractedData || {};
@@ -1458,7 +1463,7 @@ export class MemStorage implements IStorage {
     expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
 
     // Health snapshot — aggregate recent tracker data from health-related trackers
-    const trackers = Array.from(this.trackers.values());
+    const trackers = Array.from(this.trackers.values()).filter(t => mp(t.linkedProfiles));
     const healthCategories = ['health', 'fitness', 'weight', 'sleep', 'blood_pressure', 'running', 'exercise', 'nutrition', 'wellness'];
     const healthTrackers = trackers.filter(t => healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c)));
     const healthSnapshot: any[] = [];
@@ -1486,7 +1491,7 @@ export class MemStorage implements IStorage {
     }
 
     // Finance snapshot — spending by category this month + upcoming bills
-    const expenses = Array.from(this.expenses.values());
+    const expenses = Array.from(this.expenses.values()).filter(e => mp(e.linkedProfiles));
     const monthlyExpenses = expenses.filter(e => {
       const d = new Date(e.date);
       return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
@@ -1505,7 +1510,7 @@ export class MemStorage implements IStorage {
     });
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const obligations = Array.from(this.obligations.values());
+    const obligations = Array.from(this.obligations.values()).filter(o => mp(o.linkedProfiles));
     const upcomingBills = obligations
       .filter(o => {
         const due = new Date(o.nextDueDate);
@@ -1535,7 +1540,7 @@ export class MemStorage implements IStorage {
     }, 0);
 
     // Overdue tasks
-    const tasks = Array.from(this.tasks.values());
+    const tasks = Array.from(this.tasks.values()).filter(t => mp(t.linkedProfiles));
     const overdueTasks = tasks.filter(t => {
       if (t.status === 'done' || !t.dueDate) return false;
       return new Date(t.dueDate) < now;
@@ -1548,7 +1553,7 @@ export class MemStorage implements IStorage {
     }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 
     // Today's events
-    const events = Array.from(this.events.values());
+    const events = Array.from(this.events.values()).filter(e => mp(e.linkedProfiles));
     const todaysEvents = events.filter(e => e.date === today)
       .map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
 

@@ -1167,8 +1167,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const start = (startRaw && isValidDateStr(startRaw)) ? startRaw : new Date().toISOString().slice(0, 10);
     const endDefault = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
     const end = (endRaw && isValidDateStr(endRaw)) ? endRaw : endDefault;
+    const fp = req.query.profileId as string | undefined;
     try {
-      const items = await storage.getCalendarTimeline(start, end);
+      let items = await storage.getCalendarTimeline(start, end);
+      // Filter by profile if specified
+      if (fp) {
+        const allProfiles = await storage.getProfiles();
+        const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+        items = items.filter(item => !fp || item.linkedProfiles.includes(fp) || (isSelf && item.linkedProfiles.length === 0));
+      }
       res.json(items);
     } catch (err: any) {
       res.status(500).json({ error: "Failed to load calendar" });
@@ -1454,8 +1461,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Notifications (computed on each request) ----
-  app.get("/api/notifications", asyncHandler(async (_req, res) => {
+  app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
+      const fp = req.query.profileId as string | undefined;
       interface Notification {
         id: string;
         type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone";
@@ -1505,8 +1513,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return Math.round((a.getTime() - b.getTime()) / 86400000);
       };
 
+      // Profile filter helper
+      const allProfiles = await storage.getProfiles();
+      const isSelfNotif = fp ? allProfiles.find(p => p.id === fp)?.type === "self" : false;
+      const mpNotif = (linked: string[]) => !fp || linked.includes(fp) || (isSelfNotif && linked.length === 0);
+
       // --- Document Expirations ---
-      const documents = await storage.getDocuments();
+      const allDocuments = await storage.getDocuments();
+      const documents = allDocuments.filter(d => mpNotif(d.linkedProfiles));
       const expirationKeywords = ["expir", "exp date", "exp_date", "expdate", "valid until", "valid through", "valid_until", "valid_through", "expires", "expiration"];
 
       for (const doc of documents) {
@@ -1558,7 +1572,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       }
 
       // --- Also scan profile fields for expiration dates ---
-      const profiles = await storage.getProfiles();
+      const profiles = fp ? allProfiles.filter(p => p.id === fp) : allProfiles;
       for (const profile of profiles) {
         if (!profile.fields || typeof profile.fields !== "object") continue;
         for (const [key, value] of Object.entries(profile.fields as Record<string, any>)) {
@@ -1607,7 +1621,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       }
 
       // --- Task Due Dates ---
-      const tasks = await storage.getTasks();
+      const allTasks = await storage.getTasks();
+      const tasks = allTasks.filter(t => mpNotif(t.linkedProfiles));
       for (const task of tasks) {
         if (task.status === "done" || !task.dueDate) continue;
         const due = parseDate(task.dueDate);
@@ -1650,7 +1665,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       }
 
       // --- Bills/Obligations ---
-      const obligations = await storage.getObligations();
+      const allObligations = await storage.getObligations();
+      const obligations = allObligations.filter(o => mpNotif(o.linkedProfiles));
       for (const ob of obligations) {
         if (!ob.nextDueDate) continue;
         const due = parseDate(ob.nextDueDate);
@@ -1693,7 +1709,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       }
 
       // --- Habit Streak Risk & Milestones ---
-      const habits = await storage.getHabits();
+      const allHabits = await storage.getHabits();
+      const habits = allHabits.filter(h => mpNotif(h.linkedProfiles));
       const streakMilestones = [7, 14, 30, 60, 90, 100, 365];
       for (const habit of habits) {
         // Streak risk: hasn't checked in today and has streak >= 3
