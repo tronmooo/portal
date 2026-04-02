@@ -295,6 +295,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, date: r.date, mood: r.mood as MoodLevel, content: r.content || "",
       tags: r.tags || [], energy: r.energy ?? undefined,
       gratitude: r.gratitude || undefined, highlights: r.highlights || undefined,
+      linkedProfiles: r.linked_profiles || [],
       createdAt: r.created_at,
     };
   }
@@ -1929,6 +1930,7 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, date: data.date || now.slice(0, 10), mood: data.mood,
       content: data.content || "", tags: data.tags || [], energy: data.energy ?? null,
       gratitude: data.gratitude || null, highlights: data.highlights || null,
+      linked_profiles: (data as any).linkedProfiles || [],
       created_at: now,
     });
     if (error) throw error;
@@ -1944,6 +1946,7 @@ export class SupabaseStorage implements IStorage {
       date: merged.date, mood: merged.mood, content: merged.content,
       tags: merged.tags, energy: merged.energy ?? null,
       gratitude: merged.gratitude || null, highlights: merged.highlights || null,
+      ...((data as any).linkedProfiles ? { linked_profiles: (data as any).linkedProfiles } : {}),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     return this.getJournalEntry(id);

@@ -1087,6 +1087,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         energy: { type: "number", description: "Energy level 1-5" },
         gratitude: { type: "array", items: { type: "string" }, description: "Things grateful for" },
         highlights: { type: "array", items: { type: "string" }, description: "Day highlights" },
+        forProfile: { type: "string", description: "REQUIRED when journal is for a specific person. Set to exact profile name." },
       },
       required: ["mood"],
     },
@@ -2144,6 +2145,28 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_habit": {
+      // Deduplication: check if a habit with the same name already exists for the same profile
+      const existingHabits = await storage.getHabits();
+      let targetProfileId: string | undefined;
+      if (input.forProfile) {
+        const allProfiles = await storage.getProfiles();
+        const targetP = allProfiles.find(p => p.name.toLowerCase() === input.forProfile.toLowerCase().trim())
+          || allProfiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+        if (targetP) targetProfileId = targetP.id;
+      }
+      const dupHabit = existingHabits.find(h => {
+        if (h.name.toLowerCase() !== (input.name || "").toLowerCase()) return false;
+        // If forProfile is set, check if this habit is linked to the same profile
+        if (targetProfileId) {
+          return (h.linkedProfiles || []).includes(targetProfileId);
+        }
+        return true; // same name, no specific profile filter
+      });
+      if (dupHabit) {
+        logger.info("ai", `Skipped duplicate habit: "${dupHabit.name}" already exists${targetProfileId ? " for this profile" : ""}`);
+        return dupHabit;
+      }
+
       const habit = await storage.createHabit({
         name: input.name,
         frequency: input.frequency || "daily",
@@ -2255,15 +2278,50 @@ async function executeTool(name: string, input: any): Promise<any> {
       return storage.payObligation(ob.id, parseFloat(input.amount) || ob.amount, input.method, input.confirmationNumber);
     }
 
-    case "journal_entry":
-      return storage.createJournalEntry({
-        mood: input.mood || "neutral",
-        content: input.content || "",
-        energy: input.energy,
-        gratitude: input.gratitude,
-        highlights: input.highlights,
-        tags: [],
-      });
+    case "journal_entry": {
+      // Check if a journal entry already exists for today
+      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const allJournalEntries = await storage.getJournalEntries();
+      const existingToday = allJournalEntries.find(j => j.date === todayDate);
+
+      let entry: any;
+      if (existingToday) {
+        // APPEND to existing entry instead of blocking
+        const appendedContent = existingToday.content
+          ? existingToday.content + "\n\n" + (input.content || "")
+          : (input.content || "");
+        entry = await storage.updateJournalEntry(existingToday.id, {
+          content: appendedContent,
+          mood: input.mood || existingToday.mood,
+          energy: input.energy ?? existingToday.energy,
+          gratitude: input.gratitude || existingToday.gratitude,
+          highlights: input.highlights || existingToday.highlights,
+        } as any);
+        if (!entry) entry = existingToday;
+      } else {
+        entry = await storage.createJournalEntry({
+          mood: input.mood || "neutral",
+          content: input.content || "",
+          energy: input.energy,
+          gratitude: input.gratitude,
+          highlights: input.highlights,
+          tags: [],
+        });
+      }
+
+      // Direct profile linking for forProfile
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const target = profiles.find((p: any) => p.name.toLowerCase() === input.forProfile.toLowerCase().trim())
+          || profiles.find((p: any) => p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+        if (target) {
+          await storage.updateJournalEntry(entry.id, { linkedProfiles: [target.id] } as any);
+          await storage.linkProfileTo(target.id, "journal", entry.id).catch(() => {});
+        }
+      }
+
+      return entry;
+    }
 
     case "create_artifact":
       return storage.createArtifact({
@@ -2972,17 +3030,23 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
 
     // When an entity is linked to an asset/child profile (Honda, Tesla, etc.),
     // ALSO ensure it's linked to the self profile so it appears in the main Finance/Tasks view.
-    // Previously this was removing the self-link, causing data to vanish from the main profile.
+    // EXCEPTION: When forProfile is explicitly set for non-expense entities (tasks, events, habits, goals, journal),
+    // do NOT auto-link to self — the item belongs to the target profile only.
     if (matchedNonSelfIds.length > 0 && selfProfile) {
       for (const matchedId of matchedNonSelfIds) {
         // Propagate up the parent chain (Honda → Me)
         try { await storage.propagateEntityToAncestors(entityType, entityId, matchedId); } catch { /* non-critical */ }
       }
-      // Ensure self profile always has the link
-      try {
-        await storage.linkProfileTo(selfProfile.id, entityType, entityId);
-        await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
-      } catch { /* may already be linked */ }
+      // Only add self-link when:
+      // - The entity is an expense (expenses should always show in owner's finance)
+      // - OR no explicit forProfile was provided (implicit text-based match)
+      const shouldLinkToSelf = entityType === "expense" || !explicitProfileName;
+      if (shouldLinkToSelf) {
+        try {
+          await storage.linkProfileTo(selfProfile.id, entityType, entityId);
+          await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
+        } catch { /* may already be linked */ }
+      }
     }
   } catch (err) {
     console.error("Auto-link failed:", err);
@@ -3344,7 +3408,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     let documentPreview: { id: string; name: string; mimeType: string; data: string } | undefined;
     const documentPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
     let iterations = 0;
-    const MAX_ITERATIONS = 8; // Each iteration is a full AI round-trip; 8 is enough for even 10+ tool calls
+    const MAX_ITERATIONS = 15; // Each iteration is a full AI round-trip; increased to handle 10+ action messages
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
