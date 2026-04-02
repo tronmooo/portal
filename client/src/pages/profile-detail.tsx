@@ -1495,6 +1495,7 @@ function TrackerCard_Profile({
       setDeleteEntryId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
@@ -1737,6 +1738,7 @@ function TrackersTab({
       setDeleteTrackerId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to delete tracker", description: err.message, variant: "destructive" }),

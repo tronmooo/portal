@@ -37,6 +37,7 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
     mutationFn: () => apiRequest("DELETE", `/api/journal/${entry.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Entry deleted" });
     },
     onError: () => toast({ title: "Failed to delete entry", variant: "destructive" }),

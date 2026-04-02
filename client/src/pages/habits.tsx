@@ -31,7 +31,7 @@ function HabitCard({ habit }: { habit: Habit }) {
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: "Habit deleted" }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Habit deleted" }); },
     onError: () => toast({ title: "Failed to delete habit", variant: "destructive" }),
   });
 

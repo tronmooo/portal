@@ -1068,6 +1068,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
       setEditGoal(null); resetForm();
       toast({ title: "Goal updated" });
     },
+    onError: (e: Error) => toast({ title: "Failed to update goal", description: e.message, variant: "destructive" }),
   });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
@@ -1076,6 +1077,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
       setEditGoal(null);
       toast({ title: "Goal deleted" });
     },
+    onError: (e: Error) => toast({ title: "Failed to delete goal", description: e.message, variant: "destructive" }),
   });
 
   const resetForm = () => { setFormTitle(""); setFormTarget(""); setFormUnit(""); setFormDeadline(""); setFormType("custom"); };

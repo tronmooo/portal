@@ -6,13 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { CheckSquare, FileText, Pin, Plus, X, ArrowLeft } from "lucide-react";
+import { CheckSquare, FileText, Pin, Plus, X, ArrowLeft, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Artifact } from "@shared/schema";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
-function ChecklistCard({ artifact }: { artifact: Artifact }) {
+function ChecklistCard({ artifact, onDelete }: { artifact: Artifact; onDelete: (id: string) => void }) {
   const { toast } = useToast();
   const total = artifact.items.length;
   const done = artifact.items.filter(i => i.checked).length;
@@ -25,10 +25,13 @@ function ChecklistCard({ artifact }: { artifact: Artifact }) {
   });
 
   return (
-    <Card className="relative" data-testid={`card-artifact-${artifact.id}`}>
+    <Card className="relative group" data-testid={`card-artifact-${artifact.id}`}>
       {artifact.pinned && (
         <Pin className="absolute top-2 right-2 h-3 w-3 text-primary" />
       )}
+      <button onClick={() => onDelete(artifact.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10" aria-label="Delete">
+        <Trash2 className="h-3 w-3 text-destructive" />
+      </button>
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2">
           <CheckSquare className="h-4 w-4 text-primary" />
@@ -69,12 +72,15 @@ function ChecklistCard({ artifact }: { artifact: Artifact }) {
   );
 }
 
-function NoteCard({ artifact }: { artifact: Artifact }) {
+function NoteCard({ artifact, onDelete }: { artifact: Artifact; onDelete: (id: string) => void }) {
   return (
-    <Card className="relative" data-testid={`card-artifact-${artifact.id}`}>
+    <Card className="relative group" data-testid={`card-artifact-${artifact.id}`}>
       {artifact.pinned && (
         <Pin className="absolute top-2 right-2 h-3 w-3 text-primary" />
       )}
+      <button onClick={() => onDelete(artifact.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10" aria-label="Delete">
+        <Trash2 className="h-3 w-3 text-destructive" />
+      </button>
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-primary" />
@@ -120,17 +126,39 @@ export default function ArtifactsPage() {
     onError: () => toast({ title: "Failed to create artifact", variant: "destructive" }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/artifacts/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      toast({ title: "Artifact deleted" });
+    },
+    onError: () => toast({ title: "Failed to delete artifact", variant: "destructive" }),
+  });
+
+  const handleDelete = (id: string) => {
+    if (confirm("Delete this artifact?")) deleteMutation.mutate(id);
+  };
+
   const pinned = artifacts.filter(a => a.pinned);
   const unpinned = artifacts.filter(a => !a.pinned);
 
   const handleCreate = () => {
     if (!title.trim()) return;
     if (createType === "checklist") {
+      const validItems = items.filter(i => i.trim());
+      if (validItems.length === 0) {
+        toast({ title: "Add at least one item", variant: "destructive" });
+        return;
+      }
       createMutation.mutate({
         type: "checklist", title: title.trim(),
-        items: items.filter(i => i.trim()).map(text => ({ text: text.trim(), checked: false })),
+        items: validItems.map(text => ({ text: text.trim(), checked: false })),
       });
     } else {
+      if (!content.trim()) {
+        toast({ title: "Content required", description: "Write something for your note", variant: "destructive" });
+        return;
+      }
       createMutation.mutate({ type: "note", title: title.trim(), content });
     }
   };
@@ -207,13 +235,13 @@ export default function ArtifactsPage() {
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><Pin className="h-3 w-3" /> Pinned</p>
               <div className="grid gap-3 md:grid-cols-2">
-                {pinned.map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
+                {pinned.map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} onDelete={handleDelete} /> : <NoteCard key={a.id} artifact={a} onDelete={handleDelete} />)}
               </div>
             </div>
           )}
           {unpinned.length > 0 && (
             <div className="grid gap-3 md:grid-cols-2">
-              {unpinned.map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
+              {unpinned.map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} onDelete={handleDelete} /> : <NoteCard key={a.id} artifact={a} onDelete={handleDelete} />)}
             </div>
           )}
         </>

@@ -44,6 +44,10 @@ export default function FinancePage() {
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
 
   const handleAddExpense = () => {
+    if (!newExpense.description.trim()) {
+      toast({ title: "Description required", description: "Please enter a description", variant: "destructive" });
+      return;
+    }
     const amount = parseFloat(newExpense.amount);
     if (!amount || amount <= 0) {
       toast({ title: "Invalid amount", description: "Amount must be greater than 0", variant: "destructive" });
@@ -68,6 +72,9 @@ export default function FinancePage() {
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
       toast({ title: "Expense added" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to add expense", description: err.message, variant: "destructive" });
     },
   });
 

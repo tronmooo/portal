@@ -472,6 +472,9 @@ function EventDetailDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
+    onError: () => {
+      toast({ title: "Failed to update task", variant: "destructive" });
+    },
   });
 
   return (
@@ -751,10 +754,11 @@ export default function CalendarView() {
     return toLocalDateStr(d);
   }, [viewYear, viewMonth]);
 
+  const profileParam = resolvedProfileId ? `&profileId=${resolvedProfileId}` : "";
   const { data: timelineItems = [], isLoading: timelineLoading } = useQuery<CalendarTimelineItem[]>({
-    queryKey: ["/api/calendar/timeline", startDate, endDate],
+    queryKey: ["/api/calendar/timeline", startDate, endDate, resolvedProfileId],
     queryFn: () =>
-      apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}`).then(r => r.json()),
+      apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}${profileParam}`).then(r => r.json()),
   });
 
   // Group items by date (with type + profile filtering)

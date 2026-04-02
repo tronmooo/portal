@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus } from "lucide-react";
+import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Obligation } from "@shared/schema";
 
@@ -18,7 +18,7 @@ const CATEGORY_ICONS: Record<string, any> = {
   health: CheckCircle, investment: DollarSign,
 };
 
-function ObligationCard({ ob }: { ob: Obligation }) {
+function ObligationCard({ ob, onDelete }: { ob: Obligation; onDelete: (id: string) => void }) {
   const { toast } = useToast();
   const Icon = CATEGORY_ICONS[ob.category] || DollarSign;
   const dueDate = new Date(ob.nextDueDate);
@@ -63,16 +63,27 @@ function ObligationCard({ ob }: { ob: Obligation }) {
               {ob.notes && <p className="text-[10px] text-muted-foreground mt-1">{ob.notes}</p>}
             </div>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => payMutation.mutate()}
-            disabled={payMutation.isPending}
-            className="h-7 text-xs shrink-0"
-            data-testid={`button-pay-${ob.id}`}
-          >
-            Mark Paid
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => payMutation.mutate()}
+              disabled={payMutation.isPending}
+              className="h-7 text-xs"
+              data-testid={`button-pay-${ob.id}`}
+            >
+              Mark Paid
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onDelete(ob.id)}
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+              data-testid={`button-delete-${ob.id}`}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          </div>
         </div>
 
         {/* Payment history */}
@@ -119,6 +130,21 @@ export default function ObligationsPage() {
     },
     onError: () => toast({ title: "Failed to create obligation", variant: "destructive" }),
   });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/obligations/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Obligation deleted" });
+    },
+    onError: () => toast({ title: "Failed to delete obligation", variant: "destructive" }),
+  });
+
+  const handleDelete = (id: string) => {
+    if (confirm("Delete this obligation?")) deleteMutation.mutate(id);
+  };
 
   const sorted = [...obligations].sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime());
   const monthlyTotal = obligations.reduce((s, o) => {
@@ -255,7 +281,7 @@ export default function ObligationsPage() {
       ) : (
         <div className="grid gap-3">
           {sorted.map(ob => (
-            <ObligationCard key={ob.id} ob={ob} />
+            <ObligationCard key={ob.id} ob={ob} onDelete={handleDelete} />
           ))}
         </div>
       )}
