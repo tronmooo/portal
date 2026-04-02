@@ -2560,9 +2560,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         return res.status(400).json({ error: "Target must be greater than 0" });
       }
       const parsed = insertGoalSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      if (!parsed.success) return res.status(400).json({ error: parsed.error });
       const goal = await storage.createGoal(parsed.data);
-      res.json(goal);
+      res.status(201).json(goal);
     } catch (err: any) {
       console.error("Create goal error:", err);
       res.status(500).json({ error: "Failed to create goal" });
