@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -68,7 +69,7 @@ export default function FinancePage() {
       toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to add expense", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" });
     },
   });
 

@@ -8,6 +8,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { MobileBottomNav } from "@/components/mobile-nav";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
@@ -185,6 +186,7 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
         <TooltipProvider>
+          <ErrorBoundary>
           <Router hook={useHashLocation}>
             <AuthGate>
             <CommandSearchProvider>
@@ -226,6 +228,7 @@ function App() {
             </CommandSearchProvider>
             </AuthGate>
           </Router>
+          </ErrorBoundary>
           <Toaster />
           <OfflineIndicator />
           <InstallPrompt />

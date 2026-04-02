@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -702,7 +703,7 @@ function AddEntryDialog({
       toast({ title: "Entry logged", description: `Added entry to ${tracker.name}` });
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to log entry", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -845,7 +846,7 @@ function DeleteEntryButton({
       toast({ title: "Entry deleted" });
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to delete entry", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -1274,7 +1275,7 @@ function CreateTrackerDialog({
       toast({ title: "Tracker created" });
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to create tracker", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to create tracker", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -1492,7 +1493,7 @@ function DeleteTrackerDialog({
       toast({ title: "Tracker deleted", description: `${trackerName} has been removed` });
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to delete tracker", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -2624,7 +2625,7 @@ function TrackerDetailDialog({
       onClose();
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to delete tracker", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -2863,7 +2864,7 @@ export default function TrackersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
     },
     onError: (err: Error) => {
-      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -2877,7 +2878,7 @@ export default function TrackersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
     },
     onError: (err: Error) => {
-      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
     },
   });
 

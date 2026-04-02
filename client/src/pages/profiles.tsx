@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";

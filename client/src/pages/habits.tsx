@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getDashboardProfileFilter } from "@/lib/profileFilter";
@@ -38,13 +39,13 @@ function HabitCard({ habit }: { habit: Habit }) {
         toast({ title: `${habit.name} — ${newCount}/${targetPerDay}`, description: `${targetPerDay - newCount} more to go` });
       }
     },
-    onError: (err: Error) => toast({ title: `Failed to check in ${habit.name}`, description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to check in ${habit.name}`, description: formatApiError(err), variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `"${habit.name}" deleted` }); },
-    onError: (err: Error) => toast({ title: `Failed to delete "${habit.name}"`, description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to delete "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
   // Build last 14 days grid (multi-daily aware)
@@ -122,17 +123,31 @@ function HabitCard({ habit }: { habit: Habit }) {
         </div>
       </CardHeader>
       <CardContent className="pl-5 pb-3">
-        {/* Streak badges */}
+        {/* Streak badges + progress */}
         <div className="flex items-center gap-3 mb-3">
-          <div className="flex items-center gap-1">
-            <Flame className="h-3.5 w-3.5 text-orange-500" />
-            <span className="text-xs font-semibold">{habit.currentStreak}d streak</span>
-          </div>
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Trophy className="h-3 w-3" />
-            <span className="text-xs">Best: {habit.longestStreak}d</span>
-          </div>
-          <Badge variant="outline" className="text-[10px] h-5">{habit.frequency}</Badge>
+          {habit.currentStreak > 0 ? (
+            <div className="flex items-center gap-1">
+              <Flame className="h-3.5 w-3.5 text-orange-500" />
+              <span className="text-xs font-semibold">{habit.currentStreak}d streak</span>
+            </div>
+          ) : todayCheckins > 0 && !completedToday ? (
+            <div className="flex items-center gap-1">
+              <Flame className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">{todayCheckins}/{targetPerDay} today</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              <Flame className="h-3.5 w-3.5 text-muted-foreground/50" />
+              <span className="text-xs text-muted-foreground">No streak yet</span>
+            </div>
+          )}
+          {habit.longestStreak > 0 && (
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <Trophy className="h-3 w-3" />
+              <span className="text-xs">Best: {habit.longestStreak}d</span>
+            </div>
+          )}
+          <Badge variant="outline" className="text-[10px] h-5">{habit.frequency}{targetPerDay > 1 ? ` ${targetPerDay}x` : ""}</Badge>
         </div>
 
         {/* 14-day grid */}
@@ -184,7 +199,7 @@ export default function HabitsPage() {
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
-    onError: (err: Error) => toast({ title: "Failed to create habit", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
   // Summary stats

@@ -2725,7 +2725,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.get("/api/preferences/:key", asyncHandler(async (req, res) => {
     try {
       const value = await storage.getPreference(req.params.key);
-      if (value === null) return res.status(404).json({ error: "Not found" });
+      if (value === null) return res.json({ value: null });
       res.json({ value });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to get preference" });

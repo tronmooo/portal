@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getDashboardProfileFilter } from "@/lib/profileFilter";
@@ -40,7 +41,7 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
       toast({ title: "Journal entry deleted" });
     },
-    onError: (err: Error) => toast({ title: "Failed to delete entry", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -162,7 +163,7 @@ export default function JournalPage() {
       setMood(null); setContent(""); setEnergy(3); setShowCreate(false);
       toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
     },
-    onError: (err: Error) => toast({ title: "Failed to create journal entry", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create journal entry", description: formatApiError(err), variant: "destructive" }),
   });
 
   // 7-day mood strip

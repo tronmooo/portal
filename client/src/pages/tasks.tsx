@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -94,7 +95,7 @@ function TaskDialog({
       onClose();
     },
     onError: (err: Error) => {
-      toast({ title: isEdit ? "Update failed" : "Create failed", description: err.message, variant: "destructive" });
+      toast({ title: isEdit ? "Update failed" : "Create failed", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -200,7 +201,7 @@ function TaskItem({
       invalidateTaskQueries();
       toast({ title: task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed` });
     },
-    onError: (err: Error) => toast({ title: `Failed to update "${task.title}"`, description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to update "${task.title}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -209,7 +210,7 @@ function TaskItem({
       invalidateTaskQueries();
       toast({ title: `"${task.title}" deleted` });
     },
-    onError: (err: Error) => toast({ title: `Failed to delete "${task.title}"`, description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to delete "${task.title}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
   return (

@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
@@ -727,7 +728,7 @@ function InfoTab({
       setNewFieldValue("");
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to add field", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to add field", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -1103,7 +1104,7 @@ function DocumentsTab({
       onUploaded();
     },
     onError: (err: Error) => {
-      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -1117,7 +1118,7 @@ function DocumentsTab({
       onUploaded();
     },
     onError: (err: Error) => {
-      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -1569,7 +1570,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed to add expense", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" }),
   });
 
   const updateExpenseMutation = useMutation({
@@ -1588,7 +1589,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed to update expense", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to update expense", description: formatApiError(err), variant: "destructive" }),
   });
 
   const deleteExpenseMutation = useMutation({
@@ -1605,7 +1606,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   function openEdit(expense: ProfileDetail["relatedExpenses"][number]) {
@@ -2258,7 +2259,7 @@ function TrackerCard_Profile({
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -2458,7 +2459,7 @@ function TrackersTab({
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   const linkTrackerMutation = useMutation({
@@ -2472,7 +2473,7 @@ function TrackersTab({
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   const unlinkTrackerMutation = useMutation({
@@ -2486,7 +2487,7 @@ function TrackersTab({
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   const deleteTrackerMutation = useMutation({
@@ -2500,7 +2501,7 @@ function TrackersTab({
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed to delete tracker", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" }),
   });
 
   const logEntryMutation = useMutation({
@@ -2523,7 +2524,7 @@ function TrackersTab({
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed to log entry", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" }),
   });
 
   const trackerCategories = ["custom", "health", "fitness", "finance", "productivity", "nutrition", "sleep", "mood", "weight", "other"];
@@ -2747,7 +2748,7 @@ function QuickHealthButton({ profileId, name, unit, field, category, fieldType =
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onCreated();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -2856,7 +2857,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   // ── empty state ───────────────────────────────────────────
@@ -3297,7 +3298,7 @@ function TasksTab({
       onChanged();
     },
     onError: (err: Error, variables) => {
-      toast({ title: `Failed to update "${variables.title || "task"}"`, description: err.message, variant: "destructive" });
+      toast({ title: `Failed to update "${variables.title || "task"}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -3323,7 +3324,7 @@ function TasksTab({
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed to create task", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create task", description: formatApiError(err), variant: "destructive" }),
   });
 
   const deleteTaskMutation = useMutation({
@@ -3340,7 +3341,7 @@ function TasksTab({
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   const [taskFilter, setTaskFilter] = useState<"all" | "open" | "done">("all");
@@ -3601,7 +3602,7 @@ function EditProfileDialog({
       onClose();
     },
     onError: (err: Error) => {
-      toast({ title: `Failed to update "${name}"`, description: err.message, variant: "destructive" });
+      toast({ title: `Failed to update "${name}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -3917,7 +3918,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed to save notes", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to save notes", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -4019,7 +4020,7 @@ export default function ProfileDetailPage() {
       navigate("/profiles");
     },
     onError: (err: Error) => {
-      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
     },
   });
 

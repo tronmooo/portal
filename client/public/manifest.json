@@ -1,7 +1,7 @@
 {
-  "name": "LifeOS",
-  "short_name": "LifeOS",
-  "description": "AI-powered personal life management system",
+  "name": "Portol",
+  "short_name": "Portol",
+  "description": "AI-powered personal life management",
   "start_url": "/#/",
   "scope": "/",
   "display": "standalone",

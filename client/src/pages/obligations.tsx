@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
@@ -36,7 +37,7 @@ function ObligationCard({ ob }: { ob: Obligation }) {
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: `"${ob.name}" marked paid`, description: `$${ob.amount.toFixed(2)} payment recorded` });
     },
-    onError: (err: Error) => toast({ title: `Failed to pay "${ob.name}"`, description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to pay "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -136,7 +137,7 @@ export default function ObligationsPage() {
       setAddOpen(false);
       setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing");
     },
-    onError: (err: Error) => toast({ title: "Failed to create bill", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create bill", description: formatApiError(err), variant: "destructive" }),
   });
 
   const sorted = [...obligations].sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime());
