@@ -64,6 +64,14 @@ function getCached(key: string): any | null {
   return null;
 }
 function setCache(key: string, data: any, ttlMs: number = 10000): void {
+  // Cap cache size to prevent unbounded memory growth
+  if (responseCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of responseCache) {
+      if (v.expiresAt < now) responseCache.delete(k);
+      if (responseCache.size <= 250) break;
+    }
+  }
   responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
 function bustCache(prefix: string): void {
@@ -88,6 +96,8 @@ function sanitize(input: string): string {
     .replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '')
     .replace(/<embed[^>]*>/gi, '')
     .replace(/<link[^>]*>/gi, '')
+    .replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, '')
+    .replace(/<form[^>]*>[\s\S]*?<\/form>/gi, '')
     .replace(/data:text\/html/gi, '')
     .replace(/vbscript:/gi, '')
     .trim()
@@ -605,9 +615,10 @@ export async function registerRoutes(
       const filteredHabits = habits.filter(h => mp(h.linkedProfiles));
       const filteredDocuments = documents.filter(d => mp(d.linkedProfiles));
       const filteredGoals = goals.filter(g => mp(g.linkedProfiles));
+      const filteredJournal = journal.filter(j => mp(j.linkedProfiles));
       const insights = generateSmartInsights({
         profiles, trackers, tasks, expenses, habits: filteredHabits, obligations,
-        journal, documents: filteredDocuments, goals: filteredGoals, events,
+        journal: filteredJournal, documents: filteredDocuments, goals: filteredGoals, events,
       });
       res.json(insights);
     } catch (err: any) {
@@ -1205,7 +1216,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const doc = await storage.getDocument(req.params.id);
     if (!doc || !doc.fileData) return res.status(404).json({ error: "Not found" });
     const buffer = Buffer.from(doc.fileData, "base64");
-    res.setHeader("Content-Type", doc.mimeType);
+    // Prevent serving HTML/SVG that could execute scripts in browser
+    const safeMimeTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain', 'application/json'];
+    const mimeType = safeMimeTypes.includes(doc.mimeType) ? doc.mimeType : 'application/octet-stream';
+    res.setHeader("Content-Type", mimeType);
     // Sanitize filename: strip all non-alphanumeric except dots, hyphens, underscores
     const safeName = (doc.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
     res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
@@ -1860,13 +1874,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // Import tasks
       if (data.tasks && Array.isArray(data.tasks)) {
         for (const t of data.tasks) {
-          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags }));
+          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags || [], linkedProfiles: t.linkedProfiles || [] }));
         }
       }
       // Import expenses
       if (data.expenses && Array.isArray(data.expenses)) {
         for (const e of data.expenses) {
-          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags }));
+          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags || [], linkedProfiles: e.linkedProfiles || [] }));
         }
       }
       // Import events
@@ -1898,7 +1912,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (data.obligations && Array.isArray(data.obligations)) {
         for (const o of data.obligations) {
           await tryImport("obligations", o.name || "unnamed", async () => {
-            const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes });
+            const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes, linkedProfiles: o.linkedProfiles || [] });
             if (o.payments) {
               for (const p of o.payments) {
                 await tryImport("obligationPayments", `${o.name} payment`, () => storage.payObligation(created.id, p.amount, p.method, p.confirmationNumber));
@@ -2038,6 +2052,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
             vendor: description.split(/\s{2,}|[-–]/).shift()?.trim().slice(0, 100) || undefined,
             date: normalizedDate,
             tags: ["bank-import"],
+            linkedProfiles: [],
           });
           imported++;
         } catch (err: any) {

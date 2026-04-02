@@ -190,12 +190,13 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   date TEXT NOT NULL,
-  mood TEXT NOT NULL CHECK (mood IN ('amazing','good','neutral','bad','awful')),
+  mood TEXT NOT NULL CHECK (mood IN ('amazing','great','good','okay','neutral','bad','awful','terrible')),
   content TEXT DEFAULT '',
   tags JSONB DEFAULT '[]'::jsonb,
   energy INTEGER CHECK (energy IS NULL OR (energy >= 1 AND energy <= 5)),
   gratitude JSONB DEFAULT '[]'::jsonb,
   highlights JSONB DEFAULT '[]'::jsonb,
+  linked_profiles JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -378,6 +379,9 @@ CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_goals_user ON goals(user_id);
 CREATE INDEX IF NOT EXISTS idx_domains_user ON domains(user_id);
 CREATE INDEX IF NOT EXISTS idx_domain_entries_domain ON domain_entries(domain_id);
+CREATE INDEX IF NOT EXISTS idx_tracker_entries_timestamp ON tracker_entries(tracker_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_obligation_payments_user ON obligation_payments(user_id);
+CREATE INDEX IF NOT EXISTS idx_habit_checkins_user ON habit_checkins(user_id);
 CREATE INDEX IF NOT EXISTS idx_entity_links_source ON entity_links(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_entity_links_target ON entity_links(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_entity_links_user ON entity_links(user_id);

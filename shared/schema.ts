@@ -213,7 +213,7 @@ export interface TrackerEntry {
   values: Record<string, any>;
   computed: ComputedData;
   notes?: string;
-  mood?: "great" | "good" | "okay" | "bad" | "terrible";
+  mood?: MoodLevel;
   tags?: string[];
   timestamp: string;
 }
@@ -254,7 +254,7 @@ export const insertTrackerEntrySchema = z.object({
   trackerId: z.string(),
   values: z.record(z.any()),
   notes: z.string().optional(),
-  mood: z.enum(["great", "good", "okay", "bad", "terrible"]).optional(),
+  mood: z.enum(["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"]).optional(),
   tags: z.array(z.string()).optional(),
 });
 
@@ -400,6 +400,7 @@ export interface JournalEntry {
   energy?: number; // 1-5
   gratitude?: string[];
   highlights?: string[];
+  linkedProfiles: string[];
   createdAt: string;
 }
 
@@ -411,6 +412,7 @@ export const insertJournalEntrySchema = z.object({
   energy: z.number().min(1).max(5).optional(),
   gratitude: z.array(z.string()).optional(),
   highlights: z.array(z.string()).optional(),
+  linkedProfiles: z.array(z.string()).optional(),
 });
 
 export type InsertJournalEntry = z.infer<typeof insertJournalEntrySchema>;

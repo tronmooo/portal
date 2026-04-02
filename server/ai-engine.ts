@@ -607,6 +607,7 @@ Return ONLY the JSON array, nothing else.`;
           description: desc,
           date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
           tags: ["from-document"],
+          linkedProfiles: linkedProfiles || [],
         });
         // Link to the asset/profile AND propagate up to the self (Me) profile
         if (existingProfileId) {
@@ -665,6 +666,8 @@ Return ONLY the JSON array, nothing else.`;
             tags: ['from-document', 'expiration-alert'],
             linkedProfiles: alertProfiles,
             linkedDocuments: [document.id],
+            source: 'ai',
+            recurrence: 'none',
           });
           // Link the event to profiles via junction tables too
           for (const pId of alertProfiles) {
@@ -744,7 +747,9 @@ Return ONLY the JSON array, nothing else.`;
               description: `Auto-created from document: ${parsed.label || fileName}`,
               linkedProfiles: linkedProfiles,
               linkedDocuments: [document.id],
+              tags: ["from-document", "expiration-alert"],
               source: "ai",
+              recurrence: "none",
             });
             savedItems.push(`Calendar event: ${eventTitle} on ${dateStr}`);
           }
@@ -1985,6 +1990,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         dueDate: input.dueDate,
         description: input.description,
         tags: input.tags || [],
+        linkedProfiles: input.linkedProfiles || [],
       });
       // Auto-link: scan title for profile names + explicit forProfile
       await autoLinkToProfiles("task", newTask.id, input.title || "", input.forProfile);
@@ -2097,6 +2103,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), // YYYY-MM-DD in Pacific
         vendor: input.vendor,
         tags: input.tags || [],
+        linkedProfiles: input.linkedProfiles || [],
       });
       // Auto-link: scan description and vendor for profile names + explicit forProfile
       await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
@@ -2172,6 +2179,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         category: input.category || "general",
         nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
         autopay: input.autopay ?? false,
+        linkedProfiles: input.linkedProfiles || [],
       });
 
       // Auto-create subscription profile if this looks like a subscription/service
@@ -2239,8 +2247,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       return storage.payObligation(ob.id, parseFloat(input.amount) || ob.amount, input.method, input.confirmationNumber);
     }
 
-    case "journal_entry":
-      return storage.createJournalEntry({
+    case "journal_entry": {
+      const entry = await storage.createJournalEntry({
         mood: input.mood || "neutral",
         content: input.content || "",
         energy: input.energy,
@@ -2248,6 +2256,9 @@ async function executeTool(name: string, input: any): Promise<any> {
         highlights: input.highlights,
         tags: [],
       });
+      await autoLinkToProfiles("journal", entry.id, input.content || "", input.forProfile);
+      return entry;
+    }
 
     case "create_artifact": {
       const artifact = await storage.createArtifact({
@@ -3038,6 +3049,15 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       }
       break;
     }
+    case "journal": {
+      const entries = await storage.getJournalEntries();
+      const entry = entries.find(e => e.id === entityId);
+      if (entry && !entry.linkedProfiles.includes(profileId)) {
+        entry.linkedProfiles.push(profileId);
+        await storage.updateJournalEntry(entityId, { linkedProfiles: entry.linkedProfiles } as any);
+      }
+      break;
+    }
   }
 }
 
@@ -3509,7 +3529,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;
     const desc = message.replace(/\$[\d.]+/, "").replace(/spent|bought|on/gi, "").trim();
     if (amount > 0) {
-      const expense = await storage.createExpense({ amount, category: "general", description: desc || "Expense", tags: [] });
+      const expense = await storage.createExpense({ amount, category: "general", description: desc || "Expense", tags: [], linkedProfiles: [] });
       // Auto-link to self profile so it shows in Finance tab
       await autoLinkToProfiles("expense", expense.id, desc || "Expense");
       actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc } });
@@ -3518,7 +3538,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     }
   } else if (lower.startsWith("remind") || lower.startsWith("todo") || lower.startsWith("task")) {
     const title = message.replace(/^(remind me to|remind|todo|task)\s*/i, "").trim();
-    const task = await storage.createTask({ title, priority: "medium", tags: [] });
+    const task = await storage.createTask({ title, priority: "medium", tags: [], linkedProfiles: [] });
     // Auto-link to self profile so it shows in Tasks tab
     await autoLinkToProfiles("task", task.id, title);
     actions.push({ type: "create_task", category: "task", data: { title } });

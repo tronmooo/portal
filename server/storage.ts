@@ -134,6 +134,10 @@ export interface IStorage {
   getDomainEntries(domainId: string): Promise<DomainEntry[]>;
   addDomainEntry(domainId: string, values: Record<string, any>, tags?: string[], notes?: string): Promise<DomainEntry | undefined>;
 
+  // Propagation
+  propagateDocumentToAncestors(documentId: string, profileId: string): Promise<string[]>;
+  propagateEntityToAncestors(entityType: string, entityId: string, profileId: string): Promise<string[]>;
+
   // Entity Links
   getEntityLinks(entityType: string, entityId: string): Promise<EntityLink[]>;
   createEntityLink(data: InsertEntityLink): Promise<EntityLink>;
@@ -736,6 +740,38 @@ export class MemStorage implements IStorage {
     return Array.from(this.profiles.values()).find(p => p.type === "self");
   }
 
+  async propagateDocumentToAncestors(documentId: string, profileId: string): Promise<string[]> {
+    const propagated: string[] = [];
+    let currentProfileId = profileId;
+    while (true) {
+      const profile = this.profiles.get(currentProfileId);
+      if (!profile?.parentProfileId) break;
+      const parent = this.profiles.get(profile.parentProfileId);
+      if (!parent) break;
+      if (!parent.documents.includes(documentId)) {
+        parent.documents.push(documentId);
+        propagated.push(parent.id);
+      }
+      currentProfileId = parent.id;
+    }
+    return propagated;
+  }
+
+  async propagateEntityToAncestors(entityType: string, entityId: string, profileId: string): Promise<string[]> {
+    const propagated: string[] = [];
+    let currentProfileId = profileId;
+    while (true) {
+      const profile = this.profiles.get(currentProfileId);
+      if (!profile?.parentProfileId) break;
+      const parent = this.profiles.get(profile.parentProfileId);
+      if (!parent) break;
+      await this.linkProfileTo(parent.id, entityType, entityId);
+      propagated.push(parent.id);
+      currentProfileId = parent.id;
+    }
+    return propagated;
+  }
+
   // ---- Trackers ----
   async getTrackers() { return Array.from(this.trackers.values()); }
   async getTracker(id: string) { return this.trackers.get(id); }
@@ -813,6 +849,7 @@ export class MemStorage implements IStorage {
 
   // ---- Expenses ----
   async getExpenses() { return Array.from(this.expenses.values()); }
+  async getExpense(id: string) { return this.expenses.get(id); }
   async createExpense(data: InsertExpense): Promise<Expense> {
     const expense: Expense = { id: randomUUID(), ...data, linkedProfiles: [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
     this.expenses.set(expense.id, expense);
@@ -1115,7 +1152,7 @@ export class MemStorage implements IStorage {
   async getObligations() { return Array.from(this.obligations.values()); }
   async getObligation(id: string) { return this.obligations.get(id); }
   async createObligation(data: InsertObligation): Promise<Obligation> {
-    const obligation: Obligation = { id: randomUUID(), ...data, autopay: data.autopay ?? false, linkedProfiles: [], payments: [], createdAt: new Date().toISOString() };
+    const obligation: Obligation = { id: randomUUID(), ...data, autopay: data.autopay ?? false, status: "active", linkedProfiles: data.linkedProfiles || [], payments: [], createdAt: new Date().toISOString() };
     this.obligations.set(obligation.id, obligation);
     this.logActivity("obligation", `Created obligation: ${obligation.name} ($${obligation.amount}/${obligation.frequency})`);
     return obligation;
@@ -1185,6 +1222,7 @@ export class MemStorage implements IStorage {
       id: randomUUID(), date: data.date || new Date().toISOString().slice(0, 10),
       mood: data.mood, content: data.content || "", tags: data.tags || [],
       energy: data.energy, gratitude: data.gratitude, highlights: data.highlights,
+      linkedProfiles: data.linkedProfiles || [],
       createdAt: new Date().toISOString(),
     };
     this.journal.set(entry.id, entry);
@@ -1238,6 +1276,7 @@ export class MemStorage implements IStorage {
     const now = new Date().toISOString();
     const goal: Goal = {
       id: randomUUID(), ...data, current: 0, status: "active",
+      linkedProfiles: data.linkedProfiles || [],
       milestones: (data.milestones || []).map(m => ({ ...m, reached: false })),
       createdAt: now, updatedAt: now,
     };
