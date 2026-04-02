@@ -2294,11 +2294,11 @@ async function executeTool(name: string, input: any): Promise<any> {
           } catch (e) {
             console.error("Auto-create subscription profile failed:", e);
           }
-        } else {
-          // Link to existing profile
+        } else if (!oblForProfile) {
+          // Link to existing profile only if directLink didn't already handle it
           await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
         }
-      } else {
+      } else if (!oblForProfile) {
         await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
       }
 
