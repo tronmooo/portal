@@ -633,6 +633,7 @@ export interface Goal {
   habitId?: string;
   category?: string;
   status: "active" | "completed" | "abandoned";
+  linkedProfiles: string[];
   milestones: Array<{ value: number; label: string; reached: boolean; reachedAt?: string }>;
   createdAt: string;
   updatedAt: string;
@@ -648,6 +649,7 @@ export interface InsertGoal {
   trackerId?: string;
   habitId?: string;
   category?: string;
+  linkedProfiles?: string[];
   milestones?: Array<{ value: number; label: string }>;
 }
 
@@ -661,6 +663,7 @@ export const insertGoalSchema = z.object({
   trackerId: z.string().optional(),
   habitId: z.string().optional(),
   category: z.string().optional(),
+  linkedProfiles: z.array(z.string()).optional(),
   milestones: z.array(z.object({ value: z.number(), label: z.string() })).optional(),
 });
 

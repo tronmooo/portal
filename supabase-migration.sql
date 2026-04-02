@@ -245,6 +245,7 @@ CREATE TABLE IF NOT EXISTS goals (
   habit_id TEXT,
   category TEXT,
   status TEXT DEFAULT 'active' CHECK (status IN ('active','completed','abandoned')),
+  linked_profiles JSONB DEFAULT '[]'::jsonb,
   milestones JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()

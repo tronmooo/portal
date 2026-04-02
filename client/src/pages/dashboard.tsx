@@ -1029,11 +1029,20 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
   );
 }
 
-function GoalsSection() {
-  const { data: goals = [], isLoading } = useQuery<GoalItem[]>({
+function GoalsSection({ profileId }: { profileId?: string }) {
+  const { data: allGoals = [], isLoading } = useQuery<GoalItem[]>({
     queryKey: ["/api/goals"],
     queryFn: () => apiRequest("GET", "/api/goals").then(r => r.json()),
   });
+  // Filter goals by profile — show goals linked to this profile, or unlinked goals for self profile
+  const { data: profiles = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const isSelfProfile = profileId && profiles.find((p: any) => p.id === profileId)?.type === "self";
+  const goals = profileId
+    ? allGoals.filter((g: any) => (g.linkedProfiles || []).includes(profileId) || (isSelfProfile && (!g.linkedProfiles || g.linkedProfiles.length === 0)))
+    : allGoals;
   const [editGoal, setEditGoal] = useState<GoalItem | null>(null);
   const [creating, setCreating] = useState(false);
   const [formTitle, setFormTitle] = useState("");
@@ -1537,7 +1546,7 @@ export default function DashboardPage() {
         content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
         break;
       case "goals":
-        content = <GoalsSection />;
+        content = <GoalsSection profileId={resolvedFilterId} />;
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;

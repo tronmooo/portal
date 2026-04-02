@@ -602,8 +602,12 @@ export async function registerRoutes(
       const expenses = allExpenses.filter(e => mp(e.linkedProfiles));
       const obligations = allObligations.filter(o => mp(o.linkedProfiles));
       const events = allEvents.filter(e => mp(e.linkedProfiles));
+      const filteredHabits = habits.filter(h => mp(h.linkedProfiles));
+      const filteredDocuments = documents.filter(d => mp(d.linkedProfiles));
+      const filteredGoals = goals.filter(g => mp(g.linkedProfiles));
       const insights = generateSmartInsights({
-        profiles, trackers, tasks, expenses, habits, obligations, journal, documents, goals, events,
+        profiles, trackers, tasks, expenses, habits: filteredHabits, obligations,
+        journal, documents: filteredDocuments, goals: filteredGoals, events,
       });
       res.json(insights);
     } catch (err: any) {

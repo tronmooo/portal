@@ -315,6 +315,7 @@ export class SupabaseStorage implements IStorage {
       unit: r.unit, startValue: r.start_value ?? undefined, deadline: r.deadline || undefined,
       trackerId: r.tracker_id || undefined, habitId: r.habit_id || undefined,
       category: r.category || undefined, status: r.status,
+      linkedProfiles: r.linked_profiles || [],
       milestones: r.milestones || [], createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -1979,7 +1980,8 @@ export class SupabaseStorage implements IStorage {
       current: 0, unit: data.unit, start_value: data.startValue ?? null,
       deadline: data.deadline || null, tracker_id: data.trackerId || null,
       habit_id: data.habitId || null, category: data.category || null,
-      status: "active", milestones, created_at: now, updated_at: now,
+      status: "active", linked_profiles: data.linkedProfiles || [],
+      milestones, created_at: now, updated_at: now,
     });
     if (error) throw error;
     this.logActivity("goal", `Created goal: ${data.title}`);
@@ -2002,6 +2004,7 @@ export class SupabaseStorage implements IStorage {
     if (data.habitId !== undefined) updates.habit_id = data.habitId;
     if (data.category !== undefined) updates.category = data.category;
     if (data.status !== undefined) updates.status = data.status;
+    if (data.linkedProfiles !== undefined) updates.linked_profiles = data.linkedProfiles;
     if (data.milestones !== undefined) updates.milestones = data.milestones;
     const { error } = await this.supabase.from("goals").update(updates).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;

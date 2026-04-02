@@ -2249,8 +2249,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         tags: [],
       });
 
-    case "create_artifact":
-      return storage.createArtifact({
+    case "create_artifact": {
+      const artifact = await storage.createArtifact({
         type: input.type || "note",
         title: input.title,
         content: input.content || "",
@@ -2258,13 +2258,18 @@ async function executeTool(name: string, input: any): Promise<any> {
         tags: [],
         pinned: false,
       });
+      await autoLinkToProfiles("artifact", artifact.id, input.title || "", input.forProfile);
+      return artifact;
+    }
 
-    case "save_memory":
-      return storage.saveMemory({
+    case "save_memory": {
+      const memory = await storage.saveMemory({
         key: input.key,
         value: input.value,
         category: input.category || "general",
       });
+      return memory;
+    }
 
     case "open_document": {
       const searchTerm = (input.query || "").toLowerCase();
@@ -2305,11 +2310,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         fileData: Buffer.from(input.content || "").toString("base64"),
         size: input.content?.length || 0,
       });
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        const profile = profiles.find((p: any) => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
-        if (profile) await storage.linkProfileTo(profile.id, "document", doc.id);
-      }
+      await autoLinkToProfiles("document", doc.id, input.name || "", input.forProfile);
       return doc;
     }
 
@@ -2342,16 +2343,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         habitId,
         category: input.category,
       });
-      // Link goal to profile (via tracker's profile or explicit name)
-      if (trackerId) {
-        const trackers = await storage.getTrackers();
-        const linkedTracker = trackers.find(t => t.id === trackerId);
-        if (linkedTracker?.linkedProfiles?.[0]) {
-          await autoLinkToProfiles("goal", goal.id, input.title || "", undefined);
-        }
-      } else {
-        await autoLinkToProfiles("goal", goal.id, input.title || "", input.forProfile);
-      }
+      // Always link goal to profile — via tracker's linked profile or explicit name
+      await autoLinkToProfiles("goal", goal.id, input.title || "", input.forProfile);
       return goal;
     }
 
@@ -3026,6 +3019,22 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       if (habit && !habit.linkedProfiles.includes(profileId)) {
         habit.linkedProfiles.push(profileId);
         await storage.updateHabit(entityId, { linkedProfiles: habit.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "document": {
+      const doc = await storage.getDocument(entityId);
+      if (doc && !doc.linkedProfiles.includes(profileId)) {
+        doc.linkedProfiles.push(profileId);
+        await storage.updateDocument(entityId, { linkedProfiles: doc.linkedProfiles } as any);
+      }
+      break;
+    }
+    case "goal": {
+      const goal = await storage.getGoal(entityId);
+      if (goal && !goal.linkedProfiles.includes(profileId)) {
+        goal.linkedProfiles.push(profileId);
+        await storage.updateGoal(entityId, { linkedProfiles: goal.linkedProfiles } as any);
       }
       break;
     }
