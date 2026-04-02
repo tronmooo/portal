@@ -11,6 +11,7 @@ import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter } from "l
 import { Link } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { getUserTimezone } from "@/lib/utils";
 import type { Expense } from "@shared/schema";
 import {
   BarChart,
@@ -42,6 +43,15 @@ export default function FinancePage() {
   const [addOpen, setAddOpen] = useState(false);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
 
+  const handleAddExpense = () => {
+    const amount = parseFloat(newExpense.amount);
+    if (!amount || amount <= 0) {
+      toast({ title: "Invalid amount", description: "Amount must be greater than 0", variant: "destructive" });
+      return;
+    }
+    addExpenseMutation.mutate();
+  };
+
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", "/api/expenses", {
@@ -49,7 +59,7 @@ export default function FinancePage() {
         amount: parseFloat(newExpense.amount),
         category: newExpense.category,
         vendor: newExpense.vendor || undefined,
-        date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        date: new Date().toLocaleDateString('en-CA', { timeZone: getUserTimezone() }),
         tags: [],
       });
     },
@@ -130,7 +140,7 @@ export default function FinancePage() {
                   </div>
                   <div><Label className="text-xs">Vendor (optional)</Label>
                     <Input placeholder="Store or vendor name" value={newExpense.vendor} onChange={e => setNewExpense(p => ({ ...p, vendor: e.target.value }))} data-testid="input-expense-vendor" /></div>
-                  <Button className="w-full" onClick={() => addExpenseMutation.mutate()} disabled={!newExpense.description || !newExpense.amount || addExpenseMutation.isPending} data-testid="button-save-expense">
+                  <Button className="w-full" onClick={handleAddExpense} disabled={!newExpense.description || !newExpense.amount || addExpenseMutation.isPending} data-testid="button-save-expense">
                     {addExpenseMutation.isPending ? "Saving..." : "Save Expense"}
                   </Button>
                 </div>

@@ -103,8 +103,8 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
           <div className="mb-2">
             <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><Star className="h-2.5 w-2.5" /> Highlights</p>
             <div className="flex flex-wrap gap-1">
-              {entry.highlights.map((h, i) => (
-                <Badge key={i} variant="secondary" className="text-[10px]">{h}</Badge>
+              {entry.highlights.map((h) => (
+                <Badge key={h} variant="secondary" className="text-[10px]">{h}</Badge>
               ))}
             </div>
           </div>
@@ -114,8 +114,8 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
           <div>
             <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><BookHeart className="h-2.5 w-2.5" /> Gratitude</p>
             <div className="flex flex-wrap gap-1">
-              {entry.gratitude.map((g, i) => (
-                <Badge key={i} variant="outline" className="text-[10px]">{g}</Badge>
+              {entry.gratitude.map((g) => (
+                <Badge key={g} variant="outline" className="text-[10px]">{g}</Badge>
               ))}
             </div>
           </div>
@@ -123,8 +123,8 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
 
         {entry.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {entry.tags.map((t, i) => (
-              <span key={i} className="text-[10px] text-muted-foreground">#{t}</span>
+            {entry.tags.map((t) => (
+              <span key={t} className="text-[10px] text-muted-foreground">#{t}</span>
             ))}
           </div>
         )}
@@ -194,7 +194,7 @@ export default function JournalPage() {
           const MIcon = cfg?.icon || Meh;
           const dayLabel = new Date(day.date).toLocaleDateString("en-US", { weekday: "short" }).slice(0, 2);
           return (
-            <div key={i} className="flex flex-col items-center gap-1">
+            <div key={day.date} className="flex flex-col items-center gap-1">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center ${cfg ? cfg.bg : "bg-muted"}`}>
                 <MIcon className="h-4 w-4" style={{ color: cfg?.color || "#797876" }} />
               </div>

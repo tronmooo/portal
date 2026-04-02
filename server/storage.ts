@@ -832,7 +832,7 @@ export class MemStorage implements IStorage {
   async getTasks() { return Array.from(this.tasks.values()); }
   async getTask(id: string) { return this.tasks.get(id); }
   async createTask(data: InsertTask): Promise<Task> {
-    const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles: [], tags: data.tags || [], createdAt: new Date().toISOString() };
+    const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], createdAt: new Date().toISOString() };
     this.tasks.set(task.id, task);
     this.logActivity("task", `Created task: ${task.title}`);
     return task;
@@ -851,7 +851,7 @@ export class MemStorage implements IStorage {
   async getExpenses() { return Array.from(this.expenses.values()); }
   async getExpense(id: string) { return this.expenses.get(id); }
   async createExpense(data: InsertExpense): Promise<Expense> {
-    const expense: Expense = { id: randomUUID(), ...data, linkedProfiles: [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
+    const expense: Expense = { id: randomUUID(), ...data, linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
     this.expenses.set(expense.id, expense);
     this.logActivity("expense", `${data.description} - $${data.amount}${data.vendor ? ` at ${data.vendor}` : ""}`);
     return expense;

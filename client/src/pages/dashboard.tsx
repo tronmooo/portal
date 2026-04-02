@@ -614,7 +614,7 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
         </DialogHeader>
         <ScrollArea className="flex-1 max-h-[60vh]">
           {isLoading ? (
-            <div className="space-y-2 py-2">{[1,2,3].map(i => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+            <div className="space-y-2 py-2">{[1,2,3].map(i => <Skeleton key={`skeleton-${i}`} className="h-10 rounded-lg" />)}</div>
           ) : (
             <div className="space-y-1 py-1 pr-2">
               {activeTasks.map((t: any) => (
@@ -1243,13 +1243,13 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
     <CollapsibleSection icon={Activity} label="Recent Activity" count={validActivities.length} testId="section-activity">
       <div className="space-y-1.5">
         {groups.map((group, gi) => (
-          <div key={gi}>
+          <div key={group.hourLabel}>
             <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-0.5 mt-1 first:mt-0">{group.hourLabel}</p>
             {group.items.map((item, i) => {
               const Icon = ACTIVITY_ICONS[item.type] || Activity;
               const route = ACTIVITY_ROUTES[item.type];
               return (
-                <div key={i}
+                <div key={`${item.type}-${item.timestamp}-${i}`}
                   onClick={() => route && navigate(route)}
                   className={`flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0 ${route ? "cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors" : ""}`}>
                   <Icon className="h-3 w-3 text-muted-foreground shrink-0" />

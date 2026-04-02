@@ -59,8 +59,8 @@ function ChecklistCard({ artifact }: { artifact: Artifact }) {
         </div>
         {artifact.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {artifact.tags.map((t, i) => (
-              <span key={i} className="text-[10px] text-muted-foreground">#{t}</span>
+            {artifact.tags.map((t) => (
+              <span key={t} className="text-[10px] text-muted-foreground">#{t}</span>
             ))}
           </div>
         )}
@@ -85,8 +85,8 @@ function NoteCard({ artifact }: { artifact: Artifact }) {
         <p className="text-xs text-foreground/80 whitespace-pre-wrap line-clamp-6">{artifact.content}</p>
         {artifact.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {artifact.tags.map((t, i) => (
-              <span key={i} className="text-[10px] text-muted-foreground">#{t}</span>
+            {artifact.tags.map((t) => (
+              <span key={t} className="text-[10px] text-muted-foreground">#{t}</span>
             ))}
           </div>
         )}
@@ -169,7 +169,7 @@ export default function ArtifactsPage() {
           {createType === "checklist" ? (
             <div className="space-y-1.5">
               {items.map((item, i) => (
-                <div key={i} className="flex gap-2">
+                <div key={`item-${i}`} className="flex gap-2">
                   <Input
                     placeholder={`Item ${i + 1}...`}
                     value={item}

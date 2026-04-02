@@ -931,7 +931,7 @@ export default function ChatPage() {
       }
       return false;
     } catch (err) {
-      console.error("Confirm extraction failed:", err);
+      // extraction confirmation error is handled by returning false
       return false;
     }
   };

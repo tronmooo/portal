@@ -55,10 +55,10 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
     storage.getGoals(),
   ]);
   contextCacheMap.set(cacheKey, { data, timestamp: now });
-  // Evict old entries to prevent memory leak
-  if (contextCacheMap.size > 100) {
+  // Evict old entries to prevent memory leak (cap at 50 users)
+  if (contextCacheMap.size > 50) {
     const oldest = [...contextCacheMap.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
-    for (let i = 0; i < 50; i++) contextCacheMap.delete(oldest[i][0]);
+    for (let i = 0; i < 25 && i < oldest.length; i++) contextCacheMap.delete(oldest[i][0]);
   }
   return data;
 }
@@ -80,7 +80,14 @@ const actionLogMap = new Map<string, ActionLogEntry[]>();
 
 function logAction(action: string, type: string, entityName: string, entityId?: string, userId?: string) {
   const key = userId || '_global';
-  if (!actionLogMap.has(key)) actionLogMap.set(key, []);
+  if (!actionLogMap.has(key)) {
+    // Cap total users to prevent unbounded memory growth
+    if (actionLogMap.size > 200) {
+      const firstKey = actionLogMap.keys().next().value;
+      if (firstKey !== undefined) actionLogMap.delete(firstKey);
+    }
+    actionLogMap.set(key, []);
+  }
   const log = actionLogMap.get(key)!;
   log.push({ timestamp: new Date().toISOString(), action, type, entityName, entityId });
   if (log.length > 20) log.shift();

@@ -1362,7 +1362,7 @@ function CreateTrackerDialog({
             <div className="space-y-3">
               {fields.map((f, i) => (
                 <div
-                  key={i}
+                  key={`field-${i}`}
                   className="rounded-md border p-3 space-y-2 bg-muted/30"
                   data-testid={`field-row-${i}`}
                 >
@@ -2029,7 +2029,7 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
                 <PieChart>
                   <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={3}
                     label={({ name, value }) => `${name}: ${macroTotal > 0 ? Math.round(value / macroTotal * 100) : 0}%`}>
-                    {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                    {pieData.map((d) => <Cell key={d.name} fill={d.color} />)}
                   </Pie>
                   <Tooltip formatter={(value: number) => `${value.toFixed(0)}g`} />
                 </PieChart>
@@ -2088,7 +2088,7 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
                 <PieChart>
                   <Pie data={bpPieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={3}
                     label={({ name, value }) => `${name}: ${value}`}>
-                    {bpPieData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                    {bpPieData.map((d) => <Cell key={d.name} fill={d.color} />)}
                   </Pie>
                   <Tooltip />
                 </PieChart>
@@ -2136,7 +2136,7 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
                 <PieChart>
                   <Pie data={qPieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={3}
                     label={({ name, value }) => `${name}: ${value}`}>
-                    {qPieData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                    {qPieData.map((d) => <Cell key={d.name} fill={d.color} />)}
                   </Pie>
                   <Tooltip />
                 </PieChart>
@@ -2904,12 +2904,12 @@ export default function TrackersPage() {
         <div className="h-8 w-40 rounded skeleton-shimmer" />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-20 rounded-lg skeleton-shimmer" />
+            <div key={`skeleton-${i}`} className="h-20 rounded-lg skeleton-shimmer" />
           ))}
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-44 rounded-lg skeleton-shimmer" />
+            <div key={`skeleton-${i}`} className="h-44 rounded-lg skeleton-shimmer" />
           ))}
         </div>
       </div>

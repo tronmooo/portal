@@ -111,9 +111,9 @@ function HabitCard({ habit }: { habit: Habit }) {
 
         {/* 14-day grid */}
         <div className="flex gap-1">
-          {last14.map((day, i) => (
+          {last14.map((day) => (
             <div
-              key={i}
+              key={day.date}
               className="w-5 h-5 rounded-sm flex items-center justify-center text-[8px]"
               style={{
                 backgroundColor: day.done ? (habit.color || "#4F98A3") : "var(--color-muted)",

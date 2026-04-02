@@ -1473,7 +1473,7 @@ export class SupabaseStorage implements IStorage {
     // Upload to Supabase Storage if we have base64 file data
     if (data.fileData && data.fileData.length > 0) {
       try {
-        const safeName = (data.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+        const safeName = (data.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.{2,}/g, '.').slice(0, 200);
         const path = `${this.userId}/${id}/${safeName}`;
         const buffer = Buffer.from(data.fileData, 'base64');
         const { error: uploadError } = await this.supabase.storage
