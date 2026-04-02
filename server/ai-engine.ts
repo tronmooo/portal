@@ -1872,6 +1872,20 @@ async function executeTool(name: string, input: any): Promise<any> {
       return storage.recallMemory(input.query);
 
     case "create_profile": {
+      // DEDUP: Check if profile with same name already exists
+      const existingProfiles = await storage.getProfiles();
+      const existingProfile = existingProfiles.find(p => p.name.toLowerCase() === (input.name || "").toLowerCase().trim());
+      if (existingProfile) {
+        // Update existing instead of creating duplicate
+        logger.info("ai", `Profile "${input.name}" already exists (${existingProfile.id}) — updating instead of creating`);
+        const mergedFields = { ...existingProfile.fields, ...(input.fields || {}) };
+        return storage.updateProfile(existingProfile.id, {
+          fields: mergedFields,
+          notes: input.notes || existingProfile.notes,
+          tags: input.tags?.length ? input.tags : existingProfile.tags,
+          type: input.type || existingProfile.type,
+        });
+      }
       // Auto-detect parent profile for non-primary profile types
       let parentProfileId = input.parentProfileId;
       const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
@@ -1990,8 +2004,10 @@ async function executeTool(name: string, input: any): Promise<any> {
         description: input.description,
         tags: input.tags || [],
       });
-      // Auto-link: scan title for profile names + explicit forProfile
-      await autoLinkToProfiles("task", newTask.id, input.title || "", input.forProfile);
+      // DIRECT link first (reliable), then autoLink as fallback
+      const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
+      const taskLinked = await directLinkToProfile("task", newTask.id, taskForProfile);
+      if (!taskLinked) await autoLinkToProfiles("task", newTask.id, input.title || "", input.forProfile);
       return newTask;
     }
 
@@ -2103,8 +2119,9 @@ async function executeTool(name: string, input: any): Promise<any> {
         vendor: input.vendor,
         tags: input.tags || [],
       });
-      // Auto-link: scan description and vendor for profile names + explicit forProfile
-      await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
+      // DIRECT link first (reliable), then autoLink as fallback
+      const expLinked = await directLinkToProfile("expense", newExpense.id, input.forProfile);
+      if (!expLinked) await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
       return newExpense;
     }
 
@@ -2133,7 +2150,9 @@ async function executeTool(name: string, input: any): Promise<any> {
         tags: [],
       });
       // Auto-link: scan title and description for profile names + explicit forProfile
-      await autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`, input.forProfile);
+      const evtForProfile = await resolveForProfile(input.forProfile, `${input.title || ""} ${input.description || ""}`);
+      const evtLinked = await directLinkToProfile("event", newEvent.id, evtForProfile);
+      if (!evtLinked) await autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`, input.forProfile);
       return newEvent;
     }
 
@@ -2212,6 +2231,21 @@ async function executeTool(name: string, input: any): Promise<any> {
         nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
         autopay: input.autopay ?? false,
       });
+
+      // DIRECT link to profile FIRST (before any auto-subscription logic)
+      // Also scan the obligation name for profile names as a fallback
+      let oblForProfile = input.forProfile;
+      if (!oblForProfile) {
+        const allProfiles = await storage.getProfiles();
+        for (const p of allProfiles) {
+          if (p.type === 'self') continue;
+          if ((input.name || '').toLowerCase().includes(p.name.toLowerCase())) {
+            oblForProfile = p.name;
+            break;
+          }
+        }
+      }
+      await directLinkToProfile("obligation", newObligation.id, oblForProfile);
 
       // Auto-create subscription profile if this looks like a subscription/service
       // and no matching profile already exists
@@ -2912,6 +2946,54 @@ async function autoUpdateGoalProgress(trackerId: string, values: Record<string, 
 // ============================================================
 // AUTO-LINKING — scan created entities for profile name matches
 // ============================================================
+
+// ═══════════════════════════════════════════════════════════════
+// DIRECT PROFILE LINKING — the ONLY reliable way to link entities
+// Called by every create_* tool when forProfile is set.
+// This bypasses all the scoring/text-matching complexity.
+// ═══════════════════════════════════════════════════════════════
+async function directLinkToProfile(entityType: string, entityId: string, forProfile: string | undefined): Promise<string | undefined> {
+  if (!forProfile) return undefined;
+  const profiles = await storage.getProfiles();
+  const searchName = forProfile.toLowerCase().trim();
+  // Exact match first, then partial
+  const target = profiles.find(p => p.name.toLowerCase() === searchName)
+    || profiles.find(p => p.name.toLowerCase().includes(searchName) || searchName.includes(p.name.toLowerCase()));
+  if (!target) {
+    logger.warn("ai", `directLinkToProfile: profile "${forProfile}" not found`);
+    return undefined;
+  }
+  // Set linkedProfiles on the entity
+  await updateEntityLinkedProfiles(entityType, entityId, target.id);
+  await storage.linkProfileTo(target.id, entityType, entityId).catch(() => {});
+  
+  // For expenses ONLY: also link to self so it shows in owner's finance
+  if (entityType === "expense") {
+    const self = profiles.find(p => p.type === "self");
+    if (self && self.id !== target.id) {
+      await updateEntityLinkedProfiles(entityType, entityId, self.id);
+      await storage.linkProfileTo(self.id, entityType, entityId).catch(() => {});
+    }
+  }
+  
+  logger.info("ai", `directLinkToProfile: linked ${entityType} to "${target.name}" (${target.id.substring(0, 8)})`);
+  return target.id;
+}
+
+
+// Scan text for profile names when forProfile wasn't explicitly set
+async function resolveForProfile(forProfile: string | undefined, text: string): Promise<string | undefined> {
+  if (forProfile) return forProfile;
+  const profiles = await storage.getProfiles();
+  for (const p of profiles) {
+    if (p.type === 'self') continue;
+    if (p.name.length < 2) continue;
+    if (text.toLowerCase().includes(p.name.toLowerCase())) {
+      return p.name;
+    }
+  }
+  return undefined;
+}
 
 async function autoLinkToProfiles(entityType: string, entityId: string, text: string, explicitProfileName?: string): Promise<void> {
   logger.info("ai", `autoLinkToProfiles: type=${entityType} text="${text?.substring(0, 50)}" explicit="${explicitProfileName}"`);
