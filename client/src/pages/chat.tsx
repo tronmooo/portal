@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useToast } from "@/hooks/use-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -103,6 +104,19 @@ function actionIcon(type: string) {
 function actionLabel(type: string) {
   return type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+const ACTION_DELETE_ENDPOINTS: Record<string, string> = {
+  create_profile: "/api/profiles",
+  create_tracker: "/api/trackers",
+  create_task: "/api/tasks",
+  log_expense: "/api/expenses",
+  create_event: "/api/events",
+  create_goal: "/api/goals",
+  create_habit: "/api/habits",
+  create_obligation: "/api/obligations",
+  create_artifact: "/api/artifacts",
+  journal_entry: "/api/journal",
+};
 
 // ── Inline document previews in chat messages ─────────────────────────────────
 function LazyDocumentPreview({ id, name, mimeType, data }: { id: string; name: string; mimeType: string; data: string }) {
@@ -712,6 +726,7 @@ export default function ChatPage() {
     });
   };
   const [input, setInput] = useState("");
+  const { toast } = useToast();
 
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
@@ -906,6 +921,22 @@ export default function ChatPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
     queryClient.invalidateQueries({ queryKey: ["/api/ai-digest"] });
   }
+
+  const [undoneActions, setUndoneActions] = useState<Set<string>>(new Set());
+
+  const handleUndoAction = async (action: ParsedAction) => {
+    const entityId = action.data?._entityId;
+    const endpoint = ACTION_DELETE_ENDPOINTS[action.type];
+    if (!entityId || !endpoint) return;
+    try {
+      await apiRequest("DELETE", `${endpoint}/${entityId}`);
+      setUndoneActions(prev => { const next = new Set(prev); next.add(entityId); return next; });
+      invalidateAll();
+      toast({ title: "Undone", description: `Removed ${actionLabel(action.type).toLowerCase()}` });
+    } catch {
+      toast({ title: "Undo failed", variant: "destructive" });
+    }
+  };
 
   const handleConfirmExtraction = async (data: {
     extractionId: string;
@@ -1233,20 +1264,38 @@ export default function ChatPage() {
                   />
                 )}
 
-                {/* Action badges */}
+                {/* Action badges with undo */}
                 {msg.actions && msg.actions.length > 0 && (
                   <div className="mt-2.5 flex flex-wrap gap-1.5">
-                    {msg.actions.map((action, i) => (
-                      <Badge
-                        key={i}
-                        variant="outline"
-                        className="text-xs flex items-center gap-1 text-muted-foreground border-green-600/30 bg-green-500/5"
-                        data-testid={`badge-action-${action.type}-${i}`}
-                      >
-                        <Check className="h-2.5 w-2.5 text-green-600" />
-                        {actionLabel(action.type)}
-                      </Badge>
-                    ))}
+                    {msg.actions.map((action, i) => {
+                      const entityId = action.data?._entityId;
+                      const isUndone = entityId && undoneActions.has(entityId);
+                      const canUndo = entityId && ACTION_DELETE_ENDPOINTS[action.type] && !isUndone;
+                      return (
+                        <Badge
+                          key={i}
+                          variant="outline"
+                          className={`text-xs flex items-center gap-1 ${isUndone ? "line-through text-muted-foreground/40 border-muted" : "text-muted-foreground border-green-600/30 bg-green-500/5"}`}
+                          data-testid={`badge-action-${action.type}-${i}`}
+                        >
+                          {isUndone ? (
+                            <RotateCcw className="h-2.5 w-2.5 text-muted-foreground/40" />
+                          ) : (
+                            <Check className="h-2.5 w-2.5 text-green-600" />
+                          )}
+                          {actionLabel(action.type)}
+                          {canUndo && (
+                            <button
+                              onClick={() => handleUndoAction(action)}
+                              className="ml-0.5 p-0.5 rounded hover:bg-destructive/10 transition-colors"
+                              title="Undo this action"
+                            >
+                              <X className="h-2.5 w-2.5 text-muted-foreground hover:text-destructive" />
+                            </button>
+                          )}
+                        </Badge>
+                      );
+                    })}
                   </div>
                 )}
 

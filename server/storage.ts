@@ -639,8 +639,8 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Profiles ----
-  async getProfiles() { return Array.from(this.profiles.values()); }
-  async getProfile(id: string) { return this.profiles.get(id); }
+  async getProfiles() { return Array.from(this.profiles.values()).filter(p => !p.deletedAt); }
+  async getProfile(id: string) { const p = this.profiles.get(id); return p?.deletedAt ? undefined : p; }
 
   async getProfileDetail(id: string): Promise<ProfileDetail | undefined> {
     const profile = this.profiles.get(id);
@@ -709,7 +709,9 @@ export class MemStorage implements IStorage {
         doc.linkedProfiles = doc.linkedProfiles.filter(pid => pid !== id);
       }
     }
-    return this.profiles.delete(id);
+    // Soft delete
+    profile.deletedAt = new Date().toISOString();
+    return true;
   }
 
   async linkProfileTo(profileId: string, entityType: string, entityId: string) {
@@ -829,8 +831,8 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Tasks ----
-  async getTasks() { return Array.from(this.tasks.values()); }
-  async getTask(id: string) { return this.tasks.get(id); }
+  async getTasks() { return Array.from(this.tasks.values()).filter(t => !t.deletedAt); }
+  async getTask(id: string) { const t = this.tasks.get(id); return t?.deletedAt ? undefined : t; }
   async createTask(data: InsertTask): Promise<Task> {
     const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], createdAt: new Date().toISOString() };
     this.tasks.set(task.id, task);
@@ -845,11 +847,16 @@ export class MemStorage implements IStorage {
     if (data.status === "done") this.logActivity("task", `Completed: ${t.title}`);
     return updated;
   }
-  async deleteTask(id: string) { return this.tasks.delete(id); }
+  async deleteTask(id: string) {
+    const t = this.tasks.get(id);
+    if (!t) return false;
+    t.deletedAt = new Date().toISOString();
+    return true;
+  }
 
   // ---- Expenses ----
-  async getExpenses() { return Array.from(this.expenses.values()); }
-  async getExpense(id: string) { return this.expenses.get(id); }
+  async getExpenses() { return Array.from(this.expenses.values()).filter(e => !e.deletedAt); }
+  async getExpense(id: string) { const e = this.expenses.get(id); return e?.deletedAt ? undefined : e; }
   async createExpense(data: InsertExpense): Promise<Expense> {
     const expense: Expense = { id: randomUUID(), ...data, linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
     this.expenses.set(expense.id, expense);
@@ -864,7 +871,12 @@ export class MemStorage implements IStorage {
     this.logActivity("expense", `Updated expense: ${updated.description}`);
     return updated;
   }
-  async deleteExpense(id: string): Promise<boolean> { return this.expenses.delete(id); }
+  async deleteExpense(id: string): Promise<boolean> {
+    const e = this.expenses.get(id);
+    if (!e) return false;
+    e.deletedAt = new Date().toISOString();
+    return true;
+  }
 
   // ---- Events ----
   async getEvents() { return Array.from(this.events.values()); }
@@ -1050,8 +1062,8 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Documents ----
-  async getDocuments() { return Array.from(this.documents.values()); }
-  async getDocument(id: string) { return this.documents.get(id); }
+  async getDocuments() { return Array.from(this.documents.values()).filter(d => !d.deletedAt); }
+  async getDocument(id: string) { const d = this.documents.get(id); return d?.deletedAt ? undefined : d; }
   async createDocument(data: any): Promise<Document> {
     const document: Document = {
       id: randomUUID(),
@@ -1109,10 +1121,11 @@ export class MemStorage implements IStorage {
       if (profile) profile.documents = profile.documents.filter(did => did !== id);
     }
     this.logActivity("document", `Deleted document: ${doc.name}`);
-    return this.documents.delete(id);
+    doc.deletedAt = new Date().toISOString();
+    return true;
   }
   async getDocumentsForProfile(profileId: string): Promise<Document[]> {
-    return Array.from(this.documents.values()).filter(d => d.linkedProfiles.includes(profileId));
+    return Array.from(this.documents.values()).filter(d => !d.deletedAt && d.linkedProfiles.includes(profileId));
   }
 
   // ---- Habits ----

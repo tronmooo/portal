@@ -171,6 +171,7 @@ export interface Profile {
   linkedObligationId?: string; // Links subscription/loan profile to its obligation record
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string; // Soft delete timestamp
 }
 
 export const insertProfileSchema = z.object({
@@ -452,6 +453,7 @@ export interface Task {
   linkedProfiles: string[];
   tags: string[];
   createdAt: string;
+  deletedAt?: string;
 }
 
 export const insertTaskSchema = z.object({
@@ -480,6 +482,7 @@ export interface Expense {
   tags: string[];
   date: string;
   createdAt: string;
+  deletedAt?: string;
 }
 
 export const insertExpenseSchema = z.object({
@@ -596,6 +599,7 @@ export interface Document {
   linkedProfiles: string[];
   tags: string[];
   createdAt: string;
+  deletedAt?: string;
 }
 
 export interface ProfileDocument {

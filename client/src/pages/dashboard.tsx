@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { usePersistedState } from "@/hooks/use-persisted-state";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -1415,7 +1416,7 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [profileFilter, setProfileFilter] = useState<string>("me");
+  const [profileFilter, setProfileFilter] = usePersistedState<string>("portal:profileFilter", "me");
 
   // Fetch profiles for filter
   const { data: allProfiles = [] } = useQuery<any[]>({

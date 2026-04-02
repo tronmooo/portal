@@ -3381,13 +3381,11 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
           // Map tool name to a ParsedAction type for backwards compat
           const actionType = mapToolToActionType(toolUse.name);
-          allActions.push({ type: actionType, category: "ai", data: toolUse.input as Record<string, any> });
-          if (result) allResults.push(result);
-
-          // Log the action to in-memory history
           const inp = toolUse.input as Record<string, any>;
-          const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+          const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
+          allActions.push({ type: actionType, category: "ai", data: { ...inp, _entityId: entityId, _entityName: entityName } });
+          if (result) allResults.push(result);
           const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);

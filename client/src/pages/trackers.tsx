@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { usePersistedState } from "@/hooks/use-persisted-state";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -2789,7 +2790,7 @@ export default function TrackersPage() {
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
   // Default to "me" — only show your personal trackers
-  const [profileFilter, setProfileFilter] = useState<string>("me");
+  const [profileFilter, setProfileFilter] = usePersistedState<string>("portal:profileFilter", "me");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [docSearch, setDocSearch] = useState("");
