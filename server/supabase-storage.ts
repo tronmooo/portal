@@ -2502,7 +2502,21 @@ export class SupabaseStorage implements IStorage {
     return {
       expiringDocuments: expiringDocs.filter(d => d.status !== 'ok'),
       healthSnapshot,
-      financeSnapshot: { totalMonthlySpend, lastMonthTotal, spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0, spendByCategory, upcomingBills, monthlyObligationTotal: Math.round(monthlyObligationTotal) },
+      financeSnapshot: {
+        totalMonthlySpend, lastMonthTotal,
+        spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0,
+        spendByCategory, upcomingBills,
+        monthlyObligationTotal: Math.round(monthlyObligationTotal),
+        totalAssetValue: allProfiles.reduce((s, p) => {
+          const price = p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue;
+          return s + (price ? Number(price) : 0);
+        }, 0),
+        totalLiabilities: allObligations.reduce((s, o) => {
+          const remaining = o.fields?.remainingBalance || o.fields?.totalAmount;
+          return s + (remaining ? Number(remaining) : 0);
+        }, 0),
+        recentExpenses: allExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category })),
+      },
       overdueTasks,
       todaysEvents,
       totalDocuments: filteredDocs.length,

@@ -3,6 +3,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import EditableTitle from "@/components/EditableTitle";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -51,7 +52,16 @@ function HabitCard({ habit }: { habit: Habit }) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Icon className="h-4 w-4" style={{ color: habit.color || "#4F98A3" }} />
-            <CardTitle className="text-sm font-medium">{habit.name}</CardTitle>
+            <CardTitle className="text-sm font-medium">
+              <EditableTitle
+                value={habit.name}
+                onSave={async (newName) => {
+                  await apiRequest("PATCH", `/api/habits/${habit.id}`, { name: newName });
+                  queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+                  toast({ title: `Renamed to "${newName}"` });
+                }}
+              />
+            </CardTitle>
           </div>
           <div className="flex items-center gap-1">
             <Button

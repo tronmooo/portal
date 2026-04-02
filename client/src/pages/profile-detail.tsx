@@ -110,6 +110,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { Skeleton } from "@/components/ui/skeleton";
+import EditableTitle from "@/components/EditableTitle";
 // DynamicProfileDetail import removed — registry system not yet integrated (see registry/index.ts)
 
 // ============================================================
@@ -1236,7 +1237,7 @@ function DocumentsTab({
                       const colorClass = DOC_TYPE_COLORS[doc.type] || (doc.mimeType.startsWith("image/") ? "bg-blue-500/10 text-blue-500" : "bg-slate-500/10 text-slate-500");
                       return (
                         <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${colorClass}`}>
-                          {doc.mimeType.startsWith("image/") ? <Eye className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                          {doc.mimeType.startsWith("image/") ? <ImageIcon className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
                         </div>
                       );
                     })()}
@@ -1247,7 +1248,16 @@ function DocumentsTab({
                         setViewingDoc(fullDoc);
                       } catch { setViewingDoc(doc); }
                     }}>
-                      <p className="text-sm font-medium truncate text-primary hover:underline">{doc.name}</p>
+                      <div className="text-sm font-medium text-primary" onClick={(e) => e.stopPropagation()}>
+                        <EditableTitle
+                          value={doc.name}
+                          onSave={async (newName) => {
+                            await apiRequest("PATCH", `/api/documents/${doc.id}`, { name: newName });
+                            queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+                            toast({ title: `Renamed to "${newName}"` });
+                          }}
+                        />
+                      </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
                         <span className="text-xs text-muted-foreground">

@@ -1232,6 +1232,108 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   );
 }
 
+// ─── Section: Finance Widget ─────────────────────────────────────────────────
+
+function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | undefined }) {
+  const [, navigate] = useLocation();
+
+  const monthlySpend = stats?.monthlySpend || 0;
+  const totalAssetValue = data?.totalAssetValue || 0;
+  const totalLiabilities = data?.totalLiabilities || 0;
+  const netWorth = totalAssetValue - totalLiabilities;
+  const recentExpenses: any[] = data?.recentExpenses || [];
+
+  if (!data && !stats) {
+    return (
+      <CollapsibleSection icon={DollarSign} label="Finance" testId="section-finance">
+        <p className="text-xs text-muted-foreground py-2">No finance data yet</p>
+      </CollapsibleSection>
+    );
+  }
+
+  return (
+    <CollapsibleSection icon={DollarSign} label="Finance" count={recentExpenses.length || undefined} testId="section-finance">
+      <div className="space-y-2">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+            <p className="text-[10px] text-muted-foreground">This Month</p>
+            <p className="text-sm font-bold tabular-nums">${monthlySpend.toLocaleString()}</p>
+          </div>
+          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+            <p className="text-[10px] text-muted-foreground">Assets</p>
+            <p className="text-sm font-bold tabular-nums text-green-500">${totalAssetValue.toLocaleString()}</p>
+          </div>
+          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+            <p className="text-[10px] text-muted-foreground">Net Worth</p>
+            <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
+          </div>
+        </div>
+        {recentExpenses.length > 0 && (
+          <div className="space-y-0.5">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase">Recent Expenses</p>
+            {recentExpenses.slice(0, 5).map((exp: any) => (
+              <div key={exp.id} className="flex items-center justify-between py-1 text-xs">
+                <span className="truncate flex-1">{exp.description || "Expense"}</span>
+                <span className="font-medium tabular-nums ml-2">${exp.amount?.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 w-full" onClick={() => navigate("/finance")}>
+          View All Finance →
+        </Button>
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+// ─── Section: AI Summary ─────────────────────────────────────────────────────
+
+function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefined; enhanced: any }) {
+  const [summary, setSummary] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [lastGenerated, setLastGenerated] = useState<string | null>(null);
+
+  const generateSummary = async () => {
+    setLoading(true);
+    try {
+      const resp = await apiRequest("POST", "/api/chat", {
+        message: "Give me a brief daily summary of my current status. Include: tasks due today, habits completion, upcoming events, and any health or finance highlights. Keep it under 4 sentences. Be direct and specific with numbers.",
+      });
+      const data = await resp.json();
+      setSummary(data.reply || "No summary available.");
+      setLastGenerated(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+    } catch {
+      setSummary("Unable to generate summary right now.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return summary ? (
+    <CollapsibleSection icon={Sparkles} label="AI Summary" testId="section-ai-summary">
+      <div className="space-y-2">
+        <p className="text-xs leading-relaxed">{summary}</p>
+        <div className="flex items-center justify-between">
+          {lastGenerated && <span className="text-[10px] text-muted-foreground">Generated at {lastGenerated}</span>}
+          <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1" onClick={generateSummary} disabled={loading}>
+            <RotateCcw className={`h-2.5 w-2.5 ${loading ? "animate-spin" : ""}`} /> Refresh
+          </Button>
+        </div>
+      </div>
+    </CollapsibleSection>
+  ) : (
+    <CollapsibleSection icon={Sparkles} label="AI Summary" testId="section-ai-summary">
+      <div className="flex flex-col items-center gap-2 py-3">
+        <p className="text-xs text-muted-foreground">Get a personalized AI-powered daily briefing</p>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" onClick={generateSummary} disabled={loading}>
+          {loading ? <><RotateCcw className="h-3 w-3 animate-spin" /> Generating...</> : <><Sparkles className="h-3 w-3" /> Generate Summary</>}
+        </Button>
+      </div>
+    </CollapsibleSection>
+  );
+}
+
 // ─── Section: Recent Activity ────────────────────────────────────────────────
 
 function ActivitySection({ activities }: { activities: DashboardStats["recentActivity"] }) {
@@ -1308,24 +1410,40 @@ interface DashboardSection {
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
+  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
   { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
   { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left" },
-  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "right" },
-  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
+  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "right" },
+  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "left" },
+  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "right" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
 ];
+
+const LAYOUT_VERSION = 2; // Bump when section structure changes
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
   try {
-    const parsed = JSON.parse(saved) as DashboardSection[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    const parsed = JSON.parse(saved);
+    // Support versioned layout: { version, sections }
+    let sections: DashboardSection[];
+    let version = 0;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.sections) {
+      version = parsed.version || 0;
+      sections = parsed.sections;
+    } else if (Array.isArray(parsed)) {
+      sections = parsed;
+      version = 0;
+    } else {
+      return null;
+    }
+    // If layout version is outdated, reset to defaults
+    if (version < LAYOUT_VERSION) return null;
+    if (!Array.isArray(sections) || sections.length === 0) return null;
     const iconMap = new Map(DEFAULT_SECTIONS.map(s => [s.id, s.icon]));
-    // Filter out removed sections (upcoming, trends) and add new ones if missing
     const validIds = new Set(DEFAULT_SECTIONS.map(s => s.id));
-    const filtered = parsed.filter(s => validIds.has(s.id));
-    // Add any new default sections not present in saved layout
+    const filtered = sections.filter(s => validIds.has(s.id));
     const savedIds = new Set(filtered.map(s => s.id));
     for (const def of DEFAULT_SECTIONS) {
       if (!savedIds.has(def.id)) filtered.push({ ...def });
@@ -1337,7 +1455,7 @@ function parseSavedLayout(saved: string | null): DashboardSection[] | null {
 }
 
 function serializeLayout(sections: DashboardSection[]): string {
-  return JSON.stringify(sections.map(({ id, label, visible, column }) => ({ id, label, visible, column })));
+  return JSON.stringify({ version: LAYOUT_VERSION, sections: sections.map(({ id, label, visible, column }) => ({ id, label, visible, column })) });
 }
 
 function CustomizeDialog({
@@ -1576,6 +1694,12 @@ export default function DashboardPage() {
       case "obligations":
         content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
         break;
+      case "finance":
+        content = <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} />;
+        break;
+      case "ai-summary":
+        content = <AISummaryWidget stats={stats} enhanced={enhanced} />;
+        break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
         break;
@@ -1670,22 +1794,35 @@ export default function DashboardPage() {
       <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}
         sections={sections} onSave={(layout) => saveMutation.mutate(layout)} />
 
-      {/* Full-width sections (kpis always renders first if visible) */}
-      {fullWidthSections.map(s => (
-        <div key={s.id}>{renderSection(s.id)}</div>
-      ))}
+      {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid */}
+      {(() => {
+        // Split full-width into before-grid (kpis, ai-summary) and after-grid (activity, obligations)
+        const afterGridIds = new Set(["activity"]);
+        const beforeGrid = fullWidthSections.filter(s => !afterGridIds.has(s.id));
+        const afterGrid = fullWidthSections.filter(s => afterGridIds.has(s.id));
+        return (
+          <>
+            {beforeGrid.map(s => (
+              <div key={s.id}>{renderSection(s.id)}</div>
+            ))}
 
-      {/* Two-column layout */}
-      {(leftSections.length > 0 || rightSections.length > 0) && (
-        <div className="grid md:grid-cols-2 gap-3">
-          <div className="space-y-3">
-            {leftSections.map(s => <div key={s.id}>{renderSection(s.id)}</div>)}
-          </div>
-          <div className="space-y-3">
-            {rightSections.map(s => <div key={s.id}>{renderSection(s.id)}</div>)}
-          </div>
-        </div>
-      )}
+            {(leftSections.length > 0 || rightSections.length > 0) && (
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="space-y-3">
+                  {leftSections.map(s => <div key={s.id}>{renderSection(s.id)}</div>)}
+                </div>
+                <div className="space-y-3">
+                  {rightSections.map(s => <div key={s.id}>{renderSection(s.id)}</div>)}
+                </div>
+              </div>
+            )}
+
+            {afterGrid.map(s => (
+              <div key={s.id}>{renderSection(s.id)}</div>
+            ))}
+          </>
+        );
+      })()}
     </div>
   );
 }

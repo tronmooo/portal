@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -229,12 +230,20 @@ function TaskItem({
             onClick={() => onEdit(task)}
             data-testid={`task-edit-trigger-${task.id}`}
           >
-            <p
+            <div
               className={`text-sm font-medium ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}
               data-testid={`text-task-title-${task.id}`}
+              onClick={(e) => e.stopPropagation()}
             >
-              {task.title}
-            </p>
+              <EditableTitle
+                value={task.title}
+                onSave={async (newTitle) => {
+                  await apiRequest("PATCH", `/api/tasks/${task.id}`, { title: newTitle });
+                  invalidateTaskQueries();
+                  toast({ title: `Renamed to "${newTitle}"` });
+                }}
+              />
+            </div>
             {task.description && (
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{task.description}</p>
             )}

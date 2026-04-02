@@ -1156,13 +1156,13 @@ export default function ChatPage() {
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         <div className="max-w-2xl mx-auto space-y-4">
-          {/* Reset chat button - show when there are messages beyond welcome */}
+          {/* Reset chat button at top of messages */}
           {messages.length > 1 && (
             <div className="flex justify-center">
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                className="h-7 text-xs text-muted-foreground gap-1.5"
+                className="h-8 text-xs gap-1.5 border-dashed"
                 onClick={() => { setMessages([WELCOME_MSG]); }}
                 title="Start new conversation"
                 data-testid="button-reset-chat"
@@ -1349,7 +1349,21 @@ export default function ChatPage() {
 
       {/* Text input area (only shown when no attachment pending) */}
       {!hasAttachments && (
-        <div className="border-t border-border px-4 py-3 pb-[env(safe-area-inset-bottom,12px)] bg-background/80 backdrop-blur-sm">
+        <div className="border-t border-border px-4 py-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/80 backdrop-blur-sm">
+          {/* Mobile-visible New Chat button above input when there are messages */}
+          {messages.length > 1 && (
+            <div className="max-w-2xl mx-auto flex justify-center mb-1.5 md:hidden">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] gap-1 border-dashed w-full"
+                onClick={() => { setMessages([WELCOME_MSG]); }}
+                data-testid="button-reset-chat-mobile"
+              >
+                <RotateCcw className="h-3 w-3" /> New Chat
+              </Button>
+            </div>
+          )}
           <div className="max-w-2xl mx-auto flex items-end gap-2">
             <Button
               variant="ghost"

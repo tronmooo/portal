@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getDashboardProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,7 +48,16 @@ function ObligationCard({ ob }: { ob: Obligation }) {
               <Icon className={`h-4 w-4 ${isOverdue ? "text-red-500" : isDueSoon ? "text-yellow-500" : "text-primary"}`} />
             </div>
             <div>
-              <h3 className="text-sm font-medium">{ob.name}</h3>
+              <h3 className="text-sm font-medium">
+                <EditableTitle
+                  value={ob.name}
+                  onSave={async (newName) => {
+                    await apiRequest("PATCH", `/api/obligations/${ob.id}`, { name: newName });
+                    queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+                    toast({ title: `Renamed to "${newName}"` });
+                  }}
+                />
+              </h3>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-lg font-semibold">${ob.amount.toLocaleString()}</span>
                 <Badge variant="outline" className="text-[10px] h-5">

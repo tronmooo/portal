@@ -1532,6 +1532,22 @@ BEHAVIOR:
   - Drinking: "drank a Coke", "had coffee", "drank a smoothie", "had a beer", "drank water"
   - Snacking: "had some chips", "ate candy", "grabbed a donut"
   Only create an expense if the user explicitly mentions a dollar amount ("$12 lunch").
+  ACCURACY IS CRITICAL — use these reference values (per standard serving) and scale proportionally:
+  - Mac & cheese (1 cup/bowl): 380-420 cal, 48g carbs, 10-11g protein, 17-18g fat
+  - Chicken sandwich: 400-450 cal, 40g carbs, 28-32g protein, 14-18g fat
+  - Cheese pizza (1 slice): 270 cal, 33g carbs, 12g protein, 10g fat
+  - Hamburger: 350 cal, 28g carbs, 20g protein, 17g fat
+  - Coke (12oz): 140 cal, 39g carbs/sugar, 0g protein, 0g fat
+  - Grande latte (16oz): 190 cal, 18g carbs, 13g protein, 7g fat
+  - Salad (garden): 150 cal, 12g carbs, 5g protein, 9g fat
+  - Rice (1 cup cooked): 210 cal, 45g carbs, 4g protein, 0.5g fat
+  - Pasta (1 cup cooked): 220 cal, 43g carbs, 8g protein, 1.3g fat
+  - Egg (1 large): 70 cal, 0.5g carbs, 6g protein, 5g fat
+  - Steak (6oz): 420 cal, 0g carbs, 42g protein, 28g fat
+  - Protein shake: 200 cal, 8g carbs, 25g protein, 5g fat
+  - Beer (12oz): 150 cal, 13g carbs, 2g protein, 0g fat
+  - Donut: 250 cal, 31g carbs, 3g protein, 13g fat
+  When estimating, prioritize accuracy over round numbers. Carbs should dominate in grain/starch dishes. Protein should be HIGH only for meat/fish/protein-rich foods. Fat should be high for fried/cheesy foods. Do NOT overestimate protein for carb-heavy foods.
   Example: "I ate a chicken sandwich and ran 2 miles" → log_tracker_entry for Nutrition (calories, protein, carbs, fat) + log_tracker_entry for Running (distance, estimated calories burned). TWO separate tracker entries.
   Example: "I drank a Coke" → log_tracker_entry for Nutrition with: calories: ~140, sugar: 39g, carbs: 39g, protein: 0, fat: 0. Include the item name in notes.
   Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with estimated macros for a 16oz latte.

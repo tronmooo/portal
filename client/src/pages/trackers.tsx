@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
+import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -944,7 +945,16 @@ function TrackerCard({
               data-testid={`tracker-name-link-${tracker.id}`}
             >
               {specIcon && <span className="text-muted-foreground">{specIcon}</span>}
-              {tracker.name}
+              <span onClick={(e) => e.stopPropagation()}>
+                <EditableTitle
+                  value={tracker.name}
+                  onSave={async (newName) => {
+                    await apiRequest("PATCH", `/api/trackers/${tracker.id}`, { name: newName });
+                    queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+                    toast({ title: `Renamed to "${newName}"` });
+                  }}
+                />
+              </span>
             </CardTitle>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               {(() => {
