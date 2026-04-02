@@ -65,7 +65,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
-      toast({ title: "Expense added" });
+      toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
     },
     onError: (err: Error) => {
       toast({ title: "Failed to add expense", description: err.message, variant: "destructive" });

@@ -38,7 +38,7 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
     mutationFn: () => apiRequest("DELETE", `/api/journal/${entry.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-      toast({ title: "Entry deleted" });
+      toast({ title: "Journal entry deleted" });
     },
     onError: (err: Error) => toast({ title: "Failed to delete entry", description: err.message, variant: "destructive" }),
   });
@@ -160,7 +160,7 @@ export default function JournalPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
       setMood(null); setContent(""); setEnergy(3); setShowCreate(false);
-      toast({ title: "Journal entry saved" });
+      toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
     },
     onError: (err: Error) => toast({ title: "Failed to create journal entry", description: err.message, variant: "destructive" }),
   });

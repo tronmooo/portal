@@ -359,23 +359,24 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
   });
 
   const toggleMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
+    mutationFn: ({ id, status, title }: { id: string; status: string; title?: string }) =>
       apiRequest("PATCH", `/api/tasks/${id}`, { status }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
     },
     onError: () => toast({ title: "Failed to update task", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/tasks/${id}`),
-    onSuccess: () => {
+    mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/tasks/${id}`),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Task deleted" });
+      toast({ title: `"${variables.title || "Task"}" deleted` });
     },
     onError: () => toast({ title: "Failed to delete task", variant: "destructive" }),
   });
@@ -404,7 +405,7 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
             <div className="space-y-1 py-1 pr-2">
               {activeTasks.map((t: any) => (
                 <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted/50 transition-colors group">
-                  <button onClick={() => toggleMutation.mutate({ id: t.id, status: "done" })}
+                  <button onClick={() => toggleMutation.mutate({ id: t.id, status: "done", title: t.title })}
                     className="shrink-0 w-4 h-4 rounded border border-primary/40 hover:bg-primary/10 flex items-center justify-center">
                     {toggleMutation.isPending ? <span className="animate-spin h-2 w-2 border border-primary rounded-full border-t-transparent" /> : null}
                   </button>
@@ -416,7 +417,7 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
                     </div>
                   </div>
                   <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={() => deleteMutation.mutate(t.id)}><Trash2 className="h-3 w-3" /></Button>
+                    onClick={() => deleteMutation.mutate({ id: t.id, title: t.title })}><Trash2 className="h-3 w-3" /></Button>
                 </div>
               ))}
               {doneTasks.length > 0 && (
@@ -492,26 +493,30 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
   }, [enhanced, dismissedIds]);
 
   const handleMarkComplete = async (taskId: string) => {
+    const task = allItems.find(i => i.id === taskId);
     try {
       await apiRequest("PATCH", `/api/tasks/${taskId}`, { status: "done" });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Task completed" });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: `"${task?.title || "Task"}" completed` });
     } catch {
-      toast({ title: "Failed to complete task", variant: "destructive" });
+      toast({ title: `Failed to complete "${task?.title || "task"}"`, variant: "destructive" });
     }
   };
 
   const handleSnooze = async (taskId: string) => {
+    const task = allItems.find(i => i.id === taskId);
     try {
       const newDate = new Date();
       newDate.setDate(newDate.getDate() + 7);
       await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toISOString().slice(0, 10) });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Task snoozed 7 days" });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: `"${task?.title || "Task"}" snoozed`, description: `Moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
     } catch {
-      toast({ title: "Failed to snooze task", variant: "destructive" });
+      toast({ title: `Failed to snooze "${task?.title || "task"}"`, variant: "destructive" });
     }
   };
 
@@ -781,25 +786,27 @@ function ObligationsSection({ data }: { data: any[] }) {
   const [selectedBill, setSelectedBill] = useState<any>(null);
 
   const payMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("POST", `/api/obligations/${id}/pay`),
-    onSuccess: () => {
+    mutationFn: ({ id, name, amount }: { id: string; name?: string; amount?: number }) => apiRequest("POST", `/api/obligations/${id}/pay`),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Payment recorded" });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      toast({ title: `"${variables.name || "Bill"}" marked paid`, description: variables.amount ? `$${variables.amount.toFixed(2)} payment recorded` : undefined });
       setSelectedBill(null);
     },
-    onError: () => toast({ title: "Failed to record payment", variant: "destructive" }),
+    onError: (_err, variables) => toast({ title: `Failed to mark "${variables.name || "bill"}" as paid`, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/obligations/${id}`),
-    onSuccess: () => {
+    mutationFn: ({ id, name }: { id: string; name?: string }) => apiRequest("DELETE", `/api/obligations/${id}`),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Obligation deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      toast({ title: `"${variables.name || "Obligation"}" deleted` });
       setSelectedBill(null);
     },
-    onError: () => toast({ title: "Failed to delete obligation", variant: "destructive" }),
+    onError: (_err, variables) => toast({ title: `Failed to delete "${variables.name || "obligation"}"`, variant: "destructive" }),
   });
 
   // Group bills by timeframe
@@ -877,11 +884,11 @@ function ObligationsSection({ data }: { data: any[] }) {
             <div className="flex justify-between text-xs"><span className="text-muted-foreground">Autopay</span><span>{selectedBill?.autopay ? "Yes" : "No"}</span></div>
           </div>
           <div className="flex gap-2 pt-2">
-            <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => selectedBill && payMutation.mutate(selectedBill.id)}
+            <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => selectedBill && payMutation.mutate({ id: selectedBill.id, name: selectedBill.name, amount: selectedBill.amount })}
               disabled={payMutation.isPending}>
               <Check className="h-3 w-3 mr-1" /> Mark Paid
             </Button>
-            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => selectedBill && deleteMutation.mutate(selectedBill.id)}
+            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => selectedBill && deleteMutation.mutate({ id: selectedBill.id, name: selectedBill.name })}
               disabled={deleteMutation.isPending}>
               <Trash2 className="h-3 w-3 mr-1" /> Delete
             </Button>
@@ -958,25 +965,26 @@ function GoalsSection({ profileId }: { profileId?: string }) {
     mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      const name = formTitle;
       setCreating(false); resetForm();
-      toast({ title: "Goal created" });
+      toast({ title: `"${name}" goal created`, description: formTarget ? `Target: ${formTarget} ${formUnit}` : undefined });
     },
     onError: (e: Error) => toast({ title: "Failed to create goal", description: e.message, variant: "destructive" }),
   });
   const updateMutation = useMutation({
-    mutationFn: ({ id, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, data).then(r => r.json()),
-    onSuccess: () => {
+    mutationFn: ({ id, title, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, { title, ...data }).then(r => r.json()),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       setEditGoal(null); resetForm();
-      toast({ title: "Goal updated" });
+      toast({ title: `"${variables.title || "Goal"}" updated` });
     },
   });
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
-    onSuccess: () => {
+    mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       setEditGoal(null);
-      toast({ title: "Goal deleted" });
+      toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
   });
 
@@ -1146,7 +1154,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   <Button
                     variant="destructive"
                     className="h-9 text-xs gap-1.5"
-                    onClick={() => { deleteMutation.mutate(actionGoal.id); setActionGoal(null); }}
+                    onClick={() => { deleteMutation.mutate({ id: actionGoal.id, title: actionGoal.title }); setActionGoal(null); }}
                   >
                     <Trash2 className="h-3.5 w-3.5" /> Delete
                   </Button>
@@ -1205,7 +1213,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
           </div>
           <DialogFooter className="gap-2">
             {editGoal && (
-              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => deleteMutation.mutate(editGoal.id)} disabled={deleteMutation.isPending} data-testid="btn-delete-goal">
+              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title })} disabled={deleteMutation.isPending} data-testid="btn-delete-goal">
                 <Trash2 className="h-3 w-3 mr-1" /> Delete
               </Button>
             )}

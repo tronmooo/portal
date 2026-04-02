@@ -26,14 +26,14 @@ function HabitCard({ habit }: { habit: Habit }) {
 
   const checkinMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: "Checked in!" }); },
-    onError: (err: Error) => toast({ title: "Failed to check in", description: err.message, variant: "destructive" }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `${habit.name} — Done for today`, description: `Streak: ${habit.currentStreak + 1} day${habit.currentStreak + 1 !== 1 ? "s" : ""}` }); },
+    onError: (err: Error) => toast({ title: `Failed to check in ${habit.name}`, description: err.message, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: "Habit deleted" }); },
-    onError: (err: Error) => toast({ title: "Failed to delete habit", description: err.message, variant: "destructive" }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `"${habit.name}" deleted` }); },
+    onError: (err: Error) => toast({ title: `Failed to delete "${habit.name}"`, description: err.message, variant: "destructive" }),
   });
 
   // Build last 14 days grid
@@ -155,7 +155,7 @@ export default function HabitsPage() {
 
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); setNewName(""); setShowCreate(false); toast({ title: "Habit created" }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: err.message, variant: "destructive" }),
   });
 

@@ -207,7 +207,7 @@ function EventFormDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: isEdit ? "Event updated" : "Event created" });
+      toast({ title: isEdit ? `"${form.title}" updated` : `"${form.title}" created`, description: form.date ? new Date(form.date + "T12:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : undefined });
       onClose();
     },
     onError: () => {
@@ -453,7 +453,7 @@ function EventDetailDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: "Deleted" });
+      toast({ title: `"${item?.title || "Item"}" deleted` });
       onClose();
     },
     onError: () => {

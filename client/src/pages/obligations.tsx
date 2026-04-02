@@ -33,9 +33,9 @@ function ObligationCard({ ob }: { ob: Obligation }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: "Payment recorded" });
+      toast({ title: `"${ob.name}" marked paid`, description: `$${ob.amount.toFixed(2)} payment recorded` });
     },
-    onError: (err: Error) => toast({ title: "Failed to record payment", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to pay "${ob.name}"`, description: err.message, variant: "destructive" }),
   });
 
   return (
@@ -121,11 +121,12 @@ export default function ObligationsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: "Obligation created" });
+      const savedName = newName;
+      toast({ title: `"${savedName}" bill created`, description: `${newFrequency} · $${newAmount}` });
       setAddOpen(false);
       setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing");
     },
-    onError: (err: Error) => toast({ title: "Failed to create obligation", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create bill", description: err.message, variant: "destructive" }),
   });
 
   const sorted = [...obligations].sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime());

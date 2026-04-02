@@ -763,7 +763,7 @@ function CreateProfileDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: "Profile created" });
+      toast({ title: `"${name}" profile created`, description: selectedTypeDef?.label || selectedTypeKey });
       handleClose();
     },
     onError: (err: Error) => {
@@ -1112,7 +1112,8 @@ export default function ProfilesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      toast({ title: "Profile deleted" });
+      const delProfile = profiles.find(p => p.id === deleteId);
+      toast({ title: `"${delProfile?.name || "Profile"}" deleted`, description: "All linked data removed" });
       setDeleteId(null);
     },
     onError: (err: Error) => {

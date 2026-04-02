@@ -2454,25 +2454,26 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
     mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      const name = formTitle;
       setCreating(false); resetForm();
-      toast({ title: "Goal created" });
+      toast({ title: `"${name}" goal created`, description: formTarget ? `Target: ${formTarget} ${formUnit}` : undefined });
     },
-    onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Failed to create goal", description: e.message, variant: "destructive" }),
   });
   const updateMutation = useMutation({
-    mutationFn: ({ id, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, data).then(r => r.json()),
-    onSuccess: () => {
+    mutationFn: ({ id, title, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, { title, ...data }).then(r => r.json()),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       setEditGoal(null); resetForm();
-      toast({ title: "Goal updated" });
+      toast({ title: `"${variables.title || "Goal"}" updated` });
     },
   });
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
-    onSuccess: () => {
+    mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       setEditGoal(null);
-      toast({ title: "Goal deleted" });
+      toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
   });
 
@@ -2541,7 +2542,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
               {editGoal ? "Update" : "Create"}
             </Button>
             {editGoal && (
-              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate(editGoal.id)} data-testid="btn-delete-tracker-goal">
+              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title })} data-testid="btn-delete-tracker-goal">
                 <Trash2 className="h-3 w-3" />
               </Button>
             )}

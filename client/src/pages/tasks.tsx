@@ -89,7 +89,7 @@ function TaskDialog({
     },
     onSuccess: () => {
       invalidateTaskQueries();
-      toast({ title: isEdit ? "Task updated" : "Task created" });
+      toast({ title: isEdit ? `"${title.trim()}" updated` : `"${title.trim()}" created`, description: dueDate ? `Due ${new Date(dueDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : undefined });
       onClose();
     },
     onError: (err: Error) => {
@@ -197,18 +197,18 @@ function TaskItem({
     },
     onSuccess: () => {
       invalidateTaskQueries();
-      toast({ title: task.status === "done" ? "Task reopened" : "Task completed" });
+      toast({ title: task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed` });
     },
-    onError: (err: Error) => toast({ title: "Failed to update task", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to update "${task.title}"`, description: err.message, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/tasks/${task.id}`),
     onSuccess: () => {
       invalidateTaskQueries();
-      toast({ title: "Task deleted" });
+      toast({ title: `"${task.title}" deleted` });
     },
-    onError: (err: Error) => toast({ title: "Failed to delete task", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to delete "${task.title}"`, description: err.message, variant: "destructive" }),
   });
 
   return (

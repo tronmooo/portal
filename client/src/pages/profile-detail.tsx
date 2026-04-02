@@ -1549,7 +1549,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       return expense;
     },
     onSuccess: () => {
-      toast({ title: "Expense added" });
+      const saved = expDesc;
+      toast({ title: `$${Number(expAmount).toFixed(2)} expense added`, description: saved });
       setShowAddExpense(false);
       setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor("");
       setExpDate(new Date().toISOString().slice(0, 10));
@@ -1558,7 +1559,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to add expense", description: err.message, variant: "destructive" }),
   });
 
   const updateExpenseMutation = useMutation({
@@ -1570,23 +1571,24 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       });
     },
     onSuccess: () => {
-      toast({ title: "Expense updated" });
+      toast({ title: `"${expDesc}" expense updated`, description: `$${Number(expAmount).toFixed(2)}` });
       setEditingExpense(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to update expense", description: err.message, variant: "destructive" }),
   });
 
   const deleteExpenseMutation = useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async ({ id, desc }: { id: string; desc?: string }) => {
       await apiRequest("DELETE", `/api/expenses/${id}`);
       await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "expense", entityId: id });
+      return { desc };
     },
-    onSuccess: () => {
-      toast({ title: "Expense deleted" });
+    onSuccess: (_data, variables) => {
+      toast({ title: `"${variables.desc || "Expense"}" deleted` });
       setDeleteExpenseId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
@@ -2168,7 +2170,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteExpenseId && deleteExpenseMutation.mutate(deleteExpenseId)}
+              onClick={() => { if (deleteExpenseId) { const e = expenses.find(x => x.id === deleteExpenseId); deleteExpenseMutation.mutate({ id: deleteExpenseId, desc: e?.description }); } }}
               disabled={deleteExpenseMutation.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete-expense"
@@ -2501,8 +2503,9 @@ function TrackersTab({
         trackerId, values, notes: entryNotes || undefined,
       });
     },
-    onSuccess: () => {
-      toast({ title: "Entry logged" });
+    onSuccess: (_data, trackerId) => {
+      const tracker = trackers.find(t => t.id === trackerId);
+      toast({ title: `Entry logged to "${tracker?.name || "tracker"}"`, description: entryValue ? `Value: ${entryValue}` : undefined });
       setShowLogEntry(null);
       setEntryValue(""); setEntryNotes("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
@@ -2510,7 +2513,7 @@ function TrackersTab({
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to log entry", description: err.message, variant: "destructive" }),
   });
 
   const trackerCategories = ["custom", "health", "fitness", "finance", "productivity", "nutrition", "sleep", "mood", "weight", "other"];
@@ -3272,18 +3275,19 @@ function TasksTab({
   const [taskDueDate, setTaskDueDate] = useState("");
 
   const toggleMutation = useMutation({
-    mutationFn: async ({ taskId, status }: { taskId: string; status: "todo" | "done" }) => {
+    mutationFn: async ({ taskId, status, title }: { taskId: string; status: "todo" | "done"; title?: string }) => {
       const res = await apiRequest("PATCH", `/api/tasks/${taskId}`, { status });
-      return res.json();
+      return { ...(await res.json()), _title: title };
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
       onChanged();
     },
-    onError: (err: Error) => {
-      toast({ title: "Failed to update task", description: err.message, variant: "destructive" });
+    onError: (err: Error, variables) => {
+      toast({ title: `Failed to update "${variables.title || "task"}"`, description: err.message, variant: "destructive" });
     },
   });
 
@@ -3300,7 +3304,8 @@ function TasksTab({
       return task;
     },
     onSuccess: () => {
-      toast({ title: "Task created" });
+      const saved = taskTitle;
+      toast({ title: `"${saved}" created`, description: taskDueDate ? `Due ${new Date(taskDueDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : undefined });
       setShowAddTask(false);
       setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
@@ -3308,16 +3313,17 @@ function TasksTab({
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Failed to create task", description: err.message, variant: "destructive" }),
   });
 
   const deleteTaskMutation = useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async ({ id, title }: { id: string; title?: string }) => {
       await apiRequest("DELETE", `/api/tasks/${id}`);
       await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "task", entityId: id });
+      return { title };
     },
-    onSuccess: () => {
-      toast({ title: "Task deleted" });
+    onSuccess: (_data, variables) => {
+      toast({ title: `"${variables.title || "Task"}" deleted` });
       setDeleteTaskId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
@@ -3406,7 +3412,7 @@ function TasksTab({
                   data-testid={`row-task-${task.id}`}
                 >
                   <button
-                    onClick={() => toggleMutation.mutate({ taskId: task.id, status: isDone ? "todo" : "done" })}
+                    onClick={() => toggleMutation.mutate({ taskId: task.id, status: isDone ? "todo" : "done", title: task.title })}
                     disabled={toggleMutation.isPending}
                     className="mt-0.5 shrink-0"
                     data-testid={`button-toggle-task-${task.id}`}
@@ -3502,7 +3508,7 @@ function TasksTab({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteTaskId && deleteTaskMutation.mutate(deleteTaskId)}
+              onClick={() => { if (deleteTaskId) { const t = tasks.find(x => x.id === deleteTaskId); deleteTaskMutation.mutate({ id: deleteTaskId, title: t?.title }); } }}
               disabled={deleteTaskMutation.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete-task"
@@ -3580,12 +3586,12 @@ function EditProfileDialog({
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Profile updated" });
+      toast({ title: `"${name}" updated` });
       onSaved();
       onClose();
     },
     onError: (err: Error) => {
-      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+      toast({ title: `Failed to update "${name}"`, description: err.message, variant: "destructive" });
     },
   });
 
@@ -3896,7 +3902,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes });
     },
     onSuccess: () => {
-      toast({ title: "Notes saved" });
+      toast({ title: "Notes saved for this profile" });
       setIsEditing(false);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       onChanged();
@@ -3990,7 +3996,7 @@ export default function ProfileDetailPage() {
       await apiRequest("DELETE", `/api/profiles/${id}`);
     },
     onSuccess: () => {
-      toast({ title: "Profile deleted" });
+      toast({ title: `Profile deleted`, description: "All linked data has been removed" });
       // Cascade: profile delete also removes linked obligations, events, expenses, etc.
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
