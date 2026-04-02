@@ -2255,15 +2255,20 @@ function CorrelationsTabContent({ tracker }: { tracker: Tracker }) {
 }
 
 // -- History Tab
-function HistoryTabContent({ tracker, primaryField }: { tracker: Tracker; primaryField: string }) {
+function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Tracker; primaryField: string; profiles?: { id: string; name: string }[] }) {
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
+  const [profileFilter, setProfileFilter] = useState<string>("all");
   const sortedEntries = [...tracker.entries].reverse();
+
+  // Profile filter: only show entries for selected profile
+  const profileFiltered = profileFilter === "all" ? sortedEntries
+    : sortedEntries.filter(e => (e as any).forProfile === profileFilter);
 
   const now = Date.now();
   const dateFilterMs: Record<string, number> = { "7d": 7*86400000, "30d": 30*86400000, "90d": 90*86400000 };
-  const dateFiltered = dateFilter === "all" ? sortedEntries :
-    sortedEntries.filter(e => now - new Date(e.timestamp).getTime() <= (dateFilterMs[dateFilter] || Infinity));
+  const dateFiltered = dateFilter === "all" ? profileFiltered :
+    profileFiltered.filter(e => now - new Date(e.timestamp).getTime() <= (dateFilterMs[dateFilter] || Infinity));
   const searchLower = search.toLowerCase();
   const filtered = searchLower
     ? dateFiltered.filter(e => {
@@ -2274,11 +2279,33 @@ function HistoryTabContent({ tracker, primaryField }: { tracker: Tracker; primar
       })
     : dateFiltered;
 
+  // Determine which profiles have entries in this tracker
+  const profileIdsInEntries = [...new Set(sortedEntries.map(e => (e as any).forProfile).filter(Boolean))];
+  const hasMultipleProfiles = profileIdsInEntries.length > 0;
+
   return (
     <div className="space-y-3">
       {/* Filter bar */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[10px] text-muted-foreground">({filtered.length})</span>
+        {/* Profile filter chips */}
+        {hasMultipleProfiles && profiles && (
+          <div className="flex items-center gap-1">
+            <button onClick={() => setProfileFilter("all")}
+              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${profileFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              All
+            </button>
+            {profileIdsInEntries.map(pid => {
+              const p = profiles.find(pr => pr.id === pid);
+              return p ? (
+                <button key={pid} onClick={() => setProfileFilter(pid)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${profileFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+                  {p.name}
+                </button>
+              ) : null;
+            })}
+          </div>
+        )}
         <div className="flex-1" />
         <div className="flex items-center gap-1">
           {(["all", "7d", "30d", "90d"] as const).map(range => (
@@ -2580,6 +2607,10 @@ function TrackerDetailDialog({
   const [deleteTrackerOpen, setDeleteTrackerOpen] = useState(false);
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { data: allProfiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
 
   const deleteTrackerMut = useMutation({
     mutationFn: async () => {
@@ -2669,7 +2700,7 @@ function TrackerDetailDialog({
                   <CorrelationsTabContent tracker={tracker} />
                 </TabsContent>
                 <TabsContent value="history" className="mt-0">
-                  <HistoryTabContent tracker={tracker} primaryField={primaryField} />
+                  <HistoryTabContent tracker={tracker} primaryField={primaryField} profiles={allProfiles} />
                 </TabsContent>
                 <TabsContent value="insights" className="mt-0">
                   <InsightsTabContent tracker={tracker} primaryField={primaryField} />

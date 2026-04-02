@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "/api"
+    },
+    {
+      "source": "/((?!api|assets|icons|sw.js|manifest.json|favicon.png|offline.html).*)",
+      "destination": "/index.html"
     }
   ],
   "headers": [

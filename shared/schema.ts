@@ -216,6 +216,7 @@ export interface TrackerEntry {
   notes?: string;
   mood?: "great" | "good" | "okay" | "bad" | "terrible";
   tags?: string[];
+  forProfile?: string; // Profile ID this entry belongs to (for per-profile filtering)
   timestamp: string;
 }
 
@@ -274,9 +275,11 @@ export interface Habit {
   color?: string;
   frequency: HabitFrequency;
   targetDays?: number[]; // 0=Sun..6=Sat for custom frequency
+  targetPerDay: number; // How many times per day (default 1, e.g., 3 for "brush teeth 3x daily")
   currentStreak: number;
   longestStreak: number;
   checkins: HabitCheckin[];
+  linkedProfiles?: string[];
   createdAt: string;
 }
 
@@ -294,6 +297,7 @@ export const insertHabitSchema = z.object({
   color: z.string().optional(),
   frequency: z.enum(["daily", "weekly", "custom"]).default("daily"),
   targetDays: z.array(z.number().min(0).max(6)).optional(),
+  targetPerDay: z.number().min(1).max(10).default(1),
 });
 
 export type InsertHabit = z.infer<typeof insertHabitSchema>;

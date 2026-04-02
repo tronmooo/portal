@@ -2066,7 +2066,14 @@ async function executeTool(name: string, input: any): Promise<any> {
           logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
           return recentDup; // Return existing instead of creating duplicate
         }
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues });
+        // Resolve forProfile to actual profile ID
+        let forProfileId: string | undefined;
+        if (input.forProfile) {
+          const profiles = await storage.getProfiles();
+          const match = profiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
+          if (match) forProfileId = match.id;
+        }
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: forProfileId } as any);
         await autoLinkToProfiles("tracker", tracker.id, tracker.name, input.forProfile);
         // Auto-update any linked goals (e.g., running 1.5 mi updates 5K goal progress)
         await autoUpdateGoalProgress(tracker.id, entryValues);
@@ -2086,7 +2093,14 @@ async function executeTool(name: string, input: any): Promise<any> {
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       });
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues });
+      // Resolve forProfile for new tracker entries too
+      let newForProfileId: string | undefined;
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const match = profiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
+        if (match) newForProfileId = match.id;
+      }
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: newForProfileId } as any);
       await autoLinkToProfiles("tracker", newTracker.id, input.trackerName || "", input.forProfile);
       return entry;
     }

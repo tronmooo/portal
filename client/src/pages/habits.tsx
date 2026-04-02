@@ -22,12 +22,22 @@ function HabitCard({ habit }: { habit: Habit }) {
   const { toast } = useToast();
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const checkedToday = habit.checkins.some(c => c.date === today);
+  const todayCheckins = habit.checkins.filter(c => c.date === today).length;
+  const targetPerDay = (habit as any).targetPerDay || 1;
+  const completedToday = todayCheckins >= targetPerDay;
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
 
   const checkinMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `${habit.name} — Done for today`, description: `Streak: ${habit.currentStreak + 1} day${habit.currentStreak + 1 !== 1 ? "s" : ""}` }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      const newCount = todayCheckins + 1;
+      if (newCount >= targetPerDay) {
+        toast({ title: `${habit.name} — Done for today`, description: `Streak: ${habit.currentStreak + 1} day${habit.currentStreak + 1 !== 1 ? "s" : ""}` });
+      } else {
+        toast({ title: `${habit.name} — ${newCount}/${targetPerDay}`, description: `${targetPerDay - newCount} more to go` });
+      }
+    },
     onError: (err: Error) => toast({ title: `Failed to check in ${habit.name}`, description: err.message, variant: "destructive" }),
   });
 
@@ -37,12 +47,13 @@ function HabitCard({ habit }: { habit: Habit }) {
     onError: (err: Error) => toast({ title: `Failed to delete "${habit.name}"`, description: err.message, variant: "destructive" }),
   });
 
-  // Build last 14 days grid
-  const last14: { date: string; done: boolean }[] = [];
+  // Build last 14 days grid (multi-daily aware)
+  const last14: { date: string; done: boolean; count: number }[] = [];
   for (let i = 13; i >= 0; i--) {
     const dd = new Date(Date.now() - i * 86400000);
     const dateStr = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
-    last14.push({ date: dateStr, done: habit.checkins.some(c => c.date === dateStr) });
+    const count = habit.checkins.filter(c => c.date === dateStr).length;
+    last14.push({ date: dateStr, done: count >= targetPerDay, count });
   }
 
   return (
@@ -66,13 +77,17 @@ function HabitCard({ habit }: { habit: Habit }) {
           <div className="flex items-center gap-1">
             <Button
               size="sm"
-              variant={checkedToday ? "secondary" : "default"}
-              disabled={checkedToday || checkinMutation.isPending}
+              variant={completedToday ? "secondary" : "default"}
+              disabled={completedToday || checkinMutation.isPending}
               onClick={() => checkinMutation.mutate()}
               className="h-7 text-xs"
               data-testid={`button-checkin-${habit.id}`}
             >
-              {checkedToday ? <><Check className="h-3 w-3 mr-1" /> Done</> : "Check In"}
+              {completedToday
+                ? <><Check className="h-3 w-3 mr-1" /> Done</>
+                : targetPerDay > 1
+                  ? `${todayCheckins}/${targetPerDay}`
+                  : "Check In"}
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -122,19 +137,22 @@ function HabitCard({ habit }: { habit: Habit }) {
 
         {/* 14-day grid */}
         <div className="flex gap-1">
-          {last14.map((day, i) => (
-            <div
-              key={i}
-              className="w-5 h-5 rounded-sm flex items-center justify-center text-[8px]"
-              style={{
-                backgroundColor: day.done ? (habit.color || "#4F98A3") : "var(--color-muted)",
-                opacity: day.done ? 1 : 0.3,
-              }}
-              title={`${day.date}${day.done ? " ✓" : ""}`}
-            >
-              {day.done && <Check className="h-2.5 w-2.5 text-white" />}
-            </div>
-          ))}
+          {last14.map((day, i) => {
+            const partial = targetPerDay > 1 && day.count > 0 && !day.done;
+            return (
+              <div
+                key={i}
+                className="w-5 h-5 rounded-sm flex items-center justify-center text-[8px]"
+                style={{
+                  backgroundColor: day.done ? (habit.color || "#4F98A3") : partial ? (habit.color || "#4F98A3") : "var(--color-muted)",
+                  opacity: day.done ? 1 : partial ? 0.5 : 0.3,
+                }}
+                title={`${day.date}${day.done ? " ✓" : day.count > 0 ? ` ${day.count}/${targetPerDay}` : ""}`}
+              >
+                {day.done ? <Check className="h-2.5 w-2.5 text-white" /> : partial ? <span className="text-white font-bold">{day.count}</span> : null}
+              </div>
+            );
+          })}
         </div>
         <div className="flex justify-between text-[9px] text-muted-foreground mt-1">
           <span>14 days ago</span>
@@ -172,7 +190,10 @@ export default function HabitsPage() {
   // Summary stats
   const todayD = new Date();
   const today = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, '0')}-${String(todayD.getDate()).padStart(2, '0')}`;
-  const completedToday = habits.filter(h => h.checkins.some(c => c.date === today)).length;
+  const completedToday = habits.filter(h => {
+    const tpd = (h as any).targetPerDay || 1;
+    return h.checkins.filter(c => c.date === today).length >= tpd;
+  }).length;
   const totalActive = habits.length;
 
   return (

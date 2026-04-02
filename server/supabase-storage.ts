@@ -34,9 +34,20 @@ function getExtension(mimeType: string): string {
 }
 
 // ---- Streak calculator (timezone-aware) ----
-function calculateStreak(checkins: { date: string }[]): { current: number; longest: number } {
+function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1): { current: number; longest: number } {
   if (checkins.length === 0) return { current: 0, longest: 0 };
-  const dates = [...new Set(checkins.map(c => c.date))].sort().reverse();
+  // Count check-ins per date
+  const countByDate = new Map<string, number>();
+  for (const c of checkins) {
+    countByDate.set(c.date, (countByDate.get(c.date) || 0) + 1);
+  }
+  // A day is "complete" if check-in count >= targetPerDay
+  const completeDates = [...countByDate.entries()]
+    .filter(([, count]) => count >= targetPerDay)
+    .map(([date]) => date)
+    .sort()
+    .reverse();
+  if (completeDates.length === 0) return { current: 0, longest: 0 };
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
   function addDays(dateStr: string, days: number): string {
     const d = new Date(dateStr + 'T12:00:00');
@@ -45,14 +56,14 @@ function calculateStreak(checkins: { date: string }[]): { current: number; longe
   }
   const yesterdayStr = addDays(todayStr, -1);
   let current = 0;
-  if (dates[0] === todayStr || dates[0] === yesterdayStr) {
-    let expectedDate = dates[0];
-    for (let i = 0; i < dates.length; i++) {
-      if (dates[i] === expectedDate) { current++; expectedDate = addDays(expectedDate, -1); }
-      else if (dates[i] < expectedDate) { break; }
+  if (completeDates[0] === todayStr || completeDates[0] === yesterdayStr) {
+    let expectedDate = completeDates[0];
+    for (let i = 0; i < completeDates.length; i++) {
+      if (completeDates[i] === expectedDate) { current++; expectedDate = addDays(expectedDate, -1); }
+      else if (completeDates[i] < expectedDate) { break; }
     }
   }
-  const allDates = [...new Set(checkins.map(c => c.date))].sort();
+  const allDates = [...completeDates].sort();
   let tempStreak = 1;
   let longest = 1;
   for (let i = 1; i < allDates.length; i++) {
@@ -196,7 +207,8 @@ export class SupabaseStorage implements IStorage {
     return {
       id: r.id, values: r.entry_values || {}, computed: r.computed || {},
       notes: r.notes || undefined, mood: r.mood || undefined,
-      tags: r.tags || undefined, timestamp: r.timestamp,
+      tags: r.tags || undefined, forProfile: r.for_profile || undefined,
+      timestamp: r.timestamp,
     };
   }
 
@@ -259,6 +271,7 @@ export class SupabaseStorage implements IStorage {
     return {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
+      targetPerDay: r.target_per_day || 1,
       currentStreak: r.current_streak || 0, longestStreak: r.longest_streak || 0,
       linkedProfiles: r.linked_profiles || [],
       checkins, createdAt: r.created_at,
@@ -1016,7 +1029,9 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("tracker_entries").insert({
       id, user_id: this.userId, tracker_id: data.trackerId,
       entry_values: values, computed, notes: data.notes || null,
-      mood: data.mood || null, tags: data.tags || null, timestamp: ts,
+      mood: data.mood || null, tags: data.tags || null,
+      for_profile: (data as any).forProfile || null,
+      timestamp: ts,
     });
     if (error) throw error;
     this.logActivity("tracker", `Logged ${tracker.name}`);
@@ -1708,7 +1723,8 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("habits").insert({
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
-      target_days: data.targetDays || null, current_streak: 0, longest_streak: 0,
+      target_days: data.targetDays || null, target_per_day: data.targetPerDay || 1,
+      current_streak: 0, longest_streak: 0,
       created_at: now,
     });
     if (error) throw error;
@@ -1720,8 +1736,13 @@ export class SupabaseStorage implements IStorage {
     const habit = await this.getHabit(habitId);
     if (!habit) return undefined;
     const checkinDate = date || new Date().toISOString().slice(0, 10);
-    const existing = habit.checkins.find(c => c.date === checkinDate);
-    if (existing) return existing;
+    // Allow multiple check-ins per day up to targetPerDay
+    const todayCheckins = habit.checkins.filter(c => c.date === checkinDate);
+    const maxPerDay = habit.targetPerDay || 1;
+    if (todayCheckins.length >= maxPerDay) {
+      // Already at max for today
+      return todayCheckins[todayCheckins.length - 1];
+    }
     const id = randomUUID();
     const ts = new Date().toISOString();
     const { error } = await this.supabase.from("habit_checkins").insert({
@@ -1729,9 +1750,9 @@ export class SupabaseStorage implements IStorage {
       value: value ?? null, notes: notes || null, timestamp: ts,
     });
     if (error) throw error;
-    // Recalculate streaks
+    // Recalculate streaks (with targetPerDay support)
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
-    const { current, longest } = calculateStreak(allCheckins || []);
+    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1);
     await this.supabase.from("habits").update({
       current_streak: current, longest_streak: Math.max(longest, habit.longestStreak),
     }).eq("id", habitId).eq("user_id", this.userId);
@@ -1746,6 +1767,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("habits").update({
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
+      target_per_day: merged.targetPerDay || existing.targetPerDay || 1,
       linked_profiles: merged.linkedProfiles || existing.linkedProfiles || [],
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
