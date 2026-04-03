@@ -1291,7 +1291,7 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
             ))}
           </div>
         )}
-        <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 w-full" onClick={() => navigate("/finance")}>
+        <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 w-full" onClick={() => navigate("/dashboard/finance")}>
           View All Finance →
         </Button>
       </div>

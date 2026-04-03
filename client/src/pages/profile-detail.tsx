@@ -111,6 +111,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
 import EditableTitle from "@/components/EditableTitle";
 // DynamicProfileDetail import removed — registry system not yet integrated (see registry/index.ts)
 
@@ -862,6 +863,36 @@ function InfoTab({
           </p>
         </Card>
       </div>
+
+      {/* ── Subscription Insights ── */}
+      {profile.type === "subscription" && (() => {
+        const cost = Number(profile.fields?.monthlyCost || profile.fields?.cost || profile.fields?.amount || 0);
+        const startDate = profile.fields?.startDate;
+        const renewalDate = profile.fields?.renewalDate;
+        if (!cost && !startDate) return null;
+        const monthsActive = startDate ? Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (30.44 * 86400000))) : 0;
+        const totalPaid = cost * monthsActive;
+        const daysUntilRenewal = renewalDate ? Math.ceil((new Date(renewalDate).getTime() - Date.now()) / 86400000) : null;
+        return (
+          <Card className="p-3">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Subscription Insights</p>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div>
+                <p className="text-sm font-bold tabular-nums">${cost.toLocaleString()}/mo</p>
+                <p className="text-[10px] text-muted-foreground">Monthly Cost</p>
+              </div>
+              <div>
+                <p className="text-sm font-bold tabular-nums">${Math.round(totalPaid).toLocaleString()}</p>
+                <p className="text-[10px] text-muted-foreground">Total Paid ({monthsActive}mo)</p>
+              </div>
+              <div>
+                <p className="text-sm font-bold tabular-nums">{daysUntilRenewal != null ? (daysUntilRenewal > 0 ? `${daysUntilRenewal}d` : "Due") : "—"}</p>
+                <p className="text-[10px] text-muted-foreground">Until Renewal</p>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* ── 3. Grouped Field Sections (type-aware) ── */}
       {groups.length > 0 ? (
@@ -3778,6 +3809,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Vehicle — maintenance + cost focused
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -3787,6 +3819,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Loan — payment focused
   loan: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "finances", label: "Payments", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
@@ -3819,6 +3852,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Property / Home
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -3851,6 +3885,170 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "notes", label: "Notes", testId: "tab-notes" },
 ];
 
+// ─── Loan Tab ─────────────────────────────────────────────────────────
+function LoanTab({ profile, obligations }: { profile: any; obligations: any[] }) {
+  const loanBalance = Number(profile.fields?.loanBalance || profile.fields?.balance || 0);
+  const interestRate = Number(profile.fields?.interestRate || profile.fields?.apr || 0);
+  const monthlyPayment = Number(profile.fields?.monthlyPayment || 0);
+  const loanTerm = Number(profile.fields?.loanTerm || 0); // months
+  const startDate = profile.fields?.loanStartDate || profile.fields?.purchaseDate || profile.createdAt?.slice(0, 10);
+
+  // Calculate amortization schedule
+  const schedule: { month: number; payment: number; principal: number; interest: number; balance: number }[] = [];
+  if (loanBalance > 0 && monthlyPayment > 0 && interestRate > 0) {
+    const monthlyRate = interestRate / 100 / 12;
+    let remaining = loanBalance;
+    let month = 0;
+    while (remaining > 0 && month < 360) {
+      month++;
+      const interestCharge = remaining * monthlyRate;
+      const principalPaid = Math.min(monthlyPayment - interestCharge, remaining);
+      remaining = Math.max(0, remaining - principalPaid);
+      schedule.push({
+        month,
+        payment: Math.round((principalPaid + interestCharge) * 100) / 100,
+        principal: Math.round(principalPaid * 100) / 100,
+        interest: Math.round(interestCharge * 100) / 100,
+        balance: Math.round(remaining * 100) / 100,
+      });
+    }
+  }
+
+  const totalInterest = schedule.reduce((s, r) => s + r.interest, 0);
+  const totalCost = loanBalance + totalInterest;
+  const payoffDate = schedule.length > 0 ? (() => {
+    const d = new Date(startDate || new Date());
+    d.setMonth(d.getMonth() + schedule.length);
+    return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  })() : null;
+
+  // Linked obligations (existing payments)
+  const linkedObs = obligations.filter((o: any) =>
+    o.linkedProfiles?.includes(profile.id) || o.name?.toLowerCase().includes(profile.name?.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Loan Summary KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <Card className="p-3 text-center">
+          <p className="text-[10px] text-muted-foreground">Balance</p>
+          <p className="text-sm font-bold tabular-nums">${loanBalance.toLocaleString()}</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <p className="text-[10px] text-muted-foreground">Rate</p>
+          <p className="text-sm font-bold tabular-nums">{interestRate}%</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <p className="text-[10px] text-muted-foreground">Monthly</p>
+          <p className="text-sm font-bold tabular-nums">${monthlyPayment.toLocaleString()}</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <p className="text-[10px] text-muted-foreground">Payoff</p>
+          <p className="text-sm font-bold tabular-nums">{payoffDate || "—"}</p>
+        </Card>
+      </div>
+
+      {/* Payoff Summary */}
+      {schedule.length > 0 && (
+        <Card className="p-4">
+          <h3 className="text-xs font-semibold mb-2">Payoff Summary</h3>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div>
+              <p className="text-[10px] text-muted-foreground">Total Interest</p>
+              <p className="text-sm font-bold text-red-400">${Math.round(totalInterest).toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Total Cost</p>
+              <p className="text-sm font-bold">${Math.round(totalCost).toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Months Left</p>
+              <p className="text-sm font-bold">{schedule.length}</p>
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div className="mt-3">
+            <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+              <span>Paid off</span>
+              <span>{loanTerm > 0 ? `${Math.round((1 - schedule.length / loanTerm) * 100)}%` : "—"}</span>
+            </div>
+            <Progress value={loanTerm > 0 ? Math.round((1 - schedule.length / loanTerm) * 100) : 0} className="h-2" />
+          </div>
+        </Card>
+      )}
+
+      {/* Amortization Schedule (first 12 + last 3) */}
+      {schedule.length > 0 && (
+        <Card className="p-4">
+          <h3 className="text-xs font-semibold mb-2">Amortization Schedule</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b text-muted-foreground">
+                  <th className="text-left py-1 pr-2">#</th>
+                  <th className="text-right py-1 px-2">Payment</th>
+                  <th className="text-right py-1 px-2">Principal</th>
+                  <th className="text-right py-1 px-2">Interest</th>
+                  <th className="text-right py-1 pl-2">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schedule.slice(0, 12).map(row => (
+                  <tr key={row.month} className="border-b border-border/30">
+                    <td className="py-1 pr-2 text-muted-foreground">{row.month}</td>
+                    <td className="text-right py-1 px-2">${row.payment.toLocaleString()}</td>
+                    <td className="text-right py-1 px-2 text-green-500">${row.principal.toLocaleString()}</td>
+                    <td className="text-right py-1 px-2 text-red-400">${row.interest.toLocaleString()}</td>
+                    <td className="text-right py-1 pl-2 font-medium">${row.balance.toLocaleString()}</td>
+                  </tr>
+                ))}
+                {schedule.length > 15 && (
+                  <tr><td colSpan={5} className="text-center py-2 text-muted-foreground">... {schedule.length - 15} more months ...</td></tr>
+                )}
+                {schedule.length > 12 && schedule.slice(-3).map(row => (
+                  <tr key={row.month} className="border-b border-border/30">
+                    <td className="py-1 pr-2 text-muted-foreground">{row.month}</td>
+                    <td className="text-right py-1 px-2">${row.payment.toLocaleString()}</td>
+                    <td className="text-right py-1 px-2 text-green-500">${row.principal.toLocaleString()}</td>
+                    <td className="text-right py-1 px-2 text-red-400">${row.interest.toLocaleString()}</td>
+                    <td className="text-right py-1 pl-2 font-medium">${row.balance.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Linked Obligations */}
+      {linkedObs.length > 0 && (
+        <Card className="p-4">
+          <h3 className="text-xs font-semibold mb-2">Linked Payments</h3>
+          <div className="space-y-2">
+            {linkedObs.map((ob: any) => (
+              <div key={ob.id} className="flex items-center justify-between text-xs">
+                <span>{ob.name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">${ob.amount}/mo</span>
+                  <Badge variant="outline" className="text-[9px]">{ob.frequency}</Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Empty state */}
+      {!loanBalance && !interestRate && linkedObs.length === 0 && (
+        <Card className="p-6 text-center">
+          <p className="text-xs text-muted-foreground">No loan data yet. Edit this profile to add loan details (balance, interest rate, monthly payment).</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function getTabsForType(type: string, profile?: any): TabDef[] {
   const baseTabs = ENTITY_TABS[type] || DEFAULT_TABS;
   
@@ -3877,6 +4075,8 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "finances": return (profile.relatedExpenses || []).length > 0;
         case "tasks": return (profile.relatedTasks || []).length > 0;
         case "documents": return (profile.relatedDocuments || []).length > 0;
+        case "loan-detail": return !!(profile.fields?.interestRate || profile.fields?.loanBalance ||
+          profile.fields?.monthlyPayment || (profile.relatedObligations || []).length > 0);
         case "notes": return !!(profile.notes && profile.notes.trim());
         case "timeline": return ((profile.relatedEvents || []).length + (profile.relatedTasks || []).length) > 0;
         default: return false;
@@ -3887,7 +4087,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "health"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "health", "loan-detail"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -4201,6 +4401,12 @@ export default function ProfileDetailPage() {
                     childProfiles={profile.childProfiles}
                     onUploaded={handleSaved}
                   />
+                </TabsContent>
+              )}
+
+              {tabValues.has("loan-detail") && (
+                <TabsContent value="loan-detail" className="mt-4 px-1 sm:px-0">
+                  <LoanTab profile={profile} obligations={profile.relatedObligations || []} />
                 </TabsContent>
               )}
 

@@ -9,6 +9,10 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { MobileBottomNav } from "@/components/mobile-nav";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { initErrorReporter } from "@/lib/errorReporter";
+
+// Initialize error reporter immediately
+initErrorReporter();
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
@@ -156,6 +160,7 @@ function AppRouter() {
         <Route path="/" component={ChatPage} />
         <Route path="/dashboard" component={DashboardPage} />
         <Route path="/trackers" component={TrackersPage} />
+        <Route path="/linked" component={TrackersPage} />
         <Route path="/profiles" component={ProfilesPage} />
         <Route path="/profiles/:id" component={ProfileDetailPage} />
         <Route path="/documents/:id" component={DocumentDetailPage} />
