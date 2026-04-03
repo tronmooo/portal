@@ -1254,8 +1254,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const start = (startRaw && isValidDateStr(startRaw)) ? startRaw : new Date().toISOString().slice(0, 10);
     const endDefault = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
     const end = (endRaw && isValidDateStr(endRaw)) ? endRaw : endDefault;
+    const profileIdsRaw = req.query.profileIds as string | undefined;
+    const profileIds = profileIdsRaw ? profileIdsRaw.split(",").filter(Boolean) : undefined;
     try {
-      const items = await storage.getCalendarTimeline(start, end);
+      const items = await storage.getCalendarTimeline(start, end, profileIds);
       res.json(items);
     } catch (err: any) {
       res.status(500).json({ error: "Failed to load calendar" });

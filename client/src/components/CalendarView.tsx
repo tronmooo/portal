@@ -764,15 +764,24 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     return toLocalDateStr(d);
   }, [viewYear, viewMonth]);
 
-  const { data: timelineItems = [], isLoading: timelineLoading } = useQuery<CalendarTimelineItem[]>({
-    queryKey: ["/api/calendar/timeline", startDate, endDate],
-    queryFn: () =>
-      apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}`).then(r => r.json()),
-  });
-
   // Determine effective filter: external props take precedence over internal filter
+  // (computed before the query so filter state is part of the query key)
   const effectiveFilterMode = externalFilterMode ?? (resolvedProfileId ? "selected" : "everyone");
   const effectiveFilterIds = externalFilterIds ?? (resolvedProfileId ? [resolvedProfileId] : []);
+
+  const serverProfileIds = effectiveFilterMode === "selected" && effectiveFilterIds.length > 0
+    ? effectiveFilterIds
+    : [];
+
+  const { data: timelineItems = [], isLoading: timelineLoading } = useQuery<CalendarTimelineItem[]>({
+    queryKey: ["/api/calendar/timeline", startDate, endDate, ...serverProfileIds],
+    queryFn: () => {
+      const url = serverProfileIds.length > 0
+        ? `/api/calendar/timeline?start=${startDate}&end=${endDate}&profileIds=${serverProfileIds.join(",")}`
+        : `/api/calendar/timeline?start=${startDate}&end=${endDate}`;
+      return apiRequest("GET", url).then(r => r.json());
+    },
+  });
   const effectiveHasSelf = effectiveFilterMode === "everyone" ||
     effectiveFilterIds.includes(selfProfile?.id || "") ||
     (externalFilterMode === undefined && profileFilter === "me");

@@ -29,12 +29,17 @@ function HabitCard({ habit }: { habit: Habit }) {
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
 
   const checkinMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
-    onSuccess: () => {
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today });
+      const updated = await apiRequest("GET", `/api/habits/${habit.id}`).then(r => r.json());
+      return updated as typeof habit;
+    },
+    onSuccess: (updatedHabit) => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       const newCount = todayCheckins + 1;
       if (newCount >= targetPerDay) {
-        toast({ title: `${habit.name} — Done for today`, description: `Streak: ${habit.currentStreak + 1} day${habit.currentStreak + 1 !== 1 ? "s" : ""}` });
+        const streak = updatedHabit?.currentStreak ?? habit.currentStreak;
+        toast({ title: `${habit.name} — Done for today`, description: `Streak: ${streak} day${streak !== 1 ? "s" : ""}` });
       } else {
         toast({ title: `${habit.name} — ${newCount}/${targetPerDay}`, description: `${targetPerDay - newCount} more to go` });
       }

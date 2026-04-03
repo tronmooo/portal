@@ -82,7 +82,7 @@ export interface IStorage {
   deleteEvent(id: string): Promise<boolean>;
 
   // Unified calendar timeline
-  getCalendarTimeline(startDate: string, endDate: string): Promise<CalendarTimelineItem[]>;
+  getCalendarTimeline(startDate: string, endDate: string, profileIds?: string[]): Promise<CalendarTimelineItem[]>;
 
   // Documents
   getDocuments(): Promise<Document[]>;
@@ -918,7 +918,7 @@ export class MemStorage implements IStorage {
   async deleteEvent(id: string): Promise<boolean> { return this.events.delete(id); }
 
   // ---- Unified Calendar Timeline ----
-  async getCalendarTimeline(startDate: string, endDate: string): Promise<CalendarTimelineItem[]> {
+  async getCalendarTimeline(startDate: string, endDate: string, profileIds?: string[]): Promise<CalendarTimelineItem[]> {
     const items: CalendarTimelineItem[] = [];
 
     // 1. Calendar events (expand recurrence)

@@ -57,7 +57,7 @@ export default function FinancePage() {
   const { data: allProfiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const [activeTab, setActiveTab] = useState<"expenses" | "income">("expenses");
   const { data: incomes = [] } = useQuery<Income[]>({
-    queryKey: ["/api/incomes"],
+    queryKey: ["/api/incomes", filterMode, filterIds],
     queryFn: () => apiRequest("GET", "/api/incomes").then(r => r.json()),
   });
   const [addIncomeOpen, setAddIncomeOpen] = useState(false);
@@ -281,19 +281,37 @@ export default function FinancePage() {
         }).reduce((s, i) => s + i.amount, 0);
         const cashFlow = monthIncome - monthExpenses;
 
-        // Asset values from profiles
-        const assetProfiles = (profiles || []).filter(p => ["vehicle", "asset", "investment", "property"].includes(p.type));
-        const totalAssetValue = assetProfiles.reduce((s, p) => {
+        // Asset values from profiles (respect active profile filter)
+        const filteredAssetProfiles = (profiles || []).filter(p => {
+          if (!["vehicle", "asset", "investment", "property"].includes(p.type)) return false;
+          if (filterMode === "selected" && filterIds.length > 0) return filterIds.includes(p.id);
+          return true;
+        });
+        const totalAssetValue = filteredAssetProfiles.reduce((s, p) => {
           const val = (p as any).fields?.purchasePrice || (p as any).fields?.cost || (p as any).fields?.value || (p as any).fields?.amount || 0;
           return s + Number(val);
         }, 0);
 
-        const oblData = obligations || [];
-        const monthlyLiabilities = oblData.reduce((s: number, o: any) => {
+        // Convert all obligations to annual amounts for consistent net worth calc
+        const oblData = (obligations || []).filter((o: any) => {
+          if (filterMode === "selected" && filterIds.length > 0) {
+            const linked = o.linkedProfiles || [];
+            return linked.some((id: string) => filterIds.includes(id));
+          }
+          return true;
+        });
+        const annualLiabilities = oblData.reduce((s: number, o: any) => {
           const amt = Number(o.amount) || 0;
-          return s + (o.frequency === "monthly" ? amt : o.frequency === "yearly" ? amt / 12 : amt);
+          switch (o.frequency) {
+            case "weekly":     return s + amt * 52;
+            case "biweekly":   return s + amt * 26;
+            case "monthly":    return s + amt * 12;
+            case "quarterly":  return s + amt * 4;
+            case "yearly":     return s + amt;
+            default:           return s + amt * 12;
+          }
         }, 0);
-        const netWorth = totalAssetValue - monthlyLiabilities * 12;
+        const netWorth = totalAssetValue - annualLiabilities;
 
         return (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -450,6 +468,8 @@ export default function FinancePage() {
                       try {
                         await apiRequest("DELETE", `/api/incomes/${income.id}`);
                         queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                         toast({ title: `Income from "${income.source}" deleted` });
                       } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
                     }} title="Delete"><Trash2 className="h-3 w-3" /></Button>
@@ -495,6 +515,8 @@ export default function FinancePage() {
                   isRecurring: editIncomeForm.frequency !== "one_time",
                 });
                 queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                 toast({ title: `Income updated` });
                 setEditingIncome(null);
               } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }

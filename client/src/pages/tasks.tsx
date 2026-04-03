@@ -51,6 +51,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 const invalidateTaskQueries = () => {
   queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
 };
 
 // ── Create / Edit Dialog ─────────────────────────────────────────────────────

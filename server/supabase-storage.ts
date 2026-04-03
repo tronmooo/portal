@@ -1287,13 +1287,21 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // CALENDAR TIMELINE
   // ============================================================
-  async getCalendarTimeline(startDate: string, endDate: string): Promise<CalendarTimelineItem[]> {
+  async getCalendarTimeline(startDate: string, endDate: string, profileIds?: string[]): Promise<CalendarTimelineItem[]> {
     const items: CalendarTimelineItem[] = [];
     // Fetch all data in parallel for speed
     const [events, tasks, obligations, habits, profiles] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getHabits(), this.getProfiles(),
     ]);
+
+    // Helper: returns true when an item should be included given the active profile filter
+    const matchesFilter = (linkedProfiles: string[] | undefined) => {
+      if (!profileIds || profileIds.length === 0) return true;
+      const linked = linkedProfiles || [];
+      return linked.some(id => profileIds.includes(id));
+    };
     for (const ev of events) {
+      if (!matchesFilter(ev.linkedProfiles)) continue;
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
       const baseDate = ev.date.slice(0, 10);
       if (baseDate >= startDate && baseDate <= endDate) {
@@ -1321,6 +1329,7 @@ export class SupabaseStorage implements IStorage {
     }
 
     for (const task of tasks) {
+      if (!matchesFilter(task.linkedProfiles)) continue;
       if (task.dueDate) {
         const d = task.dueDate.slice(0, 10);
         if (d >= startDate && d <= endDate) {
@@ -1330,6 +1339,7 @@ export class SupabaseStorage implements IStorage {
     }
 
     for (const ob of obligations) {
+      if (!matchesFilter(ob.linkedProfiles)) continue;
       // Show the next due date
       const baseDate = ob.nextDueDate.slice(0, 10);
       if (baseDate >= startDate && baseDate <= endDate) {
@@ -1358,6 +1368,7 @@ export class SupabaseStorage implements IStorage {
 
     // ── Add habits as repeating calendar items ──
     for (const habit of habits) {
+      if (!matchesFilter(habit.linkedProfiles)) continue;
       // Show daily habits on each day in the range, weekly habits on their target days
       const start = new Date(startDate + "T12:00:00");
       const end = new Date(endDate + "T12:00:00");
@@ -2489,13 +2500,38 @@ export class SupabaseStorage implements IStorage {
     }
 
     const todayStr2 = now.toISOString().slice(0, 10);
-    const allActiveHabits = habits.filter(h => h.frequency === "daily" || h.frequency === "weekly");
-    const todayCompleted = allActiveHabits.filter(h => h.checkins.some(c => c.date === todayStr2)).length;
-    const habitCompletionRate = allActiveHabits.length > 0 ? Math.round((todayCompleted / allActiveHabits.length) * 100) : 0;
+    const todayDayOfWeek = now.getDay();
+    // Only count habits that are actually scheduled for today
+    const habitsScheduledToday = habits.filter(h => {
+      if (h.frequency === "daily") return true;
+      if (h.frequency === "weekly") {
+        const targetDays = (h as any).targetDays as number[] | undefined;
+        return targetDays ? targetDays.includes(todayDayOfWeek) : todayDayOfWeek === 1;
+      }
+      if (h.frequency === "custom") {
+        const targetDays = (h as any).targetDays as number[] | undefined;
+        return targetDays ? targetDays.includes(todayDayOfWeek) : false;
+      }
+      return false;
+    });
+    const todayCompleted = habitsScheduledToday.filter(h => {
+      const target = (h as any).targetPerDay || 1;
+      return h.checkins.filter(c => c.date === todayStr2).length >= target;
+    }).length;
+    const habitCompletionRate = habitsScheduledToday.length > 0 ? Math.round((todayCompleted / habitsScheduledToday.length) * 100) : 0;
 
     const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
     const upcomingObs = obligations.filter(o => { const due = new Date(o.nextDueDate); return due >= now && due <= sevenDaysOut; });
-    const monthlyObTotal = obligations.filter(o => o.frequency === "monthly" || o.frequency === "biweekly" || o.frequency === "weekly").reduce((s, o) => s + o.amount, 0);
+    const monthlyObTotal = obligations.reduce((s, o) => {
+      switch (o.frequency) {
+        case "weekly":    return s + o.amount * 4.33;
+        case "biweekly":  return s + o.amount * 2.17;
+        case "monthly":   return s + o.amount;
+        case "quarterly": return s + o.amount / 3;
+        case "yearly":    return s + o.amount / 12;
+        default:          return s;
+      }
+    }, 0);
 
     let journalStreak = 0;
     const today = new Date(); today.setHours(0, 0, 0, 0);

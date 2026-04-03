@@ -3991,7 +3991,7 @@ export default function ProfileDetailPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
 
-  const { data: profile, isLoading, refetch } = useQuery<ProfileDetail>({
+  const { data: profile, isLoading, isError, refetch } = useQuery<ProfileDetail>({
     queryKey: ["/api/profiles", id, "detail"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/profiles/${id}/detail`);
@@ -4030,7 +4030,15 @@ export default function ProfileDetailPage() {
     refetch();
   }
 
-  if (isLoading || !profile) {
+  if (isError || (!isLoading && !profile)) {
+    return (
+      <div className="p-4 md:p-6 flex flex-col items-center justify-center gap-3 h-full text-center">
+        <p className="text-sm text-muted-foreground">Profile not found or could not be loaded.</p>
+      </div>
+    );
+  }
+
+  if (isLoading) {
     return (
       <div className="p-4 md:p-6 space-y-4 overflow-y-auto h-full">
         <div className="h-8 w-32 rounded skeleton-shimmer" />

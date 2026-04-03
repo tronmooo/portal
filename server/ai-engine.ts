@@ -2183,10 +2183,16 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_event": {
+      if (!input.title || typeof input.title !== "string" || !input.title.trim()) {
+        return { error: "Event title is required" };
+      }
+      if (!input.date || typeof input.date !== "string") {
+        return { error: "Event date is required" };
+      }
       // Dedup: skip if a very similar event exists on the same date
       const allEvents = await storage.getEvents();
-      const dupEvent = allEvents.find(e => 
-        e.title.toLowerCase() === (input.title || "").toLowerCase() &&
+      const dupEvent = allEvents.find(e =>
+        (e.title || "").toLowerCase() === input.title.toLowerCase() &&
         e.date === input.date
       );
       if (dupEvent) {
@@ -2194,7 +2200,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         return dupEvent;
       }
       const newEvent = await storage.createEvent({
-        title: input.title,
+        title: input.title.trim(),
         date: input.date,
         time: input.time,
         endTime: input.endTime,
