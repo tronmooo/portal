@@ -3317,7 +3317,18 @@ export default function TrackersPage() {
           </Button>
         </div>
       ) : viewMode === "table" ? (
-        <div className="space-y-3" data-testid="tracker-table">
+        <div className="rounded-lg border border-border/40 overflow-hidden" data-testid="tracker-table">
+          {/* Excel-style header row */}
+          <div className="grid grid-cols-[1fr_80px_70px_70px_60px_60px] md:grid-cols-[1fr_90px_80px_80px_70px_70px_80px] gap-0 bg-muted/60 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+            <div className="px-3 py-2">Tracker</div>
+            <div className="px-2 py-2 text-right">Latest</div>
+            <div className="px-2 py-2 text-right">7d Avg</div>
+            <div className="px-2 py-2 text-right hidden md:block">Trend</div>
+            <div className="px-2 py-2 text-right">Entries</div>
+            <div className="px-2 py-2 text-right">Status</div>
+            <div className="px-2 py-2 text-right hidden md:block">Updated</div>
+          </div>
+          {/* Data rows */}
           {filteredTrackers.map((tracker) => {
             const entries = tracker.entries;
             const spec = detectSpecialization(tracker);
@@ -3328,171 +3339,96 @@ export default function TrackersPage() {
             const pv = typeof rv === 'string' ? (() => { try { return JSON.parse(rv); } catch { return null; } })() : rv;
             const latestVal = pv?.[pf] ?? (pv ? Object.values(pv).find(v => typeof v === 'number') : null);
 
-            // Compute stats
-            const numEntries = entries.filter(e => {
-              const v = e.values?.[pf]; return typeof v === 'number';
-            });
-            const vals = numEntries.map(e => Number(e.values[pf]));
-            const avg7d = (() => {
-              const week = entries.filter(e => Date.now() - new Date(e.timestamp).getTime() < 7 * 86400000);
-              const wv = week.map(e => Number(e.values?.[pf])).filter(v => !isNaN(v));
-              return wv.length > 0 ? wv.reduce((a, b) => a + b, 0) / wv.length : null;
-            })();
-            const prevWeek = (() => {
-              const pw = entries.filter(e => {
-                const age = Date.now() - new Date(e.timestamp).getTime();
-                return age >= 7 * 86400000 && age < 14 * 86400000;
-              });
-              const wv = pw.map(e => Number(e.values?.[pf])).filter(v => !isNaN(v));
-              return wv.length > 0 ? wv.reduce((a, b) => a + b, 0) / wv.length : null;
-            })();
-            const trend = avg7d != null && prevWeek != null && prevWeek !== 0
-              ? ((avg7d - prevWeek) / Math.abs(prevWeek)) * 100 : null;
-            const trendDir: "up" | "down" | "flat" = trend != null ? (trend > 2 ? "up" : trend < -2 ? "down" : "flat") : "flat";
+            // 7d average
+            const week = entries.filter(e => Date.now() - new Date(e.timestamp).getTime() < 7 * 86400000);
+            const wv = week.map(e => Number(e.values?.[pf])).filter(v => !isNaN(v));
+            const avg7d = wv.length > 0 ? wv.reduce((a, b) => a + b, 0) / wv.length : null;
 
-            // Sparkline data (last 14 entries)
-            const sparkData = entries.slice(-14).map(e => {
-              const v = Number(e.values?.[pf]);
-              return { v: isNaN(v) ? 0 : v };
+            // Previous week for trend
+            const pw = entries.filter(e => {
+              const age = Date.now() - new Date(e.timestamp).getTime();
+              return age >= 7 * 86400000 && age < 14 * 86400000;
             });
+            const pwv = pw.map(e => Number(e.values?.[pf])).filter(v => !isNaN(v));
+            const prevAvg = pwv.length > 0 ? pwv.reduce((a, b) => a + b, 0) / pwv.length : null;
+            const trendPct = avg7d != null && prevAvg != null && prevAvg !== 0
+              ? ((avg7d - prevAvg) / Math.abs(prevAvg)) * 100 : null;
+
+            // BP display
+            let displayVal = "—";
+            if (spec === "bloodpressure" && pv) {
+              const sys = pv.systolic || pv.sys || latestVal;
+              const dia = pv.diastolic || pv.dia;
+              displayVal = dia ? `${sys}/${dia}` : String(sys || "—");
+            } else if (latestVal != null) {
+              displayVal = typeof latestVal === 'number' ? Number(latestVal).toFixed(1) : String(latestVal);
+            }
+
+            // Status badge
+            let statusLabel = ""; let statusColor = "";
+            if (spec === "bloodpressure" && pv) {
+              const sys = Number(pv.systolic || pv.sys || latestVal || 0);
+              if (sys >= 140) { statusLabel = "High"; statusColor = "text-red-500"; }
+              else if (sys >= 130) { statusLabel = "Elevated"; statusColor = "text-amber-500"; }
+              else if (sys > 0) { statusLabel = "Normal"; statusColor = "text-green-500"; }
+            } else if (entries.length === 0) {
+              statusLabel = "No data"; statusColor = "text-muted-foreground";
+            } else if (entries.length < 3) {
+              statusLabel = "New"; statusColor = "text-blue-500";
+            } else {
+              statusLabel = trendPct != null ? (trendPct > 2 ? "↑" : trendPct < -2 ? "↓" : "→") : "•";
+              statusColor = trendPct != null ? (trendPct > 2 ? "text-green-500" : trendPct < -2 ? "text-orange-500" : "text-muted-foreground") : "text-muted-foreground";
+            }
 
             // Last updated
             const lastUpdated = last ? (() => {
               const diff = Date.now() - new Date(last.timestamp).getTime();
               const mins = Math.floor(diff / 60000);
-              if (mins < 60) return `${mins}m ago`;
+              if (mins < 60) return `${mins}m`;
               const hrs = Math.floor(mins / 60);
-              if (hrs < 24) return `${hrs}h ago`;
-              const days = Math.floor(hrs / 24);
-              return days === 1 ? "yesterday" : `${days}d ago`;
-            })() : null;
-
-            // This week total (for activity trackers)
-            const thisWeekEntries = entries.filter(e => Date.now() - new Date(e.timestamp).getTime() < 7 * 86400000);
-            const thisWeekTotal = thisWeekEntries.reduce((sum, e) => sum + (Number(e.values?.[pf]) || 0), 0);
-
-            // Type-specific display
-            let primaryDisplay = "";
-            let secondaryLine = "";
-            let trendText = "";
-            let statusBadge: { label: string; color: string } | null = null;
-
-            if (spec === "bloodpressure") {
-              const sys = pv?.systolic || pv?.sys || latestVal;
-              const dia = pv?.diastolic || pv?.dia;
-              primaryDisplay = dia ? `${sys}/${dia}` : String(sys || "—");
-              if (avg7d != null) secondaryLine = `7d avg: ${avg7d.toFixed(0)}`;
-              if (typeof sys === 'number') {
-                if (sys >= 140) statusBadge = { label: "High", color: "text-red-500 bg-red-500/10" };
-                else if (sys >= 130) statusBadge = { label: "Elevated", color: "text-amber-500 bg-amber-500/10" };
-                else statusBadge = { label: "Normal", color: "text-green-500 bg-green-500/10" };
-              }
-            } else if (spec === "weight") {
-              primaryDisplay = latestVal != null ? `${Number(latestVal).toFixed(1)}` : "—";
-              if (avg7d != null) secondaryLine = `7d avg: ${avg7d.toFixed(1)} ${unit}`;
-              if (trend != null) trendText = `${trend > 0 ? "+" : ""}${trend.toFixed(1)}% this week`;
-            } else if (spec === "sleep") {
-              primaryDisplay = latestVal != null ? `${Number(latestVal).toFixed(1)}` : "—";
-              if (avg7d != null) secondaryLine = `7d avg: ${avg7d.toFixed(1)} hrs`;
-            } else if (spec === "running" || tracker.category === "fitness") {
-              primaryDisplay = latestVal != null ? `${Number(latestVal).toFixed(1)}` : "—";
-              secondaryLine = `This week: ${thisWeekTotal.toFixed(1)} ${unit} · ${thisWeekEntries.length} sessions`;
-            } else if (tracker.name.toLowerCase().includes("practice") || tracker.name.toLowerCase().includes("gaming")) {
-              primaryDisplay = latestVal != null ? `${Number(latestVal).toFixed(0)}` : "—";
-              secondaryLine = `This week: ${thisWeekTotal.toFixed(0)} ${unit} · ${thisWeekEntries.length} sessions`;
-            } else if (tracker.category === "nutrition") {
-              primaryDisplay = latestVal != null ? `${Number(latestVal).toFixed(0)}` : "—";
-              secondaryLine = `Today's total · 7d avg: ${avg7d != null ? avg7d.toFixed(0) : "—"} ${unit}`;
-            } else {
-              primaryDisplay = latestVal != null ? `${typeof latestVal === 'number' ? Number(latestVal).toFixed(1) : latestVal}` : "—";
-              if (entries.length > 1 && avg7d != null) secondaryLine = `7d avg: ${avg7d.toFixed(1)} ${unit}`;
-            }
-
-            // Generic trend text if not set
-            if (!trendText && trend != null) {
-              trendText = `${trend > 0 ? "↑" : trend < 0 ? "↓" : "→"} ${Math.abs(trend).toFixed(0)}% vs last week`;
-            }
-
-            // AI insight (simple client-side version)
-            let insight = "";
-            if (entries.length >= 5) {
-              if (trendDir === "up" && (spec === "weight" || spec === "sleep" || tracker.category === "fitness")) {
-                insight = spec === "weight" ? "Trending up — check if this aligns with your goal" : "Improving this week";
-              } else if (trendDir === "down" && spec === "weight") {
-                insight = "Trending down — on track if losing weight";
-              } else if (trendDir === "flat") {
-                insight = "Holding steady";
-              } else if (entries.length >= 10) {
-                const streak = computeStreak(entries);
-                if (streak >= 3) insight = `${streak}-day logging streak`;
-              }
-            } else if (entries.length === 1) {
-              insight = "Just started tracking";
-            } else if (entries.length === 0) {
-              insight = "No entries yet";
-            }
+              if (hrs < 24) return `${hrs}h`;
+              return `${Math.floor(hrs / 24)}d`;
+            })() : "—";
 
             const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
 
             return (
               <div
                 key={tracker.id}
-                className="rounded-xl border bg-card p-3.5 hover:bg-muted/20 cursor-pointer transition-colors"
+                className="grid grid-cols-[1fr_80px_70px_70px_60px_60px] md:grid-cols-[1fr_90px_80px_80px_70px_70px_80px] gap-0 border-b border-border/30 hover:bg-muted/30 cursor-pointer transition-colors items-center"
                 data-testid={`tracker-row-${tracker.id}`}
                 onClick={() => setSelectedTrackerId(tracker.id)}
               >
-                {/* Row 1: Name + badges */}
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm font-semibold truncate">{tracker.name}</span>
-                    {linkedProfile && (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary shrink-0">{linkedProfile.name}</span>
-                    )}
+                <div className="px-3 py-2 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium truncate">{tracker.name}</span>
+                    {linkedProfile && <span className="text-[8px] px-1 py-0.5 rounded bg-primary/10 text-primary shrink-0">{linkedProfile.name}</span>}
                   </div>
-                  {statusBadge && (
-                    <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${statusBadge.color}`}>{statusBadge.label}</span>
-                  )}
+                  {unit && <span className="text-[9px] text-muted-foreground">{tracker.category} · {unit}</span>}
                 </div>
-
-                {/* Row 2: Primary metric + sparkline */}
-                <div className="flex items-end justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-xl font-bold tabular-nums">{primaryDisplay}</span>
-                      <span className="text-[10px] text-muted-foreground">{unit}</span>
-                    </div>
-                    {secondaryLine && <p className="text-[10px] text-muted-foreground mt-0.5">{secondaryLine}</p>}
-                    {trendText && (
-                      <p className={`text-[10px] mt-0.5 ${trendDir === 'up' ? 'text-green-500' : trendDir === 'down' ? 'text-orange-500' : 'text-muted-foreground'}`}>
-                        {trendText}
-                      </p>
-                    )}
-                  </div>
-                  {/* Sparkline */}
-                  {sparkData.length >= 2 && (
-                    <div className="w-20 h-10 shrink-0">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={sparkData} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
-                          <defs>
-                            <linearGradient id={`spark-${tracker.id}`} x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor={CHART_COLORS.primary} stopOpacity={0.3} />
-                              <stop offset="100%" stopColor={CHART_COLORS.primary} stopOpacity={0} />
-                            </linearGradient>
-                          </defs>
-                          <Area type="monotone" dataKey="v" stroke={CHART_COLORS.primary} strokeWidth={1.5} fill={`url(#spark-${tracker.id})`} dot={false} />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
+                <div className="px-2 py-2 text-right">
+                  <span className="text-xs font-bold tabular-nums">{displayVal}</span>
+                  {unit && <span className="text-[9px] text-muted-foreground ml-0.5">{unit}</span>}
                 </div>
-
-                {/* Row 3: Insight + last updated */}
-                {(insight || lastUpdated) && (
-                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
-                    {insight && <p className="text-[10px] text-muted-foreground italic truncate">{insight}</p>}
-                    {lastUpdated && <p className="text-[9px] text-muted-foreground/70 shrink-0 ml-2">{lastUpdated}</p>}
-                  </div>
-                )}
+                <div className="px-2 py-2 text-right">
+                  <span className="text-[10px] tabular-nums text-muted-foreground">{avg7d != null ? avg7d.toFixed(1) : "—"}</span>
+                </div>
+                <div className="px-2 py-2 text-right hidden md:block">
+                  {trendPct != null ? (
+                    <span className={`text-[10px] tabular-nums ${trendPct > 2 ? "text-green-500" : trendPct < -2 ? "text-orange-500" : "text-muted-foreground"}`}>
+                      {trendPct > 0 ? "+" : ""}{trendPct.toFixed(0)}%
+                    </span>
+                  ) : <span className="text-[10px] text-muted-foreground">—</span>}
+                </div>
+                <div className="px-2 py-2 text-right">
+                  <span className="text-[10px] tabular-nums text-muted-foreground">{entries.length}</span>
+                </div>
+                <div className="px-2 py-2 text-right">
+                  <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
+                </div>
+                <div className="px-2 py-2 text-right hidden md:block">
+                  <span className="text-[9px] text-muted-foreground">{lastUpdated}</span>
+                </div>
               </div>
             );
           })}
