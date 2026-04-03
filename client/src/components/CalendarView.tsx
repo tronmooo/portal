@@ -129,6 +129,10 @@ const CATEGORY_LABELS: Record<EventCategory, string> = {
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const TYPE_COLORS: Record<string, string> = {
+  event: "#4F98A3", task: "#E5A545", obligation: "#C75B5B",
+  habit: "#8B5CF6", goal: "#10B981", tracker: "#6366F1",
+};
 
 // ─── Event Create/Edit Dialog ──────────────────────────────────────────────────
 
@@ -707,8 +711,10 @@ interface CalendarViewProps {
 export default function CalendarView({ externalFilterIds, externalFilterMode }: CalendarViewProps = {}) {
   const today = new Date();
   const todayStr = toLocalDateStr(today);
+  const [viewMode, setViewMode] = useState<"month" | "week" | "day">("month");
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewDate, setViewDate] = useState(today); // for week/day navigation
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<CalendarTimelineItem | null>(null);
@@ -801,20 +807,28 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   };
 
   const prevMonth = () => {
-    if (viewMonth === 0) {
-      setViewMonth(11);
-      setViewYear(viewYear - 1);
+    if (viewMode === "week") {
+      const d = new Date(viewDate); d.setDate(d.getDate() - 7); setViewDate(d);
+      setViewMonth(d.getMonth()); setViewYear(d.getFullYear());
+    } else if (viewMode === "day") {
+      const d = new Date(viewDate); d.setDate(d.getDate() - 1); setViewDate(d);
+      setViewMonth(d.getMonth()); setViewYear(d.getFullYear());
     } else {
-      setViewMonth(viewMonth - 1);
+      if (viewMonth === 0) { setViewMonth(11); setViewYear(viewYear - 1); }
+      else setViewMonth(viewMonth - 1);
     }
   };
 
   const nextMonth = () => {
-    if (viewMonth === 11) {
-      setViewMonth(0);
-      setViewYear(viewYear + 1);
+    if (viewMode === "week") {
+      const d = new Date(viewDate); d.setDate(d.getDate() + 7); setViewDate(d);
+      setViewMonth(d.getMonth()); setViewYear(d.getFullYear());
+    } else if (viewMode === "day") {
+      const d = new Date(viewDate); d.setDate(d.getDate() + 1); setViewDate(d);
+      setViewMonth(d.getMonth()); setViewYear(d.getFullYear());
     } else {
-      setViewMonth(viewMonth + 1);
+      if (viewMonth === 11) { setViewMonth(0); setViewYear(viewYear + 1); }
+      else setViewMonth(viewMonth + 1);
     }
   };
 
@@ -843,7 +857,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
           <h2 className="text-xs font-semibold min-w-[100px] text-center" data-testid="text-month-year">
-            {fmtMonthYear(viewYear, viewMonth)}
+            {viewMode === "day"
+              ? viewDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+              : viewMode === "week"
+                ? `Week of ${new Date(viewDate.getTime() - viewDate.getDay() * 86400000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                : fmtMonthYear(viewYear, viewMonth)}
           </h2>
           <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" data-testid="btn-next-month">
             <ChevronRight className="h-3.5 w-3.5" />
@@ -851,6 +869,15 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           <Button variant="outline" size="sm" onClick={goToday} className="h-6 text-[10px] px-2" data-testid="btn-today">
             Today
           </Button>
+          {/* View mode toggle */}
+          <div className="flex items-center bg-muted/50 rounded-md p-0.5">
+            {(["month", "week", "day"] as const).map(mode => (
+              <button key={mode} onClick={() => setViewMode(mode)}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${viewMode === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                {mode.charAt(0).toUpperCase() + mode.slice(1)}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
           <Button
@@ -901,8 +928,8 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         ))}
       </div>
 
-      {/* Calendar Grid */}
-      <div className="rounded-lg border border-border/40 overflow-hidden">
+      {/* Calendar Grid — conditional on viewMode */}
+      {viewMode === "month" && <div className="rounded-lg border border-border/40 overflow-hidden">
           {/* Weekday header */}
           <div className="grid grid-cols-7 border-b border-border">
             {WEEKDAYS.map(d => (
@@ -988,7 +1015,93 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               );
             })}
           </div>
-      </div>
+      </div>}
+
+      {/* Week View */}
+      {viewMode === "week" && (() => {
+        const weekStart = new Date(viewDate);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
+        const weekDays = Array.from({ length: 7 }, (_, i) => {
+          const d = new Date(weekStart); d.setDate(d.getDate() + i);
+          return { date: toLocalDateStr(d), day: d, label: WEEKDAYS[i], num: d.getDate() };
+        });
+        return (
+          <div className="rounded-lg border border-border/40 overflow-hidden">
+            <div className="grid grid-cols-7 divide-x divide-border">
+              {weekDays.map(wd => {
+                const dayItems = itemsByDate[wd.date] || [];
+                const isToday = wd.date === todayStr;
+                return (
+                  <div key={wd.date} className={`p-1.5 min-h-[120px] ${isToday ? "bg-primary/5" : ""}`}>
+                    <div className={`text-center mb-1 ${isToday ? "font-bold text-primary" : "text-muted-foreground"}`}>
+                      <div className="text-[9px] uppercase">{wd.label}</div>
+                      <div className="text-sm">{wd.num}</div>
+                    </div>
+                    <div className="space-y-0.5">
+                      {dayItems.map(item => (
+                        <button key={item.id} onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
+                          className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate hover:bg-muted/50 transition-colors"
+                          style={{ borderLeft: `2px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
+                          {item.time ? <span className="text-muted-foreground mr-1">{item.time.slice(0,5)}</span> : null}
+                          {item.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Day View */}
+      {viewMode === "day" && (() => {
+        const dayStr = toLocalDateStr(viewDate);
+        const dayItems = (itemsByDate[dayStr] || []).sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
+        const timedItems = dayItems.filter(i => i.time);
+        const allDayItems = dayItems.filter(i => !i.time);
+        return (
+          <div className="rounded-lg border border-border/40 overflow-hidden">
+            <div className="p-3 border-b border-border bg-muted/30">
+              <h3 className="text-sm font-semibold">
+                {viewDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+              </h3>
+              <p className="text-xs text-muted-foreground">{dayItems.length} item{dayItems.length !== 1 ? "s" : ""}</p>
+            </div>
+            {allDayItems.length > 0 && (
+              <div className="px-3 py-2 border-b border-border bg-muted/10">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">All Day</p>
+                {allDayItems.map(item => (
+                  <button key={item.id} onClick={() => setDetailItem(item)}
+                    className="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-muted/50 transition-colors"
+                    style={{ borderLeft: `3px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
+                    <span className="text-xs">{item.title}</span>
+                    <Badge variant="outline" className="text-[9px] ml-auto">{item.type}</Badge>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="divide-y divide-border/50">
+              {timedItems.length === 0 && allDayItems.length === 0 && (
+                <div className="p-6 text-center text-xs text-muted-foreground">No items scheduled</div>
+              )}
+              {timedItems.map(item => (
+                <button key={item.id} onClick={() => setDetailItem(item)}
+                  className="flex items-center gap-3 w-full text-left py-2.5 px-3 hover:bg-muted/50 transition-colors">
+                  <span className="text-xs font-mono text-muted-foreground w-12 shrink-0">{item.time?.slice(0,5)}</span>
+                  <div className="w-1 h-6 rounded-full shrink-0" style={{ backgroundColor: TYPE_COLORS[item.type] || "#888" }} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate">{item.title}</p>
+                    {item.description && <p className="text-[10px] text-muted-foreground truncate">{item.description}</p>}
+                  </div>
+                  <Badge variant="outline" className="text-[9px] shrink-0">{item.type}</Badge>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Selected Day Agenda */}
       <div className="rounded-lg border border-border/40" data-testid="section-day-agenda">

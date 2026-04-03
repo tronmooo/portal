@@ -2816,8 +2816,8 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     const latest = getLatestValue(tracker);
     const prev = getPrevValue(tracker);
     if (latest == null || prev == null) return "flat";
-    if (latest > prev) return "up";
-    if (latest < prev) return "down";
+    if (Number(latest) > Number(prev)) return "up";
+    if (Number(latest) < Number(prev)) return "down";
     return "flat";
   }
 
@@ -2852,7 +2852,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     onSuccess: () => {
       toast({ title: "Entry logged" });
       setLogOpen(null); setLogValue(""); setLogNotes("");
-      setQuickLogOpen(null); setQuickLogValue("");
+      setLogOpen(null); setLogValue("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       onChanged();
@@ -2922,10 +2922,10 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
 
     // Weight trending up
     if (nameLower.includes("weight") && trend === "up" && latest != null && avg7 != null) {
-      insights.push({ key: `weight-up-${t.id}`, text: `Weight trending up — ${latest.toFixed(1)} ${t.unit || ""} vs ${avg7.toFixed(1)} ${t.unit || ""} (7-day avg)`, level: "warn" });
+      insights.push({ key: `weight-up-${t.id}`, text: `Weight trending up — ${Number(latest).toFixed(1)} ${t.unit || ""} vs ${Number(avg7).toFixed(1)} ${t.unit || ""} (7-day avg)`, level: "warn" });
     }
     // BP elevated
-    if ((nameLower.includes("blood pressure") || nameLower.includes("bp")) && latest != null && latest > 130) {
+    if ((nameLower.includes("blood pressure") || nameLower.includes("bp")) && latest != null && Number(latest) > 130) {
       insights.push({ key: `bp-${t.id}`, text: `Blood pressure reading is elevated (${latest} ${t.unit || "mmHg"})`, level: "warn" });
     }
     // No entries in 3+ days

@@ -1113,7 +1113,7 @@ export default function ProfilesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      const delProfile = profiles.find(p => p.id === deleteId);
+      const delProfile = profiles?.find(p => p.id === deleteId);
       toast({ title: `"${delProfile?.name || "Profile"}" deleted`, description: "All linked data removed" });
       setDeleteId(null);
     },

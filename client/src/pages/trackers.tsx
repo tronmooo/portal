@@ -896,6 +896,7 @@ function TrackerCard({
   onDelete: (id: string) => void;
   onOpenDetail?: (id: string) => void;
 }) {
+  const { toast } = useToast();
   // Read cached profiles (already fetched by TrackersPage)
   const { data: allProfiles } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -3376,7 +3377,7 @@ export default function TrackersPage() {
             let trendText = "";
             let statusBadge: { label: string; color: string } | null = null;
 
-            if (spec === "bloodpressure" || spec === "bp") {
+            if (spec === "bloodpressure") {
               const sys = pv?.systolic || pv?.sys || latestVal;
               const dia = pv?.diastolic || pv?.dia;
               primaryDisplay = dia ? `${sys}/${dia}` : String(sys || "—");

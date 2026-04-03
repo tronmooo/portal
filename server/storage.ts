@@ -38,6 +38,8 @@ export interface IStorage {
   deleteProfile(id: string): Promise<boolean>;
   linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void>;
   unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void>;
+  propagateDocumentToAncestors(documentId: string, profileId: string): Promise<string[]>;
+  propagateEntityToAncestors(entityType: string, entityId: string, profileId: string): Promise<string[]>;
   getSelfProfile(): Promise<Profile | undefined>;
 
   // Trackers
@@ -732,6 +734,14 @@ export class MemStorage implements IStorage {
     }
   }
 
+  async propagateDocumentToAncestors(_documentId: string, _profileId: string): Promise<string[]> {
+    return []; // stub — propagation handled in Supabase storage
+  }
+
+  async propagateEntityToAncestors(_entityType: string, _entityId: string, _profileId: string): Promise<string[]> {
+    return []; // stub — propagation handled in Supabase storage
+  }
+
   async getSelfProfile(): Promise<Profile | undefined> {
     return Array.from(this.profiles.values()).find(p => p.type === "self");
   }
@@ -813,8 +823,9 @@ export class MemStorage implements IStorage {
 
   // ---- Expenses ----
   async getExpenses() { return Array.from(this.expenses.values()); }
+  async getExpense(id: string) { return this.expenses.get(id); }
   async createExpense(data: InsertExpense): Promise<Expense> {
-    const expense: Expense = { id: randomUUID(), ...data, linkedProfiles: [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
+    const expense: Expense = { id: randomUUID(), ...data, category: data.category || "general", linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
     this.expenses.set(expense.id, expense);
     this.logActivity("expense", `${data.description} - $${data.amount}${data.vendor ? ` at ${data.vendor}` : ""}`);
     return expense;
@@ -1082,7 +1093,7 @@ export class MemStorage implements IStorage {
   async getHabits() { return Array.from(this.habits.values()); }
   async getHabit(id: string) { return this.habits.get(id); }
   async createHabit(data: InsertHabit): Promise<Habit> {
-    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
+    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
     this.habits.set(habit.id, habit);
     this.logActivity("habit", `Created habit: ${habit.name}`);
     return habit;
@@ -1115,7 +1126,7 @@ export class MemStorage implements IStorage {
   async getObligations() { return Array.from(this.obligations.values()); }
   async getObligation(id: string) { return this.obligations.get(id); }
   async createObligation(data: InsertObligation): Promise<Obligation> {
-    const obligation: Obligation = { id: randomUUID(), ...data, autopay: data.autopay ?? false, linkedProfiles: [], payments: [], createdAt: new Date().toISOString() };
+    const obligation: Obligation = { id: randomUUID(), ...data, category: data.category || "general", frequency: data.frequency || "monthly", autopay: data.autopay ?? false, status: "active", linkedProfiles: data.linkedProfiles || [], payments: [], createdAt: new Date().toISOString() };
     this.obligations.set(obligation.id, obligation);
     this.logActivity("obligation", `Created obligation: ${obligation.name} ($${obligation.amount}/${obligation.frequency})`);
     return obligation;

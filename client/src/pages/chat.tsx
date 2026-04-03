@@ -34,6 +34,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
 import DocumentViewer, { ShareButton } from "@/components/DocumentViewer";
 
@@ -707,6 +708,7 @@ export function clearChatCache() {
 
 export default function ChatPage() {
   useEffect(() => { document.title = "Chat — Portol"; }, []);
+  const { toast } = useToast();
   const [messages, setMessagesRaw] = useState<ChatMessage[]>(_chatCache);
   // Wrap setMessages to also persist to module-level cache
   const setMessages = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
@@ -1241,17 +1243,51 @@ export default function ChatPage() {
                 {/* Action badges */}
                 {msg.actions && msg.actions.length > 0 && (
                   <div className="mt-2.5 flex flex-wrap gap-1.5">
-                    {msg.actions.map((action, i) => (
-                      <Badge
-                        key={i}
-                        variant="outline"
-                        className="text-xs flex items-center gap-1 text-muted-foreground border-green-600/30 bg-green-500/5"
-                        data-testid={`badge-action-${action.type}-${i}`}
-                      >
-                        <Check className="h-2.5 w-2.5 text-green-600" />
-                        {actionLabel(action.type)}
-                      </Badge>
-                    ))}
+                    {msg.actions.map((action, i) => {
+                      const entityId = action.data?._entityId;
+                      const isUndone = action.data?._undone;
+                      const canUndo = entityId && !isUndone && ["create_task","log_expense","create_event","create_habit","create_obligation","create_goal","create_profile","journal_entry","create_artifact","create_tracker"].includes(action.type);
+                      const undoEndpoint: Record<string, string> = {
+                        create_task: "tasks", log_expense: "expenses", create_event: "events",
+                        create_habit: "habits", create_obligation: "obligations", create_goal: "goals",
+                        create_profile: "profiles", journal_entry: "journal", create_artifact: "artifacts",
+                        create_tracker: "trackers",
+                      };
+                      return (
+                        <Badge
+                          key={i}
+                          variant="outline"
+                          className={`text-xs flex items-center gap-1 ${isUndone ? "line-through opacity-50 border-red-600/30 bg-red-500/5" : "text-muted-foreground border-green-600/30 bg-green-500/5"}`}
+                          data-testid={`badge-action-${action.type}-${i}`}
+                        >
+                          {isUndone ? <X className="h-2.5 w-2.5 text-red-500" /> : <Check className="h-2.5 w-2.5 text-green-600" />}
+                          {actionLabel(action.type)}
+                          {canUndo && (
+                            <button
+                              className="ml-1 p-0.5 rounded hover:bg-destructive/20 transition-colors"
+                              title="Undo this action"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                const ep = undoEndpoint[action.type];
+                                if (!ep) return;
+                                try {
+                                  await apiRequest("DELETE", `/api/${ep}/${entityId}`);
+                                  // Mark as undone in local state
+                                  action.data._undone = true;
+                                  setMessages(prev => [...prev]);
+                                  queryClient.invalidateQueries();
+                                  toast({ title: "Action undone" });
+                                } catch {
+                                  toast({ title: "Failed to undo", variant: "destructive" });
+                                }
+                              }}
+                            >
+                              <X className="h-2.5 w-2.5 text-muted-foreground hover:text-destructive" />
+                            </button>
+                          )}
+                        </Badge>
+                      );
+                    })}
                   </div>
                 )}
 

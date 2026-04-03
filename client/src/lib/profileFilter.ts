@@ -4,6 +4,7 @@
 // Otherwise, selectedIds contains the checked profile IDs.
 
 const STORAGE_KEY = "portol_profile_filter";
+const LOCAL_KEY = "portol_profile_filter_v2"; // localStorage for persistence across sessions
 
 export type FilterMode = "everyone" | "selected";
 
@@ -13,19 +14,22 @@ interface FilterState {
   selectedNames: string[]; // parallel array for display
 }
 
-let _state: FilterState = loadFromSession();
+let _state: FilterState = loadFromStorage();
 
-function loadFromSession(): FilterState {
+function loadFromStorage(): FilterState {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
+    // Try localStorage first (persistent), then sessionStorage (legacy)
+    const raw = localStorage.getItem(LOCAL_KEY) || sessionStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
   return { mode: "everyone", selectedIds: [], selectedNames: [] };
 }
 
-function saveToSession() {
+function saveToStorage() {
   try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(_state));
+    const json = JSON.stringify(_state);
+    localStorage.setItem(LOCAL_KEY, json);
+    sessionStorage.setItem(STORAGE_KEY, json); // backward compat
   } catch {}
 }
 
@@ -39,13 +43,13 @@ export function getProfileFilter(): FilterState {
 /** Set filter to "everyone" (no filtering) */
 export function setFilterEveryone() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
-  saveToSession();
+  saveToStorage();
 }
 
 /** Set filter to specific profile IDs */
 export function setFilterSelected(ids: string[], names: string[]) {
   _state = { mode: "selected", selectedIds: [...ids], selectedNames: [...names] };
-  saveToSession();
+  saveToStorage();
 }
 
 /** Toggle a single profile in/out of the selection */
@@ -67,7 +71,7 @@ export function toggleFilterProfile(id: string, name: string) {
       _state.selectedNames.push(name);
     }
   }
-  saveToSession();
+  saveToStorage();
 }
 
 /** Check if a specific profile ID passes the current filter */

@@ -310,7 +310,7 @@ export class SupabaseStorage implements IStorage {
       gratitude: r.gratitude || undefined, highlights: r.highlights || undefined,
       linkedProfiles: r.linked_profiles || [],
       createdAt: r.created_at,
-    };
+    } as JournalEntry & { linkedProfiles: string[] };
   }
 
   private rowToMemory(r: any): MemoryItem {
@@ -1019,7 +1019,7 @@ export class SupabaseStorage implements IStorage {
         const existing = recentEntries.data.find(e =>
           JSON.stringify(e.entry_values) === JSON.stringify(values)
         );
-        return existing ? this.rowToTrackerEntry(existing) : null;
+        return existing ? this.rowToTrackerEntry(existing) : undefined;
       }
     }
 
@@ -1055,7 +1055,7 @@ export class SupabaseStorage implements IStorage {
   // TASKS
   // ============================================================
   async getTasks(): Promise<Task[]> {
-    const { data, error } = await this.supabase.from("tasks").select("*").eq("user_id", this.userId);
+    const { data, error } = await this.supabase.from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null);
     if (error) throw error;
     return (data || []).map(r => this.rowToTask(r));
   }
@@ -1097,7 +1097,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteTask(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("tasks").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("tasks").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -1105,7 +1105,7 @@ export class SupabaseStorage implements IStorage {
   // EXPENSES
   // ============================================================
   async getExpenses(): Promise<Expense[]> {
-    const { data, error } = await this.supabase.from("expenses").select("*").eq("user_id", this.userId);
+    const { data, error } = await this.supabase.from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null);
     if (error) throw error;
     return (data || []).map(r => this.rowToExpense(r));
   }
@@ -1144,7 +1144,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteExpense(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("expenses").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("expenses").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -1505,7 +1505,8 @@ export class SupabaseStorage implements IStorage {
     // Only getDocument(id) returns file_data when specifically needed.
     const { data, error } = await this.supabase.from("documents")
       .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
-      .eq("user_id", this.userId);
+      .eq("user_id", this.userId)
+      .is("deleted_at", null);
     if (error) throw error;
     return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
   }
@@ -1637,8 +1638,8 @@ export class SupabaseStorage implements IStorage {
     } catch (e: any) {
       console.error(`[deleteDocument] Profile cleanup error for ${id}:`, e.message);
     }
-    // Delete the document itself
-    const { error } = await this.supabase.from("documents").delete().eq("id", id).eq("user_id", this.userId);
+    // Soft delete the document
+    const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     if (error) {
       console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
       return false;

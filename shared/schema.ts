@@ -300,7 +300,7 @@ export const insertHabitSchema = z.object({
   targetPerDay: z.number().min(1).max(10).default(1),
 });
 
-export type InsertHabit = z.infer<typeof insertHabitSchema>;
+export type InsertHabit = z.input<typeof insertHabitSchema>;
 
 // ============================================================
 // OBLIGATIONS — recurring bills, subscriptions, dues
@@ -322,6 +322,7 @@ export interface Obligation {
   linkedProfiles: string[];
   payments: ObligationPayment[];
   notes?: string;
+  fields?: Record<string, any>; // Additional structured fields (remainingBalance, totalAmount, etc.)
   createdAt: string;
   updatedAt?: string;
 }
@@ -346,7 +347,7 @@ export const insertObligationSchema = z.object({
   linkedProfiles: z.array(z.string()).optional().default([]),
 });
 
-export type InsertObligation = z.infer<typeof insertObligationSchema>;
+export type InsertObligation = z.input<typeof insertObligationSchema>;
 
 // ============================================================
 // ARTIFACTS — checklists and notes
@@ -464,7 +465,7 @@ export const insertTaskSchema = z.object({
   linkedProfiles: z.array(z.string()).optional().default([]),
 });
 
-export type InsertTask = z.infer<typeof insertTaskSchema>;
+export type InsertTask = z.input<typeof insertTaskSchema>;
 
 // ============================================================
 // FINANCE (unchanged)
@@ -494,7 +495,7 @@ export const insertExpenseSchema = z.object({
   linkedProfiles: z.array(z.string()).optional().default([]),
 });
 
-export type InsertExpense = z.infer<typeof insertExpenseSchema>;
+export type InsertExpense = z.input<typeof insertExpenseSchema>;
 
 // ============================================================
 // CALENDAR EVENTS (expanded with recurrence, categories, linking)
@@ -556,7 +557,7 @@ export const insertEventSchema = z.object({
   source: z.enum(["manual", "chat", "ai", "external"]).default("manual"),
 });
 
-export type InsertEvent = z.infer<typeof insertEventSchema>;
+export type InsertEvent = z.input<typeof insertEventSchema>;
 
 // ============================================================
 // UNIFIED CALENDAR TIMELINE ITEM (virtual, not stored)
@@ -588,13 +589,17 @@ export interface CalendarTimelineItem {
 
 export interface Document {
   id: string;
+  deletedAt?: string | null;
   name: string;
+  title?: string; // Display title (extracted or user-provided)
   type: string; // "drivers_license", "medical_report", "receipt", "insurance", "passport", "other"
   mimeType: string; // "image/jpeg", "application/pdf", etc.
   fileData: string; // base64 encoded file data (legacy — new docs use storagePath)
   storagePath?: string; // Supabase Storage path (new docs)
   storage_path?: string; // DB column alias (snake_case)
   extractedData: Record<string, any>;
+  fields?: Record<string, any>; // Additional structured fields from extraction
+  expirationDate?: string; // Document expiration date
   linkedProfiles: string[];
   tags: string[];
   createdAt: string;
@@ -618,7 +623,7 @@ export const insertDocumentSchema = z.object({
   tags: z.array(z.string()).optional().default([]),
 });
 
-export type InsertDocument = z.infer<typeof insertDocumentSchema>;
+export type InsertDocument = z.input<typeof insertDocumentSchema>;
 
 // ============================================================
 // GOALS — measurable goals with progress tracking

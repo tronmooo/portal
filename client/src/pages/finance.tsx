@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -50,6 +50,8 @@ export default function FinancePage() {
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "" });
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
@@ -263,7 +265,7 @@ export default function FinancePage() {
           ) : (
             <div className="divide-y divide-border">
               {filtered.map((expense) => (
-                <div key={expense.id} className="flex items-center gap-3 py-3" data-testid={`expense-${expense.id}`}>
+                <div key={expense.id} className="flex items-center gap-3 py-3 group" data-testid={`expense-${expense.id}`}>
                   <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                     <ShoppingCart className="h-3.5 w-3.5 text-primary" />
                   </div>
@@ -277,12 +279,64 @@ export default function FinancePage() {
                     </div>
                   </div>
                   <span className="text-sm font-semibold tabular-nums shrink-0">${expense.amount.toFixed(2)}</span>
+                  <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
+                      setEditingExpense(expense);
+                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "" });
+                    }} title="Edit"><Pencil className="h-3 w-3" /></Button>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={async () => {
+                      if (!confirm(`Delete "${expense.description}"?`)) return;
+                      try {
+                        await apiRequest("DELETE", `/api/expenses/${expense.id}`);
+                        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                        toast({ title: `"${expense.description}" deleted` });
+                      } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
+                    }} title="Delete"><Trash2 className="h-3 w-3" /></Button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Expense Dialog */}
+      <Dialog open={!!editingExpense} onOpenChange={(open) => !open && setEditingExpense(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label>Description</Label><Input value={editForm.description} onChange={e => setEditForm(f => ({...f, description: e.target.value}))} /></div>
+            <div><Label>Amount</Label><Input type="number" step="0.01" value={editForm.amount} onChange={e => setEditForm(f => ({...f, amount: e.target.value}))} /></div>
+            <div><Label>Category</Label>
+              <Select value={editForm.category} onValueChange={v => setEditForm(f => ({...f, category: v}))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["general","food","transport","housing","utilities","health","entertainment","shopping","subscription","insurance","education","pet","automotive","travel"].map(c => (
+                    <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
+            <Button className="w-full" onClick={async () => {
+              if (!editingExpense) return;
+              try {
+                await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
+                  description: editForm.description,
+                  amount: parseFloat(editForm.amount),
+                  category: editForm.category,
+                  vendor: editForm.vendor || undefined,
+                });
+                queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                toast({ title: `"${editForm.description}" updated` });
+                setEditingExpense(null);
+              } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }
+            }}>Save Changes</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1984,7 +1984,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           tags: input.changes?.tags || [],
           notes: input.changes?.notes || "",
         });
-        logger.info(`Auto-created profile "${input.name}" for update_profile (was not found)`);
+        logger.info("ai", `Auto-created profile "${input.name}" for update_profile (was not found)`);
         return newProfile;
       }
       
@@ -2520,10 +2520,10 @@ async function executeTool(name: string, input: any): Promise<any> {
             const habit = await storage.createHabit({ name: input.title, frequency: "daily" });
             // Link the habit to the goal
             await storage.updateGoal(goal.id, { habitId: habit.id });
-            logger.info(`Auto-created companion habit "${input.title}" for goal ${goal.id}`);
+            logger.info("ai", `Auto-created companion habit "${input.title}" for goal ${goal.id}`);
           }
         } catch (e) {
-          logger.warn("Failed to auto-create companion habit for goal:", e);
+          logger.warn("ai", `Failed to auto-create companion habit for goal: ${e}`);
         }
       }
       return goal;
@@ -3278,7 +3278,7 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       const entries = await storage.getJournalEntries();
       const entry = entries.find(j => j.id === entityId);
       if (entry) {
-        const existing = entry.linkedProfiles || [];
+        const existing = (entry as any).linkedProfiles || [];
         if (!existing.includes(profileId)) {
           existing.push(profileId);
           await storage.updateJournalEntry(entityId, { linkedProfiles: existing } as any);
@@ -3594,13 +3594,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
           // Map tool name to a ParsedAction type for backwards compat
           const actionType = mapToolToActionType(toolUse.name);
-          allActions.push({ type: actionType, category: "ai", data: toolUse.input as Record<string, any> });
+          const inp = toolUse.input as Record<string, any>;
+          const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+          allActions.push({ type: actionType, category: "ai", data: { ...inp, _entityId: entityId || undefined } });
           if (result) allResults.push(result);
 
           // Log the action to in-memory history
-          const inp = toolUse.input as Record<string, any>;
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
           const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
@@ -3759,7 +3759,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     const allTrackers = await storage.getTrackers();
     const dupTracker = allTrackers.find(t => t.name.toLowerCase() === name.toLowerCase());
     const tracker = dupTracker || await storage.createTracker({ name, category: "custom", fields: [{ name: "value", type: "number" }] });
-    actions.push({ type: "create_tracker", category: "custom", data: { name } });
+    actions.push({ type: "create_tracker", category: "custom", data: { name, _entityId: tracker.id } });
     results.push(tracker);
     reply = dupTracker
       ? `Found existing tracker "${tracker.name}". You can log entries to it.`
@@ -3772,7 +3772,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
       const expense = await storage.createExpense({ amount, category: "general", description: desc || "Expense", tags: [] });
       // Auto-link to self profile so it shows in Finance tab
       await autoLinkToProfiles("expense", expense.id, desc || "Expense");
-      actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc } });
+      actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc, _entityId: expense.id } });
       results.push(expense);
       reply = `Logged expense: $${amount} — ${desc || "Expense"}`;
     }
@@ -3781,7 +3781,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     const task = await storage.createTask({ title, priority: "medium", tags: [] });
     // Auto-link to self profile so it shows in Tasks tab
     await autoLinkToProfiles("task", task.id, title);
-    actions.push({ type: "create_task", category: "task", data: { title } });
+    actions.push({ type: "create_task", category: "task", data: { title, _entityId: task.id } });
     results.push(task);
     reply = `Created task: "${title}"`;
   } else {

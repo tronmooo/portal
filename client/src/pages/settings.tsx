@@ -153,7 +153,7 @@ export default function SettingsPage() {
   }
 
   const userInitial = user?.email?.charAt(0).toUpperCase() || "?";
-  const memberSince = user?.created_at ? new Date(user.created_at).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : null;
+  const memberSince = (user as any)?.created_at ? new Date((user as any).created_at).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : null;
 
   return (
     <div className="h-full overflow-y-auto pb-24">
@@ -190,9 +190,9 @@ export default function SettingsPage() {
                   <Badge variant="secondary" className="text-[10px]">
                     <Shield className="h-2.5 w-2.5 mr-1" /> Authenticated
                   </Badge>
-                  {user?.app_metadata?.provider && (
+                  {(user as any)?.app_metadata?.provider && (
                     <Badge variant="outline" className="text-[10px] capitalize">
-                      {user.app_metadata.provider === "google" ? "Google" : "Email"}
+                      {(user as any).app_metadata.provider === "google" ? "Google" : "Email"}
                     </Badge>
                   )}
                 </div>
