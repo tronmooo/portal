@@ -917,6 +917,7 @@ export default function ChatPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
     queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
     queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
     queryClient.invalidateQueries({ queryKey: ["/api/insights"] });
     queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
     queryClient.invalidateQueries({ queryKey: ["/api/goals"] });

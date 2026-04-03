@@ -1,7 +1,8 @@
 import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter } from "@/lib/profileFilter";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import EditableTitle from "@/components/EditableTitle";
@@ -32,6 +33,8 @@ function HabitCard({ habit }: { habit: Habit }) {
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       const newCount = todayCheckins + 1;
       if (newCount >= targetPerDay) {
         toast({ title: `${habit.name} — Done for today`, description: `Streak: ${habit.currentStreak + 1} day${habit.currentStreak + 1 !== 1 ? "s" : ""}` });
@@ -44,7 +47,12 @@ function HabitCard({ habit }: { habit: Habit }) {
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `"${habit.name}" deleted` }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: `"${habit.name}" deleted` });
+    },
     onError: (err: Error) => toast({ title: `Failed to delete "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
@@ -183,12 +191,17 @@ export default function HabitsPage() {
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
-  const { id: profileId, name: profileName } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
 
-  const { data: habits = [], isLoading, error, refetch } = useQuery<Habit[]>({
-    queryKey: ["/api/habits", profileId || "all"],
-    queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()),
+  const { data: habitsAll = [], isLoading, error, refetch } = useQuery<Habit[]>({
+    queryKey: ["/api/habits"],
+    queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
+  });
+
+  const habits = habitsAll.filter(h => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    return (h.linkedProfiles || []).some((id: string) => filterIds.includes(id));
   });
 
   const handleCreate = () => {
@@ -202,7 +215,12 @@ export default function HabitsPage() {
 
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" });
+    },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
@@ -225,7 +243,11 @@ export default function HabitsPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Habits{profileId ? ` — ${profileName}` : ""}</h1>
+            <h1 className="text-lg font-semibold">Habits</h1>
+            <MultiProfileFilter
+              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              compact
+            />
           </div>
           <p className="text-xs text-muted-foreground">{completedToday}/{totalActive} completed today</p>
         </div>

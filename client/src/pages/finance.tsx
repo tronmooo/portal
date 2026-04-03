@@ -52,7 +52,7 @@ export default function FinancePage() {
   const [addOpen, setAddOpen] = useState(false);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "" });
+  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "", linkedProfiles: [] as string[] });
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
@@ -67,6 +67,8 @@ export default function FinancePage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
       toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
@@ -316,7 +318,7 @@ export default function FinancePage() {
                   <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
                       setEditingExpense(expense);
-                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "" });
+                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "", date: expense.date || "", linkedProfiles: expense.linkedProfiles || [] });
                     }} title="Edit"><Pencil className="h-3 w-3" /></Button>
                     <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={async () => {
                       if (!confirm(`Delete "${expense.description}"?`)) return;
@@ -324,6 +326,7 @@ export default function FinancePage() {
                         await apiRequest("DELETE", `/api/expenses/${expense.id}`);
                         queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                         toast({ title: `"${expense.description}" deleted` });
                       } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
                     }} title="Delete"><Trash2 className="h-3 w-3" /></Button>
@@ -363,9 +366,12 @@ export default function FinancePage() {
                   amount: parseFloat(editForm.amount),
                   category: editForm.category,
                   vendor: editForm.vendor || undefined,
+                  date: editForm.date || undefined,
+                  linkedProfiles: editForm.linkedProfiles,
                 });
                 queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                 toast({ title: `"${editForm.description}" updated` });
                 setEditingExpense(null);
               } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }

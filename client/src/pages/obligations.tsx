@@ -3,7 +3,8 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter } from "@/lib/profileFilter";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ function ObligationCard({ ob }: { ob: Obligation }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: `"${ob.name}" marked paid`, description: `$${ob.amount.toFixed(2)} payment recorded` });
     },
     onError: (err: Error) => toast({ title: `Failed to pay "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
@@ -119,12 +121,17 @@ export default function ObligationsPage() {
   const [newFrequency, setNewFrequency] = useState("monthly");
   const [newCategory, setNewCategory] = useState("housing");
   const [newDueDate, setNewDueDate] = useState(new Date().toISOString().slice(0, 10));
-  const { id: profileId, name: profileName } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
 
-  const { data: obligations = [], isLoading, error, refetch } = useQuery<Obligation[]>({
-    queryKey: ["/api/obligations", profileId || "all"],
-    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
+  const { data: obligationsAll = [], isLoading, error, refetch } = useQuery<Obligation[]>({
+    queryKey: ["/api/obligations"],
+    queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
+  });
+
+  const obligations = obligationsAll.filter(o => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    return ((o as any).linkedProfiles || []).some((id: string) => filterIds.includes(id));
   });
 
   const createMutation = useMutation({
@@ -132,6 +139,7 @@ export default function ObligationsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       const savedName = newName;
       toast({ title: `"${savedName}" bill created`, description: `${newFrequency} · $${newAmount}` });
       setAddOpen(false);
@@ -168,7 +176,11 @@ export default function ObligationsPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Obligations{profileId ? ` — ${profileName}` : ""}</h1>
+            <h1 className="text-lg font-semibold">Obligations</h1>
+            <MultiProfileFilter
+              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              compact
+            />
           </div>
           <p className="text-xs text-muted-foreground">Recurring bills and payments</p>
         </div>

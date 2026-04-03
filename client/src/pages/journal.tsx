@@ -1,7 +1,8 @@
 import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter } from "@/lib/profileFilter";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,6 +40,8 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
     mutationFn: () => apiRequest("DELETE", `/api/journal/${entry.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: "Journal entry deleted" });
     },
     onError: (err: Error) => toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" }),
@@ -142,12 +145,17 @@ export default function JournalPage() {
   const [mood, setMood] = useState<MoodLevel | null>(null);
   const [content, setContent] = useState("");
   const [energy, setEnergy] = useState(3);
-  const { id: profileId, name: profileName } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
 
-  const { data: entries = [], isLoading, error, refetch } = useQuery<JournalEntry[]>({
-    queryKey: ["/api/journal", profileId || "all"],
-    queryFn: () => apiRequest("GET", `/api/journal${profileParam}`).then(r => r.json()),
+  const { data: entriesAll = [], isLoading, error, refetch } = useQuery<JournalEntry[]>({
+    queryKey: ["/api/journal"],
+    queryFn: () => apiRequest("GET", "/api/journal").then(r => r.json()),
+  });
+
+  const entries = entriesAll.filter(e => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    return ((e as any).linkedProfiles || []).some((id: string) => filterIds.includes(id));
   });
 
   const handleSaveJournal = () => {
@@ -160,6 +168,8 @@ export default function JournalPage() {
     mutationFn: (data: any) => apiRequest("POST", "/api/journal", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setMood(null); setContent(""); setEnergy(3); setShowCreate(false);
       toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
     },
@@ -184,7 +194,11 @@ export default function JournalPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Journal{profileId ? ` — ${profileName}` : ""}</h1>
+            <h1 className="text-lg font-semibold">Journal</h1>
+            <MultiProfileFilter
+              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              compact
+            />
           </div>
           <p className="text-xs text-muted-foreground">{entries.length} entries</p>
         </div>
