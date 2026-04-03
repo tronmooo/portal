@@ -2721,6 +2721,20 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     }
   }));
 
+  // ---- Audit Log ----
+  app.get("/api/audit-log", asyncHandler(async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const { data, error } = await (storage as any).supabase
+      .from("audit_log")
+      .select("*")
+      .eq("user_id", (storage as any).userId)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  }));
+
   // ---- Preferences ----
   app.get("/api/preferences/:key", asyncHandler(async (req, res) => {
     try {

@@ -336,7 +336,7 @@ export default function TasksPage() {
   const profileFilteredTasks = (tasks || []).filter(t => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const linked = t.linkedProfiles || [];
-    return linked.some(id => filterIds.includes(id)) || linked.length === 0;
+    return linked.some(id => filterIds.includes(id));
   });
   const activeTasks = profileFilteredTasks.filter(t => t.status !== "done");
   const completedTasks = profileFilteredTasks.filter(t => t.status === "done");

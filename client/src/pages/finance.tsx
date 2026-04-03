@@ -43,6 +43,7 @@ export default function FinancePage() {
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const { data: obligations } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
+  const { data: enhanced } = useQuery<any>({ queryKey: ["/api/dashboard-enhanced"] });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", "all"],
     queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
@@ -97,7 +98,7 @@ export default function FinancePage() {
   const profileFiltered = (expenses || []).filter(e => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const linked = e.linkedProfiles || [];
-    return linked.some(id => filterIds.includes(id)) || linked.length === 0;
+    return linked.some(id => filterIds.includes(id));
   });
   const filtered = filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => e.category === filterCategory);
   const total = filtered.reduce((s, e) => s + e.amount, 0);
@@ -219,6 +220,39 @@ export default function FinancePage() {
         );
       })()}
 
+      {/* Net Worth KPIs */}
+      {(() => {
+        const assetValue = enhanced?.financeSnapshot?.totalAssetValue || 0;
+        const liabilities = enhanced?.financeSnapshot?.totalLiabilities || 0;
+        const monthlyBills = obligations?.reduce((s: number, o: any) => s + (o.amount || 0), 0) || 0;
+        const netWorth = assetValue - liabilities;
+        return (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card className="p-3">
+              <p className="text-[10px] text-muted-foreground uppercase">This Month</p>
+              <p className="text-lg font-bold tabular-nums">${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-[10px] text-muted-foreground">{filtered.length} expenses</p>
+            </Card>
+            <Card className="p-3">
+              <p className="text-[10px] text-muted-foreground uppercase">Monthly Bills</p>
+              <p className="text-lg font-bold tabular-nums">${monthlyBills.toLocaleString()}</p>
+              <p className="text-[10px] text-muted-foreground">{obligations?.length || 0} obligations</p>
+            </Card>
+            <Card className="p-3">
+              <p className="text-[10px] text-muted-foreground uppercase">Assets</p>
+              <p className="text-lg font-bold tabular-nums text-green-500">${assetValue.toLocaleString()}</p>
+            </Card>
+            <Card className="p-3">
+              <p className="text-[10px] text-muted-foreground uppercase">Net Worth</p>
+              <p className={`text-lg font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>
+                ${netWorth.toLocaleString()}
+              </p>
+              {liabilities > 0 && <p className="text-[10px] text-muted-foreground">Liabilities: ${liabilities.toLocaleString()}</p>}
+            </Card>
+          </div>
+        );
+      })()}
+
       {chartData.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
@@ -319,8 +353,10 @@ export default function FinancePage() {
               </Select>
             </div>
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
-            <Button className="w-full" onClick={async () => {
+            <Button className="w-full" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0} onClick={async () => {
               if (!editingExpense) return;
+              if (!editForm.description.trim()) { toast({ title: "Description required", variant: "destructive" }); return; }
+              if (!editForm.amount || parseFloat(editForm.amount) <= 0) { toast({ title: "Valid amount required", variant: "destructive" }); return; }
               try {
                 await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
                   description: editForm.description,

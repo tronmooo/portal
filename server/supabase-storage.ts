@@ -180,8 +180,16 @@ export class SupabaseStorage implements IStorage {
 
   setUserId(userId: string) { this.userId = userId; }
 
-  private logActivity(_type: string, _description: string) {
-    // No-op for Supabase — activity logging is SQLite-specific
+  private logActivity(entityType: string, description: string, action: string = "create", entityId?: string, source: string = "manual") {
+    // Write to audit_log table (fire-and-forget, non-blocking)
+    Promise.resolve(this.supabase.from("audit_log").insert({
+      user_id: this.userId,
+      action,
+      entity_type: entityType,
+      entity_id: entityId,
+      entity_name: description,
+      source,
+    })).catch(() => {}); // non-critical, never block
   }
 
   // ---- ROW → OBJECT helpers ----

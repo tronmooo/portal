@@ -2164,6 +2164,16 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_event": {
+      // Dedup: skip if a very similar event exists on the same date
+      const allEvents = await storage.getEvents();
+      const dupEvent = allEvents.find(e => 
+        e.title.toLowerCase() === (input.title || "").toLowerCase() &&
+        e.date === input.date
+      );
+      if (dupEvent) {
+        logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
+        return dupEvent;
+      }
       const newEvent = await storage.createEvent({
         title: input.title,
         date: input.date,
@@ -2455,6 +2465,13 @@ async function executeTool(name: string, input: any): Promise<any> {
       return { navigateTo: input.page, profileId: input.profileId };
 
     case "create_goal": {
+      // Dedup: skip if a goal with the same title already exists
+      const allGoals = await storage.getGoals();
+      const dupGoal = allGoals.find(g => g.title.toLowerCase() === (input.title || "").toLowerCase() && g.status === "active");
+      if (dupGoal) {
+        logger.info("ai", `Skipped duplicate goal: "${dupGoal.title}"`);
+        return dupGoal;
+      }
       // Resolve tracker name to ID
       let trackerId = input.trackerId;
       if (trackerId) {
