@@ -8,10 +8,11 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, Search, Filter } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
@@ -161,6 +162,38 @@ export default function JournalPage() {
     onError: () => toast({ title: "Failed to create journal entry", variant: "destructive" }),
   });
 
+  // Search & filter state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [moodFilter, setMoodFilter] = useState<MoodLevel | "all">("all");
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+
+  // Collect all unique tags
+  const allTags = useMemo(() => {
+    const tags = new Set<string>();
+    entries.forEach(e => e.tags?.forEach(t => tags.add(t)));
+    return Array.from(tags).sort();
+  }, [entries]);
+
+  // Filtered entries
+  const filteredEntries = useMemo(() => {
+    return entries.filter(e => {
+      if (moodFilter !== "all" && e.mood !== moodFilter) return false;
+      if (tagFilter && !(e.tags || []).includes(tagFilter)) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchContent = e.content?.toLowerCase().includes(q);
+        const matchTags = (e.tags || []).some(t => t.toLowerCase().includes(q));
+        const matchHighlights = (e.highlights || []).some(h => h.toLowerCase().includes(q));
+        const matchGratitude = (e.gratitude || []).some(g => g.toLowerCase().includes(q));
+        if (!matchContent && !matchTags && !matchHighlights && !matchGratitude) return false;
+      }
+      return true;
+    });
+  }, [entries, moodFilter, tagFilter, searchQuery]);
+
+  const hasActiveFilters = moodFilter !== "all" || tagFilter !== null || searchQuery.trim().length > 0;
+
   // 7-day mood strip
   const last7: { date: string; mood?: MoodLevel }[] = [];
   for (let i = 6; i >= 0; i--) {
@@ -203,6 +236,81 @@ export default function JournalPage() {
             </div>
           );
         })}
+      </div>
+
+      {/* Search & Filters */}
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search entries..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="h-8 pl-8 text-sm"
+              data-testid="input-journal-search"
+            />
+          </div>
+          <Button
+            size="sm"
+            variant={showFilters ? "secondary" : "outline"}
+            className="h-8 px-2.5"
+            onClick={() => setShowFilters(v => !v)}
+            data-testid="button-toggle-filters"
+          >
+            <Filter className="h-3.5 w-3.5 mr-1" />
+            Filters
+            {hasActiveFilters && <Badge variant="secondary" className="ml-1 h-4 w-4 p-0 text-[9px] rounded-full justify-center">!</Badge>}
+          </Button>
+          {hasActiveFilters && (
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs text-muted-foreground"
+              onClick={() => { setMoodFilter("all"); setTagFilter(null); setSearchQuery(""); }}>
+              Clear
+            </Button>
+          )}
+        </div>
+        {showFilters && (
+          <div className="space-y-2 p-3 rounded-lg border border-border/50 bg-muted/30">
+            <div>
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Filter by mood</p>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  onClick={() => setMoodFilter("all")}
+                  className={`text-[10px] px-2 py-1 rounded-full transition-colors ${moodFilter === "all" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
+                >
+                  All
+                </button>
+                {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => (
+                  <button
+                    key={key}
+                    onClick={() => setMoodFilter(moodFilter === key ? "all" : key)}
+                    className={`text-[10px] px-2 py-1 rounded-full flex items-center gap-1 transition-colors ${moodFilter === key ? "ring-2 ring-primary" : "opacity-70 hover:opacity-100"} ${cfg.bg}`}
+                    data-testid={`filter-mood-${key}`}
+                  >
+                    <span style={{ color: cfg.color }}>{cfg.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            {allTags.length > 0 && (
+              <div>
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Filter by tag</p>
+                <div className="flex flex-wrap gap-1">
+                  {allTags.map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
+                      className={`text-[10px] px-2 py-1 rounded-full transition-colors ${tagFilter === tag ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground"}`}
+                      data-testid={`filter-tag-${tag}`}
+                    >
+                      #{tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Create form */}
@@ -265,9 +373,27 @@ export default function JournalPage() {
         <div className="space-y-3">
           {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
         </div>
+      ) : filteredEntries.length === 0 ? (
+        <div className="text-center py-12">
+          <BookHeart className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">
+            {hasActiveFilters ? "No entries match your filters" : "No journal entries yet"}
+          </p>
+          {hasActiveFilters && (
+            <Button size="sm" variant="outline" className="mt-2 text-xs"
+              onClick={() => { setMoodFilter("all"); setTagFilter(null); setSearchQuery(""); }}>
+              Clear Filters
+            </Button>
+          )}
+        </div>
       ) : (
         <div className="grid gap-4">
-          {entries.map(entry => (
+          {hasActiveFilters && (
+            <p className="text-[10px] text-muted-foreground">
+              Showing {filteredEntries.length} of {entries.length} entries
+            </p>
+          )}
+          {filteredEntries.map(entry => (
             <JournalCard key={entry.id} entry={entry} />
           ))}
         </div>

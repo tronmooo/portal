@@ -129,13 +129,15 @@ function CollapsibleSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <Card data-testid={testId}>
-      <CardHeader className="py-2.5 px-3">
+    <Card className="card-elevated overflow-hidden" data-testid={testId}>
+      <CardHeader className="py-2.5 px-3.5">
         <div className="flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5 text-primary shrink-0" />
-          <h2 className="text-xs font-semibold">{label}</h2>
+          <div className="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+            <Icon className="h-3.5 w-3.5 text-primary" />
+          </div>
+          <h2 className="text-xs font-semibold tracking-tight">{label}</h2>
           {count !== undefined && (
-            <Badge variant="secondary" className="text-[10px] h-4 px-1.5">{count}</Badge>
+            <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-semibold">{count}</Badge>
           )}
           {sub && <span className="text-[10px] text-muted-foreground ml-1">{sub}</span>}
           <div className="ml-auto flex items-center gap-1">
@@ -150,17 +152,17 @@ function CollapsibleSection({
           </div>
         </div>
       </CardHeader>
-      {open && <CardContent className="px-3 pb-2.5 pt-0">{children}</CardContent>}
+      {open && <CardContent className="px-3.5 pb-3 pt-0">{children}</CardContent>}
     </Card>
   );
 }
 
 function MiniStat({
-  icon: Icon, label, value, sub, color, onClick, trend,
-}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat" }) {
+  icon: Icon, label, value, sub, color, onClick, trend, gradient,
+}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat"; gradient?: string }) {
   return (
     <div
-      className={`flex items-center gap-2 p-2.5 rounded-lg border border-border/50 transition-all duration-200 ${onClick ? "cursor-pointer hover:bg-muted/50 hover:border-primary/30 hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]" : "hover:scale-[1.01]"}`}
+      className={`relative flex items-center gap-3 p-3 rounded-xl border border-border/40 card-elevated transition-all duration-200 ${gradient || ""} ${onClick ? "cursor-pointer hover:scale-[1.02] active:scale-[0.98]" : ""}`}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -168,20 +170,23 @@ function MiniStat({
       onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
     >
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-primary/8" style={color ? { backgroundColor: `${color}15` } : {}}>
-        <Icon className="h-3.5 w-3.5" style={color ? { color } : { color: "hsl(var(--primary))" }} />
+      <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm" style={{ backgroundColor: color ? `${color}18` : "hsl(var(--primary) / 0.1)" }}>
+        <Icon className="h-4 w-4" style={color ? { color } : { color: "hsl(var(--primary))" }} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-[10px] text-muted-foreground leading-none mb-0.5">{label}</p>
-        <div className="flex items-center gap-1">
-          <p className="text-sm font-bold tabular-nums leading-none">{value}</p>
-          {trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
-          {trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
-          {trend === "flat" && <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+        <p className="text-[10px] font-medium text-muted-foreground leading-none mb-1 uppercase tracking-wider">{label}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-base font-bold tabular-nums leading-none count-in">{value}</p>
+          {trend && (
+            <span className={`trend-pill ${trend === "up" ? "trend-pill-up" : trend === "down" ? "trend-pill-down" : "trend-pill-flat"}`}>
+              {trend === "up" && <ArrowUp className="h-2.5 w-2.5" />}
+              {trend === "down" && <ArrowDown className="h-2.5 w-2.5" />}
+              {trend === "flat" && <Minus className="h-2.5 w-2.5" />}
+            </span>
+          )}
         </div>
       </div>
-      {sub && <span className="text-[9px] text-muted-foreground shrink-0">{sub}</span>}
-      {onClick && <Eye className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" aria-hidden="true" />}
+      {sub && <span className="text-[9px] text-muted-foreground shrink-0 text-right leading-tight max-w-[60px]">{sub}</span>}
     </div>
   );
 }
@@ -415,27 +420,32 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
   return (
     <>
       <CollapsibleSection icon={BarChart3} label="Key Metrics" testId="section-kpis">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <MiniStat icon={ListTodo} label="Open Tasks" value={stats.activeTasks}
+            color="#4F98A3" gradient="kpi-gradient-teal"
             onClick={() => setPopup("tasks")} />
           <MiniStat icon={DollarSign} label="Monthly Spend" value={formatMoney(stats.monthlySpend)}
-            trend={spendTrend} onClick={() => setPopup("spending")} />
+            trend={spendTrend} color="#BB653B" gradient="kpi-gradient-amber"
+            onClick={() => setPopup("spending")} />
           <MiniStat icon={Flame} label="Habits Today" value={`${stats.habitCompletionRate}%`}
             sub={`${stats.totalHabits} tracked`}
+            color="#6DAA45" gradient="kpi-gradient-emerald"
             onClick={() => navigate("/dashboard/habits")} />
           <MiniStat icon={BookHeart} label="Journal Streak"
             value={`${stats.journalStreak}d`}
             sub={moodConf ? moodConf.label : journalStreakLabel(stats.journalStreak)}
-            color={moodConf?.color}
+            color={moodConf?.color || "#A86FDF"} gradient="kpi-gradient-violet"
             onClick={() => navigate("/dashboard/journal")} />
           <MiniStat icon={CreditCard} label="Upcoming Bills"
             value={stats.upcomingObligations}
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
+            color="#5591C7" gradient="kpi-gradient-blue"
             onClick={() => setPopup("bills")} />
           <MiniStat icon={FileWarning} label="Expiring Docs"
             value={enhanced?.expiringDocuments?.length || 0}
             sub={enhanced?.expiringDocuments?.[0] ? `next: ${fmtDateWithYear(enhanced.expiringDocuments[0].expirationDate)}` : "all clear"}
-            color={enhanced?.expiringDocuments?.some((d: any) => d.status === 'expired') ? '#A13544' : enhanced?.expiringDocuments?.length > 0 ? '#BB653B' : undefined}
+            color={enhanced?.expiringDocuments?.some((d: any) => d.status === 'expired') ? '#A13544' : enhanced?.expiringDocuments?.length > 0 ? '#BB653B' : '#797876'}
+            gradient="kpi-gradient-rose"
             onClick={() => setPopup("docs")} />
         </div>
       </CollapsibleSection>
@@ -752,15 +762,13 @@ function TrendsSection({ stats, enhanced }: { stats: DashboardStats; enhanced: a
 
   return (
     <CollapsibleSection icon={TrendingUp} label="Trends" testId="section-trends">
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5">
         {/* Spending */}
-        <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-          <p className="text-[10px] text-muted-foreground">Spending</p>
-          <div className="flex items-center gap-1">
+        <div className="p-3 rounded-xl border border-border/40 kpi-gradient-amber space-y-1.5">
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Spending</p>
+          <div className="flex items-center gap-1.5">
             <p className="text-sm font-bold tabular-nums">{formatMoney(finSnap?.totalMonthlySpend || 0)}</p>
-            <span className={`text-[10px] font-medium ${
-              spendDir === "up" ? "text-red-500" : spendDir === "down" ? "text-green-500" : "text-muted-foreground"
-            }`}>
+            <span className={`trend-pill ${spendDir === "up" ? "trend-pill-down" : spendDir === "down" ? "trend-pill-up" : "trend-pill-flat"}`}>
               {spendDir === "up" ? "↑" : spendDir === "down" ? "↓" : "→"}
             </span>
           </div>
@@ -771,35 +779,33 @@ function TrendsSection({ stats, enhanced }: { stats: DashboardStats; enhanced: a
 
         {/* Health */}
         {topHealth && (
-          <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-            <p className="text-[10px] text-muted-foreground">{topHealth.name}</p>
-            <div className="flex items-center gap-1">
+          <div className="p-3 rounded-xl border border-border/40 kpi-gradient-emerald space-y-1.5">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">{topHealth.name}</p>
+            <div className="flex items-center gap-1.5">
               <p className="text-sm font-bold tabular-nums">{topHealth.latestValue}</p>
               {topHealth.unit && <span className="text-[10px] text-muted-foreground">{topHealth.unit}</span>}
-              <span className={`text-[10px] font-medium ${
-                topHealth.trend === "up" ? "text-green-500" :
-                topHealth.trend === "down" ? "text-red-500" : "text-muted-foreground"
+              <span className={`trend-pill ${
+                topHealth.trend === "up" ? "trend-pill-up" :
+                topHealth.trend === "down" ? "trend-pill-down" : "trend-pill-flat"
               }`}>
                 {topHealth.trend === "up" ? "↑" : topHealth.trend === "down" ? "↓" : "→"}
               </span>
             </div>
-            <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground">7-day avg: {topHealth.average}</span>
-            </div>
+            <span className="text-[10px] text-muted-foreground">7-day avg: {topHealth.average}</span>
           </div>
         )}
 
         {/* Habits */}
-        <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-          <p className="text-[10px] text-muted-foreground">Habits Today</p>
+        <div className="p-3 rounded-xl border border-border/40 kpi-gradient-teal space-y-1.5">
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Habits Today</p>
           <p className="text-sm font-bold tabular-nums">{stats.habitCompletionRate}%</p>
-          <Progress value={stats.habitCompletionRate} className="h-1" />
+          <Progress value={stats.habitCompletionRate} className="h-1.5 mt-1" />
         </div>
 
         {/* Mood */}
         {stats.currentMood && (
-          <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-            <p className="text-[10px] text-muted-foreground">Current Mood</p>
+          <div className="p-3 rounded-xl border border-border/40 kpi-gradient-violet space-y-1.5">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Current Mood</p>
             <div className="flex items-center gap-1.5">
               {(() => { const m = MOOD_CONFIG[stats.currentMood!]; const MI = m.icon; return <MI className="h-4 w-4" style={{ color: m.color }} />; })()}
               <p className="text-sm font-bold">{MOOD_CONFIG[stats.currentMood].label}</p>
@@ -808,8 +814,8 @@ function TrendsSection({ stats, enhanced }: { stats: DashboardStats; enhanced: a
         )}
 
         {/* Journal */}
-        <div className="p-2.5 rounded-lg border border-border/50 space-y-1">
-          <p className="text-[10px] text-muted-foreground">Journal Streak</p>
+        <div className="p-3 rounded-xl border border-border/40 kpi-gradient-blue space-y-1.5">
+          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Journal Streak</p>
           <p className="text-sm font-bold tabular-nums">{stats.journalStreak} days</p>
           <p className="text-[10px] text-muted-foreground">{stats.totalHabits} habits tracked</p>
         </div>
@@ -838,25 +844,23 @@ function HealthSection({ data }: { data: any[] }) {
   return (
     <>
       <CollapsibleSection icon={HeartPulse} label="Health" count={filteredData.length} testId="section-health">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2.5">
           {filteredData.slice(0, 6).map((item: any) => (
             <div key={item.trackerId}
               onClick={() => setSelectedTracker(item)}
-              className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
+              className="flex items-center gap-2.5 p-2.5 rounded-xl border border-border/40 kpi-gradient-emerald cursor-pointer hover:scale-[1.02] transition-all duration-200">
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-muted-foreground truncate" title={item.name}>{item.name}</p>
-                <div className="flex items-center gap-1">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider truncate" title={item.name}>{item.name}</p>
+                <div className="flex items-center gap-1.5 mt-0.5">
                   <span className="text-sm font-bold tabular-nums">{item.latestValue}</span>
                   {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
-                  <TrendIcon trend={item.trend} />
-                  {item.trendValue > 0 && (
-                    <span className={`text-[10px] ${item.trend === "up" ? "text-green-500" : item.trend === "down" ? "text-red-500" : "text-muted-foreground"}`}>
-                      {item.trendValue}
-                    </span>
-                  )}
+                  <span className={`trend-pill ${item.trend === "up" ? "trend-pill-up" : item.trend === "down" ? "trend-pill-down" : "trend-pill-flat"}`}>
+                    {item.trend === "up" ? "↑" : item.trend === "down" ? "↓" : "→"}
+                    {item.trendValue > 0 && ` ${item.trendValue}`}
+                  </span>
                 </div>
               </div>
-              <span className="text-[9px] text-muted-foreground">avg: {item.average}</span>
+              <span className="text-[9px] text-muted-foreground shrink-0">avg: {item.average}</span>
             </div>
           ))}
         </div>
@@ -1569,8 +1573,8 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-base font-semibold">Dashboard</h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-lg font-bold tracking-tight">Dashboard</h1>
             <Select value={profileFilter} onValueChange={setProfileFilter}>
               <SelectTrigger className="w-[120px] h-7 text-xs" data-testid="select-dashboard-profile">
                 <SelectValue />
