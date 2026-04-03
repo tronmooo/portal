@@ -3785,7 +3785,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     try {
       const mood = moodMatch[1] as any;
       const entry = await storage.createJournalEntry({ mood, content: "", tags: [] });
-      return { reply: `Logged mood: ${mood}`, actions: [{ type: "journal_entry" as const, category: "journal" as const, data: { mood } }], results: [entry] };
+      return { reply: `Logged mood: ${mood}`, actions: [{ type: "journal_entry" as const, category: "journal" as const, data: { mood, _entityId: entry.id } }], results: [entry] };
     } catch { /* continue */ }
   }
 
