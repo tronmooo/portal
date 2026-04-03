@@ -683,7 +683,47 @@ export class SupabaseStorage implements IStorage {
       }
     } catch (e) { errors.push("documents"); }
 
-    try { // 7. Delete entity_links
+    try { // 7. Unlink habits
+      const allHabits = await this.getHabits();
+      for (const habit of allHabits) {
+        if (habit.linkedProfiles.includes(id)) {
+          await this.supabase.from("habits").update({ linked_profiles: habit.linkedProfiles.filter(pid => pid !== id) }).eq("id", habit.id).eq("user_id", this.userId);
+        }
+      }
+    } catch (e) { errors.push("habits"); }
+
+    try { // 8. Unlink/delete artifacts
+      const allArtifacts = await this.getArtifacts();
+      for (const artifact of allArtifacts) {
+        if (artifact.linkedProfiles.includes(id)) {
+          if (artifact.linkedProfiles.length <= 1) {
+            await this.supabase.from("artifacts").delete().eq("id", artifact.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("artifacts").update({ linked_profiles: artifact.linkedProfiles.filter(pid => pid !== id) }).eq("id", artifact.id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("artifacts"); }
+
+    try { // 9. Unlink goals
+      const allGoals = await this.getGoals();
+      for (const goal of allGoals) {
+        if ((goal.linkedProfiles || []).includes(id)) {
+          await this.supabase.from("goals").update({ linked_profiles: goal.linkedProfiles.filter(pid => pid !== id) }).eq("id", goal.id).eq("user_id", this.userId);
+        }
+      }
+    } catch (e) { errors.push("goals"); }
+
+    try { // 10. Unlink journal entries
+      const allJournalEntries = await this.getJournalEntries();
+      for (const entry of allJournalEntries) {
+        if ((entry.linkedProfiles || []).includes(id)) {
+          await this.supabase.from("journal_entries").update({ linked_profiles: entry.linkedProfiles.filter(pid => pid !== id) }).eq("id", entry.id).eq("user_id", this.userId);
+        }
+      }
+    } catch (e) { errors.push("journal_entries"); }
+
+    try { // 11. Delete entity_links
       await this.supabase.from("entity_links").delete()
         .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
         .eq("user_id", this.userId);
@@ -1132,7 +1172,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("expenses").insert({
       id, user_id: this.userId, amount: data.amount, category: data.category || "general",
       description: data.description, vendor: data.vendor || null,
-      is_recurring: data.isRecurring || false, linked_profiles: [],
+      is_recurring: data.isRecurring || false, linked_profiles: (data as any).linkedProfiles || [],
       tags: data.tags || [], date: data.date || now,
       source: (data as any).source || "manual", created_at: now,
     });
@@ -1819,6 +1859,7 @@ export class SupabaseStorage implements IStorage {
       color: data.color || null, frequency: data.frequency || "daily",
       target_days: data.targetDays || null, target_per_day: data.targetPerDay || 1,
       current_streak: 0, longest_streak: 0,
+      linked_profiles: (data as any).linkedProfiles || [],
       created_at: now,
     });
     if (error) throw error;
@@ -1987,7 +2028,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("artifacts").insert({
       id, user_id: this.userId, type: data.type, title: data.title,
       content: data.content || "", items, tags: data.tags || [],
-      linked_profiles: [], pinned: data.pinned || false,
+      linked_profiles: (data as any).linkedProfiles || [], pinned: data.pinned || false,
       created_at: now, updated_at: now,
     });
     if (error) throw error;
@@ -2165,6 +2206,7 @@ export class SupabaseStorage implements IStorage {
       current: data.startValue || 0, unit: data.unit, start_value: data.startValue ?? null,
       deadline: data.deadline || null, tracker_id: data.trackerId || null,
       habit_id: data.habitId || null, category: data.category || null,
+      linked_profiles: (data as any).linkedProfiles || [],
       status: "active", milestones, created_at: now, updated_at: now,
     });
     if (error) throw error;
