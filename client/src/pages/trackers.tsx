@@ -3318,17 +3318,7 @@ export default function TrackersPage() {
         </div>
       ) : viewMode === "table" ? (
         <div className="rounded-lg border border-border/40 overflow-hidden" data-testid="tracker-table">
-          {/* Excel-style header row */}
-          <div className="grid grid-cols-[1fr_80px_70px_70px_60px_60px] md:grid-cols-[1fr_90px_80px_80px_70px_70px_80px] gap-0 bg-muted/60 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-            <div className="px-3 py-2">Tracker</div>
-            <div className="px-2 py-2 text-right">Latest</div>
-            <div className="px-2 py-2 text-right">7d Avg</div>
-            <div className="px-2 py-2 text-right hidden md:block">Trend</div>
-            <div className="px-2 py-2 text-right">Entries</div>
-            <div className="px-2 py-2 text-right">Status</div>
-            <div className="px-2 py-2 text-right hidden md:block">Updated</div>
-          </div>
-          {/* Data rows */}
+          {/* Dynamic KPI rows — each tracker gets context-aware metrics */}
           {filteredTrackers.map((tracker) => {
             const entries = tracker.entries;
             const spec = detectSpecialization(tracker);
@@ -3353,6 +3343,9 @@ export default function TrackersPage() {
             const prevAvg = pwv.length > 0 ? pwv.reduce((a, b) => a + b, 0) / pwv.length : null;
             const trendPct = avg7d != null && prevAvg != null && prevAvg !== 0
               ? ((avg7d - prevAvg) / Math.abs(prevAvg)) * 100 : null;
+
+            // All numeric values for range/stats
+            const vals = entries.map(e => Number(e.values?.[pf])).filter(v => !isNaN(v) && v !== 0);
 
             // BP display
             let displayVal = "—";
@@ -3392,43 +3385,132 @@ export default function TrackersPage() {
 
             const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
 
+            // === Dynamic KPIs per tracker type ===
+            type KPI = { label: string; value: string; color?: string };
+            const kpis: KPI[] = [];
+
+            if (spec === "bloodpressure" && last) {
+              const sys = Number(pv?.systolic || pv?.sys || 0);
+              const dia = Number(pv?.diastolic || pv?.dia || 0);
+              kpis.push({ label: "BP", value: dia ? `${sys}/${dia}` : `${sys}`, color: sys >= 140 ? "text-red-500" : sys >= 130 ? "text-amber-500" : "text-green-500" });
+              if (avg7d != null) kpis.push({ label: "7d Avg", value: avg7d.toFixed(0) + " mmHg" });
+              const range = vals.length >= 2 ? `${Math.min(...vals)}-${Math.max(...vals)}` : null;
+              if (range) kpis.push({ label: "Range", value: range });
+              kpis.push({ label: "Readings", value: String(entries.length) });
+            } else if (spec === "weight") {
+              kpis.push({ label: "Current", value: displayVal + " " + unit });
+              if (avg7d != null) kpis.push({ label: "7d Avg", value: avg7d.toFixed(1) + " " + unit });
+              if (vals.length >= 2) {
+                const change = vals[vals.length - 1] - vals[0];
+                kpis.push({ label: "Change", value: `${change > 0 ? "+" : ""}${change.toFixed(1)} ${unit}`, color: change > 0 ? "text-amber-500" : "text-green-500" });
+              }
+              kpis.push({ label: "Logged", value: `${entries.length}x` });
+            } else if (spec === "running" || tracker.category === "fitness") {
+              if (last?.values?.distance) kpis.push({ label: "Last Run", value: `${Number(last.values.distance).toFixed(1)} mi` });
+              else kpis.push({ label: "Latest", value: displayVal + " " + unit });
+              const weekEntries = entries.filter(e => Date.now() - new Date(e.timestamp).getTime() < 7 * 86400000);
+              const weekTotal = weekEntries.reduce((s, e) => s + (Number(e.values?.distance || e.values?.[pf]) || 0), 0);
+              kpis.push({ label: "This Week", value: `${weekTotal.toFixed(1)} ${unit || "mi"} · ${weekEntries.length}x` });
+              if (last?.values?.pace) kpis.push({ label: "Pace", value: `${last.values.pace} min/mi` });
+              if (last?.values?.caloriesBurned) kpis.push({ label: "Burned", value: `${last.values.caloriesBurned} cal` });
+              if (kpis.length < 4) kpis.push({ label: "Total", value: `${entries.length} sessions` });
+            } else if (spec === "sleep") {
+              kpis.push({ label: "Last Night", value: displayVal + " hrs" });
+              if (avg7d != null) kpis.push({ label: "7d Avg", value: avg7d.toFixed(1) + " hrs", color: avg7d >= 7 ? "text-green-500" : avg7d >= 6 ? "text-amber-500" : "text-red-500" });
+              if (vals.length >= 2) kpis.push({ label: "Best", value: Math.max(...vals).toFixed(1) + " hrs" });
+              kpis.push({ label: "Logged", value: `${entries.length} nights` });
+            } else if (tracker.category === "nutrition" || tracker.name.toLowerCase().includes("calorie")) {
+              const todayEntries = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10)));
+              const todayTotal = todayEntries.reduce((s, e) => s + (Number(e.values?.[pf]) || 0), 0);
+              kpis.push({ label: "Today", value: `${todayTotal.toLocaleString()} ${unit}` });
+              if (avg7d != null) kpis.push({ label: "Daily Avg", value: `${avg7d.toFixed(0)} ${unit}` });
+              kpis.push({ label: "Entries", value: `${entries.length}` });
+              if (vals.length >= 2) kpis.push({ label: "High", value: `${Math.max(...vals).toLocaleString()} ${unit}` });
+            } else if (tracker.name.toLowerCase().includes("hydration") || tracker.name.toLowerCase().includes("water")) {
+              const todayEntries = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10)));
+              const todayTotal = todayEntries.reduce((s, e) => s + (Number(e.values?.[pf]) || 0), 0);
+              kpis.push({ label: "Today", value: `${todayTotal} ml`, color: todayTotal >= 2000 ? "text-green-500" : todayTotal >= 1000 ? "text-amber-500" : "text-red-400" });
+              if (avg7d != null) kpis.push({ label: "Daily Avg", value: `${avg7d.toFixed(0)} ml` });
+              kpis.push({ label: "Goal", value: todayTotal >= 2000 ? "✓ Met" : `${2000 - todayTotal}ml left`, color: todayTotal >= 2000 ? "text-green-500" : undefined });
+            } else if (tracker.name.toLowerCase().includes("heart rate") || tracker.name.toLowerCase().includes("hr")) {
+              kpis.push({ label: "Latest", value: displayVal + " bpm" });
+              if (avg7d != null) kpis.push({ label: "Resting Avg", value: avg7d.toFixed(0) + " bpm" });
+              if (vals.length >= 2) kpis.push({ label: "Range", value: `${Math.min(...vals)}-${Math.max(...vals)} bpm` });
+              kpis.push({ label: "Readings", value: String(entries.length) });
+            } else if (tracker.name.toLowerCase().includes("medication")) {
+              const todayDoses = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10))).length;
+              kpis.push({ label: "Today", value: `${todayDoses} dose${todayDoses !== 1 ? "s" : ""}`, color: todayDoses > 0 ? "text-green-500" : "text-muted-foreground" });
+              kpis.push({ label: "This Week", value: `${entries.filter(e => Date.now() - new Date(e.timestamp).getTime() < 7 * 86400000).length} doses` });
+              kpis.push({ label: "Total", value: `${entries.length} logged` });
+            } else if (tracker.name.toLowerCase().includes("tire") || tracker.name.toLowerCase().includes("pressure")) {
+              if (last?.values?.front) kpis.push({ label: "Front", value: `${last.values.front} psi` });
+              if (last?.values?.rear) kpis.push({ label: "Rear", value: `${last.values.rear} psi` });
+              kpis.push({ label: "Checked", value: `${entries.length}x` });
+            } else if (tracker.name.toLowerCase().includes("mood") || tracker.name.toLowerCase().includes("stress")) {
+              kpis.push({ label: "Latest", value: displayVal });
+              if (avg7d != null) kpis.push({ label: "7d Avg", value: avg7d.toFixed(1) + "/10" });
+              kpis.push({ label: "Logged", value: `${entries.length}x` });
+            } else if (tracker.name.toLowerCase().includes("pain")) {
+              kpis.push({ label: "Current", value: displayVal + "/10", color: Number(latestVal) >= 7 ? "text-red-500" : Number(latestVal) >= 4 ? "text-amber-500" : "text-green-500" });
+              if (avg7d != null) kpis.push({ label: "7d Avg", value: avg7d.toFixed(1) + "/10" });
+              kpis.push({ label: "Reports", value: String(entries.length) });
+            } else {
+              // Generic fallback
+              kpis.push({ label: "Latest", value: displayVal + (unit ? " " + unit : "") });
+              if (avg7d != null) kpis.push({ label: "7d Avg", value: avg7d.toFixed(1) + (unit ? " " + unit : "") });
+              if (trendPct != null) kpis.push({ label: "Trend", value: `${trendPct > 0 ? "+" : ""}${trendPct.toFixed(0)}%`, color: trendPct > 2 ? "text-green-500" : trendPct < -2 ? "text-orange-500" : undefined });
+              kpis.push({ label: "Entries", value: String(entries.length) });
+            }
+
+            // Dynamic insight
+            let insight = "";
+            if (entries.length === 0) insight = "No data yet — log your first entry";
+            else if (entries.length === 1) insight = "Just started tracking";
+            else if (spec === "bloodpressure" && Number(pv?.systolic || 0) >= 140) insight = "⚠️ Blood pressure is high — consult your doctor";
+            else if (spec === "bloodpressure" && Number(pv?.systolic || 0) >= 130) insight = "Slightly elevated — monitor closely";
+            else if (spec === "weight" && trendPct != null && trendPct > 5) insight = "Weight trending up this week";
+            else if (spec === "weight" && trendPct != null && trendPct < -5) insight = "Weight trending down this week";
+            else if (spec === "sleep" && avg7d != null && avg7d < 6) insight = "⚠️ Below recommended 7+ hours";
+            else if (spec === "sleep" && avg7d != null && avg7d >= 7) insight = "✓ Meeting sleep goal";
+            else if (tracker.name.toLowerCase().includes("hydration")) {
+              const todayH = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10))).reduce((s, e) => s + (Number(e.values?.[pf]) || 0), 0);
+              if (todayH >= 2000) insight = "✓ Hydration goal met today";
+              else if (todayH > 0) insight = `${2000 - todayH}ml to go today`;
+            } else if (trendPct != null && Math.abs(trendPct) > 10) insight = `${trendPct > 0 ? "Increasing" : "Decreasing"} ${Math.abs(trendPct).toFixed(0)}% vs last week`;
+            else if (entries.length >= 7) {
+              const streak = computeStreak(entries);
+              if (streak >= 3) insight = `${streak}-day logging streak 🔥`;
+            }
+
             return (
               <div
                 key={tracker.id}
-                className="grid grid-cols-[1fr_80px_70px_70px_60px_60px] md:grid-cols-[1fr_90px_80px_80px_70px_70px_80px] gap-0 border-b border-border/30 hover:bg-muted/30 cursor-pointer transition-colors items-center"
+                className="border-b border-border/30 hover:bg-muted/30 cursor-pointer transition-colors px-3 py-2.5"
                 data-testid={`tracker-row-${tracker.id}`}
                 onClick={() => setSelectedTrackerId(tracker.id)}
               >
-                <div className="px-3 py-2 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium truncate">{tracker.name}</span>
+                {/* Row 1: Name + profile + last updated */}
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-xs font-semibold truncate">{tracker.name}</span>
                     {linkedProfile && <span className="text-[8px] px-1 py-0.5 rounded bg-primary/10 text-primary shrink-0">{linkedProfile.name}</span>}
+                    <span className="text-[9px] text-muted-foreground capitalize shrink-0">{tracker.category}</span>
                   </div>
-                  {unit && <span className="text-[9px] text-muted-foreground">{tracker.category} · {unit}</span>}
+                  <span className="text-[9px] text-muted-foreground shrink-0">{lastUpdated}</span>
                 </div>
-                <div className="px-2 py-2 text-right">
-                  <span className="text-xs font-bold tabular-nums">{displayVal}</span>
-                  {unit && <span className="text-[9px] text-muted-foreground ml-0.5">{unit}</span>}
+                {/* Row 2: Dynamic KPI chips */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {kpis.map((kpi, ki) => (
+                    <div key={ki} className="flex items-center gap-1 bg-muted/40 rounded px-1.5 py-0.5">
+                      <span className="text-[9px] text-muted-foreground">{kpi.label}</span>
+                      <span className={`text-[10px] font-bold tabular-nums ${kpi.color || ""}`}>{kpi.value}</span>
+                    </div>
+                  ))}
                 </div>
-                <div className="px-2 py-2 text-right">
-                  <span className="text-[10px] tabular-nums text-muted-foreground">{avg7d != null ? avg7d.toFixed(1) : "—"}</span>
-                </div>
-                <div className="px-2 py-2 text-right hidden md:block">
-                  {trendPct != null ? (
-                    <span className={`text-[10px] tabular-nums ${trendPct > 2 ? "text-green-500" : trendPct < -2 ? "text-orange-500" : "text-muted-foreground"}`}>
-                      {trendPct > 0 ? "+" : ""}{trendPct.toFixed(0)}%
-                    </span>
-                  ) : <span className="text-[10px] text-muted-foreground">—</span>}
-                </div>
-                <div className="px-2 py-2 text-right">
-                  <span className="text-[10px] tabular-nums text-muted-foreground">{entries.length}</span>
-                </div>
-                <div className="px-2 py-2 text-right">
-                  <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
-                </div>
-                <div className="px-2 py-2 text-right hidden md:block">
-                  <span className="text-[9px] text-muted-foreground">{lastUpdated}</span>
-                </div>
+                {/* Row 3: AI insight */}
+                {insight && (
+                  <p className="text-[10px] text-muted-foreground mt-1 italic">{insight}</p>
+                )}
               </div>
             );
           })}
