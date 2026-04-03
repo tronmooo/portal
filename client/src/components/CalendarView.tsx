@@ -1017,50 +1017,101 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           </div>
       </div>}
 
-      {/* Week View */}
+      {/* Week View — hourly time grid */}
       {viewMode === "week" && (() => {
+        const HOURS = Array.from({ length: 24 }, (_, i) => i);
         const weekStart = new Date(viewDate);
-        weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
         const weekDays = Array.from({ length: 7 }, (_, i) => {
           const d = new Date(weekStart); d.setDate(d.getDate() + i);
           return { date: toLocalDateStr(d), day: d, label: WEEKDAYS[i], num: d.getDate() };
         });
+        const parseHour = (t: string | undefined | null) => {
+          if (!t) return -1;
+          const [h] = t.split(":").map(Number);
+          return h;
+        };
         return (
           <div className="rounded-lg border border-border/40 overflow-hidden">
-            <div className="grid grid-cols-7 divide-x divide-border">
+            {/* Header row with day names */}
+            <div className="grid grid-cols-[48px_repeat(7,1fr)] border-b border-border bg-muted/30">
+              <div className="p-1" />
               {weekDays.map(wd => {
-                const dayItems = itemsByDate[wd.date] || [];
                 const isToday = wd.date === todayStr;
                 return (
-                  <div key={wd.date} className={`p-1.5 min-h-[120px] ${isToday ? "bg-primary/5" : ""}`}>
-                    <div className={`text-center mb-1 ${isToday ? "font-bold text-primary" : "text-muted-foreground"}`}>
-                      <div className="text-[9px] uppercase">{wd.label}</div>
-                      <div className="text-sm">{wd.num}</div>
-                    </div>
-                    <div className="space-y-0.5">
-                      {dayItems.map(item => (
-                        <button key={item.id} onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
-                          className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate hover:bg-muted/50 transition-colors"
-                          style={{ borderLeft: `2px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
-                          {item.time ? <span className="text-muted-foreground mr-1">{item.time.slice(0,5)}</span> : null}
-                          {item.title}
-                        </button>
-                      ))}
-                    </div>
+                  <div key={wd.date} className={`text-center py-1.5 border-l border-border/40 ${isToday ? "bg-primary/10" : ""}`}>
+                    <div className={`text-[9px] uppercase ${isToday ? "text-primary font-bold" : "text-muted-foreground"}`}>{wd.label}</div>
+                    <div className={`text-sm ${isToday ? "text-primary font-bold" : ""}`}>{wd.num}</div>
                   </div>
                 );
               })}
+            </div>
+            {/* All-day events row */}
+            {(() => {
+              const hasAllDay = weekDays.some(wd => (itemsByDate[wd.date] || []).some(i => !i.time));
+              if (!hasAllDay) return null;
+              return (
+                <div className="grid grid-cols-[48px_repeat(7,1fr)] border-b border-border bg-muted/10">
+                  <div className="p-1 text-[9px] text-muted-foreground text-right pr-2 pt-1.5">all day</div>
+                  {weekDays.map(wd => {
+                    const allDay = (itemsByDate[wd.date] || []).filter(i => !i.time);
+                    return (
+                      <div key={wd.date} className="border-l border-border/40 p-0.5 min-h-[28px]">
+                        {allDay.map(item => (
+                          <button key={item.id} onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
+                            className="w-full text-left px-1 py-0.5 rounded text-[9px] truncate mb-0.5 hover:opacity-80 transition-opacity text-white"
+                            style={{ backgroundColor: item.color || TYPE_COLORS[item.type] || "#888" }}>
+                            {item.title}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            {/* Hourly time grid */}
+            <div className="max-h-[500px] overflow-y-auto">
+              {HOURS.map(hour => (
+                <div key={hour} className="grid grid-cols-[48px_repeat(7,1fr)] border-b border-border/20 min-h-[40px]">
+                  <div className="text-[9px] text-muted-foreground text-right pr-2 pt-0.5 tabular-nums">
+                    {hour === 0 ? "12 AM" : hour < 12 ? `${hour} AM` : hour === 12 ? "12 PM" : `${hour - 12} PM`}
+                  </div>
+                  {weekDays.map(wd => {
+                    const hourItems = (itemsByDate[wd.date] || []).filter(i => i.time && parseHour(i.time) === hour);
+                    const isToday = wd.date === todayStr;
+                    return (
+                      <div key={wd.date}
+                        className={`border-l border-border/20 p-0.5 cursor-pointer hover:bg-muted/30 transition-colors ${isToday ? "bg-primary/[0.03]" : ""}`}
+                        onClick={() => { setQuickAddDate(wd.date); setAddOpen(true); }}>
+                        {hourItems.map(item => (
+                          <button key={item.id} onClick={(e) => { e.stopPropagation(); setSelectedDate(wd.date); setDetailItem(item); }}
+                            className="w-full text-left px-1 py-0.5 rounded text-[9px] truncate mb-0.5 hover:opacity-80 transition-opacity text-white"
+                            style={{ backgroundColor: item.color || TYPE_COLORS[item.type] || "#888" }}>
+                            {item.time?.slice(0,5)} {item.title}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           </div>
         );
       })()}
 
-      {/* Day View */}
+      {/* Day View — hourly time slots */}
       {viewMode === "day" && (() => {
+        const HOURS = Array.from({ length: 24 }, (_, i) => i);
         const dayStr = toLocalDateStr(viewDate);
         const dayItems = (itemsByDate[dayStr] || []).sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
-        const timedItems = dayItems.filter(i => i.time);
         const allDayItems = dayItems.filter(i => !i.time);
+        const parseHour = (t: string | undefined | null) => {
+          if (!t) return -1;
+          const [h] = t.split(":").map(Number);
+          return h;
+        };
         return (
           <div className="rounded-lg border border-border/40 overflow-hidden">
             <div className="p-3 border-b border-border bg-muted/30">
@@ -1074,30 +1125,37 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                 <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">All Day</p>
                 {allDayItems.map(item => (
                   <button key={item.id} onClick={() => setDetailItem(item)}
-                    className="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-muted/50 transition-colors"
-                    style={{ borderLeft: `3px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
-                    <span className="text-xs">{item.title}</span>
-                    <Badge variant="outline" className="text-[9px] ml-auto">{item.type}</Badge>
+                    className="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-muted/50 transition-colors mb-0.5"
+                    style={{ borderLeft: `3px solid ${item.color || TYPE_COLORS[item.type] || "#888"}` }}>
+                    <span className="text-xs font-medium">{item.title}</span>
+                    <Badge variant="outline" className="text-[9px] ml-auto" style={{ borderColor: item.color, color: item.color }}>{item.type}</Badge>
                   </button>
                 ))}
               </div>
             )}
-            <div className="divide-y divide-border/50">
-              {timedItems.length === 0 && allDayItems.length === 0 && (
-                <div className="p-6 text-center text-xs text-muted-foreground">No items scheduled</div>
-              )}
-              {timedItems.map(item => (
-                <button key={item.id} onClick={() => setDetailItem(item)}
-                  className="flex items-center gap-3 w-full text-left py-2.5 px-3 hover:bg-muted/50 transition-colors">
-                  <span className="text-xs font-mono text-muted-foreground w-12 shrink-0">{item.time?.slice(0,5)}</span>
-                  <div className="w-1 h-6 rounded-full shrink-0" style={{ backgroundColor: TYPE_COLORS[item.type] || "#888" }} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate">{item.title}</p>
-                    {item.description && <p className="text-[10px] text-muted-foreground truncate">{item.description}</p>}
+            <div className="max-h-[500px] overflow-y-auto">
+              {HOURS.map(hour => {
+                const hourItems = dayItems.filter(i => i.time && parseHour(i.time) === hour);
+                return (
+                  <div key={hour} className="flex border-b border-border/20 min-h-[48px] group cursor-pointer hover:bg-muted/20 transition-colors"
+                    onClick={() => { setQuickAddDate(dayStr); setAddOpen(true); }}>
+                    <div className="w-16 shrink-0 text-[10px] text-muted-foreground text-right pr-3 pt-1 tabular-nums border-r border-border/20">
+                      {hour === 0 ? "12 AM" : hour < 12 ? `${hour} AM` : hour === 12 ? "12 PM" : `${hour - 12} PM`}
+                    </div>
+                    <div className="flex-1 p-0.5">
+                      {hourItems.map(item => (
+                        <button key={item.id} onClick={(e) => { e.stopPropagation(); setDetailItem(item); }}
+                          className="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded mb-0.5 hover:opacity-80 transition-opacity text-white"
+                          style={{ backgroundColor: item.color || TYPE_COLORS[item.type] || "#888" }}>
+                          <span className="text-[10px] font-mono shrink-0">{item.time?.slice(0,5)}</span>
+                          <span className="text-xs font-medium truncate flex-1">{item.title}</span>
+                          {item.endTime && <span className="text-[10px] opacity-80 shrink-0">- {item.endTime.slice(0,5)}</span>}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <Badge variant="outline" className="text-[9px] shrink-0">{item.type}</Badge>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
