@@ -961,7 +961,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       properties: {
         amount: { type: "number", description: "Amount in dollars" },
         description: { type: "string", description: "What was purchased" },
-        category: { type: "string", description: "Category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general. Auto-detect from context (e.g., vet visit → pet, oil change → vehicle, groceries → food)." },
+        category: { type: "string", description: "Category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general. You MUST infer the best category from context — NEVER default to 'general' if ANY other category fits. Examples: groceries/restaurant/coffee → food, uber/gas/parking → transport, vet/pet food/grooming → pet, oil change/tires/car wash → vehicle, gym/doctor/pharmacy → health, Netflix/Spotify → subscription, rent/mortgage → housing, electric/water/internet → utilities, Amazon/clothes/electronics → shopping, movies/games/concerts → entertainment." },
         date: { type: "string", description: "Date of the expense in YYYY-MM-DD format. Use today's date if not specified. Use the actual date the expense occurred if the user says 'yesterday', 'last Tuesday', etc." },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
@@ -2141,9 +2141,28 @@ async function executeTool(name: string, input: any): Promise<any> {
         logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
         return dupExpense;
       }
+      // Server-side category inference fallback when AI sends 'general'
+      let inferredCategory = input.category || "general";
+      if (inferredCategory === "general") {
+        const desc = (input.description || "").toLowerCase();
+        const vendor = (input.vendor || "").toLowerCase();
+        const combined = `${desc} ${vendor}`;
+        if (/groceries|restaurant|food|coffee|lunch|dinner|breakfast|pizza|burger|sandwich|sushi|taco|donut|latte|starbucks|mcdonald|chipotle|uber eats|doordash/.test(combined)) inferredCategory = "food";
+        else if (/uber|lyft|gas|fuel|parking|toll|transit|bus|train|flight|airline/.test(combined)) inferredCategory = "transport";
+        else if (/vet|pet food|dog food|cat food|grooming|flea|treats|chewy/.test(combined)) inferredCategory = "pet";
+        else if (/oil change|tire|car wash|mechanic|auto|vehicle|detailing/.test(combined)) inferredCategory = "vehicle";
+        else if (/doctor|pharmacy|cvs|walgreens|gym|dentist|hospital|medical|prescription|copay/.test(combined)) inferredCategory = "health";
+        else if (/netflix|spotify|hulu|disney|apple music|youtube|subscription/.test(combined)) inferredCategory = "subscription";
+        else if (/rent|mortgage|hoa/.test(combined)) inferredCategory = "housing";
+        else if (/electric|water|internet|phone|cable|utility|att|verizon|comcast/.test(combined)) inferredCategory = "utilities";
+        else if (/amazon|walmart|target|clothes|shoes|electronics|bestbuy|apple store/.test(combined)) inferredCategory = "shopping";
+        else if (/movie|game|concert|ticket|bar|drinks|bowling|arcade/.test(combined)) inferredCategory = "entertainment";
+        else if (/school|tuition|textbook|course|udemy/.test(combined)) inferredCategory = "education";
+        else if (/insurance|geico|allstate|progressive|state farm/.test(combined)) inferredCategory = "insurance";
+      }
       const newExpense = await storage.createExpense({
         amount: parsedAmount,
-        category: input.category || "general",
+        category: inferredCategory,
         description: input.description || "Expense",
         date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), // YYYY-MM-DD in Pacific
         vendor: input.vendor,
@@ -3786,7 +3805,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;
     const desc = message.replace(/\$[\d.]+/, "").replace(/spent|bought|on/gi, "").trim();
     if (amount > 0) {
-      const expense = await storage.createExpense({ amount, category: "general", description: desc || "Expense", tags: [] });
+      const expense = await storage.createExpense({ amount, category: "general", description: desc || "Expense", tags: [], source: "chat" } as any);
       // Auto-link to self profile so it shows in Finance tab
       await autoLinkToProfiles("expense", expense.id, desc || "Expense");
       actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc, _entityId: expense.id } });
@@ -3795,7 +3814,7 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     }
   } else if (lower.startsWith("remind") || lower.startsWith("todo") || lower.startsWith("task")) {
     const title = message.replace(/^(remind me to|remind|todo|task)\s*/i, "").trim();
-    const task = await storage.createTask({ title, priority: "medium", tags: [] });
+    const task = await storage.createTask({ title, priority: "medium", tags: [], source: "chat" } as any);
     // Auto-link to self profile so it shows in Tasks tab
     await autoLinkToProfiles("task", task.id, title);
     actions.push({ type: "create_task", category: "task", data: { title, _entityId: task.id } });

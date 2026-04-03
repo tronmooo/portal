@@ -1080,7 +1080,8 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("tasks").insert({
       id, user_id: this.userId, title: data.title, description: data.description || null,
       status: "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
-      linked_profiles: data.linkedProfiles || [], tags: data.tags || [], created_at: now,
+      linked_profiles: data.linkedProfiles || [], tags: data.tags || [],
+      source: (data as any).source || "manual", created_at: now,
     });
     if (error) throw error;
     this.logActivity("task", `Created task: ${data.title}`);
@@ -1131,10 +1132,11 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, amount: data.amount, category: data.category || "general",
       description: data.description, vendor: data.vendor || null,
       is_recurring: data.isRecurring || false, linked_profiles: [],
-      tags: data.tags || [], date: data.date || now, created_at: now,
+      tags: data.tags || [], date: data.date || now,
+      source: (data as any).source || "manual", created_at: now,
     });
     if (error) throw error;
-    this.logActivity("expense", `${data.description} - $${data.amount}`);
+    this.logActivity("expense", `${data.description} - $${data.amount}`, "create", id);
     return (await this.getExpense(id))!;
   }
 
@@ -1283,6 +1285,39 @@ export class SupabaseStorage implements IStorage {
           if (nextStr >= startDate) {
             items.push({ id: `obligation-${ob.id}-${nextStr}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: nextStr, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
           }
+        }
+      }
+    }
+
+    // ── Add habits as repeating calendar items ──
+    for (const habit of habits) {
+      // Show daily habits on each day in the range, weekly habits on their target days
+      const start = new Date(startDate + "T12:00:00");
+      const end = new Date(endDate + "T12:00:00");
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().slice(0, 10);
+        const dayOfWeek = d.getDay();
+        const showOnDay = habit.frequency === "daily" ||
+          (habit.frequency === "weekly" && (habit.targetDays?.includes(dayOfWeek) ?? dayOfWeek === 1)) ||
+          (habit.frequency === "custom" && habit.targetDays?.includes(dayOfWeek));
+        if (showOnDay) {
+          const checkedToday = habit.checkins.filter(c => c.date === dateStr).length;
+          const target = habit.targetPerDay || 1;
+          const isDone = checkedToday >= target;
+          items.push({
+            id: `habit-${habit.id}-${dateStr}`,
+            type: "habit" as any,
+            title: habit.name + (target > 1 ? ` (${checkedToday}/${target})` : ""),
+            date: dateStr,
+            allDay: true,
+            color: isDone ? "#10B981" : (habit.color || "#8B5CF6"),
+            category: "habit",
+            description: isDone ? "Completed" : `${checkedToday}/${target} done`,
+            completed: isDone,
+            linkedProfiles: habit.linkedProfiles || [],
+            sourceId: habit.id,
+            meta: { frequency: habit.frequency, streak: habit.currentStreak },
+          });
         }
       }
     }

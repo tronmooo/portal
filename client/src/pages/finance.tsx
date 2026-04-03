@@ -149,10 +149,10 @@ export default function FinancePage() {
                   <DialogTitle>Add Expense</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-3">
-                  <div><Label className="text-xs">Description</Label>
+                  <div><Label className="text-xs">Description <span className="text-destructive">*</span></Label>
                     <Input placeholder="What was it for?" value={newExpense.description} onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))} data-testid="input-expense-description" /></div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div><Label className="text-xs">Amount ($)</Label>
+                    <div><Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
                       <Input type="number" step="0.01" placeholder="0.00" value={newExpense.amount} onChange={e => setNewExpense(p => ({ ...p, amount: e.target.value }))} data-testid="input-expense-amount" /></div>
                     <div><Label className="text-xs">Category</Label>
                       <Select value={newExpense.category} onValueChange={v => setNewExpense(p => ({ ...p, category: v }))}>

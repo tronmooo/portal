@@ -693,6 +693,16 @@ function BatchAttachmentPanel({
 
 // ── Main chat page ────────────────────────────────────────────────────────────
 // Module-level chat history cache — persists across navigation without localStorage
+function SlowResponseHint() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShow(true), 10000);
+    return () => clearTimeout(t);
+  }, []);
+  if (!show) return null;
+  return <span className="text-[10px] text-muted-foreground animate-in fade-in">Still working… complex requests take longer</span>;
+}
+
 const WELCOME_MSG: ChatMessage = {
   id: "welcome",
   role: "assistant",
@@ -1305,10 +1315,13 @@ export default function ChatPage() {
           {isPending && (
             <div className="flex items-start gap-2">
               <div className="bg-muted rounded-lg px-3 py-2">
-                <div className="flex gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '0ms'}} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '150ms'}} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '300ms'}} />
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '0ms'}} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '150ms'}} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '300ms'}} />
+                  </div>
+                  <SlowResponseHint />
                 </div>
               </div>
             </div>

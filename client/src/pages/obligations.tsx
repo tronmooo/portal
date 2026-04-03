@@ -186,12 +186,12 @@ export default function ObligationsPage() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
-              <Label className="text-xs">Name</Label>
+              <Label className="text-xs">Name <span className="text-destructive">*</span></Label>
               <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Rent, Netflix, Car Payment" data-testid="input-obligation-name" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs">Amount ($)</Label>
+                <Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
                 <Input type="number" min="0" step="0.01" value={newAmount} onChange={e => setNewAmount(e.target.value)} placeholder="0.00" data-testid="input-obligation-amount" />
               </div>
               <div>
@@ -225,7 +225,7 @@ export default function ObligationsPage() {
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Next Due Date</Label>
+                <Label className="text-xs">Next Due Date <span className="text-destructive">*</span></Label>
                 <Input type="date" value={newDueDate} onChange={e => setNewDueDate(e.target.value)} data-testid="input-obligation-due-date" />
               </div>
             </div>

@@ -156,6 +156,7 @@ export type ProfileType = "person" | "pet" | "vehicle" | "account" | "property" 
 
 export interface Profile {
   id: string;
+  deletedAt?: string | null;
   type: ProfileType;
   type_key?: string; // Registry type key (e.g., 'vehicle', 'mortgage', 'streaming')
   name: string;
@@ -446,6 +447,7 @@ export type InsertMemory = z.infer<typeof insertMemorySchema>;
 
 export interface Task {
   id: string;
+  deletedAt?: string | null;
   title: string;
   description?: string;
   status: "todo" | "in_progress" | "done";
@@ -473,6 +475,7 @@ export type InsertTask = z.input<typeof insertTaskSchema>;
 
 export interface Expense {
   id: string;
+  deletedAt?: string | null;
   amount: number;
   category: string;
   description: string;
