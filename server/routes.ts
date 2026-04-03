@@ -2721,6 +2721,28 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     }
   }));
 
+  // ---- Income ----
+  app.get("/api/incomes", asyncHandler(async (req, res) => {
+    const incomes = await (storage as any).getIncomes();
+    res.json(incomes);
+  }));
+
+  app.post("/api/incomes", asyncHandler(async (req, res) => {
+    const income = await (storage as any).createIncome(req.body);
+    res.status(201).json(income);
+  }));
+
+  app.patch("/api/incomes/:id", asyncHandler(async (req, res) => {
+    const income = await (storage as any).updateIncome(req.params.id, req.body);
+    if (!income) return res.status(404).json({ error: "Not found" });
+    res.json(income);
+  }));
+
+  app.delete("/api/incomes/:id", asyncHandler(async (req, res) => {
+    const ok = await (storage as any).deleteIncome(req.params.id);
+    res.json({ success: ok });
+  }));
+
   // ---- Audit Log ----
   app.get("/api/audit-log", asyncHandler(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);

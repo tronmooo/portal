@@ -507,6 +507,35 @@ export type InsertExpense = z.input<typeof insertExpenseSchema>;
 export type RecurrencePattern = "none" | "daily" | "weekly" | "biweekly" | "monthly" | "yearly";
 
 export type EventCategory = "personal" | "work" | "health" | "finance" | "family" | "social" | "travel" | "education" | "other";
+// ============================================================
+// INCOME
+// ============================================================
+
+export interface Income {
+  id: string;
+  description: string;
+  amount: number;
+  category: string;
+  frequency: string;
+  date?: string;
+  linkedProfiles: string[];
+  tags: string[];
+  deletedAt?: string | null;
+  createdAt: string;
+}
+
+export const insertIncomeSchema = z.object({
+  description: z.string().min(1),
+  amount: z.number().positive(),
+  category: z.string().default("salary"),
+  frequency: z.string().default("monthly"),
+  date: z.string().optional(),
+  linkedProfiles: z.array(z.string()).optional().default([]),
+  tags: z.array(z.string()).optional().default([]),
+});
+
+export type InsertIncome = z.input<typeof insertIncomeSchema>;
+
 export type ExpenseCategory = "general" | "food" | "transport" | "health" | "pet" | "vehicle" | "entertainment" | "shopping" | "utilities" | "housing" | "insurance" | "subscription" | "education" | "personal" | "automotive" | "travel";
 export type ObligationCategory = "housing" | "utilities" | "insurance" | "subscription" | "loan" | "medical" | "education" | "transportation" | "communication" | "general";
 

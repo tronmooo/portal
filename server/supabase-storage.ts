@@ -13,6 +13,7 @@ import {
   type Obligation, type InsertObligation, type ObligationPayment,
   type Artifact, type InsertArtifact, type ChecklistItem,
   type JournalEntry, type InsertJournalEntry,
+  type Income, type InsertIncome,
   type MemoryItem, type InsertMemory,
   type Domain, type InsertDomain, type DomainEntry,
   type MoodLevel,
@@ -1155,6 +1156,55 @@ export class SupabaseStorage implements IStorage {
 
   async deleteExpense(id: string): Promise<boolean> {
     const { error } = await this.supabase.from("expenses").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    return !error;
+  }
+
+  // ============================================================
+  // INCOME
+  // ============================================================
+  async getIncomes(): Promise<Income[]> {
+    const { data, error } = await this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null);
+    if (error) throw error;
+    return (data || []).map(r => ({
+      id: r.id, description: r.description, amount: Number(r.amount),
+      category: r.category || "salary", frequency: r.frequency || "monthly",
+      date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
+      tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
+    }));
+  }
+
+  async createIncome(data: InsertIncome): Promise<Income> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const { error } = await this.supabase.from("incomes").insert({
+      id, user_id: this.userId, description: data.description,
+      amount: data.amount, category: data.category || "salary",
+      frequency: data.frequency || "monthly", date: data.date || null,
+      linked_profiles: data.linkedProfiles || [], tags: data.tags || [],
+      source: "manual", created_at: now,
+    });
+    if (error) throw error;
+    this.logActivity("income", `Created income: ${data.description} $${data.amount}`, "create", id);
+    return { id, ...data, amount: data.amount, category: data.category || "salary",
+      frequency: data.frequency || "monthly", linkedProfiles: data.linkedProfiles || [],
+      tags: data.tags || [], createdAt: now };
+  }
+
+  async updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined> {
+    const updates: any = {};
+    if (data.description !== undefined) updates.description = data.description;
+    if (data.amount !== undefined) updates.amount = data.amount;
+    if (data.category !== undefined) updates.category = data.category;
+    if (data.frequency !== undefined) updates.frequency = data.frequency;
+    if (data.date !== undefined) updates.date = data.date;
+    const { error } = await this.supabase.from("incomes").update(updates).eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+    const all = await this.getIncomes();
+    return all.find(i => i.id === id);
+  }
+
+  async deleteIncome(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 

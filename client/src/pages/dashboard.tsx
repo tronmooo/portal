@@ -1236,8 +1236,14 @@ function GoalsSection({ profileId }: { profileId?: string }) {
 
 function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | undefined }) {
   const [, navigate] = useLocation();
+  const { data: incomes } = useQuery<any[]>({
+    queryKey: ["/api/incomes"],
+    queryFn: () => apiRequest("GET", "/api/incomes").then(r => r.json()),
+  });
 
   const monthlySpend = stats?.monthlySpend || 0;
+  const monthlyIncome = (incomes || []).reduce((s, i) => s + (i.amount || 0), 0);
+  const cashFlow = monthlyIncome - monthlySpend;
   const totalAssetValue = data?.totalAssetValue || 0;
   const totalLiabilities = data?.totalLiabilities || 0;
   const netWorth = totalAssetValue - totalLiabilities;
@@ -1254,14 +1260,20 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
   return (
     <CollapsibleSection icon={DollarSign} label="Finance" count={recentExpenses.length || undefined} testId="section-finance">
       <div className="space-y-2">
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
-            <p className="text-[10px] text-muted-foreground">This Month</p>
-            <p className="text-sm font-bold tabular-nums">${monthlySpend.toLocaleString()}</p>
+            <p className="text-[10px] text-muted-foreground">Spending</p>
+            <p className="text-sm font-bold tabular-nums text-red-400">${monthlySpend.toLocaleString()}</p>
           </div>
           <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
-            <p className="text-[10px] text-muted-foreground">Assets</p>
-            <p className="text-sm font-bold tabular-nums text-green-500">${totalAssetValue.toLocaleString()}</p>
+            <p className="text-[10px] text-muted-foreground">Income</p>
+            <p className="text-sm font-bold tabular-nums text-green-500">${monthlyIncome.toLocaleString()}</p>
+          </div>
+          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+            <p className="text-[10px] text-muted-foreground">Cash Flow</p>
+            <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-red-500"}`}>
+              {cashFlow >= 0 ? "+" : ""}${cashFlow.toLocaleString()}
+            </p>
           </div>
           <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
             <p className="text-[10px] text-muted-foreground">Net Worth</p>

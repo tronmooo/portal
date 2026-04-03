@@ -2147,9 +2147,9 @@ async function executeTool(name: string, input: any): Promise<any> {
         const desc = (input.description || "").toLowerCase();
         const vendor = (input.vendor || "").toLowerCase();
         const combined = `${desc} ${vendor}`;
-        if (/groceries|restaurant|food|coffee|lunch|dinner|breakfast|pizza|burger|sandwich|sushi|taco|donut|latte|starbucks|mcdonald|chipotle|uber eats|doordash/.test(combined)) inferredCategory = "food";
+        if (/vet|pet food|dog food|cat food|grooming|flea|treats|chewy/.test(combined)) inferredCategory = "pet";
+        else if (/groceries|restaurant|food|coffee|lunch|dinner|breakfast|pizza|burger|sandwich|sushi|taco|donut|latte|starbucks|mcdonald|chipotle|uber eats|doordash/.test(combined)) inferredCategory = "food";
         else if (/uber|lyft|gas|fuel|parking|toll|transit|bus|train|flight|airline/.test(combined)) inferredCategory = "transport";
-        else if (/vet|pet food|dog food|cat food|grooming|flea|treats|chewy/.test(combined)) inferredCategory = "pet";
         else if (/oil change|tire|car wash|mechanic|auto|vehicle|detailing/.test(combined)) inferredCategory = "vehicle";
         else if (/doctor|pharmacy|cvs|walgreens|gym|dentist|hospital|medical|prescription|copay/.test(combined)) inferredCategory = "health";
         else if (/netflix|spotify|hulu|disney|apple music|youtube|subscription/.test(combined)) inferredCategory = "subscription";
