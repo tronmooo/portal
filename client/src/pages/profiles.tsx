@@ -771,6 +771,7 @@ function CreateProfileDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: `"${name}" profile created`, description: selectedTypeDef?.label || selectedTypeKey });
       handleClose();
     },

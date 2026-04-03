@@ -1291,6 +1291,7 @@ function DocumentsTab({
                           onSave={async (newName) => {
                             await apiRequest("PATCH", `/api/documents/${doc.id}`, { name: newName });
                             queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
                             toast({ title: `Renamed to "${newName}"` });
                           }}
                         />
@@ -4233,6 +4234,7 @@ export default function ProfileDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       navigate("/profiles");
     },
     onError: (err: Error) => {
@@ -4243,6 +4245,9 @@ export default function ProfileDetailPage() {
   function handleSaved() {
     queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
     queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
     refetch();
   }
 

@@ -955,6 +955,8 @@ function TrackerCard({
                   onSave={async (newName) => {
                     await apiRequest("PATCH", `/api/trackers/${tracker.id}`, { name: newName });
                     queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                     toast({ title: `Renamed to "${newName}"` });
                   }}
                 />

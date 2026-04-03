@@ -21,7 +21,11 @@ function ChecklistCard({ artifact }: { artifact: Artifact }) {
 
   const toggleMutation = useMutation({
     mutationFn: (itemId: string) => apiRequest("POST", `/api/artifacts/${artifact.id}/toggle/${itemId}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
     onError: () => toast({ title: "Failed to toggle item", variant: "destructive" }),
   });
 
@@ -117,6 +121,8 @@ export default function ArtifactsPage() {
     mutationFn: (data: any) => apiRequest("POST", "/api/artifacts", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setTitle(""); setContent(""); setItems([""]); setShowCreate(false);
     },
     onError: () => toast({ title: "Failed to create artifact", variant: "destructive" }),

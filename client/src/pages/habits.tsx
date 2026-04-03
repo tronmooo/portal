@@ -51,7 +51,7 @@ function HabitCard({ habit }: { habit: Habit }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: `"${habit.name}" restored` });
     },
     onError: (err: Error) => toast({ title: `Failed to restore "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
@@ -62,7 +62,7 @@ function HabitCard({ habit }: { habit: Habit }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({
         title: `"${habit.name}" deleted`,
         description: "Habit has been removed",
@@ -95,7 +95,7 @@ function HabitCard({ habit }: { habit: Habit }) {
                   await apiRequest("PATCH", `/api/habits/${habit.id}`, { name: newName });
                   queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                   toast({ title: `Renamed to "${newName}"` });
                 }}
               />
@@ -234,7 +234,7 @@ export default function HabitsPage() {
 
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
