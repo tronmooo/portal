@@ -2785,8 +2785,12 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
 
 export default function TrackersPage() {
   useEffect(() => { document.title = "Linked — Portol"; }, []);
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const trackerProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: trackers, isLoading } = useQuery<Tracker[]>({
-    queryKey: ["/api/trackers"],
+    queryKey: ["/api/trackers", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/trackers${trackerProfileParam}`).then(r => r.json()),
   });
 
   const { data: profiles } = useQuery<Profile[]>({
@@ -2804,8 +2808,6 @@ export default function TrackersPage() {
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [docSearch, setDocSearch] = useState("");

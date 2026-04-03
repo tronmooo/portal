@@ -953,7 +953,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Trackers ----
-  app.get("/api/trackers", asyncHandler(async (req, res) => { const items = await storage.getTrackers(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
+  app.get("/api/trackers", asyncHandler(async (req, res) => {
+    let items = await storage.getTrackers();
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      items = items.filter(t => (t.linkedProfiles || []).some(pid => ids.includes(pid)));
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+  }));
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);
     if (!tracker) return res.status(404).json({ error: "Not found" });
@@ -1125,7 +1133,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.query.category && typeof req.query.category === "string") {
       items = items.filter(e => e.category === req.query.category);
     }
-    if (req.query.profileId && typeof req.query.profileId === "string") {
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      items = items.filter(e => (e.linkedProfiles || []).some(pid => ids.includes(pid)));
+    } else if (req.query.profileId && typeof req.query.profileId === "string") {
       const fp = req.query.profileId as string;
       const allProfiles = await storage.getProfiles();
       const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
@@ -1355,8 +1367,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Obligations ----
   app.get("/api/obligations", asyncHandler(async (req, res) => {
     let items = await storage.getObligations();
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
-    if (fp) {
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      items = items.filter(item => (item.linkedProfiles || []).some(pid => ids.includes(pid)));
+    } else if (fp) {
       const allProfiles = await storage.getProfiles();
       const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
       items = items.filter(item => {
@@ -1411,7 +1427,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Artifacts ----
-  app.get("/api/artifacts", asyncHandler(async (req, res) => { const items = await storage.getArtifacts(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
+  app.get("/api/artifacts", asyncHandler(async (req, res) => {
+    let items = await storage.getArtifacts();
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      items = items.filter(a => (a.linkedProfiles || []).some(pid => ids.includes(pid)));
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+  }));
   app.get("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const artifact = await storage.getArtifact(req.params.id);
     if (!artifact) return res.status(404).json({ error: "Not found" });

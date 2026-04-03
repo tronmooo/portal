@@ -155,7 +155,7 @@ export default function JournalPage() {
 
   // Client-side profile filter (journal entries have linkedProfiles)
   const entries = filterMode === "selected" && filterIds.length > 0
-    ? allEntries.filter(e => (e as any).linkedProfiles?.some((id: string) => filterIds.includes(id)) ?? true)
+    ? allEntries.filter(e => (e as any).linkedProfiles?.length > 0 ? (e as any).linkedProfiles.some((id: string) => filterIds.includes(id)) : false)
     : allEntries;
 
   const handleSaveJournal = () => {

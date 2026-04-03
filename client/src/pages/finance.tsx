@@ -42,11 +42,12 @@ export default function FinancePage() {
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
-  const { data: obligations } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
-  const { data: enhanced } = useQuery<any>({ queryKey: ["/api/dashboard-enhanced"] });
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: obligations } = useQuery<any[]>({ queryKey: ["/api/obligations", filterMode, ...filterIds] });
+  const { data: enhanced } = useQuery<any>({ queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds] });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
-    queryKey: ["/api/expenses", "all"],
-    queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
+    queryKey: ["/api/expenses", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
   });
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);

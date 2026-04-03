@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
-import { getProfileFilter, setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, setDashboardProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -184,7 +184,7 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
 
 // ─── Section: KPI Stats ──────────────────────────────────────────────────────
 
-function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any }) {
+function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | null>(null);
 
@@ -292,7 +292,7 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
       </Dialog>
 
       {/* Tasks Popup */}
-      <TasksPopup open={popup === "tasks"} onClose={() => setPopup(null)} />
+      <TasksPopup open={popup === "tasks"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
 
       {/* Expiring Documents Popup */}
       <Dialog open={popup === "docs"} onOpenChange={() => setPopup(null)}>
@@ -348,13 +348,12 @@ function KPISection({ stats, enhanced }: { stats: DashboardStats; enhanced: any 
 
 // ─── Tasks Popup ──────────────────────────────────────────────────────────────
 
-function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
+function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: { open: boolean; onClose: () => void; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
-  const { id: profileId } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: tasks = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/tasks", profileId || "all"],
+    queryKey: ["/api/tasks", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
     enabled: open,
   });
@@ -1242,7 +1241,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
 function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | null>(null);
-  const singleProfileParam = filterIds.length === 1 ? `?profileId=${filterIds[0]}` : "";
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const incomeUrl = filterMode === "selected" && filterIds.length > 0
     ? `/api/incomes?profileIds=${filterIds.join(",")}`
     : "/api/incomes";
@@ -1256,7 +1255,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   });
   const { data: allObligations } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/obligations${singleProfileParam}`).then(r => r.json()),
+    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
 
   const monthlySpend = stats?.monthlySpend || 0;
@@ -1808,7 +1807,7 @@ export default function DashboardPage() {
     switch (id) {
       case "kpis":
         content = statsLoading ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
-          stats ? <KPISection stats={stats} enhanced={enhanced} /> : null;
+          stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
         break;
       case "today":
         content = <TodaySection enhanced={enhanced} stats={stats} />;

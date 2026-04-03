@@ -1300,7 +1300,7 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Dashboard ----
-  async getStats(): Promise<DashboardStats> {
+  async getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats> {
     const tasks = Array.from(this.tasks.values());
     const expenses = Array.from(this.expenses.values());
     const trackers = Array.from(this.trackers.values());
@@ -1384,7 +1384,7 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Enhanced Dashboard Data ----
-  async getDashboardEnhanced(): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
     const thisMonth = now.getMonth();
