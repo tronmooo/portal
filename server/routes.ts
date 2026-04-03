@@ -579,7 +579,12 @@ export async function registerRoutes(
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
+    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || 'all'}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
     const data = await storage.getDashboardEnhanced(undefined, filterIds);
+    setCache(cacheKey, data, 15000);
     res.json(data);
   }));
 

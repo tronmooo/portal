@@ -2902,26 +2902,27 @@ export default function TrackersPage() {
     },
   });
 
-  // Filter documents by search + type filter + profile filter
-  const filteredDocuments = allDocuments.filter(d => {
-    // Profile filter — strict: only show docs linked to the selected profile(s)
+  // Profile-filtered documents (before type filter, so type pills don't disappear)
+  const profileFilteredDocs = allDocuments.filter(d => {
     if (filterMode === "selected" && filterIds.length > 0) {
       const linkedIds = d.linkedProfiles || [];
-      const matchesProfile = linkedIds.some(id => filterIds.includes(id));
-      if (!matchesProfile) return false;
+      return linkedIds.some(id => filterIds.includes(id));
     }
-    // Doc type filter
+    return true;
+  });
+
+  // Unique doc types for filter chips — derived from profile-filtered docs (NOT type-filtered)
+  const docTypes = [...new Set(profileFilteredDocs.map(d => d.type).filter(Boolean))].sort();
+
+  // Fully filtered documents (profile + type + search)
+  const filteredDocuments = profileFilteredDocs.filter(d => {
     if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
-    // Search
     if (docSearch) {
       const s = docSearch.toLowerCase();
       return d.name.toLowerCase().includes(s) || d.type?.toLowerCase().includes(s);
     }
     return true;
   });
-
-  // Unique doc types for filter chips — derived from FILTERED documents, not all
-  const docTypes = [...new Set(filteredDocuments.map(d => d.type).filter(Boolean))].sort();
 
   // Unique tracker categories for filter chips
   const allTrackerCats = [...new Set((trackers || []).map(t => t.category).filter(Boolean))].sort();
@@ -3243,9 +3244,9 @@ export default function TrackersPage() {
                   onClick={() => setDocTypeFilter("all")}
                   className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                   data-testid="filter-doctype-all"
-                >All ({filteredDocuments.length})</button>
+                >All ({profileFilteredDocs.length})</button>
                 {docTypes.map(t => {
-                  const count = filteredDocuments.filter(d => d.type === t).length;
+                  const count = profileFilteredDocs.filter(d => d.type === t).length;
                   return (
                     <button
                       key={t}
