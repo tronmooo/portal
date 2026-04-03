@@ -2877,6 +2877,8 @@ export default function TrackersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
     onError: (err: Error) => {
       toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" });
@@ -2891,6 +2893,9 @@ export default function TrackersPage() {
       toast({ title: "Document deleted" });
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
     onError: (err: Error) => {
       toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });

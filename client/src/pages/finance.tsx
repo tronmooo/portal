@@ -70,7 +70,7 @@ export default function FinancePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
@@ -369,7 +369,7 @@ export default function FinancePage() {
                         await apiRequest("DELETE", `/api/expenses/${expense.id}`);
                         queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                         toast({ title: `"${expense.description}" deleted` });
                       } catch (err: any) { toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" }); }
@@ -416,7 +416,7 @@ export default function FinancePage() {
                   });
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                   toast({ title: `"${editForm.description}" updated` });
                   setEditingExpense(null);

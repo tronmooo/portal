@@ -4243,6 +4243,9 @@ export default function ProfileDetailPage() {
   function handleSaved() {
     queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
     queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
     refetch();
   }
 

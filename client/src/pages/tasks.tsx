@@ -53,7 +53,7 @@ const invalidateTaskQueries = () => {
   queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
   // Also invalidate dashboard so KPIs recompute after task changes
-  queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
 };
 
