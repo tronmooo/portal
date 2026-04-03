@@ -464,16 +464,8 @@ export class SupabaseStorage implements IStorage {
     // Child profiles: profiles whose parentProfileId points to this profile
     let childProfiles = allProfiles.filter(p => p.parentProfileId === id);
     
-    // Include orphaned child-type profiles for "self" profile (read-only — no DB writes on GET)
-    if (profile.type === "self") {
-      const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
-      const orphans = allProfiles.filter(p => childTypes.has(p.type) && !p.parentProfileId);
-      if (orphans.length > 0) {
-        // Show orphans as children in UI without mutating the DB on reads
-        // Use spread to create new objects instead of mutating the fetched ones
-        childProfiles = [...childProfiles, ...orphans.map(o => ({ ...o, parentProfileId: id }))];
-      }
-    }
+    // No orphan fallback — all child profiles must have an explicit parent_profile_id.
+    // The createProfile method auto-assigns self as parent for child types.
 
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
@@ -494,10 +486,17 @@ export class SupabaseStorage implements IStorage {
   async createProfile(data: InsertProfile): Promise<Profile> {
     const now = new Date().toISOString();
     const id = randomUUID();
+    // Auto-assign parent to self profile if not specified for child types
+    const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+    let parentProfileId = data.parentProfileId;
+    if (!parentProfileId && childTypes.has(data.type)) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) parentProfileId = selfProfile.id;
+    }
     // Store parentProfileId both in the real column AND in fields JSON (backward compat)
     const fields = { ...(data.fields || {}) };
-    if (data.parentProfileId) {
-      fields._parentProfileId = data.parentProfileId;
+    if (parentProfileId) {
+      fields._parentProfileId = parentProfileId;
     }
     const insertData: any = {
       id, user_id: this.userId, type: data.type, name: data.name,
@@ -506,8 +505,8 @@ export class SupabaseStorage implements IStorage {
       linked_tasks: [], linked_events: [], created_at: now, updated_at: now,
     };
     // Write to the real column if it exists (Phase 1 migration adds it)
-    if (data.parentProfileId) {
-      insertData.parent_profile_id = data.parentProfileId;
+    if (parentProfileId) {
+      insertData.parent_profile_id = parentProfileId;
     }
     const { error } = await this.supabase.from("profiles").insert(insertData);
     if (error) throw error;
@@ -1078,18 +1077,24 @@ export class SupabaseStorage implements IStorage {
   async createTask(data: InsertTask): Promise<Task> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = data.linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("tasks").insert({
       id, user_id: this.userId, title: data.title, description: data.description || null,
       status: "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
-      linked_profiles: data.linkedProfiles || [], tags: data.tags || [],
+      linked_profiles: linkedProfiles, tags: data.tags || [],
       source: (data as any).source || "manual", created_at: now,
     });
     if (error) throw error;
+    // Link to profiles via junction table
+    for (const pId of linkedProfiles) {
+      await this.linkProfileTo(pId, "task", id);
+    }
     this.logActivity("task", `Created task: ${data.title}`);
-
-    // Auto-generate calendar event for tasks with due dates
-    // Tasks with due dates are shown in the calendar view automatically — no separate event needed.
-
     return (await this.getTask(id))!;
   }
 
@@ -1111,6 +1116,11 @@ export class SupabaseStorage implements IStorage {
     return !error;
   }
 
+  async restoreTask(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from("tasks").update({ deleted_at: null }).eq("id", id).eq("user_id", this.userId);
+    return !error;
+  }
+
   // ============================================================
   // EXPENSES
   // ============================================================
@@ -1129,14 +1139,24 @@ export class SupabaseStorage implements IStorage {
   async createExpense(data: InsertExpense): Promise<Expense> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = (data as any).linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("expenses").insert({
       id, user_id: this.userId, amount: data.amount, category: data.category || "general",
       description: data.description, vendor: data.vendor || null,
-      is_recurring: data.isRecurring || false, linked_profiles: [],
+      is_recurring: data.isRecurring || false, linked_profiles: linkedProfiles,
       tags: data.tags || [], date: data.date || now,
       source: (data as any).source || "manual", created_at: now,
     });
     if (error) throw error;
+    // Link to profiles via junction table
+    for (const pId of linkedProfiles) {
+      await this.linkProfileTo(pId, "expense", id);
+    }
     this.logActivity("expense", `${data.description} - $${data.amount}`, "create", id);
     return (await this.getExpense(id))!;
   }
@@ -1226,6 +1246,12 @@ export class SupabaseStorage implements IStorage {
   async createEvent(data: InsertEvent): Promise<CalendarEvent> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = data.linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("events").insert({
       id, user_id: this.userId, title: data.title, date: data.date,
       time: data.time || null, end_time: data.endTime || null, end_date: data.endDate || null,
@@ -1233,11 +1259,11 @@ export class SupabaseStorage implements IStorage {
       location: data.location || null, category: data.category || "personal",
       color: data.color || null, recurrence: data.recurrence || "none",
       recurrence_end: data.recurrenceEnd || null,
-      linked_profiles: data.linkedProfiles || [], linked_documents: data.linkedDocuments || [],
+      linked_profiles: linkedProfiles, linked_documents: data.linkedDocuments || [],
       tags: data.tags || [], source: data.source || "manual", created_at: now,
     });
     if (error) throw error;
-    for (const pId of (data.linkedProfiles || [])) {
+    for (const pId of linkedProfiles) {
       await this.linkProfileTo(pId, "event", id);
     }
     this.logActivity("event", `Created event: ${data.title}`);
@@ -1270,12 +1296,21 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // CALENDAR TIMELINE
   // ============================================================
-  async getCalendarTimeline(startDate: string, endDate: string): Promise<CalendarTimelineItem[]> {
+  async getCalendarTimeline(startDate: string, endDate: string, profileIds?: string[]): Promise<CalendarTimelineItem[]> {
     const items: CalendarTimelineItem[] = [];
     // Fetch all data in parallel for speed
-    const [events, tasks, obligations, habits, profiles] = await Promise.all([
+    const [allEvents, allTasks, allObligations, allHabits, profiles] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getHabits(), this.getProfiles(),
     ]);
+    // Profile filtering: when profileIds provided, only include items linked to those profiles
+    const matchesProfile = (linked: string[]) => {
+      if (!profileIds || profileIds.length === 0) return true;
+      return linked.some(id => profileIds.includes(id));
+    };
+    const events = allEvents.filter(e => matchesProfile(e.linkedProfiles));
+    const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
+    const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
+    const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     for (const ev of events) {
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
       const baseDate = ev.date.slice(0, 10);
@@ -1789,7 +1824,7 @@ export class SupabaseStorage implements IStorage {
   async getHabits(): Promise<Habit[]> {
     // Fetch all habits and ALL checkins in 2 parallel queries (not N+1)
     const [habitsResult, checkinsResult] = await Promise.all([
-      this.supabase.from("habits").select("*").eq("user_id", this.userId),
+      this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null),
       this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
     ]);
     if (habitsResult.error) throw habitsResult.error;
@@ -1854,6 +1889,20 @@ export class SupabaseStorage implements IStorage {
     return { id, date: checkinDate, value, notes, timestamp: ts };
   }
 
+  async deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean> {
+    const habit = await this.getHabit(habitId);
+    if (!habit) return false;
+    const { error } = await this.supabase.from("habit_checkins").delete().eq("id", checkinId).eq("habit_id", habitId).eq("user_id", this.userId);
+    if (error) return false;
+    // Recalculate streaks after deletion
+    const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
+    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1);
+    await this.supabase.from("habits").update({
+      current_streak: current, longest_streak: longest,
+    }).eq("id", habitId).eq("user_id", this.userId);
+    return true;
+  }
+
   async updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined> {
     const existing = await this.getHabit(id);
     if (!existing) return undefined;
@@ -1869,8 +1918,13 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteHabit(id: string): Promise<boolean> {
-    await this.supabase.from("habit_checkins").delete().eq("habit_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("habits").delete().eq("id", id).eq("user_id", this.userId);
+    // Soft delete — set deleted_at instead of removing the row
+    const { error } = await this.supabase.from("habits").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    return !error;
+  }
+
+  async restoreHabit(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from("habits").update({ deleted_at: null }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -2413,15 +2467,10 @@ export class SupabaseStorage implements IStorage {
 
     // Multi-select filter support: filterProfileIds takes precedence
     const fpIds = filterProfileIds || (filterProfileId ? [filterProfileId] : undefined);
-    const allProfiles = await this.getProfiles();
-    const selfIds = fpIds ? allProfiles.filter(p => p.type === "self" && fpIds.includes(p.id)).map(p => p.id) : [];
-    const hasSelfFilter = selfIds.length > 0;
-    // For self profile: include items linked to self OR items with no profile links (unlinked = self)
+    // Strict profile filter — no orphan fallback. All items must be explicitly linked.
     const matchesProfile = (linkedProfiles: string[]) => {
       if (!fpIds || fpIds.length === 0) return true;
-      if (linkedProfiles.some(id => fpIds.includes(id))) return true;
-      if (hasSelfFilter && linkedProfiles.length === 0) return true;
-      return false;
+      return linkedProfiles.some(id => fpIds.includes(id));
     };
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const expenses = allExpenses.filter(e => matchesProfile(e.linkedProfiles));
@@ -2452,12 +2501,33 @@ export class SupabaseStorage implements IStorage {
 
     const todayStr2 = now.toISOString().slice(0, 10);
     const allActiveHabits = habits.filter(h => h.frequency === "daily" || h.frequency === "weekly");
-    const todayCompleted = allActiveHabits.filter(h => h.checkins.some(c => c.date === todayStr2)).length;
+    // For daily habits, check if completed today. For weekly habits, check if completed this week.
+    const weekStart = new Date(now);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
+    weekStart.setHours(0, 0, 0, 0);
+    const weekStartStr = weekStart.toISOString().slice(0, 10);
+    const todayCompleted = allActiveHabits.filter(h => {
+      if (h.frequency === "daily") {
+        const tpd = h.targetPerDay || 1;
+        return h.checkins.filter(c => c.date === todayStr2).length >= tpd;
+      }
+      // weekly: completed if any checkin exists this week
+      return h.checkins.some(c => c.date >= weekStartStr && c.date <= todayStr2);
+    }).length;
     const habitCompletionRate = allActiveHabits.length > 0 ? Math.round((todayCompleted / allActiveHabits.length) * 100) : 0;
 
     const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
     const upcomingObs = obligations.filter(o => { const due = new Date(o.nextDueDate); return due >= now && due <= sevenDaysOut; });
-    const monthlyObTotal = obligations.filter(o => o.frequency === "monthly" || o.frequency === "biweekly" || o.frequency === "weekly").reduce((s, o) => s + o.amount, 0);
+    const monthlyObTotal = obligations.reduce((s, o) => {
+      switch (o.frequency) {
+        case 'weekly': return s + o.amount * 4.33;
+        case 'biweekly': return s + o.amount * 2.17;
+        case 'monthly': return s + o.amount;
+        case 'quarterly': return s + o.amount / 3;
+        case 'yearly': return s + o.amount / 12;
+        default: return s;
+      }
+    }, 0);
 
     let journalStreak = 0;
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -2506,7 +2576,7 @@ export class SupabaseStorage implements IStorage {
       habitCompletionRate,
       totalObligations: obligations.length,
       upcomingObligations: upcomingObs.length,
-      monthlyObligationTotal: monthlyObTotal,
+      monthlyObligationTotal: Math.round(monthlyObTotal),
       journalStreak,
       currentMood,
       totalArtifacts: artifacts.length,
@@ -2529,14 +2599,10 @@ export class SupabaseStorage implements IStorage {
       this.getDocuments(), this.getTrackers(), this.getProfiles(),
       this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
     ]);
-    // Apply profile filter (self profile also matches unlinked items)
-    const selfIds = fpIds ? allProfiles.filter(p => p.type === "self" && fpIds.includes(p.id)).map(p => p.id) : [];
-    const hasSelf = selfIds.length > 0;
+    // Strict profile filter — no orphan fallback. All items must be explicitly linked.
     const matchesProfileEnhanced = (linkedProfiles: string[]) => {
       if (!fpIds || fpIds.length === 0) return true;
-      if (linkedProfiles.some(id => fpIds.includes(id))) return true;
-      if (hasSelf && linkedProfiles.length === 0) return true;
-      return false;
+      return linkedProfiles.some(id => fpIds.includes(id));
     };
     const allTrackers = rawTrackers.filter(t => matchesProfileEnhanced(t.linkedProfiles));
     const allExpenses = rawExpenses.filter(e => matchesProfileEnhanced(e.linkedProfiles));
@@ -2567,18 +2633,19 @@ export class SupabaseStorage implements IStorage {
     const selfId = selfProfile?.id;
     const targetProfileId = (fpIds && fpIds.length > 0) ? fpIds[0] : selfId;
     const healthCategories = ['health', 'fitness', 'weight', 'sleep', 'blood_pressure', 'running', 'exercise', 'nutrition', 'wellness'];
-    // Health trackers: when filtered by profile, show that profile's trackers. Otherwise show self's.
+    // Health trackers: already filtered by profile above — just filter by health category.
     const healthTrackers = allTrackers.filter(t => {
       const isHealthCategory = healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c));
       if (!isHealthCategory) return false;
-      if (fpIds && fpIds.length > 0) return true; // Already filtered by profile above
+      // When profile filter active, allTrackers is already scoped. When no filter, show self's.
+      if (fpIds && fpIds.length > 0) return true;
       if (targetProfileId && t.linkedProfiles.includes(targetProfileId)) return true;
-      if (t.linkedProfiles.length === 0) return true;
       return false;
     });
     const healthSnapshot: any[] = [];
+    const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
     for (const t of healthTrackers) {
-      const recent = t.entries.slice(-7);
+      const recent = t.entries.filter(e => new Date(e.timestamp).getTime() >= sevenDaysAgoMs);
       const primaryField = t.fields.find((f: any) => f.isPrimary) || t.fields[0];
       if (!primaryField || recent.length === 0) continue;
       const values = recent.map(e => Number(e.values[primaryField.name])).filter(v => !isNaN(v));
@@ -2629,18 +2696,31 @@ export class SupabaseStorage implements IStorage {
       healthSnapshot,
       financeSnapshot: {
         totalMonthlySpend, lastMonthTotal,
-        spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : 0,
+        spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : (totalMonthlySpend > 0 ? 100 : 0),
         spendByCategory, upcomingBills,
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
-        totalAssetValue: allProfiles.reduce((s, p) => {
-          const price = p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue;
-          return s + (price ? Number(price) : 0);
-        }, 0),
+        totalAssetValue: (() => {
+          // Filter asset profiles by the same profile filter used for everything else
+          const childTypes = new Set(["vehicle", "asset", "investment", "property", "subscription", "loan", "account"]);
+          const filteredAssetProfiles = allProfiles.filter(p => {
+            if (!childTypes.has(p.type)) return false;
+            if (!fpIds || fpIds.length === 0) return true; // No filter = show all
+            // Check if the asset's parent is one of the filtered profiles
+            const pParent = p.parentProfileId || p.fields?._parentProfileId;
+            if (pParent && fpIds.includes(pParent)) return true;
+            return false;
+          });
+          return filteredAssetProfiles.reduce((s, p) => {
+            const price = p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue;
+            return s + (price ? Number(price) : 0);
+          }, 0);
+        })(),
         totalLiabilities: allObligations.reduce((s, o) => {
           const remaining = o.fields?.remainingBalance || o.fields?.totalAmount;
           return s + (remaining ? Number(remaining) : 0);
         }, 0),
         recentExpenses: allExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category })),
+        monthlyExpenseRecords: monthlyExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category, vendor: e.vendor })),
       },
       overdueTasks,
       todaysEvents,
@@ -2659,14 +2739,11 @@ export class SupabaseStorage implements IStorage {
     const allHabits = await this.getHabits();
     const allObligations = await this.getObligations();
     const journal = await this.getJournalEntries();
-    // Apply profile filter
+    // Strict profile filter — no orphan fallback
     const fp = filterProfileId;
-    const isSelf = fp && profiles.find(p => p.id === fp)?.type === "self";
     const matchFp = (lp: string[]) => {
       if (!fp) return true;
-      if (lp.includes(fp)) return true;
-      if (isSelf && lp.length === 0) return true;
-      return false;
+      return lp.includes(fp);
     };
     const trackers = allTrackers.filter(t => matchFp(t.linkedProfiles));
     const tasks = allTasks.filter(t => matchFp(t.linkedProfiles));

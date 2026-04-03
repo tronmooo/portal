@@ -92,6 +92,29 @@ export function getActionLog(count = 10, userId?: string): ActionLogEntry[] {
 }
 
 // ============================================================
+// DEDUP LOCK — in-memory guard against concurrent duplicate creation
+// ============================================================
+
+const recentCreations = new Map<string, Map<string, number>>(); // userId -> (key -> timestamp)
+
+function isDuplicateCreation(userId: string, key: string, windowMs = 30000): boolean {
+  const userMap = recentCreations.get(userId);
+  if (!userMap) return false;
+  const ts = userMap.get(key);
+  if (!ts) return false;
+  return Date.now() - ts < windowMs;
+}
+
+function markCreation(userId: string, key: string) {
+  if (!recentCreations.has(userId)) recentCreations.set(userId, new Map());
+  recentCreations.get(userId)!.set(key, Date.now());
+  // Cleanup old entries
+  setTimeout(() => {
+    recentCreations.get(userId)?.delete(key);
+  }, 60000);
+}
+
+// ============================================================
 // FAST-PATH REGEX — instant processing for common patterns
 // ============================================================
 
@@ -618,13 +641,13 @@ Return ONLY the JSON array, nothing else.`;
         if (existingProfileId) {
           await storage.linkProfileTo(existingProfileId, "expense", expense.id);
           // Propagate up: Honda → Me, so it shows in Me's Finance tab too
-          try { await storage.propagateEntityToAncestors("expense", expense.id, existingProfileId); } catch { /* non-critical */ }
+          try { await storage.propagateEntityToAncestors("expense", expense.id, existingProfileId); } catch (e: any) { logger.warn("ai", `Fast-path propagate failed for expense ${expense.id}: ${e?.message}`); }
         }
         // Also always link to self profile so it appears in the main Finance view
         const profiles = await storage.getProfiles();
         const selfProfile = profiles.find(p => p.type === 'self');
         if (selfProfile && selfProfile.id !== existingProfileId) {
-          try { await storage.linkProfileTo(selfProfile.id, "expense", expense.id); } catch { /* may already be linked */ }
+          try { await storage.linkProfileTo(selfProfile.id, "expense", expense.id); } catch (e: any) { logger.warn("ai", `Fast-path self-link failed for expense ${expense.id}: ${e?.message}`); }
         }
         savedItems.push(`$${numAmount} expense saved to Finance`);
         actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: numAmount, description: desc } });
@@ -658,7 +681,7 @@ Return ONLY the JSON array, nothing else.`;
                 : [{ name: "value", type: "number" as const, unit: entry.unit || "", isPrimary: true, options: [] }],
             });
             if (existingProfileId && tracker) {
-              try { await storage.updateTracker(tracker.id, { linkedProfiles: [existingProfileId] } as any); } catch { /* non-critical */ }
+              try { await storage.updateTracker(tracker.id, { linkedProfiles: [existingProfileId] } as any); } catch (e: any) { logger.warn("ai", `Fast-path tracker link failed for ${tracker.id}: ${e?.message}`); }
             }
             savedItems.push(`Created tracker: ${humanName}`);
           }
@@ -831,7 +854,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Profiles ---
   {
     name: "create_profile",
-    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Loan: lender, amount, apr, term, monthlyPayment. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty. Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.",
+    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Loan: lender, amount, apr, term, monthlyPayment. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty. Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday. IMPORTANT: When creating a vehicle, asset, subscription, loan, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -844,6 +867,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         fields: { type: "object", description: "Entity-specific fields. Include ALL known info in the right keys." },
         tags: { type: "array", items: { type: "string" }, description: "Tags for categorization" },
         notes: { type: "string", description: "Additional notes" },
+        forProfile: { type: "string", description: "Owner profile name. When creating a vehicle/asset/subscription/loan/investment/property FOR someone (e.g. 'Bob Johnson's car'), set this to the owner's name. The created profile will be a child of that person." },
       },
       required: ["type", "name"],
     },
@@ -1779,6 +1803,11 @@ function summarizeSingleItem(item: any): any {
 // TOOL EXECUTION — maps tool names to storage operations
 // ============================================================
 
+/** Safe lowercase — returns "" for null/undefined/non-string values */
+function safeLC(val: any): string {
+  return (typeof val === "string" ? val : "").toLowerCase();
+}
+
 async function executeTool(name: string, input: any): Promise<any> {
   switch (name) {
     case "search": {
@@ -1786,7 +1815,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Filter by profile if specified
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const matchedProfile = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+        const matchedProfile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
         if (matchedProfile) {
           const pid = matchedProfile.id;
           return results.filter((r: any) => {
@@ -1826,7 +1855,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let filterProfileId: string | undefined;
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const matched = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+        const matched = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
         if (matched) filterProfileId = matched.id;
       }
 
@@ -1909,7 +1938,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         const profiles = await storage.getProfiles();
         // If forProfile is specified, find that profile as parent
         if (input.forProfile) {
-          const parent = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+          const parent = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
           if (parent) parentProfileId = parent.id;
         }
         // Default: link to self profile
@@ -2013,6 +2042,13 @@ async function executeTool(name: string, input: any): Promise<any> {
       );
       if (dupTask) return dupTask; // Return existing instead of creating duplicate
 
+      // In-memory dedup lock
+      const taskDedupKey = `task:${safeLC(input.title)}`;
+      if (isDuplicateCreation("_global", taskDedupKey)) {
+        logger.info("ai", `Dedup lock: skipped duplicate task "${input.title}"`);
+        return { error: "Duplicate task detected — skipped" };
+      }
+
       const newTask = await storage.createTask({
         title: input.title,
         priority: input.priority || "medium",
@@ -2020,6 +2056,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         description: input.description,
         tags: input.tags || [],
       });
+      markCreation("_global", taskDedupKey);
       // DIRECT link first (reliable), then autoLink as fallback
       const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
       const taskLinked = await directLinkToProfile("task", newTask.id, taskForProfile);
@@ -2129,6 +2166,15 @@ async function executeTool(name: string, input: any): Promise<any> {
       if (!parsedAmount || parsedAmount <= 0) {
         return { error: `Invalid expense amount: ${input.amount}. Please provide a positive number.` };
       }
+      if (parsedAmount > 1000000) {
+        return { error: `Amount $${parsedAmount.toLocaleString()} seems unusually high. Please confirm the amount.` };
+      }
+      // In-memory dedup lock — catches concurrent requests before DB persistence
+      const expDedupKey = `expense:${safeLC(input.description)}:${parsedAmount}:${input.date || ""}`;
+      if (isDuplicateCreation("_global", expDedupKey)) {
+        logger.info("ai", `Dedup lock: skipped duplicate expense $${parsedAmount} ${input.description}`);
+        return { error: "Duplicate expense detected — skipped" };
+      }
       // Dedup: check if same amount + similar description was created in last 2 minutes
       const allExpenses = await storage.getExpenses();
       const twoMinAgoExp = Date.now() - 120000;
@@ -2168,6 +2214,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         vendor: input.vendor,
         tags: input.tags || [],
       });
+      markCreation("_global", expDedupKey);
       // DIRECT link first (reliable), then autoLink as fallback
       const expLinked = await directLinkToProfile("expense", newExpense.id, input.forProfile);
       if (!expLinked) await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
@@ -2183,10 +2230,23 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_event": {
+      // Validate required fields
+      if (!input.title || typeof input.title !== "string" || !input.title.trim()) {
+        return { error: "Event title is required" };
+      }
+      if (!input.date || typeof input.date !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(input.date)) {
+        return { error: "Valid event date (YYYY-MM-DD) is required" };
+      }
+      // In-memory dedup lock
+      const evtDedupKey = `event:${safeLC(input.title)}:${input.date}`;
+      if (isDuplicateCreation("_global", evtDedupKey)) {
+        logger.info("ai", `Dedup lock: skipped duplicate event "${input.title}" on ${input.date}`);
+        return { error: "Duplicate event detected — skipped" };
+      }
       // Dedup: skip if a very similar event exists on the same date
       const allEvents = await storage.getEvents();
-      const dupEvent = allEvents.find(e => 
-        e.title.toLowerCase() === (input.title || "").toLowerCase() &&
+      const dupEvent = allEvents.find(e =>
+        e.title.toLowerCase() === safeLC(input.title) &&
         e.date === input.date
       );
       if (dupEvent) {
@@ -2194,7 +2254,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         return dupEvent;
       }
       const newEvent = await storage.createEvent({
-        title: input.title,
+        title: input.title.trim(),
         date: input.date,
         time: input.time,
         endTime: input.endTime,
@@ -2208,6 +2268,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         linkedDocuments: [],
         tags: [],
       });
+      markCreation("_global", evtDedupKey);
       // Auto-link: scan title and description for profile names + explicit forProfile
       const evtForProfile = await resolveForProfile(input.forProfile, `${input.title || ""} ${input.description || ""}`);
       const evtLinked = await directLinkToProfile("event", newEvent.id, evtForProfile);
@@ -2228,8 +2289,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       let targetProfileId: string | undefined;
       if (input.forProfile) {
         const allProfiles = await storage.getProfiles();
-        const targetP = allProfiles.find(p => p.name.toLowerCase() === input.forProfile.toLowerCase().trim())
-          || allProfiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+        const targetP = allProfiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
+          || allProfiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
         if (targetP) targetProfileId = targetP.id;
       }
       const dupHabit = existingHabits.find(h => {
@@ -2254,8 +2315,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Direct profile linking — don't rely solely on text matching
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const target = profiles.find(p => p.name.toLowerCase() === input.forProfile.toLowerCase().trim())
-          || profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+        const target = profiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
+          || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
         if (target) {
           await storage.updateHabit(habit.id, { linkedProfiles: [target.id] } as any);
           await storage.linkProfileTo(target.id, "habit", habit.id).catch(() => {});
@@ -2328,7 +2389,7 @@ async function executeTool(name: string, input: any): Promise<any> {
             const selfProfile = profiles.find(p => p.type === "self");
             let parentId = selfProfile?.id;
             if (input.forProfile) {
-              const targetProfile = profiles.find(p => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+              const targetProfile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
               if (targetProfile) parentId = targetProfile.id;
             }
             const newProfile = await storage.createProfile({
@@ -2346,10 +2407,10 @@ async function executeTool(name: string, input: any): Promise<any> {
             });
             // Link the obligation to the new profile + set the FK for dedup
             await autoLinkToProfiles("obligation", newObligation.id, serviceName);
-            try { await storage.linkProfileTo(newProfile.id, "obligation", newObligation.id); } catch { /* non-critical */ }
-            try { await updateEntityLinkedProfiles("obligation", newObligation.id, newProfile.id); } catch { /* non-critical */ }
+            try { await storage.linkProfileTo(newProfile.id, "obligation", newObligation.id); } catch (linkErr: any) { logger.warn("ai", `Failed to link obligation ${newObligation.id} to profile ${newProfile.id}: ${linkErr?.message}`); }
+            try { await updateEntityLinkedProfiles("obligation", newObligation.id, newProfile.id); } catch (linkErr: any) { logger.warn("ai", `Failed to update linked profiles for obligation ${newObligation.id}: ${linkErr?.message}`); }
             // Set linked_obligation_id for subscription/loan dedup (Phase 7)
-            try { await storage.updateProfile(newProfile.id, { linkedObligationId: newObligation.id } as any); } catch { /* non-critical */ }
+            try { await storage.updateProfile(newProfile.id, { linkedObligationId: newObligation.id } as any); } catch (linkErr: any) { logger.warn("ai", `Failed to set linkedObligationId on profile ${newProfile.id}: ${linkErr?.message}`); }
           } catch (e) {
             console.error("Auto-create subscription profile failed:", e);
           }
@@ -2405,8 +2466,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Direct profile linking for forProfile
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const target = profiles.find((p: any) => p.name.toLowerCase() === input.forProfile.toLowerCase().trim())
-          || profiles.find((p: any) => p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+        const target = profiles.find((p: any) => p.name.toLowerCase() === safeLC(input.forProfile).trim())
+          || profiles.find((p: any) => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
         if (target) {
           await storage.updateJournalEntry(entry.id, { linkedProfiles: [target.id] } as any);
           await storage.linkProfileTo(target.id, "journal", entry.id).catch(() => {});
@@ -2474,7 +2535,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       });
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const profile = profiles.find((p: any) => p.name.toLowerCase().includes(input.forProfile.toLowerCase()));
+        const profile = profiles.find((p: any) => p.name.toLowerCase().includes(safeLC(input.forProfile)));
         if (profile) await storage.linkProfileTo(profile.id, "document", doc.id);
       }
       return doc;
@@ -2527,8 +2588,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         // Direct profile linking for goals
         if (input.forProfile) {
           const targetProfile = (await storage.getProfiles()).find(p => 
-            p.name.toLowerCase() === input.forProfile.toLowerCase().trim() ||
-            p.name.toLowerCase().includes(input.forProfile.toLowerCase().trim()));
+            p.name.toLowerCase() === safeLC(input.forProfile).trim() ||
+            p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
           if (targetProfile) {
             await storage.updateGoal(goal.id, { linkedProfiles: [targetProfile.id] } as any);
             await storage.linkProfileTo(targetProfile.id, "goal", goal.id).catch(() => {});
@@ -2568,7 +2629,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "get_goal_progress": {
       const goals = await storage.getGoals();
       if (input.query) {
-        const q = input.query.toLowerCase();
+        const q = safeLC(input.query);
         const filtered = goals.filter(g => g.title.toLowerCase().includes(q) || g.type.includes(q));
         return filtered.length > 0 ? filtered : goals;
       }
@@ -2616,7 +2677,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_task": {
       const tasks = await storage.getTasks();
-      const match = tasks.find(t => t.title.toLowerCase().includes(input.title.toLowerCase()));
+      const match = tasks.find(t => t.title.toLowerCase().includes(safeLC(input.title)));
       if (!match) return { error: `No task found matching "${input.title}"` };
       const updated = await storage.updateTask(match.id, input.changes);
       return { updated: true, task: updated };
@@ -2624,7 +2685,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_expense": {
       const expenses = await storage.getExpenses();
-      const match = expenses.find(e => e.description.toLowerCase().includes(input.description.toLowerCase()));
+      const match = expenses.find(e => e.description.toLowerCase().includes(safeLC(input.description)));
       if (!match) return { error: `No expense found matching "${input.description}"` };
       const updated = await storage.updateExpense(match.id, input.changes);
       return { updated: true, expense: updated };
@@ -2632,7 +2693,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_obligation": {
       const obligations = await storage.getObligations();
-      const match = obligations.find(o => o.name.toLowerCase().includes(input.name.toLowerCase()));
+      const match = obligations.find(o => o.name.toLowerCase().includes(safeLC(input.name)));
       if (!match) return { error: `No obligation found matching "${input.name}"` };
       const updated = await storage.updateObligation(match.id, input.changes);
       return { updated: true, obligation: updated };
@@ -2640,7 +2701,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_habit": {
       const habits = await storage.getHabits();
-      const match = habits.find(h => h.name.toLowerCase().includes(input.name.toLowerCase()));
+      const match = habits.find(h => h.name.toLowerCase().includes(safeLC(input.name)));
       if (!match) return { error: `No habit found matching "${input.name}"` };
       const updated = await storage.updateHabit(match.id, input.changes);
       return { updated: true, habit: updated };
@@ -2648,7 +2709,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_habit": {
       const habits = await storage.getHabits();
-      const match = habits.find(h => h.name.toLowerCase().includes(input.name.toLowerCase()));
+      const match = habits.find(h => h.name.toLowerCase().includes(safeLC(input.name)));
       if (!match) return { error: `No habit found matching "${input.name}"` };
       await storage.deleteHabit(match.id);
       return { deleted: true, name: match.name, id: match.id };
@@ -2656,7 +2717,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_obligation": {
       const obligations = await storage.getObligations();
-      const match = obligations.find(o => o.name.toLowerCase().includes(input.name.toLowerCase()));
+      const match = obligations.find(o => o.name.toLowerCase().includes(safeLC(input.name)));
       if (!match) return { error: `No obligation found matching "${input.name}"` };
       await storage.deleteObligation(match.id);
       return { deleted: true, name: match.name, id: match.id };
@@ -2664,7 +2725,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_event": {
       const events = await storage.getEvents();
-      const match = events.find(e => e.title.toLowerCase().includes(input.title.toLowerCase()));
+      const match = events.find(e => e.title.toLowerCase().includes(safeLC(input.title)));
       if (!match) return { error: `No event found matching "${input.title}"` };
       await storage.deleteEvent(match.id);
       return { deleted: true, title: match.title, id: match.id };
@@ -2672,7 +2733,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_tracker": {
       const trackers = await storage.getTrackers();
-      const match = trackers.find(t => t.name.toLowerCase().includes(input.name.toLowerCase()));
+      const match = trackers.find(t => t.name.toLowerCase().includes(safeLC(input.name)));
       if (!match) return { error: `No tracker found matching "${input.name}"` };
       await storage.deleteTracker(match.id);
       return { deleted: true, name: match.name, id: match.id };
@@ -2680,7 +2741,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_tracker": {
       const trackers = await storage.getTrackers();
-      const tracker = trackers.find(t => t.name.toLowerCase().includes(input.trackerName.toLowerCase()));
+      const tracker = trackers.find(t => t.name.toLowerCase().includes(safeLC(input.trackerName)));
       if (!tracker) return { error: `No tracker found matching "${input.trackerName}"` };
       const updated = await storage.updateTracker(tracker.id, input.changes);
       return { updated: true, tracker: updated };
@@ -2704,7 +2765,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_artifact": {
       const artifacts = await storage.getArtifacts();
-      const match = artifacts.find(a => a.title.toLowerCase().includes(input.title.toLowerCase()));
+      const match = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
       if (!match) return { error: `No artifact found matching "${input.title}"` };
       await storage.deleteArtifact(match.id);
       return { deleted: true, title: match.title, id: match.id };
@@ -2712,7 +2773,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_artifact": {
       const artifacts = await storage.getArtifacts();
-      const artifact = artifacts.find(a => a.title.toLowerCase().includes(input.title.toLowerCase()));
+      const artifact = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
       if (!artifact) return { error: `No artifact found matching "${input.title}"` };
       const updated = await storage.updateArtifact(artifact.id, input.changes);
       return { updated: true, artifact: updated };
@@ -2720,7 +2781,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_goal": {
       const goals = await storage.getGoals();
-      const match = goals.find(g => g.title.toLowerCase().includes(input.title.toLowerCase()));
+      const match = goals.find(g => g.title.toLowerCase().includes(safeLC(input.title)));
       if (!match) return { error: `No goal found matching "${input.title}"` };
       await storage.deleteGoal(match.id);
       return { deleted: true, title: match.title, id: match.id };
@@ -2729,8 +2790,8 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "delete_memory": {
       const memories = await storage.getMemories();
       const match = memories.find(m =>
-        m.key.toLowerCase().includes(input.query.toLowerCase()) ||
-        m.value.toLowerCase().includes(input.query.toLowerCase())
+        m.key.toLowerCase().includes(safeLC(input.query)) ||
+        m.value.toLowerCase().includes(safeLC(input.query))
       );
       if (!match) return { error: `No memory found matching "${input.query}"` };
       await storage.deleteMemory(match.id);
@@ -2874,7 +2935,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_domain": {
       const domains = await storage.getDomains();
-      const domain = domains.find((d: any) => d.name.toLowerCase().includes(input.name.toLowerCase()));
+      const domain = domains.find((d: any) => d.name.toLowerCase().includes(safeLC(input.name)));
       if (!domain) return { error: `No domain found matching "${input.name}"` };
       const updated = await storage.updateDomain(domain.id, input.changes);
       return { updated: true, domain: updated };
@@ -2882,7 +2943,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_domain": {
       const domains = await storage.getDomains();
-      const domain = domains.find((d: any) => d.name.toLowerCase().includes(input.name.toLowerCase()));
+      const domain = domains.find((d: any) => d.name.toLowerCase().includes(safeLC(input.name)));
       if (!domain) return { error: `No domain found matching "${input.name}"` };
       await storage.deleteDomain(domain.id);
       return { deleted: true, name: domain.name, id: domain.id };
@@ -2896,7 +2957,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Filter by profile if specified
       if (input.profileName) {
         const profile = profiles.find((p: any) =>
-          p.name.toLowerCase().includes(input.profileName.toLowerCase())
+          p.name.toLowerCase().includes(safeLC(input.profileName))
         );
         if (profile) {
           candidates = candidates.filter((d: any) =>
@@ -2907,7 +2968,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
       // Filter by document type if specified
       if (input.documentType) {
-        const typeQuery = input.documentType.toLowerCase().replace(/[_\s-]/g, "");
+        const typeQuery = safeLC(input.documentType).replace(/[_\s-]/g, "");
         candidates = candidates.filter((d: any) => {
           const docType = (d.type || "").toLowerCase().replace(/[_\s-]/g, "");
           return docType.includes(typeQuery) || typeQuery.includes(docType);
@@ -2916,7 +2977,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
       // Text search across name, type, tags, extracted data — with fuzzy stemming
       if (input.query) {
-        const q = input.query.toLowerCase();
+        const q = safeLC(input.query);
         const qWords = q.split(/\s+/).filter(Boolean);
         // Score and sort rather than hard-filter
         const scored = candidates.map((d: any) => {
@@ -3163,9 +3224,9 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
           targetType: "profile", targetId: match.id,
           relationship, confidence: Math.min(1, match.score / 100),
         });
-      } catch (e) { /* ignore duplicate link errors */ }
-      try { await storage.linkProfileTo(match.id, entityType, entityId); } catch (e) { console.error("linkProfileTo failed:", e); }
-      try { await updateEntityLinkedProfiles(entityType, entityId, match.id); } catch (e) { console.error("updateEntityLinkedProfiles failed:", e); }
+      } catch (e: any) { logger.warn("ai", `Duplicate entity link for ${entityType} ${entityId}: ${e?.message}`); }
+      try { await storage.linkProfileTo(match.id, entityType, entityId); } catch (e: any) { logger.warn("ai", `linkProfileTo failed for ${entityType} ${entityId} → profile ${match.id}: ${e?.message}`); }
+      try { await updateEntityLinkedProfiles(entityType, entityId, match.id); } catch (e: any) { logger.warn("ai", `updateEntityLinkedProfiles failed for ${entityType} ${entityId}: ${e?.message}`); }
     }
 
     // If no profile matched at all, link to self (so the item shows up in YOUR profile)
@@ -3173,7 +3234,7 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
       try {
         await storage.linkProfileTo(selfProfile.id, entityType, entityId);
         await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
-      } catch (e) { /* non-critical */ }
+      } catch (e: any) { logger.warn("ai", `Self-link failed for ${entityType} ${entityId}: ${e?.message}`); }
     }
 
     // When an entity is linked to an asset/child profile (Honda, Tesla, etc.),
@@ -3183,7 +3244,7 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
     if (matchedNonSelfIds.length > 0 && selfProfile) {
       for (const matchedId of matchedNonSelfIds) {
         // Propagate up the parent chain (Honda → Me)
-        try { await storage.propagateEntityToAncestors(entityType, entityId, matchedId); } catch { /* non-critical */ }
+        try { await storage.propagateEntityToAncestors(entityType, entityId, matchedId); } catch (e: any) { logger.warn("ai", `propagateEntityToAncestors failed for ${entityType} ${entityId}: ${e?.message}`); }
       }
       // Only add self-link when:
       // - The entity is an expense (expenses should always show in owner's finance)
@@ -3193,7 +3254,7 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
         try {
           await storage.linkProfileTo(selfProfile.id, entityType, entityId);
           await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
-        } catch { /* may already be linked */ }
+        } catch (e: any) { logger.warn("ai", `Self-link (shouldLinkToSelf) failed for ${entityType} ${entityId}: ${e?.message}`); }
       }
     }
   } catch (err) {

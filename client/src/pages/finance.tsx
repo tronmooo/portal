@@ -53,6 +53,7 @@ export default function FinancePage() {
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "" });
+  const [editSaving, setEditSaving] = useState(false);
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
@@ -67,6 +68,9 @@ export default function FinancePage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
       toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
@@ -179,23 +183,40 @@ export default function FinancePage() {
       {(() => {
         const now = new Date();
         const thisMonth = profileFiltered.filter(e => {
-          const d = new Date(e.date);
+          const raw = e.date?.slice(0, 10) || "";
+          const d = new Date(raw + "T00:00:00");
           return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
         });
         const monthTotal = thisMonth.reduce((s, e) => s + e.amount, 0);
         
-        // Asset values from profiles
-        const assetProfiles = (profiles || []).filter(p => ["vehicle", "asset", "investment", "property"].includes(p.type));
+        // Asset values from profiles (filtered by active profile selection)
+        const assetProfiles = (profiles || []).filter(p => {
+          if (!["vehicle", "asset", "investment", "property"].includes(p.type)) return false;
+          if (filterMode === "everyone" || filterIds.length === 0) return true;
+          const pParent = p.fields?._parentProfileId || p.parentProfileId;
+          return pParent && filterIds.includes(pParent);
+        });
         const totalAssetValue = assetProfiles.reduce((s, p) => {
           const val = p.fields?.purchasePrice || p.fields?.cost || p.fields?.value || p.fields?.amount || 0;
           return s + Number(val);
         }, 0);
-        
-        // Liabilities from obligations
-        const oblData = obligations || [];
+
+        // Liabilities from obligations (filtered + proper frequency conversion)
+        const oblData = (obligations || []).filter((o: any) => {
+          if (filterMode === "everyone" || filterIds.length === 0) return true;
+          const linked = o.linkedProfiles || [];
+          return linked.length === 0 || linked.some((id: string) => filterIds.includes(id));
+        });
         const monthlyLiabilities = oblData.reduce((s: number, o: any) => {
           const amt = Number(o.amount) || 0;
-          return s + (o.frequency === "monthly" ? amt : o.frequency === "yearly" ? amt / 12 : amt);
+          switch (o.frequency) {
+            case "weekly": return s + amt * 52 / 12;
+            case "biweekly": return s + amt * 26 / 12;
+            case "monthly": return s + amt;
+            case "quarterly": return s + amt * 4 / 12;
+            case "yearly": return s + amt / 12;
+            default: return s + amt; // assume monthly
+          }
         }, 0);
         
         return (
@@ -224,14 +245,37 @@ export default function FinancePage() {
       {(() => {
         const assetValue = enhanced?.financeSnapshot?.totalAssetValue || 0;
         const liabilities = enhanced?.financeSnapshot?.totalLiabilities || 0;
-        const monthlyBills = obligations?.reduce((s: number, o: any) => s + (o.amount || 0), 0) || 0;
+        // Proper monthly bills with frequency conversion + profile filtering
+        const filteredObl = (obligations || []).filter((o: any) => {
+          if (filterMode === "everyone" || filterIds.length === 0) return true;
+          const linked = o.linkedProfiles || [];
+          return linked.length === 0 || linked.some((id: string) => filterIds.includes(id));
+        });
+        const monthlyBills = filteredObl.reduce((s: number, o: any) => {
+          const amt = Number(o.amount) || 0;
+          switch (o.frequency) {
+            case "weekly": return s + amt * 52 / 12;
+            case "biweekly": return s + amt * 26 / 12;
+            case "monthly": return s + amt;
+            case "quarterly": return s + amt * 4 / 12;
+            case "yearly": return s + amt / 12;
+            default: return s + amt;
+          }
+        }, 0);
         const netWorth = assetValue - liabilities;
+        const now = new Date();
+        const thisMonthExpenses = filtered.filter(e => {
+          const raw = e.date?.slice(0, 10) || "";
+          const d = new Date(raw + "T00:00:00");
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        });
+        const thisMonthTotal = thisMonthExpenses.reduce((s, e) => s + e.amount, 0);
         return (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card className="p-3">
               <p className="text-[10px] text-muted-foreground uppercase">This Month</p>
-              <p className="text-lg font-bold tabular-nums">${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="text-[10px] text-muted-foreground">{filtered.length} expenses</p>
+              <p className="text-lg font-bold tabular-nums">${thisMonthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-[10px] text-muted-foreground">{thisMonthExpenses.length} expenses</p>
             </Card>
             <Card className="p-3">
               <p className="text-[10px] text-muted-foreground uppercase">Monthly Bills</p>
@@ -308,7 +352,7 @@ export default function FinancePage() {
                     <div className="flex items-center gap-2 mt-0.5">
                       <Badge variant="secondary" className="text-xs capitalize">{expense.category}</Badge>
                       <span className="text-xs text-muted-foreground">
-                        {new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                       </span>
                     </div>
                   </div>
@@ -324,8 +368,10 @@ export default function FinancePage() {
                         await apiRequest("DELETE", `/api/expenses/${expense.id}`);
                         queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                         toast({ title: `"${expense.description}" deleted` });
-                      } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
+                      } catch (err: any) { toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" }); }
                     }} title="Delete"><Trash2 className="h-3 w-3" /></Button>
                   </div>
                 </div>
@@ -353,23 +399,28 @@ export default function FinancePage() {
               </Select>
             </div>
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
-            <Button className="w-full" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0} onClick={async () => {
-              if (!editingExpense) return;
-              if (!editForm.description.trim()) { toast({ title: "Description required", variant: "destructive" }); return; }
-              if (!editForm.amount || parseFloat(editForm.amount) <= 0) { toast({ title: "Valid amount required", variant: "destructive" }); return; }
-              try {
-                await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
-                  description: editForm.description,
-                  amount: parseFloat(editForm.amount),
-                  category: editForm.category,
-                  vendor: editForm.vendor || undefined,
-                });
-                queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-                queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                toast({ title: `"${editForm.description}" updated` });
-                setEditingExpense(null);
-              } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }
-            }}>Save Changes</Button>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setEditingExpense(null)} disabled={editSaving}>Cancel</Button>
+              <Button className="flex-1" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0 || editSaving} onClick={async () => {
+                if (!editingExpense) return;
+                setEditSaving(true);
+                try {
+                  await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
+                    description: editForm.description,
+                    amount: parseFloat(editForm.amount),
+                    category: editForm.category,
+                    vendor: editForm.vendor || undefined,
+                  });
+                  queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                  toast({ title: `"${editForm.description}" updated` });
+                  setEditingExpense(null);
+                } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }
+                finally { setEditSaving(false); }
+              }}>{editSaving ? "Saving…" : "Save Changes"}</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

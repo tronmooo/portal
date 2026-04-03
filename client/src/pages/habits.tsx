@@ -11,6 +11,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { ToastAction } from "@/components/ui/toast";
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { Habit } from "@shared/schema";
@@ -32,9 +33,12 @@ function HabitCard({ habit }: { habit: Habit }) {
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       const newCount = todayCheckins + 1;
       if (newCount >= targetPerDay) {
-        toast({ title: `${habit.name} — Done for today`, description: `Streak: ${habit.currentStreak + 1} day${habit.currentStreak + 1 !== 1 ? "s" : ""}` });
+        toast({ title: `${habit.name} — Done for today`, description: "Keep it up!" });
       } else {
         toast({ title: `${habit.name} — ${newCount}/${targetPerDay}`, description: `${targetPerDay - newCount} more to go` });
       }
@@ -42,9 +46,25 @@ function HabitCard({ habit }: { habit: Habit }) {
     onError: (err: Error) => toast({ title: `Failed to check in ${habit.name}`, description: formatApiError(err), variant: "destructive" }),
   });
 
+  const restoreMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/habits/${habit.id}/restore`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      toast({ title: `"${habit.name}" restored` });
+    },
+    onError: (err: Error) => toast({ title: `Failed to restore "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `"${habit.name}" deleted` }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      toast({
+        title: `"${habit.name}" deleted`,
+        description: "Habit has been removed",
+        action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction>,
+      });
+    },
     onError: (err: Error) => toast({ title: `Failed to delete "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
@@ -105,7 +125,7 @@ function HabitCard({ habit }: { habit: Habit }) {
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete "{habit.name}"?</AlertDialogTitle>
-                  <AlertDialogDescription>This will permanently delete this habit and all its check-in history. This cannot be undone.</AlertDialogDescription>
+                  <AlertDialogDescription>This habit will be deleted. You can undo this action briefly after deletion.</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>

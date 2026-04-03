@@ -697,6 +697,7 @@ function AddEntryDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setValues({});
       setNotes("");
       onOpenChange(false);
@@ -843,6 +844,7 @@ function DeleteEntryButton({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: "Entry deleted" });
     },
     onError: (err: Error) => {
@@ -1060,7 +1062,7 @@ function TrackerCard({
 
             {/* Compact sparkline (default, shown when detail NOT expanded) */}
             {!detailExpanded && sparklineData.length > 1 && (
-              <div className="mt-3 h-16">
+              <div className="mt-3 h-16" key={`spark-${tracker.id}-${tracker.entries.length}`}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={sparklineData}>
                     <Line
@@ -1268,6 +1270,7 @@ function CreateTrackerDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setName("");
       setCategory("custom");
       setUnit("");
@@ -1490,6 +1493,7 @@ function DeleteTrackerDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       onOpenChange(false);
       toast({ title: "Tracker deleted", description: `${trackerName} has been removed` });
     },
@@ -1775,6 +1779,8 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
   const specialization = detectSpecialization(tracker);
   const filtered = filterEntriesByRange(tracker.entries, timeRange);
+  // Force Recharts to remount when data changes (ResponsiveContainer caching issue)
+  const chartKey = `${tracker.id}-${tracker.entries.length}-${timeRange}`;
   const stats = computeFieldStats(filtered, primaryField);
   const streak = computeStreak(tracker.entries);
 
@@ -1834,7 +1840,7 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
 
       {/* Chart */}
       {filtered.length > 0 && (
-        <div className="h-[200px]">
+        <div className="h-[200px]" key={chartKey}>
           {specialization === "weight" && <WeightDetailChart entries={filtered} primaryField={primaryField} unit={tracker.unit} />}
           {specialization === "bloodpressure" && <BloodPressureDetailChart entries={filtered} />}
           {specialization === "sleep" && <SleepDetailChart entries={filtered} primaryField={primaryField} />}
@@ -2493,27 +2499,32 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
     mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       const name = formTitle;
       setCreating(false); resetForm();
       toast({ title: `"${name}" goal created`, description: formTarget ? `Target: ${formTarget} ${formUnit}` : undefined });
     },
-    onError: (e: Error) => toast({ title: "Failed to create goal", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Failed to create goal", description: formatApiError(e), variant: "destructive" }),
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, title, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, { title, ...data }).then(r => r.json()),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setEditGoal(null); resetForm();
       toast({ title: `"${variables.title || "Goal"}" updated` });
     },
+    onError: (e: Error) => toast({ title: "Failed to update goal", description: formatApiError(e), variant: "destructive" }),
   });
   const deleteMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setEditGoal(null);
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
+    onError: (e: Error) => toast({ title: "Failed to delete goal", description: formatApiError(e), variant: "destructive" }),
   });
 
   const resetForm = () => { setFormTitle(""); setFormTarget(""); setFormUnit(tracker.unit || ""); setFormDeadline(""); };
@@ -2622,6 +2633,7 @@ function TrackerDetailDialog({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/trackers"] });
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: "Tracker deleted" });
       onClose();
     },
@@ -2885,12 +2897,11 @@ export default function TrackersPage() {
 
   // Filter documents by search + type filter + profile filter
   const filteredDocuments = allDocuments.filter(d => {
-    // Profile filter
+    // Profile filter — strict: only show docs linked to the selected profile(s)
     if (filterMode === "selected" && filterIds.length > 0) {
       const linkedIds = d.linkedProfiles || [];
       const matchesProfile = linkedIds.some(id => filterIds.includes(id));
-      const isOrphan = hasSelf && linkedIds.length === 0;
-      if (!matchesProfile && !isOrphan) return false;
+      if (!matchesProfile) return false;
     }
     // Doc type filter
     if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
@@ -2902,8 +2913,8 @@ export default function TrackersPage() {
     return true;
   });
 
-  // Unique doc types for filter chips
-  const docTypes = [...new Set(allDocuments.map(d => d.type).filter(Boolean))].sort();
+  // Unique doc types for filter chips — derived from FILTERED documents, not all
+  const docTypes = [...new Set(filteredDocuments.map(d => d.type).filter(Boolean))].sort();
 
   // Unique tracker categories for filter chips
   const allTrackerCats = [...new Set((trackers || []).map(t => t.category).filter(Boolean))].sort();
@@ -2939,7 +2950,7 @@ export default function TrackersPage() {
     return a.name.localeCompare(b.name);
   });
 
-  // Apply profile filter — when hasSelf, also include orphaned trackers (no linked profiles)
+  // Apply profile filter — strict: only show trackers linked to the selected profile(s)
   const filteredTrackers = (trackers || []).filter(t => {
     // Profile filter — strict: only show trackers linked to the selected profile(s)
     if (filterMode === "selected" && filterIds.length > 0) {
@@ -3006,16 +3017,32 @@ export default function TrackersPage() {
           />
           <div className="h-4 w-px bg-border" />
           {/* Section filter pills */}
-          {(["all", "trackers", "documents", "profiles", "subscriptions"] as const).map(s => {
-            const subCount = (profiles || []).filter(p => p.type === "subscription").length;
-            const assetCount = (profiles || []).filter(p => ["vehicle", "asset", "investment", "property"].includes(p.type)).length;
+          {(() => {
+            // Compute filtered asset/subscription counts using the SAME filter logic as the sections
+            const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
+            const isShowAllForCounts = filterMode === "everyone";
+            const filteredAssetCount = (profiles || []).filter(p => {
+              if (!childTypeSet.has(p.type)) return false;
+              if (isShowAllForCounts) return true;
+              const pParent = p.fields?._parentProfileId || p.parentProfileId;
+              if (pParent && filterIds.includes(pParent)) return true;
+              return false;
+            }).length;
+            const filteredSubCount = (profiles || []).filter(p => {
+              if (p.type !== "subscription") return false;
+              if (isShowAllForCounts) return true;
+              const pParent = p.fields?._parentProfileId || p.parentProfileId;
+              if (pParent && filterIds.includes(pParent)) return true;
+              return false;
+            }).length;
+            return (["all", "trackers", "documents", "profiles", "subscriptions"] as const).map(s => {
             const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", subscriptions: "Subscriptions" };
             const counts: Record<string, number> = {
-              all: filteredTrackers.length + filteredDocuments.length + subCount + assetCount,
+              all: filteredTrackers.length + filteredDocuments.length + filteredSubCount + filteredAssetCount,
               trackers: filteredTrackers.length,
               documents: filteredDocuments.length,
-              profiles: assetCount,
-              subscriptions: subCount,
+              profiles: filteredAssetCount,
+              subscriptions: filteredSubCount,
             };
             return (
               <button
@@ -3028,7 +3055,8 @@ export default function TrackersPage() {
                 {s !== "all" && <span className="ml-1 opacity-70">{counts[s]}</span>}
               </button>
             );
-          })}
+          });
+          })()}
         </div>
 
 
@@ -3043,12 +3071,14 @@ export default function TrackersPage() {
       {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {
         // Only show actual assets and vehicles here — NOT loans/obligations (those belong in Bills)
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
-        const isShowAll = filterMode === "everyone" || hasSelf;
+        const isShowAll = filterMode === "everyone";
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
           if (isShowAll) return true;
+          // Show assets whose parent is one of the selected filter profiles
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          return filterIds.includes(pParent);
+          if (pParent && filterIds.includes(pParent)) return true;
+          return false;
         });
         if (childProfiles.length === 0) return null;
 
@@ -3099,12 +3129,14 @@ export default function TrackersPage() {
 
       {/* Subscriptions Section */}
       {(sectionFilter === "all" || sectionFilter === "subscriptions") && (() => {
-        const isShowAll = filterMode === "everyone" || hasSelf;
+        const isShowAll = filterMode === "everyone";
         const subs = (profiles || []).filter(p => {
           if (p.type !== "subscription") return false;
           if (isShowAll) return true;
+          // Show subscriptions whose parent is one of the selected filter profiles
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          return filterIds.includes(pParent);
+          if (pParent && filterIds.includes(pParent)) return true;
+          return false;
         });
         if (subs.length === 0) return null;
         return (
@@ -3206,7 +3238,7 @@ export default function TrackersPage() {
                   data-testid="filter-doctype-all"
                 >All ({filteredDocuments.length})</button>
                 {docTypes.map(t => {
-                  const count = allDocuments.filter(d => d.type === t).length;
+                  const count = filteredDocuments.filter(d => d.type === t).length;
                   return (
                     <button
                       key={t}

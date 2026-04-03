@@ -34,6 +34,7 @@ function ObligationCard({ ob }: { ob: Obligation }) {
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: `"${ob.name}" marked paid`, description: `$${ob.amount.toFixed(2)} payment recorded` });
     },
@@ -55,6 +56,7 @@ function ObligationCard({ ob }: { ob: Obligation }) {
                   onSave={async (newName) => {
                     await apiRequest("PATCH", `/api/obligations/${ob.id}`, { name: newName });
                     queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
                     toast({ title: `Renamed to "${newName}"` });
                   }}
                 />
@@ -131,6 +133,7 @@ export default function ObligationsPage() {
     mutationFn: (data: any) => apiRequest("POST", "/api/obligations", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       const savedName = newName;
       toast({ title: `"${savedName}" bill created`, description: `${newFrequency} · $${newAmount}` });

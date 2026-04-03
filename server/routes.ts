@@ -1059,13 +1059,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Tasks ----
   app.get("/api/tasks", asyncHandler(async (req, res) => {
     let items = await storage.getTasks();
+    // Support both ?profileId=x (single) and ?profileIds=x,y (multi)
     const fp = req.query.profileId as string | undefined;
-    if (fp) {
+    const fps = req.query.profileIds as string | undefined;
+    const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    if (filterProfileIds.length > 0) {
       const allProfiles = await storage.getProfiles();
-      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      const selfIds = allProfiles.filter(p => p.type === "self").map(p => p.id);
+      const hasSelf = filterProfileIds.some(id => selfIds.includes(id));
       items = items.filter(item => {
         const lp = item.linkedProfiles || [];
-        return lp.includes(fp) || (isSelf && lp.length === 0);
+        return lp.some(id => filterProfileIds.includes(id)) || (hasSelf && lp.length === 0);
       });
     }
     if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
@@ -1099,10 +1103,19 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
-    const tasks = await storage.getTasks();
-    if (!tasks.find(t => t.id === req.params.id)) return res.status(404).json({ error: "Task not found" });
+    // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteTask(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
+  }));
+  app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
+    if (typeof (storage as any).restoreTask === 'function') {
+      const ok = await (storage as any).restoreTask(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Task not found" });
+      const task = await storage.getTask(req.params.id);
+      res.json(task || { id: req.params.id, restored: true });
+    } else {
+      res.status(501).json({ error: "Restore not supported" });
+    }
   }));
 
   // ---- Expenses ----
@@ -1168,10 +1181,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
-    const expenses = await storage.getExpenses();
-    if (!expenses.find(e => e.id === req.params.id)) return res.status(404).json({ error: "Expense not found" });
+    // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteExpense(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // ---- Events ----
@@ -1209,8 +1221,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const start = (startRaw && isValidDateStr(startRaw)) ? startRaw : new Date().toISOString().slice(0, 10);
     const endDefault = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
     const end = (endRaw && isValidDateStr(endRaw)) ? endRaw : endDefault;
+    const profileIdsRaw = req.query.profileIds as string | undefined;
+    const profileIds = profileIdsRaw ? profileIdsRaw.split(",").filter(Boolean) : undefined;
     try {
-      const items = await storage.getCalendarTimeline(start, end);
+      const items = await storage.getCalendarTimeline(start, end, profileIds);
       res.json(items);
     } catch (err: any) {
       res.status(500).json({ error: "Failed to load calendar" });
@@ -1249,10 +1263,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
-    const doc = await storage.getDocument(req.params.id);
-    if (!doc) return res.status(404).json({ error: "Not found" });
+    // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteDocument(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
   app.get("/api/profiles/:id/documents", asyncHandler(async (req, res) => {
     res.json(await storage.getDocumentsForProfile(req.params.id));
@@ -1304,6 +1317,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!checkin) return res.status(404).json({ error: "Habit not found" });
     res.status(201).json(checkin);
   }));
+  app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
+    if (typeof (storage as any).deleteHabitCheckin === 'function') {
+      const ok = await (storage as any).deleteHabitCheckin(req.params.id, req.params.checkinId);
+      if (!ok) return res.status(404).json({ error: "Checkin not found" });
+      res.json({ success: true });
+    } else {
+      res.status(501).json({ error: "Checkin deletion not supported" });
+    }
+  }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {
       const result = await storage.updateHabit(req.params.id, req.body);
@@ -1316,6 +1338,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!existing) return res.status(404).json({ error: "Habit not found" });
     await storage.deleteHabit(req.params.id);
     res.status(204).send();
+  }));
+  app.patch("/api/habits/:id/restore", asyncHandler(async (req, res) => {
+    if (typeof (storage as any).restoreHabit === 'function') {
+      const ok = await (storage as any).restoreHabit(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Habit not found" });
+      const habit = await storage.getHabit(req.params.id);
+      res.json(habit || { id: req.params.id, restored: true });
+    } else {
+      res.status(501).json({ error: "Restore not supported" });
+    }
   }));
 
   // ---- Obligations ----
@@ -2723,7 +2755,17 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   // ---- Income ----
   app.get("/api/incomes", asyncHandler(async (req, res) => {
-    const incomes = await (storage as any).getIncomes();
+    let incomes = await (storage as any).getIncomes();
+    // Support profile filtering: ?profileIds=x,y or ?profileId=x
+    const fps = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    if (filterProfileIds.length > 0) {
+      incomes = incomes.filter((i: any) => {
+        const lp = i.linkedProfiles || [];
+        return lp.length === 0 || lp.some((id: string) => filterProfileIds.includes(id));
+      });
+    }
     res.json(incomes);
   }));
 

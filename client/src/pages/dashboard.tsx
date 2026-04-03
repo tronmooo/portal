@@ -110,23 +110,23 @@ function CollapsibleSection({
   return (
     <div data-testid={testId} className="rounded-lg border border-border/40 bg-card">
       <button
-        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left"
+        className="w-full flex items-center gap-2 px-3 py-2.5 text-left"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}
       >
-        <Icon className="h-3 w-3 text-primary shrink-0" />
-        <h2 className="text-[11px] font-semibold">{label}</h2>
+        <Icon className="h-3.5 w-3.5 text-primary shrink-0" />
+        <h2 className="text-xs font-semibold">{label}</h2>
         {count !== undefined && (
-          <span className="text-[9px] text-muted-foreground bg-muted rounded px-1 py-0.5 tabular-nums">{count}</span>
+          <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
         )}
-        {sub && <span className="text-[9px] text-muted-foreground ml-0.5 truncate">{sub}</span>}
-        <div className="ml-auto flex items-center gap-1 shrink-0">
+        {sub && <span className="text-[10px] text-muted-foreground ml-1 truncate">{sub}</span>}
+        <div className="ml-auto flex items-center gap-1.5 shrink-0">
           {headerRight}
           {open ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
         </div>
       </button>
-      {open && <div className="px-1.5 pb-1.5">{children}</div>}
+      {open && <div className="px-2.5 pb-2.5">{children}</div>}
     </div>
   );
 }
@@ -136,18 +136,18 @@ function MiniStat({
 }: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat" }) {
   return (
     <div
-      className={`flex flex-col items-center justify-center p-1.5 rounded-md border border-border/30 min-h-[48px] ${onClick ? "cursor-pointer hover:bg-muted/50 active:scale-95 transition-all" : ""}`}
+      className={`flex flex-col items-center justify-center p-2 rounded-lg border border-border/30 min-h-[52px] ${onClick ? "cursor-pointer hover:bg-muted/50 active:scale-[0.98] transition-all" : ""}`}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
     >
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-1">
         <span className="text-sm font-bold tabular-nums leading-none" style={color ? { color } : {}}>{value}</span>
         {trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
         {trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
       </div>
-      <p className="text-[9px] text-muted-foreground leading-tight mt-0.5 text-center truncate w-full">{label}</p>
+      <p className="text-[10px] text-muted-foreground leading-tight mt-1 text-center truncate w-full">{label}</p>
     </div>
   );
 }
@@ -418,7 +418,7 @@ function TasksPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
                     </div>
                   </div>
                   <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={() => deleteMutation.mutate({ id: t.id, title: t.title })}><Trash2 className="h-3 w-3" /></Button>
+                    onClick={() => deleteMutation.mutate({ id: t.id, title: t.title })} disabled={deleteMutation.isPending}><Trash2 className="h-3 w-3" /></Button>
                 </div>
               ))}
               {doneTasks.length > 0 && (
@@ -949,7 +949,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
 
 function GoalsSection({ profileId }: { profileId?: string }) {
   const profileParam = profileId ? `?profileId=${profileId}` : "";
-  const { data: goals = [], isLoading } = useQuery<GoalItem[]>({
+  const { data: goals = [], isLoading, error: goalsError } = useQuery<GoalItem[]>({
     queryKey: ["/api/goals", profileId || "all"],
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
@@ -979,6 +979,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
       setEditGoal(null); resetForm();
       toast({ title: `"${variables.title || "Goal"}" updated` });
     },
+    onError: (err: Error, variables) => toast({ title: `Failed to update "${variables.title || "goal"}"`, description: err.message, variant: "destructive" }),
   });
   const deleteMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
@@ -987,6 +988,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
       setEditGoal(null);
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
+    onError: (_err: Error, variables) => toast({ title: `Failed to delete "${variables.title || "goal"}"`, variant: "destructive" }),
   });
 
   const resetForm = () => { setFormTitle(""); setFormTarget(""); setFormUnit(""); setFormDeadline(""); setFormType("custom"); };
@@ -1006,6 +1008,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   const completedGoals = goals.filter(g => g.status === "completed");
 
   if (isLoading) return <CollapsibleSection icon={Target} label="Goals" testId="section-goals"><div className="h-16 bg-muted animate-pulse rounded-lg" /></CollapsibleSection>;
+  if (goalsError) return <CollapsibleSection icon={Target} label="Goals" testId="section-goals"><p className="text-destructive text-sm p-4">Failed to load goals. Please refresh.</p></CollapsibleSection>;
 
   return (
     <>
@@ -1155,9 +1158,10 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   <Button
                     variant="destructive"
                     className="h-9 text-xs gap-1.5"
+                    disabled={deleteMutation.isPending}
                     onClick={() => { deleteMutation.mutate({ id: actionGoal.id, title: actionGoal.title }); setActionGoal(null); }}
                   >
-                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                    <Trash2 className="h-3.5 w-3.5" /> {deleteMutation.isPending ? "Deleting…" : "Delete"}
                   </Button>
                 </div>
               </div>
@@ -1219,8 +1223,8 @@ function GoalsSection({ profileId }: { profileId?: string }) {
               </Button>
             )}
             {editGoal && editGoal.status === "active" && (
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => updateMutation.mutate({ id: editGoal.id, status: "completed" })} data-testid="btn-complete-goal">
-                <Check className="h-3 w-3 mr-1" /> Complete
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => updateMutation.mutate({ id: editGoal.id, status: "completed" })} disabled={updateMutation.isPending} data-testid="btn-complete-goal">
+                <Check className="h-3 w-3 mr-1" /> {updateMutation.isPending ? "Completing…" : "Complete"}
               </Button>
             )}
             <Button size="sm" className="h-7 text-xs" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending} data-testid="btn-save-goal">
@@ -1235,24 +1239,24 @@ function GoalsSection({ profileId }: { profileId?: string }) {
 
 // ─── Section: Finance Widget ─────────────────────────────────────────────────
 
-function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | undefined }) {
+function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | null>(null);
+  const singleProfileParam = filterIds.length === 1 ? `?profileId=${filterIds[0]}` : "";
+  const incomeUrl = filterMode === "selected" && filterIds.length > 0
+    ? `/api/incomes?profileIds=${filterIds.join(",")}`
+    : "/api/incomes";
   const { data: incomes } = useQuery<any[]>({
-    queryKey: ["/api/incomes"],
-    queryFn: () => apiRequest("GET", "/api/incomes").then(r => r.json()),
-  });
-  const { data: allExpenses } = useQuery<any[]>({
-    queryKey: ["/api/expenses", "widget"],
-    queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
+    queryKey: ["/api/incomes", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", incomeUrl).then(r => r.json()),
   });
   const { data: allProfiles } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
   const { data: allObligations } = useQuery<any[]>({
-    queryKey: ["/api/obligations"],
-    queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
+    queryKey: ["/api/obligations", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/obligations${singleProfileParam}`).then(r => r.json()),
   });
 
   const monthlySpend = stats?.monthlySpend || 0;
@@ -1263,17 +1267,18 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
   const netWorth = totalAssetValue - totalLiabilities;
   const recentExpenses: any[] = data?.recentExpenses || [];
 
-  // Build drill-down data
+  // Build drill-down data — use profile-filtered monthlyExpenseRecords from enhanced API
   const now = new Date();
-  const thisMonth = now.getMonth();
-  const thisYear = now.getFullYear();
-  const monthExpenses = (allExpenses || []).filter((e: any) => {
-    const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
-  });
+  const monthExpenses: any[] = data?.monthlyExpenseRecords || [];
   const byCategory: Record<string, number> = {};
   monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
   const assetProfiles = (allProfiles || []).filter((p: any) => {
-    return p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue;
+    if (!(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue)) return false;
+    // Apply the same profile filter as everything else
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    const pParent = p.fields?._parentProfileId || p.parentProfileId;
+    if (pParent && filterIds.includes(pParent)) return true;
+    return false;
   });
 
   if (!data && !stats) {
@@ -1342,6 +1347,14 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
             category: cat,
           })),
         ]}
+        expenses={monthExpenses.map((e: any) => ({
+          id: e.id,
+          description: e.description || "Expense",
+          amount: e.amount,
+          date: e.date,
+          category: e.category,
+          vendor: e.vendor,
+        }))}
       />
 
       {/* Income Drill-Down */}
@@ -1373,6 +1386,9 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
             label: `Spending: ${cat}`, value: `-$${amt.toLocaleString()}`, category: cat,
           })),
         ]}
+        obligations={(allObligations || []).map((o: any) => ({
+          id: o.id, name: o.name, amount: o.amount, frequency: o.frequency, nextDueDate: o.nextDueDate || o.dueDate,
+        }))}
       />
 
       {/* Net Worth Drill-Down */}
@@ -1392,6 +1408,9 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
             return { label: o.name, value: `-$${val.toLocaleString()}`, sub: "liability", category: "liability" };
           })),
         ]}
+        obligations={(allObligations || []).map((o: any) => ({
+          id: o.id, name: o.name, amount: o.amount, frequency: o.frequency, nextDueDate: o.nextDueDate || o.dueDate,
+        }))}
         emptyMessage="No assets or liabilities tracked yet."
       />
     </CollapsibleSection>
@@ -1727,6 +1746,7 @@ export default function DashboardPage() {
         return res.json();
       } catch { return null; }
     },
+    staleTime: 0,
   });
 
   const sections: DashboardSection[] =
@@ -1806,7 +1826,7 @@ export default function DashboardPage() {
         content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
         break;
       case "finance":
-        content = <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} />;
+        content = <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
         break;
       case "ai-summary":
         content = <AISummaryWidget stats={stats} enhanced={enhanced} />;
@@ -1825,7 +1845,7 @@ export default function DashboardPage() {
   const rightSections = useMemo(() => sections.filter(s => s.visible && s.column === "right"), [sections]);
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden px-2 py-2 md:p-4 space-y-1.5 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
+    <div className="h-full overflow-y-auto overflow-x-hidden px-2 py-3 md:p-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -1918,7 +1938,7 @@ export default function DashboardPage() {
             ))}
 
             {(leftSections.length > 0 || rightSections.length > 0) && (
-              <div className="grid md:grid-cols-2 gap-3">
+              <div className="grid md:grid-cols-2 gap-3 mt-1">
                 <div className="space-y-3">
                   {leftSections.map(s => <div key={s.id}>{renderSection(s.id)}</div>)}
                 </div>

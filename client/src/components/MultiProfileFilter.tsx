@@ -62,14 +62,31 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
     notify();
   }, [notify]);
 
-  const filteredProfiles = (profiles || []).filter(p => {
+  const typeFiltered = (profiles || []).filter(p => {
     if (profileTypes && profileTypes.length > 0) {
       return profileTypes.includes(p.type);
     }
-    return ["person", "self", "pet", "vehicle", "asset"].includes(p.type);
+    // Only show primary profile types — not assets, vehicles, subscriptions, etc.
+    return ["person", "self", "pet"].includes(p.type);
   });
 
-  const sortOrder: Record<string, number> = { self: 0, person: 1, pet: 2, vehicle: 3, asset: 4 };
+  // Deduplicate by name+type — keep the one with the most linked data
+  const deduped = new Map<string, any>();
+  for (const p of typeFiltered) {
+    const key = `${p.type}::${p.name}`;
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, p);
+    } else {
+      // Keep the profile with more linked data (documents, expenses, tasks, etc.)
+      const score = (prof: any) =>
+        (prof.documents?.length || 0) + (prof.expenses?.length || 0) + (prof.tasks?.length || 0);
+      if (score(p) > score(existing)) deduped.set(key, p);
+    }
+  }
+  const filteredProfiles = Array.from(deduped.values());
+
+  const sortOrder: Record<string, number> = { self: 0, person: 1, pet: 2 };
   const sorted = [...filteredProfiles].sort((a, b) => (sortOrder[a.type] ?? 5) - (sortOrder[b.type] ?? 5));
 
   const isEveryone = filter.mode === "everyone";

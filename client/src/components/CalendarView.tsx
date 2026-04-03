@@ -1,3 +1,4 @@
+import { formatApiError } from "@/lib/formatError";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -211,11 +212,12 @@ function EventFormDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: isEdit ? `"${form.title}" updated` : `"${form.title}" created`, description: form.date ? new Date(form.date + "T12:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : undefined });
       onClose();
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to save event", variant: "destructive" });
+    onError: (err: Error) => {
+      toast({ title: isEdit ? "Failed to update event" : "Failed to create event", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -457,11 +459,12 @@ function EventDetailDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: `"${item?.title || "Item"}" deleted` });
       onClose();
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to delete", variant: "destructive" });
+    onError: (err: Error) => {
+      toast({ title: `Failed to delete "${item?.title || "item"}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -475,6 +478,11 @@ function EventDetailDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: item.completed ? `"${item.title}" reopened` : `"${item.title}" completed` });
+    },
+    onError: (err: Error) => {
+      toast({ title: `Failed to update "${item.title}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -764,18 +772,25 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     return toLocalDateStr(d);
   }, [viewYear, viewMonth]);
 
-  const { data: timelineItems = [], isLoading: timelineLoading } = useQuery<CalendarTimelineItem[]>({
-    queryKey: ["/api/calendar/timeline", startDate, endDate],
-    queryFn: () =>
-      apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}`).then(r => r.json()),
-  });
-
   // Determine effective filter: external props take precedence over internal filter
   const effectiveFilterMode = externalFilterMode ?? (resolvedProfileId ? "selected" : "everyone");
   const effectiveFilterIds = externalFilterIds ?? (resolvedProfileId ? [resolvedProfileId] : []);
   const effectiveHasSelf = effectiveFilterMode === "everyone" ||
     effectiveFilterIds.includes(selfProfile?.id || "") ||
     (externalFilterMode === undefined && profileFilter === "me");
+
+  const timelineUrl = (() => {
+    let url = `/api/calendar/timeline?start=${startDate}&end=${endDate}`;
+    if (effectiveFilterMode === "selected" && effectiveFilterIds.length > 0) {
+      url += `&profileIds=${effectiveFilterIds.join(",")}`;
+    }
+    return url;
+  })();
+  const { data: timelineItems = [], isLoading: timelineLoading } = useQuery<CalendarTimelineItem[]>({
+    queryKey: ["/api/calendar/timeline", startDate, endDate, effectiveFilterMode, ...effectiveFilterIds],
+    queryFn: () =>
+      apiRequest("GET", timelineUrl).then(r => r.json()),
+  });
 
   // Group items by date (with type + profile filtering)
   const itemsByDate = useMemo(() => {

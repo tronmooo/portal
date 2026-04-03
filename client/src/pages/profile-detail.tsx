@@ -504,6 +504,7 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      toast({ title: "Field removed" });
     },
     onError: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
@@ -541,9 +542,11 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value ?? ""));
+  const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
   const save = async () => {
+    setSaving(true);
     try {
       await apiRequest("PATCH", `/api/profiles/${profileId}`, {
         fields: { [fieldKey]: draft },
@@ -553,6 +556,8 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
       setEditing(false);
     } catch {
       toast({ title: "Failed to save", variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -585,8 +590,8 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
         }}
         autoFocus
       />
-      <Button size="sm" className="h-6 text-[10px] px-2" onClick={save}>Save</Button>
-      <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1" onClick={() => setEditing(false)}>✕</Button>
+      <Button size="sm" className="h-6 text-[10px] px-2" onClick={save} disabled={saving}>{saving ? "…" : "Save"}</Button>
+      <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1" onClick={() => setEditing(false)} disabled={saving}>✕</Button>
     </div>
   );
 }
@@ -2093,7 +2098,10 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       {/* ═══════════════════════════════════════════════════════ */}
 
       {/* Add Expense Dialog */}
-      <Dialog open={showAddExpense} onOpenChange={setShowAddExpense}>
+      <Dialog open={showAddExpense} onOpenChange={(open) => {
+        setShowAddExpense(open);
+        if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10)); }
+      }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-add-expense">
           <DialogHeader>
             <DialogTitle>Add Expense</DialogTitle>
@@ -2597,7 +2605,10 @@ function TrackersTab({
       )}
 
       {/* Create Tracker Dialog */}
-      <Dialog open={showCreateTracker} onOpenChange={setShowCreateTracker}>
+      <Dialog open={showCreateTracker} onOpenChange={(open) => {
+        setShowCreateTracker(open);
+        if (!open) { setNewTrackerName(""); setNewTrackerUnit(""); setNewTrackerCategory("custom"); setNewFieldName("value"); setNewFieldType("number"); }
+      }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-create-tracker">
           <DialogHeader>
             <DialogTitle>New Tracker</DialogTitle>
@@ -2886,6 +2897,8 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       setLogOpen(null); setLogValue("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -3500,7 +3513,10 @@ function TasksTab({
       )}
 
       {/* Add Task Dialog */}
-      <Dialog open={showAddTask} onOpenChange={setShowAddTask}>
+      <Dialog open={showAddTask} onOpenChange={(open) => {
+        setShowAddTask(open);
+        if (!open) { setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate(""); }
+      }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-add-task">
           <DialogHeader>
             <DialogTitle>Add Task</DialogTitle>
@@ -4191,7 +4207,7 @@ export default function ProfileDetailPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
 
-  const { data: profile, isLoading, refetch } = useQuery<ProfileDetail>({
+  const { data: profile, isLoading, error, refetch } = useQuery<ProfileDetail>({
     queryKey: ["/api/profiles", id, "detail"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/profiles/${id}/detail`);
@@ -4230,12 +4246,25 @@ export default function ProfileDetailPage() {
     refetch();
   }
 
-  if (isLoading || !profile) {
+  if (isLoading) {
     return (
       <div className="p-4 md:p-6 space-y-4 overflow-y-auto h-full">
         <div className="h-8 w-32 rounded skeleton-shimmer" />
         <div className="h-32 rounded-lg skeleton-shimmer" />
         <div className="h-48 rounded-lg skeleton-shimmer" />
+      </div>
+    );
+  }
+
+  if (error || !profile) {
+    return (
+      <div className="p-4 md:p-6 text-center overflow-y-auto h-full">
+        <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+        <p className="text-sm text-destructive mb-1">Profile not found</p>
+        <p className="text-xs text-muted-foreground mb-3">This profile may have been deleted or the URL is invalid.</p>
+        <Link href="/profiles">
+          <Button variant="outline" size="sm"><ArrowLeft className="h-3.5 w-3.5 mr-1" /> Back to Profiles</Button>
+        </Link>
       </div>
     );
   }

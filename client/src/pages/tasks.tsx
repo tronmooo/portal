@@ -36,6 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { ToastAction } from "@/components/ui/toast";
 import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task } from "@shared/schema";
@@ -51,6 +52,9 @@ const PRIORITY_COLORS: Record<string, string> = {
 const invalidateTaskQueries = () => {
   queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+  // Also invalidate dashboard so KPIs recompute after task changes
+  queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
 };
 
 // ── Create / Edit Dialog ─────────────────────────────────────────────────────
@@ -197,18 +201,48 @@ function TaskItem({
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: newStatus });
       return res.json();
     },
+    onMutate: async () => {
+      // Optimistic update: immediately toggle the task status in cache
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+      const newStatus = task.status === "done" ? "todo" : "done";
+      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+        old?.map(t => t.id === task.id ? { ...t, status: newStatus } : t)
+      );
+      return { prevQueries };
+    },
     onSuccess: () => {
       invalidateTaskQueries();
       toast({ title: task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed` });
     },
-    onError: (err: Error) => toast({ title: `Failed to update "${task.title}"`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _vars, context) => {
+      // Rollback optimistic update on error
+      if (context?.prevQueries) {
+        for (const [key, data] of context.prevQueries) {
+          queryClient.setQueryData(key, data);
+        }
+      }
+      toast({ title: `Failed to update "${task.title}"`, description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/tasks/${task.id}/restore`),
+    onSuccess: () => {
+      invalidateTaskQueries();
+      toast({ title: `"${task.title}" restored` });
+    },
+    onError: (err: Error) => toast({ title: `Failed to restore "${task.title}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/tasks/${task.id}`),
     onSuccess: () => {
       invalidateTaskQueries();
-      toast({ title: `"${task.title}" deleted` });
+      toast({
+        title: `"${task.title}" deleted`,
+        action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction>,
+      });
     },
     onError: (err: Error) => toast({ title: `Failed to delete "${task.title}"`, description: formatApiError(err), variant: "destructive" }),
   });
@@ -223,7 +257,8 @@ function TaskItem({
           <Checkbox
             checked={task.status === "done"}
             onCheckedChange={() => toggleMutation.mutate()}
-            className="mt-0.5"
+            disabled={toggleMutation.isPending}
+            className={`mt-0.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
             data-testid={`checkbox-task-${task.id}`}
           />
           <div
@@ -256,9 +291,12 @@ function TaskItem({
               {task.dueDate && (
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <Calendar className="h-3 w-3" />
-                  {isNaN(new Date(task.dueDate).getTime())
-                    ? task.dueDate
-                    : new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                  {(() => {
+                    // Parse as local date to avoid off-by-one from UTC conversion
+                    const raw = task.dueDate.slice(0, 10); // "YYYY-MM-DD"
+                    const d = new Date(raw + "T00:00:00");
+                    return isNaN(d.getTime()) ? task.dueDate : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+                  })()}
                 </span>
               )}
               {task.tags?.map(tag => (
@@ -271,6 +309,7 @@ function TaskItem({
             variant="ghost"
             className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
             onClick={() => setDeleteOpen(true)}
+            disabled={deleteMutation.isPending}
             data-testid={`button-delete-task-${task.id}`}
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -282,16 +321,17 @@ function TaskItem({
         <AlertDialogContent data-testid={`alert-delete-task-${task.id}`}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete "{task.title}"?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogDescription>This task will be deleted. You can undo this action briefly after deletion.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => deleteMutation.mutate()}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
               data-testid="button-confirm-delete-task"
             >
-              Delete
+              {deleteMutation.isPending ? "Deleting…" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -308,10 +348,14 @@ export default function TasksPage() {
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const [tabFilter, setTabFilter] = useState<"all" | "open" | "completed">("all");
 
+  const taskUrl = filterMode === "selected" && filterIds.length > 0
+    ? `/api/tasks?profileIds=${filterIds.join(",")}`
+    : "/api/tasks";
   const { data: tasks, isLoading, error, refetch } = useQuery<Task[]>({
-    queryKey: ["/api/tasks", "all"],
-    queryFn: () => apiRequest("GET", "/api/tasks").then(r => r.json()),
+    queryKey: ["/api/tasks", filterMode, filterIds],
+    queryFn: () => apiRequest("GET", taskUrl).then(r => r.json()),
   });
 
   if (isLoading) {
@@ -366,6 +410,26 @@ export default function TasksPage() {
         </Button>
       </div>
 
+      {/* Tab filters */}
+      <div className="flex items-center gap-1" data-testid="task-tab-filters">
+        {(["all", "open", "completed"] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setTabFilter(tab)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+              tabFilter === tab
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            }`}
+            data-testid={`tab-${tab}`}
+          >
+            {tab === "all" ? `All (${profileFilteredTasks.length})`
+              : tab === "open" ? `Open (${activeTasks.length})`
+              : `Completed (${completedTasks.length})`}
+          </button>
+        ))}
+      </div>
+
       {profileFilteredTasks.length === 0 ? (
         <div className="text-center py-16">
           <ListTodo className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
@@ -376,7 +440,7 @@ export default function TasksPage() {
         </div>
       ) : (
         <>
-          {activeTasks.length > 0 && (
+          {(tabFilter === "all" || tabFilter === "open") && activeTasks.length > 0 && (
             <div className="space-y-2">
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
                 Active ({activeTasks.length})
@@ -386,7 +450,7 @@ export default function TasksPage() {
               ))}
             </div>
           )}
-          {completedTasks.length > 0 && (
+          {(tabFilter === "all" || tabFilter === "completed") && completedTasks.length > 0 && (
             <div className="space-y-2">
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
                 Completed ({completedTasks.length})
