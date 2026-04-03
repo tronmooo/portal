@@ -1,14 +1,13 @@
 {
   "name": "Portol",
   "short_name": "Portol",
-  "description": "AI-powered personal life management",
+  "description": "Your AI-powered life command center. Track finances, health, tasks, and more with natural language.",
   "start_url": "/#/",
-  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0a0a0a",
-  "theme_color": "#01696F",
-  "orientation": "portrait-primary",
-  "categories": ["lifestyle", "productivity", "health"],
+  "theme_color": "#0a0a0a",
+  "categories": ["productivity", "finance", "health", "lifestyle"],
   "icons": [
     {
       "src": "/icons/icon-192.png",
@@ -22,5 +21,7 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false
 }

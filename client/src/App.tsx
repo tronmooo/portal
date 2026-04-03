@@ -53,6 +53,8 @@ const HabitsPage = lazy(() => import("@/pages/habits"));
 const JournalPage = lazy(() => import("@/pages/journal"));
 const ObligationsPage = lazy(() => import("@/pages/obligations"));
 const TasksPage = lazy(() => import("@/pages/tasks"));
+const PrivacyPage = lazy(() => import("@/pages/privacy"));
+const TermsPage = lazy(() => import("@/pages/terms"));
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
@@ -126,9 +128,15 @@ function ProfileButton() {
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading, authRequired } = useAuth();
 
-  // Allow reset-password page through without auth
+  // Allow public pages through without auth
   if (window.location.hash.startsWith("#/reset-password")) {
     return <Suspense fallback={<PageLoader />}><ResetPasswordPage /></Suspense>;
+  }
+  if (window.location.hash.startsWith("#/privacy")) {
+    return <Suspense fallback={<PageLoader />}><PrivacyPage /></Suspense>;
+  }
+  if (window.location.hash.startsWith("#/terms")) {
+    return <Suspense fallback={<PageLoader />}><TermsPage /></Suspense>;
   }
 
   if (loading) {
@@ -167,6 +175,8 @@ function AppRouter() {
         <Route path="/calendar" component={CalendarPage} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
+        <Route path="/privacy" component={PrivacyPage} />
+        <Route path="/terms" component={TermsPage} />
         <Route path="/dashboard/artifacts" component={ArtifactsPage} />
         <Route path="/dashboard/finance" component={FinancePage} />
         <Route path="/dashboard/habits" component={HabitsPage} />
