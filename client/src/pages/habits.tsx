@@ -193,6 +193,10 @@ export default function HabitsPage() {
 
   const handleCreate = () => {
     if (!newName.trim()) { toast({ title: "Name required", description: "Enter a habit name", variant: "destructive" }); return; }
+    const duplicate = habits.find(h => h.name.toLowerCase() === newName.trim().toLowerCase());
+    if (duplicate) {
+      if (!confirm(`A habit named "${duplicate.name}" already exists. Create another?`)) return;
+    }
     createMutation.mutate(newName.trim());
   };
 

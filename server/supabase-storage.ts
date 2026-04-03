@@ -2536,7 +2536,16 @@ export class SupabaseStorage implements IStorage {
       const latest = values[values.length - 1];
       const avg = values.reduce((s, v) => s + v, 0) / values.length;
       const trend = values.length >= 2 ? (values[values.length - 1] - values[0]) : 0;
-      healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: recent[recent.length - 1]?.timestamp });
+      // For hydration trackers, calculate today's total
+      const isHydration = t.name.toLowerCase().includes('hydration') || t.name.toLowerCase().includes('water');
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      let dailyTotal: number | undefined;
+      if (isHydration) {
+        dailyTotal = t.entries
+          .filter(e => e.timestamp.startsWith(todayStr))
+          .reduce((s, e) => s + (Number(e.values[primaryField.name]) || 0), 0);
+      }
+      healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: recent[recent.length - 1]?.timestamp, dailyTotal });
     }
 
     const monthlyExpenses = allExpenses.filter(e => { const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear; });

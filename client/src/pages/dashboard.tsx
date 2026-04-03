@@ -740,8 +740,8 @@ function HealthSection({ data }: { data: any[] }) {
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] text-muted-foreground truncate" title={item.name}>{item.name}</p>
                 <div className="flex items-center gap-1">
-                  <span className="text-sm font-bold tabular-nums">{item.latestValue}</span>
-                  {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
+                  <span className="text-sm font-bold tabular-nums">{item.dailyTotal != null ? item.dailyTotal : item.latestValue}</span>
+                  {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}{item.dailyTotal != null ? " today" : ""}</span>}
                   <TrendIcon trend={item.trend} />
                 </div>
               </div>

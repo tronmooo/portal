@@ -758,6 +758,13 @@ function CreateProfileDialog({
 
   const createMutation = useMutation({
     mutationFn: async (payload: InsertProfile & { type_key?: string }) => {
+      // Check for duplicate name by querying current profiles
+      const existing = await apiRequest("GET", "/api/profiles").then(r => r.json()) as any[];
+      const dup = existing?.find((p: any) => p.name.toLowerCase() === payload.name.toLowerCase());
+      if (dup) {
+        const proceed = confirm(`A profile named "${dup.name}" already exists (${dup.type}). Create another?`);
+        if (!proceed) throw new Error("Cancelled");
+      }
       const res = await apiRequest("POST", "/api/profiles", payload);
       return res.json();
     },

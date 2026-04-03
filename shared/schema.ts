@@ -507,6 +507,8 @@ export type InsertExpense = z.input<typeof insertExpenseSchema>;
 export type RecurrencePattern = "none" | "daily" | "weekly" | "biweekly" | "monthly" | "yearly";
 
 export type EventCategory = "personal" | "work" | "health" | "finance" | "family" | "social" | "travel" | "education" | "other";
+export type ExpenseCategory = "general" | "food" | "transport" | "health" | "pet" | "vehicle" | "entertainment" | "shopping" | "utilities" | "housing" | "insurance" | "subscription" | "education" | "personal" | "automotive" | "travel";
+export type ObligationCategory = "housing" | "utilities" | "insurance" | "subscription" | "loan" | "medical" | "education" | "transportation" | "communication" | "general";
 
 export const EVENT_CATEGORY_COLORS: Record<EventCategory, string> = {
   personal: "#4F98A3",
