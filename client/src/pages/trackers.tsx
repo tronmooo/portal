@@ -2941,12 +2941,11 @@ export default function TrackersPage() {
 
   // Apply profile filter — when hasSelf, also include orphaned trackers (no linked profiles)
   const filteredTrackers = (trackers || []).filter(t => {
-    // Profile filter
+    // Profile filter — strict: only show trackers linked to the selected profile(s)
     if (filterMode === "selected" && filterIds.length > 0) {
       const linkedIds = t.linkedProfiles || [];
       const matchesProfile = linkedIds.some(id => filterIds.includes(id));
-      const isOrphan = hasSelf && linkedIds.length === 0;
-      if (!matchesProfile && !isOrphan) return false;
+      if (!matchesProfile) return false;
     }
     // Category filter
     if (trackerCatFilter !== "all" && t.category !== trackerCatFilter) return false;
@@ -3485,32 +3484,29 @@ export default function TrackersPage() {
             return (
               <div
                 key={tracker.id}
-                className="border-b border-border/30 hover:bg-muted/30 cursor-pointer transition-colors px-3 py-2.5"
+                className="border-b border-border/30 hover:bg-muted/30 cursor-pointer transition-colors px-2.5 py-1.5 flex items-center gap-2"
                 data-testid={`tracker-row-${tracker.id}`}
                 onClick={() => setSelectedTrackerId(tracker.id)}
               >
-                {/* Row 1: Name + profile + last updated */}
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-xs font-semibold truncate">{tracker.name}</span>
-                    {linkedProfile && <span className="text-[8px] px-1 py-0.5 rounded bg-primary/10 text-primary shrink-0">{linkedProfile.name}</span>}
-                    <span className="text-[9px] text-muted-foreground capitalize shrink-0">{tracker.category}</span>
+                {/* Left: Name + category */}
+                <div className="min-w-0 w-[120px] md:w-[160px] shrink-0">
+                  <p className="text-[11px] font-medium truncate leading-tight">{tracker.name}</p>
+                  <div className="flex items-center gap-1">
+                    {linkedProfile && <span className="text-[8px] px-1 rounded bg-primary/10 text-primary">{linkedProfile.name}</span>}
+                    <span className="text-[8px] text-muted-foreground capitalize">{tracker.category}</span>
                   </div>
-                  <span className="text-[9px] text-muted-foreground shrink-0">{lastUpdated}</span>
                 </div>
-                {/* Row 2: Dynamic KPI chips */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  {kpis.map((kpi, ki) => (
-                    <div key={ki} className="flex items-center gap-1 bg-muted/40 rounded px-1.5 py-0.5">
-                      <span className="text-[9px] text-muted-foreground">{kpi.label}</span>
-                      <span className={`text-[10px] font-bold tabular-nums ${kpi.color || ""}`}>{kpi.value}</span>
+                {/* Middle: KPI chips (scrollable) */}
+                <div className="flex items-center gap-1.5 flex-1 overflow-x-auto min-w-0 scrollbar-hide">
+                  {kpis.slice(0, 4).map((kpi, ki) => (
+                    <div key={ki} className="flex items-center gap-0.5 bg-muted/40 rounded px-1.5 py-0.5 shrink-0">
+                      <span className="text-[8px] text-muted-foreground">{kpi.label}</span>
+                      <span className={`text-[9px] font-bold tabular-nums ${kpi.color || ""}`}>{kpi.value}</span>
                     </div>
                   ))}
                 </div>
-                {/* Row 3: AI insight */}
-                {insight && (
-                  <p className="text-[10px] text-muted-foreground mt-1 italic">{insight}</p>
-                )}
+                {/* Right: Updated */}
+                <span className="text-[8px] text-muted-foreground shrink-0 w-8 text-right">{lastUpdated}</span>
               </div>
             );
           })}
