@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getProfileFilter, setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
+import { useProfileFilter, setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1571,8 +1571,7 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const { filterIds, filterMode, onChange: onFilterChange } = useProfileFilter();
 
   // Fetch profiles for filter
   const { data: allProfiles = [] } = useQuery<any[]>({
@@ -1721,7 +1720,7 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2">
             <h1 className="text-base font-semibold">Dashboard</h1>
             <MultiProfileFilter
-              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              onChange={onFilterChange}
               compact
             />
           </div>

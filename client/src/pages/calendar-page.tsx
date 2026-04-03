@@ -1,14 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import CalendarView from "@/components/CalendarView";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileFilter } from "@/lib/profileFilter";
 import { ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 
 export default function CalendarPage() {
   useEffect(() => { document.title = "Calendar — Portol"; }, []);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const { filterIds, filterMode, onChange: onFilterChange } = useProfileFilter();
 
   return (
     <div className="h-full overflow-y-auto pb-24 px-2 py-2 md:px-4 md:py-3" data-testid="calendar-page">
@@ -20,7 +19,7 @@ export default function CalendarPage() {
         </Link>
         <h1 className="text-sm font-semibold">Calendar</h1>
         <MultiProfileFilter
-          onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+          onChange={onFilterChange}
           compact
         />
       </div>

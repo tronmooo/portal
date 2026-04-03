@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -39,8 +39,7 @@ const EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
   const { toast } = useToast();
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const { filterIds, filterMode, onChange: onFilterChange } = useProfileFilter();
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const { data: obligations } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
   const { data: enhanced } = useQuery<any>({ queryKey: ["/api/dashboard-enhanced"] });
@@ -123,7 +122,7 @@ export default function FinancePage() {
           </Link>
           <h1 className="text-xl font-semibold" data-testid="text-finance-title">Finance</h1>
           <MultiProfileFilter
-            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            onChange={onFilterChange}
             compact
           />
           <div className="ml-auto flex items-center gap-2">

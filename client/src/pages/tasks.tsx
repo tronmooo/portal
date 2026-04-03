@@ -2,7 +2,7 @@ import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -306,8 +306,7 @@ export default function TasksPage() {
   useEffect(() => { document.title = "Tasks — Portol"; }, []);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const { filterIds, filterMode, onChange: onFilterChange } = useProfileFilter();
 
   const { data: tasks, isLoading, error, refetch } = useQuery<Task[]>({
     queryKey: ["/api/tasks", "all"],
@@ -353,7 +352,7 @@ export default function TasksPage() {
             </Link>
             <h1 className="text-xl font-semibold" data-testid="text-tasks-title">Tasks</h1>
             <MultiProfileFilter
-              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              onChange={onFilterChange}
               compact
             />
           </div>

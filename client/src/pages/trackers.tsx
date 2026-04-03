@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileFilter, setFilterEveryone } from "@/lib/profileFilter";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -2792,8 +2792,7 @@ export default function TrackersPage() {
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const { filterIds, filterMode, onChange: onFilterChange } = useProfileFilter();
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [docSearch, setDocSearch] = useState("");
@@ -3002,7 +3001,7 @@ export default function TrackersPage() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Profile filter */}
           <MultiProfileFilter
-            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            onChange={onFilterChange}
             compact
           />
           <div className="h-4 w-px bg-border" />
@@ -3310,7 +3309,7 @@ export default function TrackersPage() {
             variant="outline"
             size="sm"
             className="mt-3"
-            onClick={() => { setFilterMode("everyone"); setFilterIds([]); }}
+            onClick={() => { setFilterEveryone(); onFilterChange({ mode: "everyone", selectedIds: [] }); }}
             data-testid="button-clear-filter"
           >
             Show All Trackers

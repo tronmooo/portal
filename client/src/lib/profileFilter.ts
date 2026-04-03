@@ -92,6 +92,26 @@ export function getFilterLabel(): string {
   return `${_state.selectedNames[0]} +${_state.selectedNames.length - 1}`;
 }
 
+/** Validate stored filter against current profile list — clear stale IDs */
+export function validateFilter(currentProfileIds: string[]) {
+  if (_state.mode === "everyone") return;
+  const validIds: string[] = [];
+  const validNames: string[] = [];
+  for (let i = 0; i < _state.selectedIds.length; i++) {
+    if (currentProfileIds.includes(_state.selectedIds[i])) {
+      validIds.push(_state.selectedIds[i]);
+      validNames.push(_state.selectedNames[i]);
+    }
+  }
+  if (validIds.length === 0) {
+    _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
+    saveToStorage();
+  } else if (validIds.length !== _state.selectedIds.length) {
+    _state = { mode: "selected", selectedIds: validIds, selectedNames: validNames };
+    saveToStorage();
+  }
+}
+
 // ── Legacy compat (used by pages that still read single filter) ──
 export function getDashboardProfileFilter(): { id: string | undefined; name: string } {
   if (_state.mode === "everyone") return { id: undefined, name: "Everyone" };
@@ -105,4 +125,41 @@ export function setDashboardProfileFilter(id: string | undefined, name: string) 
   } else {
     setFilterSelected([id], [name]);
   }
+}
+
+// ── React hook for centralized filter management ──────────────────────
+// Import React hooks dynamically to keep this file usable in non-React contexts
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+
+/**
+ * Centralized hook for profile filter state.
+ * - Reads initial state from localStorage
+ * - Validates stored profiles against current DB profiles
+ * - Clears stale profile IDs automatically
+ * - Returns current filter state + onChange handler for MultiProfileFilter
+ */
+export function useProfileFilter() {
+  const { data: profiles } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/profiles"] });
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState<FilterMode>(() => getProfileFilter().mode);
+  const validatedRef = useRef(false);
+
+  // Validate stored filter against actual profiles — clear stale IDs
+  useEffect(() => {
+    if (!profiles || profiles.length === 0 || validatedRef.current) return;
+    validatedRef.current = true;
+    const profileIds = profiles.map(p => p.id);
+    validateFilter(profileIds);
+    const updated = getProfileFilter();
+    setFilterIds(updated.selectedIds);
+    setFilterMode(updated.mode);
+  }, [profiles]);
+
+  const onChange = useCallback(({ mode, selectedIds }: { mode: FilterMode; selectedIds: string[] }) => {
+    setFilterMode(mode);
+    setFilterIds(selectedIds);
+  }, []);
+
+  return { filterIds, filterMode, onChange };
 }
