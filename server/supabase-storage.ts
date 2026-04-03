@@ -446,12 +446,12 @@ export class SupabaseStorage implements IStorage {
     const entriesByTracker = new Map<string, any[]>();
     for (const e of trackerEntryRows) {
       if (!entriesByTracker.has(e.tracker_id)) entriesByTracker.set(e.tracker_id, []);
-      entriesByTracker.get(e.tracker_id)!.push(e);
+      (entriesByTracker.get(e.tracker_id) || []).push(e);
     }
     const paymentsByObligation = new Map<string, any[]>();
     for (const p of obligationPaymentRows) {
       if (!paymentsByObligation.has(p.obligation_id)) paymentsByObligation.set(p.obligation_id, []);
-      paymentsByObligation.get(p.obligation_id)!.push(p);
+      (paymentsByObligation.get(p.obligation_id) || []).push(p);
     }
     const [relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations] = await Promise.all([
       fetchByIds("trackers", allIds.trackers, (r: any) => this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map((e: any) => this.rowToTrackerEntry(e)))),

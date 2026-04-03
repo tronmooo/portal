@@ -107,7 +107,8 @@ function isDuplicateCreation(userId: string, key: string, windowMs = 30000): boo
 
 function markCreation(userId: string, key: string) {
   if (!recentCreations.has(userId)) recentCreations.set(userId, new Map());
-  recentCreations.get(userId)!.set(key, Date.now());
+  const userMap = recentCreations.get(userId);
+  if (userMap) userMap.set(key, Date.now());
   // Cleanup old entries
   setTimeout(() => {
     recentCreations.get(userId)?.delete(key);
@@ -1978,8 +1979,8 @@ async function executeTool(name: string, input: any): Promise<any> {
           }
           await updateEntityLinkedProfiles("expense", expense.id, linkIds[0]);
           for (const lid of linkIds) {
-            await storage.linkProfileTo(lid, "expense", expense.id).catch(() => {});
-            await updateEntityLinkedProfiles("expense", expense.id, lid).catch(() => {});
+            await storage.linkProfileTo(lid, "expense", expense.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
+            await updateEntityLinkedProfiles("expense", expense.id, lid).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
           }
           logger.info("ai", `Auto-created purchase expense $${purchasePrice} for ${input.name}`);
         } catch (e) {
@@ -2319,7 +2320,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
         if (target) {
           await storage.updateHabit(habit.id, { linkedProfiles: [target.id] } as any);
-          await storage.linkProfileTo(target.id, "habit", habit.id).catch(() => {});
+          await storage.linkProfileTo(target.id, "habit", habit.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
           logger.info("ai", `Linked habit "${input.name}" to profile "${target.name}"`);
         }
       }
@@ -2470,7 +2471,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           || profiles.find((p: any) => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
         if (target) {
           await storage.updateJournalEntry(entry.id, { linkedProfiles: [target.id] } as any);
-          await storage.linkProfileTo(target.id, "journal", entry.id).catch(() => {});
+          await storage.linkProfileTo(target.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
         }
       }
 
@@ -2592,7 +2593,7 @@ async function executeTool(name: string, input: any): Promise<any> {
             p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
           if (targetProfile) {
             await storage.updateGoal(goal.id, { linkedProfiles: [targetProfile.id] } as any);
-            await storage.linkProfileTo(targetProfile.id, "goal", goal.id).catch(() => {});
+            await storage.linkProfileTo(targetProfile.id, "goal", goal.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
           }
         }
         await autoLinkToProfiles("goal", goal.id, `${input.title || ""} ${input.forProfile || ""}`, input.forProfile);
@@ -3092,14 +3093,14 @@ async function directLinkToProfile(entityType: string, entityId: string, forProf
   }
   // Set linkedProfiles on the entity
   await updateEntityLinkedProfiles(entityType, entityId, target.id);
-  await storage.linkProfileTo(target.id, entityType, entityId).catch(() => {});
+  await storage.linkProfileTo(target.id, entityType, entityId).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
   
   // For expenses ONLY: also link to self so it shows in owner's finance
   if (entityType === "expense") {
     const self = profiles.find(p => p.type === "self");
     if (self && self.id !== target.id) {
       await updateEntityLinkedProfiles(entityType, entityId, self.id);
-      await storage.linkProfileTo(self.id, entityType, entityId).catch(() => {});
+      await storage.linkProfileTo(self.id, entityType, entityId).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
     }
   }
   

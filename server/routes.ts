@@ -758,7 +758,7 @@ export async function registerRoutes(
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
     await storage.deleteProfile(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // ---- Profile Link / Unlink ----
@@ -1049,13 +1049,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
     if (!deleted) return res.status(404).json({ error: "Entry not found" });
-    res.status(204).send();
+    res.json({ success: true });
   }));
   app.delete("/api/trackers/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getTracker(req.params.id);
     if (!existing) return res.status(404).json({ error: "Tracker not found" });
     await storage.deleteTracker(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // Migrate unlinked trackers to "self" profile
@@ -1223,7 +1223,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const existing = await storage.getEvent(req.params.id);
     if (!existing) return res.status(404).json({ error: "Event not found" });
     await storage.deleteEvent(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // ---- Unified Calendar Timeline ----
@@ -1351,7 +1351,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const existing = await storage.getHabit(req.params.id);
     if (!existing) return res.status(404).json({ error: "Habit not found" });
     await storage.deleteHabit(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
   app.patch("/api/habits/:id/restore", asyncHandler(async (req, res) => {
     if (typeof (storage as any).restoreHabit === 'function') {
@@ -1423,7 +1423,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const existing = await storage.getObligation(req.params.id);
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
     await storage.deleteObligation(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // ---- Artifacts ----
@@ -1466,7 +1466,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const existing = await storage.getArtifact(req.params.id);
     if (!existing) return res.status(404).json({ error: "Artifact not found" });
     await storage.deleteArtifact(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // ---- Journal ----
@@ -1507,7 +1507,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const entries = await storage.getJournalEntries();
     if (!entries.find(e => e.id === req.params.id)) return res.status(404).json({ error: "Journal entry not found" });
     await storage.deleteJournalEntry(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // ---- Memory ----
@@ -1543,7 +1543,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const memories = await storage.getMemories();
     if (!memories.find((m: any) => m.id === req.params.id)) return res.status(404).json({ error: "Memory not found" });
     await storage.deleteMemory(req.params.id);
-    res.status(204).send();
+    res.json({ success: true });
   }));
 
   // ---- Domains ----

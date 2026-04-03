@@ -339,7 +339,7 @@ export function installAuthInterceptor() {
             persistTokens(refreshData.session);
             // Retry the original request with new token
             const retryHeaders = new Headers(init?.headers);
-            retryHeaders.set("Authorization", `Bearer ${memoryTokens!.access_token}`);
+            retryHeaders.set("Authorization", `Bearer ${memoryTokens?.access_token}`);
             return originalFetch!(input, { ...init, headers: retryHeaders });
           }
         } catch { /* fall through */ }

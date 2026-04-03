@@ -718,6 +718,9 @@ export function clearChatCache() {
 
 export default function ChatPage() {
   useEffect(() => { document.title = "Chat — Portol"; }, []);
+  useEffect(() => {
+    return () => { if (batchIntervalRef.current) clearInterval(batchIntervalRef.current); };
+  }, []);
   const { toast } = useToast();
   const [messages, setMessagesRaw] = useState<ChatMessage[]>(_chatCache);
   // Wrap setMessages to also persist to module-level cache
@@ -744,6 +747,7 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addMoreFileInputRef = useRef<HTMLInputElement>(null);
+  const batchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queryClient = useQueryClient();
 
   // Fetch profiles for the selector
@@ -1065,10 +1069,12 @@ export default function ChatPage() {
     const currentAttachmentCount = attachments.length;
     // Simulate progress updates
     let count = 0;
-    const interval = setInterval(() => {
+    if (batchIntervalRef.current) clearInterval(batchIntervalRef.current);
+    batchIntervalRef.current = setInterval(() => {
       count++;
       if (count >= currentAttachmentCount) {
-        clearInterval(interval);
+        if (batchIntervalRef.current) clearInterval(batchIntervalRef.current);
+        batchIntervalRef.current = null;
       }
       setBatchProcessedCount((prev) => Math.min(prev + 1, currentAttachmentCount));
     }, 2000);
@@ -1247,7 +1253,7 @@ export default function ChatPage() {
                   <ExtractionConfirmation
                     extraction={msg.pendingExtraction}
                     onConfirm={handleConfirmExtraction}
-                    onSkip={() => handleSkipExtraction(msg.pendingExtraction!.extractionId)}
+                    onSkip={() => { if (msg.pendingExtraction?.extractionId) handleSkipExtraction(msg.pendingExtraction.extractionId); }}
                   />
                 )}
 
