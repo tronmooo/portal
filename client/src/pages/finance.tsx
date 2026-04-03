@@ -52,7 +52,8 @@ export default function FinancePage() {
   const [addOpen, setAddOpen] = useState(false);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "" });
+  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "", tags: "" as string, isRecurring: false, linkedProfiles: [] as string[] });
+  const { data: allProfiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
@@ -316,7 +317,7 @@ export default function FinancePage() {
                   <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
                       setEditingExpense(expense);
-                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "" });
+                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "", date: expense.date || "", tags: (expense.tags || []).join(", "), isRecurring: expense.isRecurring || false, linkedProfiles: expense.linkedProfiles || [] });
                     }} title="Edit"><Pencil className="h-3 w-3" /></Button>
                     <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={async () => {
                       if (!confirm(`Delete "${expense.description}"?`)) return;
@@ -337,32 +338,61 @@ export default function FinancePage() {
 
       {/* Edit Expense Dialog */}
       <Dialog open={!!editingExpense} onOpenChange={(open) => !open && setEditingExpense(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div><Label>Description</Label><Input value={editForm.description} onChange={e => setEditForm(f => ({...f, description: e.target.value}))} /></div>
-            <div><Label>Amount</Label><Input type="number" step="0.01" value={editForm.amount} onChange={e => setEditForm(f => ({...f, amount: e.target.value}))} /></div>
-            <div><Label>Category</Label>
+            <div><Label className="text-xs">Description</Label><Input value={editForm.description} onChange={e => setEditForm(f => ({...f, description: e.target.value}))} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Amount ($)</Label><Input type="number" step="0.01" value={editForm.amount} onChange={e => setEditForm(f => ({...f, amount: e.target.value}))} /></div>
+              <div><Label className="text-xs">Date</Label><Input type="date" value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
+            </div>
+            <div><Label className="text-xs">Category</Label>
               <Select value={editForm.category} onValueChange={v => setEditForm(f => ({...f, category: v}))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["general","food","transport","housing","utilities","health","entertainment","shopping","subscription","insurance","education","pet","automotive","travel"].map(c => (
+                  {EXPENSE_CATEGORIES.map(c => (
                     <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
+            <div><Label className="text-xs">Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
+            <div><Label className="text-xs">Tags (comma-separated)</Label><Input value={editForm.tags} onChange={e => setEditForm(f => ({...f, tags: e.target.value}))} placeholder="e.g. groceries, weekly" /></div>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" id="edit-recurring" checked={editForm.isRecurring} onChange={e => setEditForm(f => ({...f, isRecurring: e.target.checked}))} className="h-4 w-4 rounded border-border accent-primary" />
+              <Label htmlFor="edit-recurring" className="text-xs">Recurring expense</Label>
+            </div>
+            {(allProfiles || []).length > 0 && (
+              <div>
+                <Label className="text-xs">Linked Profiles</Label>
+                <div className="flex flex-wrap gap-1.5 mt-1 max-h-24 overflow-y-auto">
+                  {(allProfiles || []).filter(p => ["self","person","pet","vehicle","asset"].includes(p.type)).map((p: any) => {
+                    const linked = editForm.linkedProfiles.includes(p.id);
+                    return (
+                      <button key={p.id} type="button"
+                        className={`px-2 py-0.5 rounded-md text-xs border transition-all ${linked ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:border-foreground/30"}`}
+                        onClick={() => setEditForm(f => ({...f, linkedProfiles: linked ? f.linkedProfiles.filter(id => id !== p.id) : [...f.linkedProfiles, p.id]}))}
+                      >{p.name}</button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <Button className="w-full" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0} onClick={async () => {
               if (!editingExpense) return;
               if (!editForm.description.trim()) { toast({ title: "Description required", variant: "destructive" }); return; }
               if (!editForm.amount || parseFloat(editForm.amount) <= 0) { toast({ title: "Valid amount required", variant: "destructive" }); return; }
               try {
+                const parsedTags = editForm.tags.split(",").map(t => t.trim()).filter(Boolean);
                 await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
                   description: editForm.description,
                   amount: parseFloat(editForm.amount),
                   category: editForm.category,
                   vendor: editForm.vendor || undefined,
+                  date: editForm.date || undefined,
+                  tags: parsedTags,
+                  isRecurring: editForm.isRecurring,
+                  linkedProfiles: editForm.linkedProfiles,
                 });
                 queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
