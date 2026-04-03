@@ -682,7 +682,60 @@ export class SupabaseStorage implements IStorage {
       }
     } catch (e) { errors.push("documents"); }
 
-    try { // 7. Delete entity_links
+    try { // 7. Delete/unlink habits
+      const allHabits = await this.getHabits();
+      for (const habit of allHabits) {
+        if ((habit.linkedProfiles || []).includes(id)) {
+          if ((habit.linkedProfiles || []).length <= 1) {
+            await this.supabase.from("habits").delete().eq("id", habit.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("habits").update({ linked_profiles: (habit.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", habit.id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("habits"); }
+
+    try { // 8. Delete/unlink artifacts
+      const allArtifacts = await this.getArtifacts();
+      for (const art of allArtifacts) {
+        if ((art.linkedProfiles || []).includes(id)) {
+          if ((art.linkedProfiles || []).length <= 1) {
+            await this.supabase.from("artifacts").delete().eq("id", art.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("artifacts").update({ linked_profiles: (art.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", art.id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("artifacts"); }
+
+    try { // 9. Delete/unlink goals
+      const allGoals = await this.getGoals();
+      for (const goal of allGoals) {
+        if ((goal.linkedProfiles || []).includes(id)) {
+          if ((goal.linkedProfiles || []).length <= 1) {
+            await this.supabase.from("goals").delete().eq("id", goal.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("goals").update({ linked_profiles: (goal.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", goal.id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("goals"); }
+
+    try { // 10. Delete/unlink journal entries
+      const { data: journalRows } = await this.supabase.from("journal_entries").select("id, linked_profiles").eq("user_id", this.userId);
+      for (const row of journalRows || []) {
+        const lp: string[] = row.linked_profiles || [];
+        if (lp.includes(id)) {
+          if (lp.length <= 1) {
+            await this.supabase.from("journal_entries").delete().eq("id", row.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("journal_entries").update({ linked_profiles: lp.filter((pid: string) => pid !== id) }).eq("id", row.id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("journal"); }
+
+    try { // 11. Delete entity_links
       await this.supabase.from("entity_links").delete()
         .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
         .eq("user_id", this.userId);
@@ -1849,14 +1902,24 @@ export class SupabaseStorage implements IStorage {
   async createHabit(data: InsertHabit): Promise<Habit> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = (data as any).linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("habits").insert({
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
       target_days: data.targetDays || null, target_per_day: data.targetPerDay || 1,
       current_streak: 0, longest_streak: 0,
+      linked_profiles: linkedProfiles,
       created_at: now,
     });
     if (error) throw error;
+    for (const pId of linkedProfiles) {
+      try { await this.linkProfileTo(pId, "habit", id); } catch {}
+    }
     this.logActivity("habit", `Created habit: ${data.name}`);
     return (await this.getHabit(id))!;
   }
@@ -2038,10 +2101,16 @@ export class SupabaseStorage implements IStorage {
     const now = new Date().toISOString();
     const id = randomUUID();
     const items: ChecklistItem[] = (data.items || []).map((item, i) => ({ id: randomUUID(), text: item.text, checked: item.checked ?? false, order: i }));
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = (data as any).linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("artifacts").insert({
       id, user_id: this.userId, type: data.type, title: data.title,
       content: data.content || "", items, tags: data.tags || [],
-      linked_profiles: [], pinned: data.pinned || false,
+      linked_profiles: linkedProfiles, pinned: data.pinned || false,
       created_at: now, updated_at: now,
     });
     if (error) throw error;
@@ -2214,11 +2283,18 @@ export class SupabaseStorage implements IStorage {
     const id = randomUUID();
     const now = new Date().toISOString();
     const milestones = (data.milestones || []).map(m => ({ ...m, reached: false }));
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = (data as any).linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("goals").insert({
       id, user_id: this.userId, title: data.title, type: data.type, target: data.target,
       current: data.startValue || 0, unit: data.unit, start_value: data.startValue ?? null,
       deadline: data.deadline || null, tracker_id: data.trackerId || null,
       habit_id: data.habitId || null, category: data.category || null,
+      linked_profiles: linkedProfiles,
       status: "active", milestones, created_at: now, updated_at: now,
     });
     if (error) throw error;

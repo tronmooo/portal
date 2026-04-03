@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import EditableTitle from "@/components/EditableTitle";
@@ -50,6 +50,8 @@ function HabitCard({ habit }: { habit: Habit }) {
     mutationFn: () => apiRequest("PATCH", `/api/habits/${habit.id}/restore`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       toast({ title: `"${habit.name}" restored` });
     },
     onError: (err: Error) => toast({ title: `Failed to restore "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
@@ -59,6 +61,8 @@ function HabitCard({ habit }: { habit: Habit }) {
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       toast({
         title: `"${habit.name}" deleted`,
         description: "Habit has been removed",
@@ -90,6 +94,8 @@ function HabitCard({ habit }: { habit: Habit }) {
                 onSave={async (newName) => {
                   await apiRequest("PATCH", `/api/habits/${habit.id}`, { name: newName });
                   queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
                   toast({ title: `Renamed to "${newName}"` });
                 }}
               />
@@ -203,13 +209,19 @@ export default function HabitsPage() {
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
-  const { id: profileId, name: profileName } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
+  const filterLabel = getFilterLabel();
+  const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
-  const { data: habits = [], isLoading, error, refetch } = useQuery<Habit[]>({
-    queryKey: ["/api/habits", profileId || "all"],
+  const { data: allHabits = [], isLoading, error, refetch } = useQuery<Habit[]>({
+    queryKey: ["/api/habits", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()),
   });
+
+  // Client-side profile filter
+  const habits = filterMode === "selected" && filterIds.length > 0
+    ? allHabits.filter(h => (h.linkedProfiles || []).some(id => filterIds.includes(id)))
+    : allHabits;
 
   const handleCreate = () => {
     if (!newName.trim()) { toast({ title: "Name required", description: "Enter a habit name", variant: "destructive" }); return; }
@@ -222,7 +234,7 @@ export default function HabitsPage() {
 
   const createMutation = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
@@ -245,7 +257,7 @@ export default function HabitsPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Habits{profileId ? ` — ${profileName}` : ""}</h1>
+            <h1 className="text-lg font-semibold">Habits{filterMode === "selected" ? ` — ${filterLabel}` : ""}</h1>
           </div>
           <p className="text-xs text-muted-foreground">{completedToday}/{totalActive} completed today</p>
         </div>

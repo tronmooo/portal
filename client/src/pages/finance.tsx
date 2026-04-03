@@ -52,7 +52,7 @@ export default function FinancePage() {
   const [addOpen, setAddOpen] = useState(false);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "" });
+  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "" });
   const [editSaving, setEditSaving] = useState(false);
 
   const addExpenseMutation = useMutation({
@@ -360,7 +360,7 @@ export default function FinancePage() {
                   <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
                       setEditingExpense(expense);
-                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "" });
+                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "", date: expense.date?.slice(0, 10) || "" });
                     }} title="Edit"><Pencil className="h-3 w-3" /></Button>
                     <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={async () => {
                       if (!confirm(`Delete "${expense.description}"?`)) return;
@@ -399,6 +399,7 @@ export default function FinancePage() {
               </Select>
             </div>
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
+            <div><Label>Date</Label><Input type="date" value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingExpense(null)} disabled={editSaving}>Cancel</Button>
               <Button className="flex-1" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0 || editSaving} onClick={async () => {
@@ -410,6 +411,7 @@ export default function FinancePage() {
                     amount: parseFloat(editForm.amount),
                     category: editForm.category,
                     vendor: editForm.vendor || undefined,
+                    date: editForm.date || undefined,
                   });
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });

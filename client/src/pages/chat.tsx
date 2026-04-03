@@ -922,6 +922,7 @@ export default function ChatPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
     queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
     queryClient.invalidateQueries({ queryKey: ["/api/ai-digest"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
   }
 
   const handleConfirmExtraction = async (data: {

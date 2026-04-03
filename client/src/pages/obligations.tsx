@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,7 +56,8 @@ function ObligationCard({ ob }: { ob: Obligation }) {
                   onSave={async (newName) => {
                     await apiRequest("PATCH", `/api/obligations/${ob.id}`, { name: newName });
                     queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
                     toast({ title: `Renamed to "${newName}"` });
                   }}
                 />
@@ -121,13 +122,19 @@ export default function ObligationsPage() {
   const [newFrequency, setNewFrequency] = useState("monthly");
   const [newCategory, setNewCategory] = useState("housing");
   const [newDueDate, setNewDueDate] = useState(new Date().toISOString().slice(0, 10));
-  const { id: profileId, name: profileName } = getDashboardProfileFilter();
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+  const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
+  const filterLabel = getFilterLabel();
+  const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
-  const { data: obligations = [], isLoading, error, refetch } = useQuery<Obligation[]>({
-    queryKey: ["/api/obligations", profileId || "all"],
+  const { data: allObligations = [], isLoading, error, refetch } = useQuery<Obligation[]>({
+    queryKey: ["/api/obligations", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
+
+  // Client-side profile filter
+  const obligations = filterMode === "selected" && filterIds.length > 0
+    ? allObligations.filter(o => o.linkedProfiles.some(id => filterIds.includes(id)))
+    : allObligations;
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/obligations", data),
@@ -171,7 +178,7 @@ export default function ObligationsPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Obligations{profileId ? ` — ${profileName}` : ""}</h1>
+            <h1 className="text-lg font-semibold">Obligations{filterMode === "selected" ? ` — ${filterLabel}` : ""}</h1>
           </div>
           <p className="text-xs text-muted-foreground">Recurring bills and payments</p>
         </div>

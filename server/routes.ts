@@ -1315,7 +1315,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const { date, value, notes } = req.body;
     const checkin = await storage.checkinHabit(req.params.id, date, value, notes);
     if (!checkin) return res.status(404).json({ error: "Habit not found" });
-    res.status(201).json(checkin);
+    // Return the full updated habit (with recalculated streak) instead of just the checkin
+    const updatedHabit = await storage.getHabit(req.params.id);
+    res.status(201).json(updatedHabit || checkin);
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
     if (typeof (storage as any).deleteHabitCheckin === 'function') {
