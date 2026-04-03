@@ -1704,6 +1704,7 @@ export class SupabaseStorage implements IStorage {
     const { data: docs, error } = await this.supabase.from("documents")
       .select("id, name, mime_type, file_data, storage_path")
       .eq("user_id", this.userId)
+      .is("deleted_at", null)
       .is("storage_path", null)
       .not("file_data", "eq", "")
       .not("file_data", "is", null);
