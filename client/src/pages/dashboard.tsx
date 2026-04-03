@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setDashboardProfileFilter, getDashboardProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
@@ -1236,9 +1237,22 @@ function GoalsSection({ profileId }: { profileId?: string }) {
 
 function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | undefined }) {
   const [, navigate] = useLocation();
+  const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | null>(null);
   const { data: incomes } = useQuery<any[]>({
     queryKey: ["/api/incomes"],
     queryFn: () => apiRequest("GET", "/api/incomes").then(r => r.json()),
+  });
+  const { data: allExpenses } = useQuery<any[]>({
+    queryKey: ["/api/expenses", "widget"],
+    queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
+  });
+  const { data: allProfiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const { data: allObligations } = useQuery<any[]>({
+    queryKey: ["/api/obligations"],
+    queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
   });
 
   const monthlySpend = stats?.monthlySpend || 0;
@@ -1248,6 +1262,19 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
   const totalLiabilities = data?.totalLiabilities || 0;
   const netWorth = totalAssetValue - totalLiabilities;
   const recentExpenses: any[] = data?.recentExpenses || [];
+
+  // Build drill-down data
+  const now = new Date();
+  const thisMonth = now.getMonth();
+  const thisYear = now.getFullYear();
+  const monthExpenses = (allExpenses || []).filter((e: any) => {
+    const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
+  });
+  const byCategory: Record<string, number> = {};
+  monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
+  const assetProfiles = (allProfiles || []).filter((p: any) => {
+    return p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue;
+  });
 
   if (!data && !stats) {
     return (
@@ -1261,24 +1288,28 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
     <CollapsibleSection icon={DollarSign} label="Finance" count={recentExpenses.length || undefined} testId="section-finance">
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+          <button onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-[10px] text-muted-foreground">Spending</p>
             <p className="text-sm font-bold tabular-nums text-red-400">${monthlySpend.toLocaleString()}</p>
-          </div>
-          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+            <p className="text-[9px] text-muted-foreground">{monthExpenses.length} this month</p>
+          </button>
+          <button onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-[10px] text-muted-foreground">Income</p>
             <p className="text-sm font-bold tabular-nums text-green-500">${monthlyIncome.toLocaleString()}</p>
-          </div>
-          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+            <p className="text-[9px] text-muted-foreground">{(incomes || []).length} sources</p>
+          </button>
+          <button onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-[10px] text-muted-foreground">Cash Flow</p>
             <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-red-500"}`}>
               {cashFlow >= 0 ? "+" : ""}${cashFlow.toLocaleString()}
             </p>
-          </div>
-          <div className="rounded-lg border border-border/40 bg-card p-2 text-center">
+            <p className="text-[9px] text-muted-foreground">income - spending</p>
+          </button>
+          <button onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-[10px] text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
-          </div>
+            <p className="text-[9px] text-muted-foreground">assets - liabilities</p>
+          </button>
         </div>
         {recentExpenses.length > 0 && (
           <div className="space-y-0.5">
@@ -1295,6 +1326,74 @@ function FinanceWidget({ data, stats }: { data: any; stats: DashboardStats | und
           View All Finance →
         </Button>
       </div>
+
+      {/* Spending Drill-Down */}
+      <DrillDownDialog
+        open={drill === "spending"}
+        onClose={() => setDrill(null)}
+        title="Monthly Spending"
+        subtitle={`${now.toLocaleDateString("en-US", { month: "long", year: "numeric" })} • ${monthExpenses.length} expenses`}
+        total={`$${monthlySpend.toLocaleString()}`}
+        items={[
+          ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).map(([cat, amt]) => ({
+            label: cat.charAt(0).toUpperCase() + cat.slice(1),
+            value: `$${amt.toLocaleString()}`,
+            sub: `${monthExpenses.filter(e => (e.category || "general") === cat).length} expenses`,
+            category: cat,
+          })),
+        ]}
+      />
+
+      {/* Income Drill-Down */}
+      <DrillDownDialog
+        open={drill === "income"}
+        onClose={() => setDrill(null)}
+        title="Income Sources"
+        total={`$${monthlyIncome.toLocaleString()}/mo`}
+        items={(incomes || []).map((i: any) => ({
+          label: i.description,
+          value: `$${i.amount.toLocaleString()}`,
+          sub: i.frequency,
+          category: i.category,
+        }))}
+        emptyMessage="No income sources yet. Add them on the Finance page."
+      />
+
+      {/* Cash Flow Drill-Down */}
+      <DrillDownDialog
+        open={drill === "cashflow"}
+        onClose={() => setDrill(null)}
+        title="Cash Flow Breakdown"
+        total={`${cashFlow >= 0 ? "+" : ""}$${cashFlow.toLocaleString()}`}
+        items={[
+          { label: "Total Income", value: `+$${monthlyIncome.toLocaleString()}`, sub: `${(incomes || []).length} sources`, category: "income" },
+          { label: "Total Spending", value: `-$${monthlySpend.toLocaleString()}`, sub: `${monthExpenses.length} expenses`, category: "expense" },
+          { label: "Monthly Bills", value: `-$${((allObligations || []).reduce((s: number, o: any) => s + (o.amount || 0), 0)).toLocaleString()}`, sub: `${(allObligations || []).length} obligations`, category: "obligation" },
+          ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).slice(0, 5).map(([cat, amt]) => ({
+            label: `Spending: ${cat}`, value: `-$${amt.toLocaleString()}`, category: cat,
+          })),
+        ]}
+      />
+
+      {/* Net Worth Drill-Down */}
+      <DrillDownDialog
+        open={drill === "networth"}
+        onClose={() => setDrill(null)}
+        title="Net Worth Breakdown"
+        subtitle="Assets minus liabilities"
+        total={`$${netWorth.toLocaleString()}`}
+        items={[
+          ...assetProfiles.map((p: any) => {
+            const val = Number(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue || 0);
+            return { label: p.name, value: `$${val.toLocaleString()}`, sub: p.type, category: "asset" };
+          }),
+          ...((allObligations || []).filter((o: any) => o.fields?.remainingBalance || o.fields?.totalAmount).map((o: any) => {
+            const val = Number(o.fields?.remainingBalance || o.fields?.totalAmount || 0);
+            return { label: o.name, value: `-$${val.toLocaleString()}`, sub: "liability", category: "liability" };
+          })),
+        ]}
+        emptyMessage="No assets or liabilities tracked yet."
+      />
     </CollapsibleSection>
   );
 }
