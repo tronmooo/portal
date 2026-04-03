@@ -10,6 +10,7 @@ import {
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
   type Task, type InsertTask,
   type Expense, type InsertExpense,
+  type Income, type InsertIncome,
   type CalendarEvent, type InsertEvent, type CalendarTimelineItem,
   type EventCategory, EVENT_CATEGORY_COLORS,
   type Document, type InsertDocument, type DashboardStats,
@@ -65,6 +66,13 @@ export interface IStorage {
   createExpense(data: InsertExpense): Promise<Expense>;
   updateExpense(id: string, data: Partial<Expense>): Promise<Expense | undefined>;
   deleteExpense(id: string): Promise<boolean>;
+
+  // Income
+  getIncomes(): Promise<Income[]>;
+  getIncome(id: string): Promise<Income | undefined>;
+  createIncome(data: InsertIncome): Promise<Income>;
+  updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined>;
+  deleteIncome(id: string): Promise<boolean>;
 
   // Events
   getEvents(): Promise<CalendarEvent[]>;
@@ -151,6 +159,9 @@ export interface IStorage {
 
   // Search
   search(query: string): Promise<any[]>;
+
+  // Audit log
+  getAuditLog(limit?: number): Promise<any[]>;
 
   // Preferences
   getPreference(key: string): Promise<string | null>;
@@ -839,6 +850,29 @@ export class MemStorage implements IStorage {
     return updated;
   }
   async deleteExpense(id: string): Promise<boolean> { return this.expenses.delete(id); }
+
+  // ---- Income ----
+  private incomes: Map<string, Income> = new Map();
+  async getIncomes(): Promise<Income[]> { return Array.from(this.incomes.values()); }
+  async getIncome(id: string): Promise<Income | undefined> { return this.incomes.get(id); }
+  async createIncome(data: InsertIncome): Promise<Income> {
+    const income: Income = {
+      id: randomUUID(), amount: data.amount, category: (data.category as any) || "other",
+      source: data.source, description: data.description, date: data.date || new Date().toISOString().slice(0, 10),
+      frequency: (data.frequency as any) || "one_time", isRecurring: data.isRecurring || false,
+      linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], createdAt: new Date().toISOString(),
+    };
+    this.incomes.set(income.id, income);
+    return income;
+  }
+  async updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined> {
+    const income = this.incomes.get(id);
+    if (!income) return undefined;
+    const updated = { ...income, ...data };
+    this.incomes.set(id, updated);
+    return updated;
+  }
+  async deleteIncome(id: string): Promise<boolean> { return this.incomes.delete(id); }
 
   // ---- Events ----
   async getEvents() { return Array.from(this.events.values()); }
@@ -1641,6 +1675,9 @@ export class MemStorage implements IStorage {
     }
     return results;
   }
+
+  // ---- Audit log (in-memory stub) ----
+  async getAuditLog(_limit?: number): Promise<any[]> { return []; }
 
   // ---- Preferences ----
   private preferences: Map<string, string> = new Map();

@@ -10,11 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2 } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, TrendingDown, Wallet } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Expense } from "@shared/schema";
+import type { Expense, Income } from "@shared/schema";
 import {
   BarChart,
   Bar,
@@ -35,6 +35,8 @@ const categoryColors: Record<string, string> = {
 };
 
 const EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general"];
+const INCOME_CATEGORIES = ["salary", "freelance", "investment", "rental", "gift", "refund", "bonus", "other"];
+const INCOME_FREQUENCIES = ["one_time", "weekly", "biweekly", "monthly", "quarterly", "yearly"];
 
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
@@ -53,6 +55,15 @@ export default function FinancePage() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "", tags: "" as string, isRecurring: false, linkedProfiles: [] as string[] });
   const { data: allProfiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const [activeTab, setActiveTab] = useState<"expenses" | "income">("expenses");
+  const { data: incomes = [] } = useQuery<Income[]>({
+    queryKey: ["/api/incomes"],
+    queryFn: () => apiRequest("GET", "/api/incomes").then(r => r.json()),
+  });
+  const [addIncomeOpen, setAddIncomeOpen] = useState(false);
+  const [newIncome, setNewIncome] = useState({ source: "", amount: "", category: "salary", frequency: "monthly", description: "" });
+  const [editingIncome, setEditingIncome] = useState<Income | null>(null);
+  const [editIncomeForm, setEditIncomeForm] = useState({ source: "", amount: "", category: "", frequency: "", description: "", date: "" });
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
@@ -73,6 +84,29 @@ export default function FinancePage() {
     },
     onError: (err: Error) => {
       toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
+  const addIncomeMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/incomes", {
+        source: newIncome.source,
+        amount: parseFloat(newIncome.amount),
+        category: newIncome.category,
+        frequency: newIncome.frequency,
+        description: newIncome.description || undefined,
+        isRecurring: newIncome.frequency !== "one_time",
+        date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+      setAddIncomeOpen(false);
+      setNewIncome({ source: "", amount: "", category: "salary", frequency: "monthly", description: "" });
+      toast({ title: `$${Number(newIncome.amount).toFixed(2)} income logged`, description: newIncome.source });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to add income", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -126,18 +160,21 @@ export default function FinancePage() {
             compact
           />
           <div className="ml-auto flex items-center gap-2">
-            <Select value={filterCategory} onValueChange={setFilterCategory}>
-              <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-category-filter">
-                <Filter className="h-3 w-3 mr-1" />
-                <SelectValue placeholder="All" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Categories</SelectItem>
-                {categories.map(c => (
-                  <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {activeTab === "expenses" && (
+              <Select value={filterCategory} onValueChange={setFilterCategory}>
+                <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-category-filter">
+                  <Filter className="h-3 w-3 mr-1" />
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Categories</SelectItem>
+                  {categories.map(c => (
+                    <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {activeTab === "expenses" ? (
             <Dialog open={addOpen} onOpenChange={setAddOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="h-8 text-xs" data-testid="button-add-expense">
@@ -170,9 +207,55 @@ export default function FinancePage() {
                 </div>
               </DialogContent>
             </Dialog>
+            ) : (
+            <Dialog open={addIncomeOpen} onOpenChange={setAddIncomeOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" className="h-8 text-xs" data-testid="button-add-income">
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Add Income
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader><DialogTitle>Log Income</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <div><Label className="text-xs">Source <span className="text-destructive">*</span></Label>
+                    <Input placeholder="Employer, client, etc." value={newIncome.source} onChange={e => setNewIncome(p => ({...p, source: e.target.value}))} /></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
+                      <Input type="number" step="0.01" placeholder="0.00" value={newIncome.amount} onChange={e => setNewIncome(p => ({...p, amount: e.target.value}))} /></div>
+                    <div><Label className="text-xs">Category</Label>
+                      <Select value={newIncome.category} onValueChange={v => setNewIncome(p => ({...p, category: v}))}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{INCOME_CATEGORIES.map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}</SelectContent>
+                      </Select></div>
+                  </div>
+                  <div><Label className="text-xs">Frequency</Label>
+                    <Select value={newIncome.frequency} onValueChange={v => setNewIncome(p => ({...p, frequency: v}))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>{INCOME_FREQUENCIES.map(f => <SelectItem key={f} value={f} className="capitalize">{f.replace("_", " ")}</SelectItem>)}</SelectContent>
+                    </Select></div>
+                  <div><Label className="text-xs">Notes (optional)</Label>
+                    <Input placeholder="Additional details" value={newIncome.description} onChange={e => setNewIncome(p => ({...p, description: e.target.value}))} /></div>
+                  <Button className="w-full" onClick={() => addIncomeMutation.mutate()} disabled={!newIncome.source || !newIncome.amount || addIncomeMutation.isPending}>
+                    {addIncomeMutation.isPending ? "Saving..." : "Log Income"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+            )}
           </div>
         </div>
-        <p className="text-sm text-muted-foreground mt-0.5">Expense tracking and analysis{filterCategory !== "all" && ` — ${filterCategory}`}</p>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          {activeTab === "expenses" ? `Expense tracking and analysis${filterCategory !== "all" ? ` — ${filterCategory}` : ""}` : "Income tracking and cash flow"}
+        </p>
+        {/* Tab pills */}
+        <div className="flex gap-1 mt-3">
+          {(["expenses", "income"] as const).map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${activeTab === tab ? "bg-primary text-primary-foreground border-transparent" : "border-border text-muted-foreground hover:bg-muted"}`}>
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Financial KPIs */}
@@ -182,78 +265,63 @@ export default function FinancePage() {
           const d = new Date(e.date);
           return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
         });
-        const monthTotal = thisMonth.reduce((s, e) => s + e.amount, 0);
-        
+        const monthExpenses = thisMonth.reduce((s, e) => s + e.amount, 0);
+
+        // Income this month
+        const filteredIncomes = (incomes || []).filter(i => {
+          if (filterMode === "selected" && filterIds.length > 0) {
+            const linked = i.linkedProfiles || [];
+            return linked.some(id => filterIds.includes(id));
+          }
+          return true;
+        });
+        const monthIncome = filteredIncomes.filter(i => {
+          const d = new Date(i.date);
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }).reduce((s, i) => s + i.amount, 0);
+        const cashFlow = monthIncome - monthExpenses;
+
         // Asset values from profiles
         const assetProfiles = (profiles || []).filter(p => ["vehicle", "asset", "investment", "property"].includes(p.type));
         const totalAssetValue = assetProfiles.reduce((s, p) => {
-          const val = p.fields?.purchasePrice || p.fields?.cost || p.fields?.value || p.fields?.amount || 0;
+          const val = (p as any).fields?.purchasePrice || (p as any).fields?.cost || (p as any).fields?.value || (p as any).fields?.amount || 0;
           return s + Number(val);
         }, 0);
-        
-        // Liabilities from obligations
+
         const oblData = obligations || [];
         const monthlyLiabilities = oblData.reduce((s: number, o: any) => {
           const amt = Number(o.amount) || 0;
           return s + (o.frequency === "monthly" ? amt : o.frequency === "yearly" ? amt / 12 : amt);
         }, 0);
-        
+        const netWorth = totalAssetValue - monthlyLiabilities * 12;
+
         return (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Total Spent</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5" data-testid="text-total-spent">${total.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Month Spent</p>
+              <p className="text-lg font-bold tabular-nums mt-0.5 text-red-500" data-testid="text-total-spent">${monthExpenses.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
             </div>
             <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">This Month</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5">${monthTotal.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Month Income</p>
+              <p className="text-lg font-bold tabular-nums mt-0.5 text-green-600">${monthIncome.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
             </div>
             <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Asset Value</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5 text-green-600">${totalAssetValue.toLocaleString()}</p>
-            </div>
-            <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Monthly Bills</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5 text-amber-600">${monthlyLiabilities.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Net Worth KPIs */}
-      {(() => {
-        const assetValue = enhanced?.financeSnapshot?.totalAssetValue || 0;
-        const liabilities = enhanced?.financeSnapshot?.totalLiabilities || 0;
-        const monthlyBills = obligations?.reduce((s: number, o: any) => s + (o.amount || 0), 0) || 0;
-        const netWorth = assetValue - liabilities;
-        return (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">This Month</p>
-              <p className="text-lg font-bold tabular-nums">${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="text-[10px] text-muted-foreground">{filtered.length} expenses</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">Monthly Bills</p>
-              <p className="text-lg font-bold tabular-nums">${monthlyBills.toLocaleString()}</p>
-              <p className="text-[10px] text-muted-foreground">{obligations?.length || 0} obligations</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">Assets</p>
-              <p className="text-lg font-bold tabular-nums text-green-500">${assetValue.toLocaleString()}</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">Net Worth</p>
-              <p className={`text-lg font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>
-                ${netWorth.toLocaleString()}
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Cash Flow</p>
+              <p className={`text-lg font-bold tabular-nums mt-0.5 ${cashFlow >= 0 ? "text-green-600" : "text-red-500"}`}>
+                {cashFlow >= 0 ? "+" : ""}${cashFlow.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}
               </p>
-              {liabilities > 0 && <p className="text-[10px] text-muted-foreground">Liabilities: ${liabilities.toLocaleString()}</p>}
-            </Card>
+            </div>
+            <div className="rounded-lg border p-2.5">
+              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Est. Net Worth</p>
+              <p className={`text-lg font-bold tabular-nums mt-0.5 ${netWorth >= 0 ? "text-green-600" : "text-red-500"}`}>
+                ${netWorth.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}
+              </p>
+            </div>
           </div>
         );
       })()}
 
-      {chartData.length > 0 && (
+      {activeTab === "expenses" && chartData.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">Spending by Category</CardTitle>
@@ -285,7 +353,7 @@ export default function FinancePage() {
         </Card>
       )}
 
-      <Card>
+      {activeTab === "expenses" && <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold">Recent Expenses</CardTitle>
         </CardHeader>
@@ -333,7 +401,107 @@ export default function FinancePage() {
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card>}
+
+      {/* Income List */}
+      {activeTab === "income" && <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold">Income Records</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {(incomes || []).length === 0 ? (
+            <div className="text-center py-10">
+              <Wallet className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground">No income logged yet.</p>
+              <p className="text-xs text-muted-foreground mt-1">Try: "logged $5000 salary from Acme Corp"</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {(incomes || []).filter(i => {
+                if (filterMode === "selected" && filterIds.length > 0) {
+                  const linked = i.linkedProfiles || [];
+                  return linked.some(id => filterIds.includes(id));
+                }
+                return true;
+              }).map((income) => (
+                <div key={income.id} className="flex items-center gap-3 py-3 group">
+                  <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center shrink-0">
+                    <TrendingUp className="h-3.5 w-3.5 text-green-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{income.source}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <Badge variant="secondary" className="text-xs capitalize">{income.category}</Badge>
+                      <Badge variant="outline" className="text-xs capitalize">{income.frequency.replace("_", " ")}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(income.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      </span>
+                    </div>
+                    {income.description && <p className="text-xs text-muted-foreground truncate mt-0.5">{income.description}</p>}
+                  </div>
+                  <span className="text-sm font-semibold tabular-nums shrink-0 text-green-600">+${income.amount.toFixed(2)}</span>
+                  <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
+                      setEditingIncome(income);
+                      setEditIncomeForm({ source: income.source, amount: String(income.amount), category: income.category, frequency: income.frequency, description: income.description || "", date: income.date });
+                    }} title="Edit"><Pencil className="h-3 w-3" /></Button>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={async () => {
+                      if (!confirm(`Delete income from "${income.source}"?`)) return;
+                      try {
+                        await apiRequest("DELETE", `/api/incomes/${income.id}`);
+                        queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+                        toast({ title: `Income from "${income.source}" deleted` });
+                      } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
+                    }} title="Delete"><Trash2 className="h-3 w-3" /></Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>}
+
+      {/* Edit Income Dialog */}
+      <Dialog open={!!editingIncome} onOpenChange={(open) => !open && setEditingIncome(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Edit Income</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label className="text-xs">Source</Label><Input value={editIncomeForm.source} onChange={e => setEditIncomeForm(f => ({...f, source: e.target.value}))} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Amount ($)</Label><Input type="number" step="0.01" value={editIncomeForm.amount} onChange={e => setEditIncomeForm(f => ({...f, amount: e.target.value}))} /></div>
+              <div><Label className="text-xs">Date</Label><Input type="date" value={editIncomeForm.date} onChange={e => setEditIncomeForm(f => ({...f, date: e.target.value}))} /></div>
+            </div>
+            <div><Label className="text-xs">Category</Label>
+              <Select value={editIncomeForm.category} onValueChange={v => setEditIncomeForm(f => ({...f, category: v}))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{INCOME_CATEGORIES.map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}</SelectContent>
+              </Select></div>
+            <div><Label className="text-xs">Frequency</Label>
+              <Select value={editIncomeForm.frequency} onValueChange={v => setEditIncomeForm(f => ({...f, frequency: v}))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{INCOME_FREQUENCIES.map(f => <SelectItem key={f} value={f} className="capitalize">{f.replace("_", " ")}</SelectItem>)}</SelectContent>
+              </Select></div>
+            <div><Label className="text-xs">Notes</Label><Input value={editIncomeForm.description} onChange={e => setEditIncomeForm(f => ({...f, description: e.target.value}))} placeholder="Optional" /></div>
+            <Button className="w-full" disabled={!editIncomeForm.source.trim() || !editIncomeForm.amount} onClick={async () => {
+              if (!editingIncome) return;
+              try {
+                await apiRequest("PATCH", `/api/incomes/${editingIncome.id}`, {
+                  source: editIncomeForm.source,
+                  amount: parseFloat(editIncomeForm.amount),
+                  category: editIncomeForm.category,
+                  frequency: editIncomeForm.frequency,
+                  description: editIncomeForm.description || undefined,
+                  date: editIncomeForm.date || undefined,
+                  isRecurring: editIncomeForm.frequency !== "one_time",
+                });
+                queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+                toast({ title: `Income updated` });
+                setEditingIncome(null);
+              } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }
+            }}>Save Changes</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Expense Dialog */}
       <Dialog open={!!editingExpense} onOpenChange={(open) => !open && setEditingExpense(null)}>

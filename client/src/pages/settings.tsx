@@ -22,7 +22,7 @@ import {
   User, Download, Upload, FileSpreadsheet, Moon, Sun, LogOut, Shield, Database,
   Palette, Info, CheckCircle2, Loader2, ArrowLeft, Bell, BellOff, Bot, Zap,
   Globe, Calendar, Lock, Trash2, HardDrive, RefreshCw, ExternalLink,
-  Smartphone, Monitor, ChevronRight, Heart, Key, Eye, EyeOff, Clock,
+  Smartphone, Monitor, ChevronRight, Heart, Key, Eye, EyeOff, Clock, ScrollText,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
@@ -62,6 +62,12 @@ export default function SettingsPage() {
   const { data: profiles = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const [showAuditLog, setShowAuditLog] = useState(false);
+  const { data: auditLog = [], isLoading: auditLoading } = useQuery<any[]>({
+    queryKey: ["/api/audit-log"],
+    queryFn: () => apiRequest("GET", "/api/audit-log?limit=100").then(r => r.json()),
+    enabled: showAuditLog,
   });
 
   async function handleExport() {
@@ -610,6 +616,51 @@ export default function SettingsPage() {
               </p>
             </div>
           </CardContent>
+        </Card>
+
+        {/* ─── Audit Trail ─── */}
+        <Card data-testid="card-audit-trail">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ScrollText className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-base">Activity Log</CardTitle>
+              </div>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setShowAuditLog(v => !v)} data-testid="button-toggle-audit">
+                {showAuditLog ? "Hide" : "View Log"}
+              </Button>
+            </div>
+            <CardDescription>A record of all actions taken in your account.</CardDescription>
+          </CardHeader>
+          {showAuditLog && (
+            <CardContent>
+              {auditLoading ? (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : auditLog.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-4">No activity recorded yet.</p>
+              ) : (
+                <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
+                  {auditLog.map((entry: any, i: number) => (
+                    <div key={entry.id || i} className="flex items-start gap-2 py-1.5 border-b border-border/40 last:border-0">
+                      <div className="w-1.5 h-1.5 rounded-full bg-primary/60 mt-1.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs truncate">{entry.entityName || "—"}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <Badge variant="outline" className="text-[9px] capitalize px-1 py-0">{entry.action}</Badge>
+                          <Badge variant="secondary" className="text-[9px] capitalize px-1 py-0">{entry.entityType}</Badge>
+                          <span className="text-[9px] text-muted-foreground">
+                            {new Date(entry.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          )}
         </Card>
 
         <div className="pb-10" />

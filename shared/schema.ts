@@ -501,6 +501,41 @@ export const insertExpenseSchema = z.object({
 export type InsertExpense = z.input<typeof insertExpenseSchema>;
 
 // ============================================================
+// INCOME
+// ============================================================
+
+export type IncomeFrequency = "one_time" | "weekly" | "biweekly" | "monthly" | "quarterly" | "yearly";
+export type IncomeCategory = "salary" | "freelance" | "investment" | "rental" | "gift" | "refund" | "bonus" | "other";
+
+export interface Income {
+  id: string;
+  amount: number;
+  category: IncomeCategory;
+  source: string; // employer, client, tenant, etc.
+  description?: string;
+  date: string; // YYYY-MM-DD
+  frequency: IncomeFrequency;
+  isRecurring: boolean;
+  linkedProfiles: string[];
+  tags: string[];
+  createdAt: string;
+}
+
+export const insertIncomeSchema = z.object({
+  amount: z.number().positive("Amount must be positive"),
+  category: z.enum(["salary", "freelance", "investment", "rental", "gift", "refund", "bonus", "other"]).default("other"),
+  source: z.string().min(1, "Source is required"),
+  description: z.string().optional(),
+  date: z.string().optional(),
+  frequency: z.enum(["one_time", "weekly", "biweekly", "monthly", "quarterly", "yearly"]).default("one_time"),
+  isRecurring: z.boolean().optional().default(false),
+  tags: z.array(z.string()).optional().default([]),
+  linkedProfiles: z.array(z.string()).optional().default([]),
+});
+
+export type InsertIncome = z.input<typeof insertIncomeSchema>;
+
+// ============================================================
 // CALENDAR EVENTS (expanded with recurrence, categories, linking)
 // ============================================================
 

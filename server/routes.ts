@@ -15,6 +15,7 @@ import {
   insertTrackerEntrySchema,
   insertTaskSchema,
   insertExpenseSchema,
+  insertIncomeSchema,
   insertEventSchema,
   insertHabitSchema,
   insertObligationSchema,
@@ -27,6 +28,7 @@ import {
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
+import { logger } from "./logger";
 
 // Simple rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -115,7 +117,7 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
     try {
       await fn(req, res, next);
     } catch (err: any) {
-      console.error(`[API Error] ${req.method} ${req.path}:`, err?.message || err);
+      logger.error("api", `${req.method} ${req.path}: ${err?.message || err}`);
       if (!res.headersSent) {
         res.status(500).json({ error: err?.message || "Internal server error" });
       }
@@ -165,7 +167,7 @@ export async function registerRoutes(
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
-      console.error("[Chat]", msg);
+      logger.error("chat", String(msg));
       // Provide actionable error messages based on error type
       const status = err?.status || err?.error?.status || 500;
       if (status === 529 || status === 503 || msg.includes('overloaded')) {
@@ -211,7 +213,7 @@ export async function registerRoutes(
       const result = await processFileUpload(fileName, safeMime, fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
-      console.error("[Upload]", err?.message || "unknown error");
+      logger.error("upload", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process upload" });
     }
   }));
@@ -332,7 +334,7 @@ export async function registerRoutes(
             pendingExtraction: result.pendingExtraction,
           });
         } catch (fileErr: any) {
-          console.error(`Batch upload error for ${fileName}:`, fileErr.message);
+          logger.error("upload", `Batch upload error for ${fileName}: ${fileErr.message}`);
           results.push({
             fileName,
             reply: `Failed to process "${fileName}": ${fileErr.message}`,
@@ -353,7 +355,7 @@ export async function registerRoutes(
 
       res.json({ results, summary });
     } catch (err: any) {
-      console.error("[BatchUpload]", err?.message || "unknown error");
+      logger.error("upload", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process batch upload" });
     }
   }));
@@ -366,7 +368,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "extractionId required" });
       }
 
-      console.log(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
+      logger.info("extraction", `confirm-extraction: extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || "NONE"}`);
 
       // If no profile was selected, auto-use the self profile for personal documents
       let resolvedProfileId = targetProfileId;
@@ -375,7 +377,7 @@ export async function registerRoutes(
         const selfProfile = profiles.find((p: any) => p.type === 'self');
         if (selfProfile) {
           resolvedProfileId = selfProfile.id;
-          console.log(`[confirm-extraction] Auto-selected self profile: ${selfProfile.name} (${selfProfile.id})`);
+          logger.info("extraction", `Auto-selected self profile: ${selfProfile.name}`);
         }
       }
 
@@ -401,7 +403,7 @@ export async function registerRoutes(
             saved.push(`Saved ${confirmedFields.length} fields to document`);
           }
         } catch (e: any) {
-          console.error("Failed to save fields to document:", e.message);
+          logger.error("extraction", `Failed to save fields to document: ${e.message}`);
         }
       }
 
@@ -447,7 +449,7 @@ export async function registerRoutes(
               fields: { ...(profile.fields || {}), ...profileFields },
             });
             saved.push(`Saved ${Object.keys(profileFields).length} fields to ${profile.name}`);
-            console.log(`[confirm-extraction] Routed ${Object.keys(profileFields).length} fields to profile ${profile.name}`);
+            logger.info("extraction", `Routed fields to profile ${profile.name}`);
 
             // Link the document to the profile
             try {
@@ -494,7 +496,7 @@ export async function registerRoutes(
             });
             saved.push(`Created event: ${event.title || event.field}`);
           } catch (evErr: any) {
-            console.error("Failed to create calendar event from extraction:", evErr.message);
+            logger.error("extraction", `Failed to create calendar event: ${evErr.message}`);
           }
         }
       }
@@ -542,7 +544,7 @@ export async function registerRoutes(
             });
             saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
           } catch (tErr: any) {
-            console.error("Failed to log tracker entry from extraction:", tErr.message);
+            logger.error("extraction", `Failed to log tracker entry: ${tErr.message}`);
           }
         }
       }
@@ -555,7 +557,7 @@ export async function registerRoutes(
         saved,
       });
     } catch (err: any) {
-      console.error("[ConfirmExtraction]", err?.message || "unknown error");
+      logger.error("extraction", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to confirm extraction" });
     }
   }));
@@ -615,7 +617,7 @@ export async function registerRoutes(
       });
       res.json(insights);
     } catch (err: any) {
-      console.error("[Insights]", err?.message || "unknown error");
+      logger.error("insights", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate insights" });
     }
   }));
@@ -947,7 +949,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       res.json(result);
     } catch (err: any) {
-      console.error("[ProfileSummary]", err?.message || "unknown error");
+      logger.error("profile", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate AI summary" });
     }
   }));
@@ -1171,6 +1173,49 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const expenses = await storage.getExpenses();
     if (!expenses.find(e => e.id === req.params.id)) return res.status(404).json({ error: "Expense not found" });
     await storage.deleteExpense(req.params.id);
+    res.status(204).send();
+  }));
+
+  // ---- Income ----
+  app.get("/api/incomes", asyncHandler(async (req, res) => {
+    let items = await storage.getIncomes();
+    if (req.query.profileId && typeof req.query.profileId === "string") {
+      items = items.filter(i => i.linkedProfiles.includes(req.query.profileId as string));
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+  }));
+  app.get("/api/incomes/:id", asyncHandler(async (req, res) => {
+    const income = await storage.getIncome(req.params.id);
+    if (!income) return res.status(404).json({ error: "Not found" });
+    res.json(income);
+  }));
+  app.post("/api/incomes", asyncHandler(async (req, res) => {
+    if (!req.body.amount || typeof req.body.amount !== "number" || req.body.amount <= 0) {
+      return res.status(400).json({ error: "Positive amount required" });
+    }
+    if (!req.body.source || typeof req.body.source !== "string" || !req.body.source.trim()) {
+      return res.status(400).json({ error: "Source is required" });
+    }
+    req.body.source = sanitize(req.body.source);
+    if (req.body.description) req.body.description = sanitize(req.body.description);
+    const parsed = insertIncomeSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    res.status(201).json(await storage.createIncome(parsed.data));
+  }));
+  app.patch("/api/incomes/:id", asyncHandler(async (req, res) => {
+    if (req.body.amount !== undefined && (typeof req.body.amount !== "number" || req.body.amount <= 0)) {
+      return res.status(400).json({ error: "Income amount must be a positive number" });
+    }
+    if (req.body.source) req.body.source = sanitize(req.body.source);
+    if (req.body.description) req.body.description = sanitize(req.body.description);
+    const updated = await storage.updateIncome(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json(updated);
+  }));
+  app.delete("/api/incomes/:id", asyncHandler(async (req, res) => {
+    const income = await storage.getIncome(req.params.id);
+    if (!income) return res.status(404).json({ error: "Income not found" });
+    await storage.deleteIncome(req.params.id);
     res.status(204).send();
   }));
 
@@ -1808,7 +1853,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       res.json(notifications);
     } catch (err: any) {
-      console.error("[Notifications]", err?.message || "unknown error");
+      logger.error("notifications", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to compute notifications" });
     }
   }));
@@ -1911,7 +1956,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${new Date().toISOString().slice(0, 10)}.json"`);
       res.json(data);
     } catch (err: any) {
-      console.error("[Export]", err?.message || "unknown error");
+      logger.error("export", err?.message || "unknown error");
       res.status(500).json({ error: "Export failed" });
     }
   }));
@@ -2027,7 +2072,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const totalFailed = Object.values(failed).reduce((s, arr) => s + arr.length, 0);
       res.json({ success: totalFailed === 0, imported, failed: totalFailed > 0 ? failed : undefined, totalFailed });
     } catch (err: any) {
-      console.error("[Import]", err?.message || "unknown error");
+      logger.error("import", err?.message || "unknown error");
       res.status(500).json({ error: "Import failed" });
     }
   }));
@@ -2145,7 +2190,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       res.json({ success: true, imported, skipped, errors: errors.slice(0, 10), totalRows: lines.length - 1 });
     } catch (err: any) {
-      console.error("Bank CSV import error:", err);
+      logger.error("import", String(err));
       res.status(500).json({ error: "CSV import failed" });
     }
   }));
@@ -2349,7 +2394,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         },
       });
     } catch (err: any) {
-      console.error("Spending analytics error:", err);
+      logger.error("analytics", String(err));
       res.status(500).json({ error: "Failed to compute spending analytics" });
     }
   }));
@@ -2585,7 +2630,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       res.json(result);
     } catch (err: any) {
-      console.error("AI Digest error:", err);
+      logger.error("ai", String(err));
       res.status(500).json({ error: "Failed to generate AI digest" });
     }
   }));
@@ -2607,7 +2652,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       }
       res.json(goals.slice(0, 500));
     } catch (err: any) {
-      console.error("Goals error:", err);
+      logger.error("goals", String(err));
       res.status(500).json({ error: "Failed to get goals" });
     }
   }));
@@ -2618,7 +2663,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       res.json(goal);
     } catch (err: any) {
-      console.error("Goal error:", err);
+      logger.error("goals", String(err));
       res.status(500).json({ error: "Failed to get goal" });
     }
   }));
@@ -2641,7 +2686,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const goal = await storage.createGoal(parsed.data);
       res.json(goal);
     } catch (err: any) {
-      console.error("Create goal error:", err);
+      logger.error("goals", String(err));
       res.status(500).json({ error: "Failed to create goal" });
     }
   }));
@@ -2662,7 +2707,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       res.json(goal);
     } catch (err: any) {
-      console.error("Update goal error:", err);
+      logger.error("goals", String(err));
       res.status(500).json({ error: "Failed to update goal" });
     }
   }));
@@ -2673,7 +2718,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       if (!deleted) return res.status(404).json({ error: "Goal not found" });
       res.json({ success: true });
     } catch (err: any) {
-      console.error("Delete goal error:", err);
+      logger.error("goals", String(err));
       res.status(500).json({ error: "Failed to delete goal" });
     }
   }));
@@ -2684,7 +2729,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const links = await storage.getEntityLinks(req.params.type, req.params.id);
       res.json(links);
     } catch (err: any) {
-      console.error("Get entity links error:", err);
+      logger.error("links", String(err));
       res.status(500).json({ error: "Failed to get entity links" });
     }
   }));
@@ -2694,7 +2739,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const related = await storage.getRelatedEntities(req.params.type, req.params.id);
       res.json(related);
     } catch (err: any) {
-      console.error("Get related entities error:", err);
+      logger.error("links", String(err));
       res.status(500).json({ error: "Failed to get related entities" });
     }
   }));
@@ -2705,7 +2750,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       const link = await storage.createEntityLink(parsed);
       res.json(link);
     } catch (err: any) {
-      console.error("Create entity link error:", err);
+      logger.error("links", String(err));
       res.status(400).json({ error: err.message || "Failed to create entity link" });
     }
   }));
@@ -2716,7 +2761,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       if (!deleted) return res.status(404).json({ error: "Entity link not found" });
       res.json({ success: true });
     } catch (err: any) {
-      console.error("Delete entity link error:", err);
+      logger.error("links", String(err));
       res.status(500).json({ error: "Failed to delete entity link" });
     }
   }));
@@ -2755,6 +2800,13 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     } catch (err: any) {
       res.status(500).json({ error: "Failed to set preference" });
     }
+  }));
+
+  // ---- Audit Log ----
+  app.get("/api/audit-log", asyncHandler(async (_req, res) => {
+    const limit = Math.min(Number(_req.query.limit) || 100, 500);
+    const entries = await storage.getAuditLog(limit);
+    res.json(entries);
   }));
 
   // ---- Onboarding Status ----
@@ -2823,7 +2875,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         });
         gcalResult = JSON.parse(stdout);
       } catch (err: any) {
-        console.error("Google Calendar fetch failed:", err.message);
+        logger.error("calendar", `Google Calendar fetch failed: ${err.message}`);
         return res.status(502).json({ error: "Failed to connect to Google Calendar. Please try again." });
       }
 
@@ -2901,7 +2953,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
           imported++;
           importedEvents.push(gcEvent.title || "Untitled");
         } catch (err: any) {
-          console.error("Failed to import event:", gcEvent.title, err.message);
+          logger.warn("calendar", `Failed to import event: ${gcEvent.title}: ${err.message}`);
         }
       }
 
@@ -2917,7 +2969,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
           : "All Google Calendar events are already synced.",
       });
     } catch (err: any) {
-      console.error("Calendar sync error:", err);
+      logger.error("calendar", String(err));
       res.status(500).json({ error: "Calendar sync failed" });
     }
   }));
@@ -2986,7 +3038,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       res.json({ exported: true, title: event.title, result });
     } catch (err: any) {
-      console.error("Calendar export error:", err);
+      logger.error("calendar", String(err));
       res.status(500).json({ error: "Failed to export event to Google Calendar" });
     }
   }));
@@ -3010,7 +3062,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   // Global async error handler — catches unhandled promise rejections from route handlers
   app.use((err: any, _req: any, res: any, _next: any) => {
-    console.error(`[API Error]`, err?.message || err);
+    logger.error("api", err?.message || String(err));
     if (!res.headersSent) {
       res.status(500).json({ error: err?.message || "Internal server error" });
     }

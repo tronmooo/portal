@@ -1,10 +1,12 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+import { logger } from "./logger";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
   type Task, type InsertTask,
   type Expense, type InsertExpense,
+  type Income, type InsertIncome,
   type CalendarEvent, type InsertEvent, type CalendarTimelineItem,
   type EventCategory, EVENT_CATEGORY_COLORS,
   type Document, type DashboardStats,
@@ -412,7 +414,7 @@ export class SupabaseStorage implements IStorage {
     };
     // Debug: log what IDs we're fetching
     if (allIds.expenses.length > 0 || allIds.trackers.length > 0) {
-      console.log(`[getProfileDetail] Profile ${id} (userId: ${this.userId}): expenses=${allIds.expenses.length}, trackers=${allIds.trackers.length}, tasks=${allIds.tasks.length}, events=${allIds.events.length}, docs=${allIds.documents.length}, obligations=${allIds.obligations.length}`);
+      logger.debug("storage", `[getProfileDetail] Profile ${id}: expenses=${allIds.expenses.length}, trackers=${allIds.trackers.length}, tasks=${allIds.tasks.length}`);
     }
     // Helper: fetch rows by IDs, also include any that have this profile in linkedProfiles JSONB
     const fetchByIds = async <T>(table: string, ids: string[], rowMapper: (r: any) => T): Promise<T[]> => {
@@ -584,7 +586,7 @@ export class SupabaseStorage implements IStorage {
             source: "ai",
           });
         } catch (e) {
-          console.error(`Auto-event generation failed for ${name} / ${def.fieldKey}:`, e);
+          logger.error("storage", `Auto-event generation failed for ${name} / ${def.fieldKey}`, { err: String(e) });
         }
       }
     }
@@ -624,7 +626,7 @@ export class SupabaseStorage implements IStorage {
       const allObligations = await this.getObligations();
       for (const ob of allObligations) {
         if (ob.linkedProfiles.includes(id)) {
-          await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
+          await this.supabase.from("obligations").update({ deleted_at: new Date().toISOString() }).eq("id", ob.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("obligations"); }
@@ -634,7 +636,7 @@ export class SupabaseStorage implements IStorage {
       for (const ev of allEvents) {
         if (ev.linkedProfiles.includes(id)) {
           if (ev.linkedProfiles.length <= 1) {
-            await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
+            await this.supabase.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", ev.id).eq("user_id", this.userId);
           } else {
             await this.supabase.from("events").update({ linked_profiles: ev.linkedProfiles.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
           }
@@ -689,13 +691,13 @@ export class SupabaseStorage implements IStorage {
     } catch (e) { errors.push("entity_links"); }
 
     if (errors.length > 0) {
-      console.warn(`[deleteProfile] Cascade delete partial failures for profile ${id}: ${errors.join(", ")}`);
+      logger.warn("storage", `[deleteProfile] Cascade delete partial failures for profile ${id}: ${errors.join(", ")}`);
     }
 
     // 8. Soft-delete the profile itself
     const { error } = await this.supabase.from("profiles").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     if (error) {
-      console.warn(`[deleteProfile] Failed to soft-delete profile ${id}:`, error.message);
+      logger.warn("storage", `[deleteProfile] Failed to soft-delete profile ${id}: ${error.message}`);
     }
     return !error;
   }
@@ -994,7 +996,7 @@ export class SupabaseStorage implements IStorage {
             if (aliases.includes(key.toLowerCase()) && fieldNames.has(canonical)) {
               normalizedValues[canonical] = val;
               mapped = true;
-              console.warn(`logEntry: mapped alias "${key}" → "${canonical}" for tracker "${tracker.name}"`);
+              logger.debug("storage", `logEntry: mapped alias "${key}" for tracker "${tracker.name}"`);
               break;
             }
           }
@@ -1002,7 +1004,7 @@ export class SupabaseStorage implements IStorage {
             // Accept the value but flag as not validated
             normalizedValues[key] = val;
             validated = false;
-            console.warn(`logEntry: unknown field "${key}" for tracker "${tracker.name}" (expected: ${[...fieldNames].join(", ")})`);
+            logger.warn("storage", `logEntry: unknown field "${key}" for tracker "${tracker.name}"`);
           }
         }
       }
@@ -1159,16 +1161,81 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
+  // INCOME
+  // ============================================================
+  async getIncomes(): Promise<Income[]> {
+    const { data, error } = await this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null).order("date", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(r => this.rowToIncome(r));
+  }
+
+  async getIncome(id: string): Promise<Income | undefined> {
+    const { data, error } = await this.supabase.from("incomes").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
+    if (error || !data) return undefined;
+    return this.rowToIncome(data);
+  }
+
+  async createIncome(data: InsertIncome): Promise<Income> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const { error } = await this.supabase.from("incomes").insert({
+      id, user_id: this.userId, amount: data.amount, category: data.category || "other",
+      source: data.source, description: data.description || null,
+      date: data.date || now.slice(0, 10), frequency: data.frequency || "one_time",
+      is_recurring: data.isRecurring || false, linked_profiles: data.linkedProfiles || [],
+      tags: data.tags || [], created_at: now,
+    });
+    if (error) throw error;
+    this.logActivity("income", `${data.source} +$${data.amount}`, "create", id);
+    return (await this.getIncome(id))!;
+  }
+
+  async updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined> {
+    const existing = await this.getIncome(id);
+    if (!existing) return undefined;
+    const merged = { ...existing, ...data };
+    const { error } = await this.supabase.from("incomes").update({
+      amount: merged.amount, category: merged.category, source: merged.source,
+      description: merged.description || null, date: merged.date,
+      frequency: merged.frequency, is_recurring: merged.isRecurring,
+      linked_profiles: merged.linkedProfiles, tags: merged.tags,
+    }).eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+    return this.getIncome(id);
+  }
+
+  async deleteIncome(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    return !error;
+  }
+
+  private rowToIncome(r: any): Income {
+    return {
+      id: r.id,
+      amount: Number(r.amount),
+      category: r.category || "other",
+      source: r.source,
+      description: r.description || undefined,
+      date: r.date,
+      frequency: r.frequency || "one_time",
+      isRecurring: r.is_recurring || false,
+      linkedProfiles: r.linked_profiles || [],
+      tags: r.tags || [],
+      createdAt: r.created_at,
+    };
+  }
+
+  // ============================================================
   // EVENTS
   // ============================================================
   async getEvents(): Promise<CalendarEvent[]> {
-    const { data, error } = await this.supabase.from("events").select("*").eq("user_id", this.userId);
+    const { data, error } = await this.supabase.from("events").select("*").eq("user_id", this.userId).is("deleted_at", null);
     if (error) throw error;
     return (data || []).map(r => this.rowToEvent(r));
   }
 
   async getEvent(id: string): Promise<CalendarEvent | undefined> {
-    const { data, error } = await this.supabase.from("events").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("events").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToEvent(data);
   }
@@ -1213,7 +1280,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteEvent(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("events").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -1566,14 +1633,14 @@ export class SupabaseStorage implements IStorage {
           .from('documents')
           .download(doc.storagePath);
         if (dlErr) {
-          console.error(`[getDocument] Storage download failed for ${doc.storagePath}:`, dlErr.message);
+          logger.error("storage", `[getDocument] Storage download failed for ${doc.storagePath}`, { err: dlErr.message });
         }
         if (!dlErr && blob) {
           const buffer = Buffer.from(await blob.arrayBuffer());
           doc.fileData = buffer.toString('base64');
         }
       } catch (e: any) {
-        console.error(`[getDocument] Storage download error for ${doc.storagePath}:`, e.message);
+        logger.error("storage", `[getDocument] Storage download error for ${doc.storagePath}`, { err: e.message });
       }
     }
     // If still no fileData and file_data column has data, use that
@@ -1612,11 +1679,11 @@ export class SupabaseStorage implements IStorage {
           storagePath = storagePath2;
           fileDataForDB = ""; // Don't store base64 when we have storage
         } else {
-          console.error('Storage upload failed, falling back to base64:', uploadError.message);
+          logger.error("storage", "Storage upload failed, falling back to base64", { err: uploadError.message });
           // Keep file_data as-is (base64 fallback)
         }
       } catch (err: any) {
-        console.error(`[Storage] Upload exception for ${id}:`, err.message);
+        logger.error("storage", `[Storage] Upload exception for ${id}`, { err: err.message });
         // Fall back to storing base64 in DB
       }
     }
@@ -1679,12 +1746,12 @@ export class SupabaseStorage implements IStorage {
         }
       }
     } catch (e: any) {
-      console.error(`[deleteDocument] Profile cleanup error for ${id}:`, e.message);
+      logger.error("storage", `[deleteDocument] Profile cleanup error for ${id}`, { err: e.message });
     }
     // Soft delete the document
     const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     if (error) {
-      console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
+      logger.error("storage", `[deleteDocument] Supabase error for ${id}`, { err: error.message });
       return false;
     }
     return true; // Supabase delete succeeds even if 0 rows matched — that's fine, doc is gone
@@ -1740,7 +1807,7 @@ export class SupabaseStorage implements IStorage {
   async getHabits(): Promise<Habit[]> {
     // Fetch all habits and ALL checkins in 2 parallel queries (not N+1)
     const [habitsResult, checkinsResult] = await Promise.all([
-      this.supabase.from("habits").select("*").eq("user_id", this.userId),
+      this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null),
       this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
     ]);
     if (habitsResult.error) throw habitsResult.error;
@@ -1756,7 +1823,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getHabit(id: string): Promise<Habit | undefined> {
-    const { data, error } = await this.supabase.from("habits").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("habits").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const { data: checkins } = await this.supabase.from("habit_checkins").select("*").eq("habit_id", id).eq("user_id", this.userId).order("date", { ascending: true });
     return this.rowToHabit(data, (checkins || []).map(c => this.rowToHabitCheckin(c)));
@@ -1820,8 +1887,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteHabit(id: string): Promise<boolean> {
-    await this.supabase.from("habit_checkins").delete().eq("habit_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("habits").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("habits").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -1831,7 +1897,7 @@ export class SupabaseStorage implements IStorage {
   async getObligations(): Promise<Obligation[]> {
     // Fetch all obligations and ALL payments in 2 parallel queries (not N+1)
     const [obligationsResult, paymentsResult] = await Promise.all([
-      this.supabase.from("obligations").select("*").eq("user_id", this.userId),
+      this.supabase.from("obligations").select("*").eq("user_id", this.userId).is("deleted_at", null),
       this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
     ]);
     if (obligationsResult.error) throw obligationsResult.error;
@@ -1847,7 +1913,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getObligation(id: string): Promise<Obligation | undefined> {
-    const { data, error } = await this.supabase.from("obligations").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("obligations").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const { data: payments } = await this.supabase.from("obligation_payments").select("*").eq("obligation_id", id).eq("user_id", this.userId).order("date", { ascending: true });
     return this.rowToObligation(data, (payments || []).map(p => this.rowToPayment(p)));
@@ -1911,8 +1977,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteObligation(id: string): Promise<boolean> {
-    await this.supabase.from("obligation_payments").delete().eq("obligation_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("obligations").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("obligations").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -1920,13 +1985,13 @@ export class SupabaseStorage implements IStorage {
   // ARTIFACTS
   // ============================================================
   async getArtifacts(): Promise<Artifact[]> {
-    const { data, error } = await this.supabase.from("artifacts").select("*").eq("user_id", this.userId);
+    const { data, error } = await this.supabase.from("artifacts").select("*").eq("user_id", this.userId).is("deleted_at", null);
     if (error) throw error;
     return (data || []).map(r => this.rowToArtifact(r));
   }
 
   async getArtifact(id: string): Promise<Artifact | undefined> {
-    const { data, error } = await this.supabase.from("artifacts").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("artifacts").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToArtifact(data);
   }
@@ -1971,7 +2036,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteArtifact(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("artifacts").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("artifacts").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -1979,13 +2044,13 @@ export class SupabaseStorage implements IStorage {
   // JOURNAL
   // ============================================================
   async getJournalEntries(): Promise<JournalEntry[]> {
-    const { data, error } = await this.supabase.from("journal_entries").select("*").eq("user_id", this.userId).order("created_at", { ascending: false });
+    const { data, error } = await this.supabase.from("journal_entries").select("*").eq("user_id", this.userId).is("deleted_at", null).order("created_at", { ascending: false });
     if (error) throw error;
     return (data || []).map(r => this.rowToJournalEntry(r));
   }
 
   private async getJournalEntry(id: string): Promise<JournalEntry | undefined> {
-    const { data, error } = await this.supabase.from("journal_entries").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("journal_entries").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToJournalEntry(data);
   }
@@ -2020,7 +2085,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteJournalEntry(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("journal_entries").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("journal_entries").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -2086,7 +2151,7 @@ export class SupabaseStorage implements IStorage {
   // GOALS
   // ============================================================
   async getGoals(): Promise<Goal[]> {
-    const { data, error } = await this.supabase.from("goals").select("*").eq("user_id", this.userId).order("created_at", { ascending: false });
+    const { data, error } = await this.supabase.from("goals").select("*").eq("user_id", this.userId).is("deleted_at", null).order("created_at", { ascending: false });
     if (error) throw error;
     const goals = (data || []).map(r => this.rowToGoal(r));
     for (const goal of goals) {
@@ -2098,7 +2163,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getGoal(id: string): Promise<Goal | undefined> {
-    const { data, error } = await this.supabase.from("goals").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("goals").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const goal = this.rowToGoal(data);
     if (goal.status === "active") {
@@ -2147,7 +2212,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteGoal(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("goals").delete().eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("goals").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -2351,6 +2416,28 @@ export class SupabaseStorage implements IStorage {
       }
     }
     return related;
+  }
+
+  // ============================================================
+  // AUDIT LOG
+  // ============================================================
+  async getAuditLog(limit = 100): Promise<any[]> {
+    const { data, error } = await this.supabase
+      .from("audit_log")
+      .select("*")
+      .eq("user_id", this.userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) return [];
+    return (data || []).map(r => ({
+      id: r.id,
+      action: r.action,
+      entityType: r.entity_type,
+      entityId: r.entity_id,
+      entityName: r.entity_name,
+      source: r.source,
+      createdAt: r.created_at,
+    }));
   }
 
   // ============================================================
