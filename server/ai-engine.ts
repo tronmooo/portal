@@ -1920,7 +1920,22 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "create_profile": {
       // DEDUP: Check if profile with same name already exists
       const existingProfiles = await storage.getProfiles();
-      const existingProfile = existingProfiles.find(p => p.name.toLowerCase() === (input.name || "").toLowerCase().trim());
+      const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
+      const isChildType = childTypes.includes(input.type || "");
+      // Resolve intended parent for child types
+      let intendedParentId: string | undefined;
+      if (isChildType && input.forProfile) {
+        const parentMatch = existingProfiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+        if (parentMatch) intendedParentId = parentMatch.id;
+      }
+      const existingProfile = existingProfiles.find(p => {
+        if (p.name.toLowerCase() !== (input.name || "").toLowerCase().trim()) return false;
+        // For child types with a specific owner, only dedup against profiles owned by the SAME person
+        if (isChildType && intendedParentId) {
+          return p.parentProfileId === intendedParentId;
+        }
+        return true;
+      });
       if (existingProfile) {
         // Update existing instead of creating duplicate
         logger.info("ai", `Profile "${input.name}" already exists (${existingProfile.id}) — updating instead of creating`);
@@ -1933,9 +1948,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         });
       }
       // Auto-detect parent profile for non-primary profile types
-      let parentProfileId = input.parentProfileId;
-      const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
-      if (!parentProfileId && childTypes.includes(input.type || "")) {
+      let parentProfileId = input.parentProfileId || (intendedParentId ?? undefined);
+      if (!parentProfileId && isChildType) {
         const profiles = await storage.getProfiles();
         // If forProfile is specified, find that profile as parent
         if (input.forProfile) {
@@ -2379,20 +2393,28 @@ async function executeTool(name: string, input: any): Promise<any> {
         // Extract the service name (strip common suffixes like "subscription", "premium", "payment")
         const serviceName = (input.name || "").replace(/\s*(subscription|premium|plus|pro|payment|bill|membership|plan|monthly|annual|yearly)\s*/gi, "").trim() || input.name || "";
         const serviceNameLower = serviceName.toLowerCase();
+        // When creating for a specific person, only match existing profiles owned by THAT person
+        let targetParentId: string | undefined;
+        if (input.forProfile) {
+          const targetProfile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+          if (targetProfile) targetParentId = targetProfile.id;
+        }
         const existingProfile = profiles.find(p => {
           const pName = p.name.toLowerCase();
-          return pName === serviceNameLower || pName.includes(serviceNameLower) || serviceNameLower.includes(pName) ||
+          const nameMatch = pName === serviceNameLower || pName.includes(serviceNameLower) || serviceNameLower.includes(pName) ||
             pName === obNameLower || obNameLower.includes(pName);
+          if (!nameMatch) return false;
+          // If creating for a specific person, only match profiles belonging to that person
+          if (targetParentId) {
+            return p.parentProfileId === targetParentId;
+          }
+          return true;
         });
         if (!existingProfile && serviceName.length > 0) {
           try {
             // Determine parent: use forProfile's profile if specified, otherwise self
             const selfProfile = profiles.find(p => p.type === "self");
-            let parentId = selfProfile?.id;
-            if (input.forProfile) {
-              const targetProfile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
-              if (targetProfile) parentId = targetProfile.id;
-            }
+            const parentId = targetParentId || selfProfile?.id;
             const newProfile = await storage.createProfile({
               type: "subscription",
               name: serviceName,
