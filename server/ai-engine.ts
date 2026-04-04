@@ -46,17 +46,17 @@ async function webSearch(query: string, numResults = 5): Promise<string> {
     if (results.length > 0) return results.join("\n");
   }
 
-  // Fallback: try Brave Search (no API key needed for HTML)
-  const braveUrl = `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`;
+  // Fallback: try Brave Search (works from cloud IPs unlike DDG)
+  const braveUrl = `https://search.brave.com/search?q=${encodeURIComponent(query)}`;
   html = await fetchUrl(braveUrl);
-  if (html) {
-    const snippets = [...html.matchAll(/class="snippet-description"[^>]*>(.*?)<\/p>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
-    const titles = [...html.matchAll(/class="snippet-title"[^>]*>(.*?)<\/span>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
-    const results: string[] = [];
-    for (let i = 0; i < Math.min(titles.length, snippets.length, numResults); i++) {
-      if (snippets[i]) results.push(`${titles[i]}: ${snippets[i]}`);
+  if (html && html.length > 1000) {
+    // Brave uses 'snippet' classes for result content — extract all substantial snippets
+    const allSnippets = [...html.matchAll(/class="[^"]*snippet[^"]*"[^>]*>(.*?)<\//gs)]
+      .map(m => m[1].replace(/<[^>]+>/g, "").trim())
+      .filter(s => s.length > 30);
+    if (allSnippets.length > 0) {
+      return allSnippets.slice(0, numResults * 2).join("\n");
     }
-    if (results.length > 0) return results.join("\n");
   }
 
   return "";
