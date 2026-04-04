@@ -79,16 +79,12 @@ const EXAMPLE_COMMANDS = [
 // ── Onboarding Section ──────────────────────────────────────
 function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void }) {
   return (
-    <div className="space-y-8 mb-8">
-      {/* Hero */}
-      <div className="text-center space-y-3">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 mb-1">
-          <Shield className="w-8 h-8 text-primary" />
-        </div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">Portol</h1>
-        <p className="text-base text-primary font-medium">Your AI-powered life command center</p>
-        <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-          Talk naturally. Portol organizes everything — finances, health, tasks, documents, and more.
+    <div className="space-y-8">
+      {/* Divider */}
+      <div className="text-center">
+        <p className="text-sm font-medium text-foreground">What can Portol do?</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Talk naturally. Portol organizes everything.
         </p>
       </div>
 
@@ -152,13 +148,13 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
         ))}
       </div>
 
-      {/* CTA to scroll to login */}
+      {/* CTA to scroll back to login */}
       <Button
         className="w-full gap-2"
         size="lg"
         onClick={onScrollToLogin}
       >
-        Get Started <ChevronDown className="h-4 w-4" />
+        Sign In Now <ChevronDown className="h-4 w-4 rotate-180" />
       </Button>
     </div>
   );
@@ -239,10 +235,16 @@ export default function AuthPage() {
     <div className="min-h-screen bg-background overflow-y-auto" style={{ WebkitOverflowScrolling: "touch" }}>
       <div className="w-full max-w-md mx-auto px-4 py-8 space-y-6">
 
-        {/* Onboarding Tutorial */}
-        <OnboardingSection onScrollToLogin={scrollToLogin} />
+        {/* Logo / Brand */}
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 mb-1">
+            <Shield className="w-7 h-7 text-primary" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Portol</h1>
+          <p className="text-sm text-muted-foreground">Your AI-powered life command center</p>
+        </div>
 
-        {/* Login Card */}
+        {/* Login Card — FIRST */}
         <div ref={loginRef}>
           <Card className="border-border/50">
             <CardHeader className="pb-4">
@@ -365,9 +367,12 @@ export default function AuthPage() {
           </Card>
         </div>
 
-        <p className="text-xs text-center text-muted-foreground pb-8">
+        <p className="text-xs text-center text-muted-foreground">
           Your data is secured with row-level security. Only you can access your information.
         </p>
+
+        {/* Onboarding Tutorial — BELOW login */}
+        <OnboardingSection onScrollToLogin={scrollToLogin} />
       </div>
     </div>
   );
