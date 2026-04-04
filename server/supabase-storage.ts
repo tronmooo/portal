@@ -419,11 +419,11 @@ export class SupabaseStorage implements IStorage {
     const fetchByIds = async <T>(table: string, ids: string[], rowMapper: (r: any) => T): Promise<T[]> => {
       if (ids.length === 0) {
         // Still check for linkedProfiles containment
-        const { data } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", [id]);
+        const { data } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
         return (data || []).map(rowMapper);
       }
       const { data: byId } = await this.supabase.from(table).select("*").eq("user_id", this.userId).in("id", ids);
-      const { data: byLink } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", [id]);
+      const { data: byLink } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
       const merged = new Map<string, any>();
       for (const r of [...(byId || []), ...(byLink || [])]) merged.set(r.id, r);
       return [...merged.values()].map(rowMapper);
@@ -431,13 +431,14 @@ export class SupabaseStorage implements IStorage {
     // For trackers and obligations, we need entries/payments — fetch them in bulk
     // Also pre-fetch tracker IDs that have this profile in their own linked_profiles JSONB
     const { data: entityLinkedTrackerRows } = await this.supabase
-      .from("trackers").select("id").eq("user_id", this.userId).contains("linked_profiles", [id]);
+      .from("trackers").select("id").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
     const entityLinkedTrackerIds = (entityLinkedTrackerRows || []).map((r: any) => r.id);
     // Pre-fetch obligation IDs that have this profile in their linked_profiles
     const { data: entityLinkedObligationRows } = await this.supabase
-      .from("obligations").select("id").eq("user_id", this.userId).contains("linked_profiles", [id]);
+      .from("obligations").select("id").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
     const entityLinkedObligationIds = (entityLinkedObligationRows || []).map((r: any) => r.id);
     const trackerIdsArr = [...new Set([...allIds.trackers, ...entityLinkedTrackerIds])];
+    console.log(`[getProfileDetail] Profile ${id}: junction trackers=${allIds.trackers.length}, entity-linked trackers=${entityLinkedTrackerIds.length}, total unique=${trackerIdsArr.length}`);
     const obligationIdsArr = [...new Set([...allIds.obligations, ...entityLinkedObligationIds])];
     const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
       trackerIdsArr.length > 0
