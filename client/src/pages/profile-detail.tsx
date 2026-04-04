@@ -87,6 +87,16 @@ import {
   Camera,
   Image as ImageIcon,
   Star,
+  Pause,
+  Play,
+  Ban,
+  CalendarPlus,
+  Globe,
+  Mail,
+  ExternalLink,
+  Receipt,
+  Zap,
+  Target,
 } from "lucide-react";
 import {
   LineChart,
@@ -533,6 +543,49 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
 }
 
 // ── Inline-editable field row for grouped sections ──
+// ── Subscription Quick Actions (used in Insights card) ──
+function SubscriptionQuickActions({ profileId, status, onChanged, onEdit }: { profileId: string; status: string; onChanged: () => void; onEdit: () => void }) {
+  const { toast } = useToast();
+  const statusMutation = useMutation({
+    mutationFn: async (newStatus: string) => {
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { status: newStatus } });
+    },
+    onSuccess: (_d, newStatus) => {
+      toast({ title: `Subscription ${newStatus}` });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to update status", description: formatApiError(err), variant: "destructive" }),
+  });
+  return (
+    <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-border/30">
+      {status === "paused" ? (
+        <Button size="sm" variant="outline" className="h-7 text-xs gap-1 flex-1" onClick={() => statusMutation.mutate("active")} disabled={statusMutation.isPending} data-testid="button-resume-subscription">
+          <Play className="h-3 w-3" /> Resume
+        </Button>
+      ) : status !== "canceled" ? (
+        <Button size="sm" variant="outline" className="h-7 text-xs gap-1 flex-1" onClick={() => statusMutation.mutate("paused")} disabled={statusMutation.isPending} data-testid="button-pause-subscription">
+          <Pause className="h-3 w-3" /> Pause
+        </Button>
+      ) : null}
+      {status !== "canceled" && (
+        <Button size="sm" variant="outline" className="h-7 text-xs gap-1 flex-1 text-destructive hover:text-destructive" onClick={() => statusMutation.mutate("canceled")} disabled={statusMutation.isPending} data-testid="button-cancel-subscription">
+          <Ban className="h-3 w-3" /> Cancel
+        </Button>
+      )}
+      {status === "canceled" && (
+        <Button size="sm" variant="outline" className="h-7 text-xs gap-1 flex-1" onClick={() => statusMutation.mutate("active")} disabled={statusMutation.isPending} data-testid="button-reactivate-subscription">
+          <Play className="h-3 w-3" /> Reactivate
+        </Button>
+      )}
+      <Button size="sm" variant="outline" className="h-7 text-xs gap-1 flex-1" onClick={onEdit} data-testid="button-edit-subscription">
+        <Pencil className="h-3 w-3" /> Edit
+      </Button>
+    </div>
+  );
+}
+
 function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
   profileId: string;
   fieldKey: string;
@@ -660,14 +713,14 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
     ]},
   ],
   subscription: [
-    { title: "Subscription Details", fields: [
-      { key: "provider", label: "Provider" }, { key: "cost", label: "Cost" },
-      { key: "frequency", label: "Frequency" }, { key: "plan", label: "Plan" },
-      { key: "service", label: "Service" },
+    { title: "Subscription", fields: [
+      { key: "provider", label: "Provider" }, { key: "cost", label: "Monthly Cost" },
+      { key: "frequency", label: "Billing Cycle" }, { key: "plan", label: "Plan" },
+      { key: "status", label: "Status" },
     ]},
-    { title: "Status", fields: [
-      { key: "startDate", label: "Start Date" }, { key: "renewalDate", label: "Renewal Date" },
-      { key: "autoRenew", label: "Auto-Renew" },
+    { title: "Dates", fields: [
+      { key: "startDate", label: "Start Date" }, { key: "renewalDate", label: "Next Billing" },
+      { key: "endDate", label: "End Date" },
     ]},
   ],
   asset: [
@@ -874,13 +927,17 @@ function InfoTab({
         const cost = Number(profile.fields?.monthlyCost || profile.fields?.cost || profile.fields?.amount || 0);
         const startDate = profile.fields?.startDate;
         const renewalDate = profile.fields?.renewalDate;
-        if (!cost && !startDate) return null;
+        const subStatus = (profile.fields?.status as string || "active").toLowerCase();
         const monthsActive = startDate ? Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (30.44 * 86400000))) : 0;
         const totalPaid = cost * monthsActive;
         const daysUntilRenewal = renewalDate ? Math.ceil((new Date(renewalDate).getTime() - Date.now()) / 86400000) : null;
+        const statusColor = subStatus === "active" ? "bg-green-500/15 text-green-400" : subStatus === "paused" ? "bg-amber-500/15 text-amber-400" : "bg-red-500/15 text-red-400";
         return (
-          <Card className="p-3">
-            <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Subscription Insights</p>
+          <Card className="p-3" data-testid="card-subscription-insights">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase">Subscription Insights</p>
+              <Badge variant="secondary" className={`text-[10px] capitalize ${statusColor}`} data-testid="badge-subscription-status">{subStatus}</Badge>
+            </div>
             <div className="grid grid-cols-3 gap-3 text-center">
               <div>
                 <p className="text-sm font-bold tabular-nums">${cost.toLocaleString()}/mo</p>
@@ -895,6 +952,7 @@ function InfoTab({
                 <p className="text-[10px] text-muted-foreground">Until Renewal</p>
               </div>
             </div>
+            <SubscriptionQuickActions profileId={profile.id} status={subStatus} onChanged={handleSaved} onEdit={onEdit} />
           </Card>
         );
       })()}
@@ -3729,10 +3787,12 @@ function EditProfileDialog({
     ],
     subscription: [
       { key: "cost", label: "Monthly Cost", placeholder: "9.99" },
-      { key: "frequency", label: "Billing Frequency", placeholder: "monthly, yearly" },
-      { key: "renewalDate", label: "Renewal Date", placeholder: "YYYY-MM-DD" },
-      { key: "accountEmail", label: "Account Email", placeholder: "" },
+      { key: "frequency", label: "Billing Cycle", placeholder: "monthly, yearly" },
+      { key: "renewalDate", label: "Next Billing", placeholder: "YYYY-MM-DD" },
+      { key: "status", label: "Status", placeholder: "active, paused, canceled" },
       { key: "plan", label: "Plan", placeholder: "Premium, Basic..." },
+      { key: "category", label: "Category", placeholder: "entertainment, utilities..." },
+      { key: "paymentMethod", label: "Payment Method", placeholder: "Visa *1234" },
     ],
     property: [
       { key: "address", label: "Address", placeholder: "" },
@@ -3888,9 +3948,9 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Subscription
   subscription: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "finances", label: "Billing", testId: "tab-finances" },
-    { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "billing", label: "Billing", testId: "tab-billing" },
+    { value: "impact", label: "Impact", testId: "tab-impact" },
+    { value: "details", label: "Details", testId: "tab-details" },
   ],
   // Medical provider
   medical: [
@@ -4256,6 +4316,9 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
           profile.fields?.monthlyPayment || (profile.relatedObligations || []).length > 0);
         case "notes": return !!(profile.notes && profile.notes.trim());
         case "timeline": return ((profile.relatedEvents || []).length + (profile.relatedTasks || []).length) > 0;
+        case "billing": return true;
+        case "impact": return true;
+        case "details": return true;
         default: return false;
       }
     })();
@@ -4264,7 +4327,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "health", "loan-detail"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "health", "loan-detail", "billing", "impact", "details"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -4274,6 +4337,457 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
   
   // Data tabs first, then empty tabs (still accessible but deprioritized)
   return [...withData, ...withoutData];
+}
+
+// ============================================================
+// SUBSCRIPTION BILLING TAB
+// ============================================================
+
+function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [showAddPayment, setShowAddPayment] = useState(false);
+  const [payDesc, setPayDesc] = useState("");
+  const [payAmount, setPayAmount] = useState("");
+  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [payCategory, setPayCategory] = useState("subscription");
+
+  const f = profile.fields || {};
+  const expenses = [...(profile.relatedExpenses || [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const events = profile.relatedEvents || [];
+
+  const billingFields = [
+    { key: "frequency", label: "Billing Cycle" },
+    { key: "startDate", label: "Start Date" },
+    { key: "renewalDate", label: "Next Billing" },
+    { key: "endDate", label: "End Date" },
+    { key: "paymentMethod", label: "Payment Method" },
+  ];
+
+  const createPaymentMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/expenses", {
+        description: payDesc || `${profile.name} payment`,
+        amount: Number(payAmount),
+        category: payCategory,
+        date: payDate,
+      });
+      const expense = await res.json();
+      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "expense", entityId: expense.id });
+      return expense;
+    },
+    onSuccess: () => {
+      toast({ title: `$${Number(payAmount).toFixed(2)} payment recorded` });
+      setShowAddPayment(false);
+      setPayDesc(""); setPayAmount(""); setPayDate(new Date().toISOString().slice(0, 10));
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to add payment", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const calendarSyncMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/events", {
+        title: `\u{1F4B0} ${profile.name} billing`,
+        date: f.renewalDate || new Date().toISOString().slice(0, 10),
+        type: "subscription",
+        linkedProfiles: [profileId],
+        recurring: f.frequency || "monthly",
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Calendar event created" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to sync", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-4" data-testid="subscription-billing-tab">
+      {/* Billing Info */}
+      <Card>
+        <button className="w-full flex items-center justify-between px-4 py-2.5">
+          <span className="text-xs font-semibold">Billing Info</span>
+        </button>
+        <CardContent className="px-4 pb-3 pt-0">
+          {billingFields.map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Calendar Events */}
+      <Card>
+        <div className="flex items-center justify-between px-4 py-2.5">
+          <span className="text-xs font-semibold">Calendar Events</span>
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => calendarSyncMutation.mutate()} disabled={calendarSyncMutation.isPending} data-testid="button-sync-calendar">
+            <CalendarPlus className="h-3 w-3" /> {calendarSyncMutation.isPending ? "Syncing..." : "Sync to Calendar"}
+          </Button>
+        </div>
+        <CardContent className="px-4 pb-3 pt-0">
+          {events.length > 0 ? (
+            <div className="space-y-1">
+              {events.slice(0, 5).map((ev: any) => (
+                <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <span className="text-xs truncate">{ev.title}</span>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{ev.date ? new Date(ev.date).toLocaleDateString() : "—"}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground py-2">No calendar events linked yet</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Payment History */}
+      <Card>
+        <div className="flex items-center justify-between px-4 py-2.5">
+          <span className="text-xs font-semibold">Payment History ({expenses.length})</span>
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setShowAddPayment(true)} data-testid="button-add-payment">
+            <Plus className="h-3 w-3" /> Add Payment
+          </Button>
+        </div>
+        <CardContent className="px-4 pb-3 pt-0">
+          {expenses.length > 0 ? (
+            <div className="space-y-0.5">
+              {expenses.map((exp) => (
+                <div key={exp.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`payment-row-${exp.id}`}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium truncate">{exp.description || "Payment"}</p>
+                    <p className="text-[10px] text-muted-foreground tabular-nums">{new Date(exp.date).toLocaleDateString()}</p>
+                  </div>
+                  <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground py-2">No payments recorded yet</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Add Payment Dialog */}
+      <Dialog open={showAddPayment} onOpenChange={setShowAddPayment}>
+        <DialogContent className="max-w-sm" data-testid="dialog-add-payment">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Add Payment</DialogTitle>
+            <DialogDescription>Record a payment for {profile.name}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs text-muted-foreground">Description</label>
+              <Input className="mt-1 h-8 text-xs" value={payDesc} onChange={e => setPayDesc(e.target.value)} placeholder={`${profile.name} payment`} data-testid="input-payment-desc" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Amount</label>
+              <Input className="mt-1 h-8 text-xs" type="number" step="0.01" value={payAmount} onChange={e => setPayAmount(e.target.value)} placeholder="0.00" data-testid="input-payment-amount" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Date</label>
+              <Input className="mt-1 h-8 text-xs" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} data-testid="input-payment-date" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Category</label>
+              <Select value={payCategory} onValueChange={setPayCategory}>
+                <SelectTrigger className="h-8 text-xs mt-1" data-testid="select-payment-category"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["subscription", "entertainment", "utilities", "software", "other"].map(c => (
+                    <SelectItem key={c} value={c} className="text-xs capitalize">{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button size="sm" className="h-8 text-xs" onClick={() => createPaymentMutation.mutate()} disabled={!payAmount || createPaymentMutation.isPending} data-testid="button-submit-payment">
+              {createPaymentMutation.isPending ? "Saving..." : "Add Payment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ============================================================
+// SUBSCRIPTION IMPACT TAB
+// ============================================================
+
+function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail; profileId: string }) {
+  const f = profile.fields || {};
+  const cost = Number(f.monthlyCost || f.cost || f.amount || 0);
+  const freq = (f.frequency || "monthly").toLowerCase();
+  const monthlyCost = freq === "yearly" || freq === "annual" ? cost / 12 : freq === "quarterly" ? cost / 3 : freq === "weekly" ? cost * 4.33 : cost;
+  const expenses = profile.relatedExpenses || [];
+
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const currentYear = now.getFullYear();
+
+  const thisMonthTotal = expenses
+    .filter(e => { const d = new Date(e.date); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey; })
+    .reduce((sum, e) => sum + (e.amount || 0), 0);
+
+  const thisYearTotal = expenses
+    .filter(e => new Date(e.date).getFullYear() === currentYear)
+    .reduce((sum, e) => sum + (e.amount || 0), 0);
+
+  const startDate = f.startDate ? new Date(f.startDate) : null;
+  const monthsSinceStart = startDate ? Math.max(1, Math.floor((Date.now() - startDate.getTime()) / (30.44 * 86400000))) : 0;
+  const lifetimeEstimate = expenses.length > 0
+    ? expenses.reduce((sum, e) => sum + (e.amount || 0), 0)
+    : monthlyCost * monthsSinceStart;
+
+  const projection12 = monthlyCost * 12;
+  const category = f.category || "";
+
+  // Monthly totals for cost trend
+  const monthlyTotals: Record<string, number> = {};
+  for (const exp of expenses) {
+    const d = new Date(exp.date);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    monthlyTotals[key] = (monthlyTotals[key] || 0) + (exp.amount || 0);
+  }
+  const sortedMonths = Object.entries(monthlyTotals).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
+
+  // Parent profile
+  const parentId = f.parentProfileId;
+  const parentQuery = useQuery<any>({
+    queryKey: ["/api/profiles", parentId, "detail"],
+    queryFn: async () => { const res = await apiRequest("GET", `/api/profiles/${parentId}/detail`); return res.json(); },
+    enabled: !!parentId,
+  });
+
+  return (
+    <div className="space-y-4" data-testid="subscription-impact-tab">
+      {/* Spending Summary */}
+      <Card className="p-3">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Spending Summary</p>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div>
+            <p className="text-sm font-bold tabular-nums">{thisMonthTotal > 0 ? `$${thisMonthTotal.toFixed(2)}` : "—"}</p>
+            <p className="text-[10px] text-muted-foreground">This Month</p>
+          </div>
+          <div>
+            <p className="text-sm font-bold tabular-nums">{thisYearTotal > 0 ? `$${thisYearTotal.toFixed(2)}` : "—"}</p>
+            <p className="text-[10px] text-muted-foreground">This Year</p>
+          </div>
+          <div>
+            <p className="text-sm font-bold tabular-nums">{lifetimeEstimate > 0 ? `$${Math.round(lifetimeEstimate).toLocaleString()}` : "—"}</p>
+            <p className="text-[10px] text-muted-foreground">Lifetime</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* 12-Month Projection */}
+      <Card className="p-3">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase">12-Month Projection</p>
+          <Target className="h-3.5 w-3.5 text-muted-foreground" />
+        </div>
+        <p className="text-lg font-bold tabular-nums mt-1" data-testid="text-12mo-projection">
+          {monthlyCost > 0 ? `$${Math.round(projection12).toLocaleString()}` : "—"}
+        </p>
+        {monthlyCost > 0 && (
+          <p className="text-[10px] text-muted-foreground">${monthlyCost.toFixed(2)}/mo × 12 months</p>
+        )}
+      </Card>
+
+      {/* Category */}
+      {category && (
+        <Card className="p-3">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">Category</p>
+          <Badge variant="secondary" className="text-xs capitalize" data-testid="badge-sub-category">{category}</Badge>
+        </Card>
+      )}
+
+      {/* Cost Over Time */}
+      {sortedMonths.length >= 3 && (
+        <Card className="p-3">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Cost Over Time</p>
+          <div className="space-y-1">
+            {sortedMonths.map(([month, total]) => {
+              const maxVal = Math.max(...sortedMonths.map(m => m[1]));
+              const pct = maxVal > 0 ? (total / maxVal) * 100 : 0;
+              return (
+                <div key={month} className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground w-14 shrink-0 tabular-nums">{month}</span>
+                  <div className="flex-1 h-4 bg-muted/30 rounded overflow-hidden">
+                    <div className="h-full bg-pink-500/40 rounded" style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="text-[10px] font-medium tabular-nums w-16 text-right">${total.toFixed(2)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Linked To */}
+      {parentId && parentQuery.data && (
+        <Card className="p-3">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">Linked To</p>
+          <Link href={`/profiles/${parentId}`} className="text-xs font-medium text-primary hover:underline" data-testid="link-parent-profile">
+            {parentQuery.data.name || "Parent Profile"}
+          </Link>
+          <p className="text-[10px] text-muted-foreground capitalize">{parentQuery.data.type}</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// SUBSCRIPTION DETAILS TAB
+// ============================================================
+
+function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [notes, setNotes] = useState(profile.notes || "");
+  const [isEditingNotes, setIsEditingNotes] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const f = profile.fields || {};
+  const documents = profile.relatedDocuments || [];
+
+  const saveNotesMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes });
+    },
+    onSuccess: () => {
+      toast({ title: "Notes saved" });
+      setIsEditingNotes(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to save notes", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const toBase64 = (f: File): Promise<string> =>
+        new Promise((res, rej) => { const reader = new FileReader(); reader.onload = () => res((reader.result as string).split(",")[1]); reader.onerror = rej; reader.readAsDataURL(f); });
+      const fileData = await toBase64(file);
+      const res = await apiRequest("POST", "/api/upload", { fileName: file.name, mimeType: file.type, fileData, profileId });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Document uploaded" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const termsFields = [
+    { key: "cancellationPolicy", label: "Cancellation Policy" },
+    { key: "trialEndDate", label: "Trial End Date" },
+    { key: "contractEndDate", label: "Contract End Date" },
+  ];
+
+  const supportFields = [
+    { key: "supportUrl", label: "Support URL" },
+    { key: "supportPhone", label: "Support Phone" },
+    { key: "supportEmail", label: "Support Email" },
+    { key: "accountEmail", label: "Account Email" },
+    { key: "loginUrl", label: "Login URL" },
+  ];
+
+  return (
+    <div className="space-y-4" data-testid="subscription-details-tab">
+      {/* Notes */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold">Notes</span>
+            {!isEditingNotes ? (
+              <Button size="sm" variant="outline" className="h-6 text-[10px] gap-1" onClick={() => setIsEditingNotes(true)} data-testid="button-edit-detail-notes">
+                <Pencil className="h-2.5 w-2.5" /> Edit
+              </Button>
+            ) : (
+              <div className="flex gap-1">
+                <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => { setNotes(profile.notes || ""); setIsEditingNotes(false); }}>Cancel</Button>
+                <Button size="sm" className="h-6 text-[10px]" onClick={() => saveNotesMutation.mutate()} disabled={saveNotesMutation.isPending} data-testid="button-save-detail-notes">
+                  {saveNotesMutation.isPending ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            )}
+          </div>
+          {isEditingNotes ? (
+            <Textarea value={notes} onChange={e => setNotes(e.target.value)} className="min-h-[120px] text-xs" placeholder="Add notes about this subscription..." data-testid="textarea-detail-notes" />
+          ) : (profile.notes ? (
+            <div className="rounded-lg border bg-muted/30 p-3 text-xs whitespace-pre-wrap">{profile.notes}</div>
+          ) : (
+            <p className="text-xs text-muted-foreground italic py-2">No notes — tap Edit to add</p>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Documents */}
+      <Card>
+        <div className="flex items-center justify-between px-4 py-2.5">
+          <span className="text-xs font-semibold">Documents ({documents.length})</span>
+          <div>
+            <input type="file" ref={fileInputRef} className="hidden" onChange={e => { const file = e.target.files?.[0]; if (file) uploadMutation.mutate(file); e.target.value = ""; }} />
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending} data-testid="button-add-document">
+              <Upload className="h-3 w-3" /> {uploadMutation.isPending ? "Uploading..." : "Add Document"}
+            </Button>
+          </div>
+        </div>
+        <CardContent className="px-4 pb-3 pt-0">
+          {documents.length > 0 ? (
+            <div className="space-y-0.5">
+              {documents.map((doc) => (
+                <div key={doc.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`document-row-${doc.id}`}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium truncate">{doc.name}</p>
+                      <p className="text-[10px] text-muted-foreground">{doc.type}{doc.expirationDate ? ` · Exp: ${new Date(doc.expirationDate).toLocaleDateString()}` : ""}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground py-2">No documents linked yet</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Terms & Cancellation */}
+      <Card>
+        <button className="w-full flex items-center justify-between px-4 py-2.5">
+          <span className="text-xs font-semibold">Terms & Cancellation</span>
+        </button>
+        <CardContent className="px-4 pb-3 pt-0">
+          {termsFields.map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Support Info */}
+      <Card>
+        <button className="w-full flex items-center justify-between px-4 py-2.5">
+          <span className="text-xs font-semibold">Support Info</span>
+        </button>
+        <CardContent className="px-4 pb-3 pt-0">
+          {supportFields.map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 // ============================================================
@@ -4665,6 +5179,24 @@ export default function ProfileDetailPage() {
               {tabValues.has("finances") && (
                 <TabsContent value="finances" className="mt-4 px-1 sm:px-0">
                   <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("billing") && (
+                <TabsContent value="billing" className="mt-4 px-1 sm:px-0">
+                  <SubscriptionBillingTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("impact") && (
+                <TabsContent value="impact" className="mt-4 px-1 sm:px-0">
+                  <SubscriptionImpactTab profile={profile} profileId={profile.id} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("details") && (
+                <TabsContent value="details" className="mt-4 px-1 sm:px-0">
+                  <SubscriptionDetailsTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
