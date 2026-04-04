@@ -2064,18 +2064,31 @@ async function executeTool(name: string, input: any): Promise<any> {
         return { error: "Duplicate task detected — skipped" };
       }
 
+      // Resolve target profile BEFORE creating the task
+      let taskLinkedProfiles: string[] = [];
+      const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
+      if (taskForProfile) {
+        const profiles = await storage.getProfiles();
+        const target = profiles.find(p => p.name.toLowerCase() === safeLC(taskForProfile).trim())
+          || profiles.find(p => p.name.toLowerCase().includes(safeLC(taskForProfile).trim()));
+        if (target) taskLinkedProfiles.push(target.id);
+      }
       const newTask = await storage.createTask({
         title: input.title,
         priority: input.priority || "medium",
         dueDate: input.dueDate,
         description: input.description,
         tags: input.tags || [],
+        linkedProfiles: taskLinkedProfiles.length > 0 ? taskLinkedProfiles : undefined,
       });
       markCreation("_global", taskDedupKey);
-      // DIRECT link first (reliable), then autoLink as fallback
-      const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
-      const taskLinked = await directLinkToProfile("task", newTask.id, taskForProfile);
-      if (!taskLinked) await autoLinkToProfiles("task", newTask.id, input.title || "", input.forProfile);
+      // Ensure junction table is set
+      for (const pid of taskLinkedProfiles) {
+        await storage.linkProfileTo(pid, "task", newTask.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
+      }
+      if (taskLinkedProfiles.length === 0) {
+        await autoLinkToProfiles("task", newTask.id, input.title || "", input.forProfile);
+      }
       return newTask;
     }
 
@@ -2221,18 +2234,32 @@ async function executeTool(name: string, input: any): Promise<any> {
         else if (/school|tuition|textbook|course|udemy/.test(combined)) inferredCategory = "education";
         else if (/insurance|geico|allstate|progressive|state farm/.test(combined)) inferredCategory = "insurance";
       }
+      // Resolve the target profile BEFORE creating the expense so linkedProfiles is set correctly
+      let expenseLinkedProfiles: string[] = [];
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const target = profiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
+          || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (target) expenseLinkedProfiles.push(target.id);
+      }
       const newExpense = await storage.createExpense({
         amount: parsedAmount,
         category: inferredCategory,
         description: input.description || "Expense",
-        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), // YYYY-MM-DD in Pacific
+        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
         vendor: input.vendor,
         tags: input.tags || [],
-      });
+        linkedProfiles: expenseLinkedProfiles.length > 0 ? expenseLinkedProfiles : undefined,
+      } as any);
       markCreation("_global", expDedupKey);
-      // DIRECT link first (reliable), then autoLink as fallback
-      const expLinked = await directLinkToProfile("expense", newExpense.id, input.forProfile);
-      if (!expLinked) await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
+      // If we already linked above, just ensure junction table is set. Otherwise auto-link.
+      if (expenseLinkedProfiles.length > 0) {
+        for (const pid of expenseLinkedProfiles) {
+          await storage.linkProfileTo(pid, "expense", newExpense.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
+        }
+      } else {
+        await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
+      }
       return newExpense;
     }
 
@@ -2268,6 +2295,14 @@ async function executeTool(name: string, input: any): Promise<any> {
         logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
         return dupEvent;
       }
+      // Resolve target profile BEFORE creating the event
+      let eventLinkedProfiles: string[] = [];
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const target = profiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
+          || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (target) eventLinkedProfiles.push(target.id);
+      }
       const newEvent = await storage.createEvent({
         title: input.title.trim(),
         date: input.date,
@@ -2279,7 +2314,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         recurrence: input.recurrence || "none",
         category: input.category || "personal",
         source: "chat",
-        linkedProfiles: [],
+        linkedProfiles: eventLinkedProfiles.length > 0 ? eventLinkedProfiles : [],
         linkedDocuments: [],
         tags: [],
       });
