@@ -2298,16 +2298,16 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
         <span className="text-[10px] text-muted-foreground">({filtered.length})</span>
         {/* Profile filter chips */}
         {hasMultipleProfiles && profiles && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 overflow-x-auto flex-nowrap max-w-[60vw] scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
             <button onClick={() => setProfileFilter("all")}
-              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${profileFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${profileFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               All
             </button>
             {profileIdsInEntries.map(pid => {
               const p = profiles.find(pr => pr.id === pid);
               return p ? (
                 <button key={pid} onClick={() => setProfileFilter(pid)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${profileFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${profileFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
                   {p.name}
                 </button>
               ) : null;
@@ -3017,7 +3017,7 @@ export default function TrackersPage() {
       {/* ── Filter Bar ── */}
       <div className="space-y-2" data-testid="filter-bar">
         {/* Profile filter (page level) + Section pills */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 overflow-x-auto flex-nowrap scrollbar-hide pb-1" style={{ WebkitOverflowScrolling: 'touch' }}>
           {/* Profile filter */}
           <MultiProfileFilter
             onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
@@ -3056,7 +3056,7 @@ export default function TrackersPage() {
               <button
                 key={s}
                 onClick={() => setSectionFilter(s)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${sectionFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${sectionFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
                 data-testid={`filter-section-${s}`}
               >
                 {labels[s]}
@@ -3239,10 +3239,10 @@ export default function TrackersPage() {
               />
             )}
             {docTypes.length > 1 && (
-              <div className="flex items-center gap-1.5 flex-wrap">
+              <div className="flex items-center gap-1.5 overflow-x-auto flex-nowrap scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
                 <button
                   onClick={() => setDocTypeFilter("all")}
-                  className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                   data-testid="filter-doctype-all"
                 >All ({profileFilteredDocs.length})</button>
                 {docTypes.map(t => {
@@ -3251,7 +3251,7 @@ export default function TrackersPage() {
                     <button
                       key={t}
                       onClick={() => setDocTypeFilter(t)}
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                       data-testid={`filter-doctype-${t}`}
                     >
                       {t.replace(/_/g, " ")} ({count})

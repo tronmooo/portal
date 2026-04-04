@@ -160,8 +160,8 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
 
       {/* Bottom sheet for filter — reliable scrolling on all devices */}
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="bottom" className="max-h-[70vh] rounded-t-2xl px-2 pb-6">
-          <SheetHeader className="px-2 pb-2">
+        <SheetContent side="bottom" className="max-h-[70vh] rounded-t-2xl px-2 pb-6 flex flex-col">
+          <SheetHeader className="px-2 pb-2 shrink-0">
             <div className="flex items-center justify-between">
               <SheetTitle className="text-sm">Filter by Profile</SheetTitle>
               {!isEveryone && (
@@ -171,7 +171,10 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
               )}
             </div>
           </SheetHeader>
-          <div className="overflow-y-auto flex-1 -mx-2 px-2" style={{ WebkitOverflowScrolling: 'touch' }}>
+          <div
+            className="overflow-y-auto min-h-0 flex-1 -mx-2 px-2 overscroll-contain"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+          >
             {listContent}
           </div>
         </SheetContent>
