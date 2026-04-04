@@ -17,32 +17,49 @@ function getClient(): Anthropic {
 // ASSET VALUATION — AI-powered market value estimation
 // ============================================================
 
-// Live web search for current market data
+// Live web search for current market data — tries multiple sources
 async function webSearch(query: string, numResults = 5): Promise<string> {
-  const https = await import("https");
-  return new Promise((resolve) => {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const req = https.default.get(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" },
-      timeout: 8000,
-    }, (res: any) => {
-      let data = "";
-      res.on("data", (chunk: string) => { data += chunk; });
-      res.on("end", () => {
-        try {
-          const snippets = [...data.matchAll(/class="result__snippet"[^>]*>(.*?)<\/a>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
-          const titles = [...data.matchAll(/class="result__a"[^>]*>(.*?)<\/a>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
-          const results: string[] = [];
-          for (let i = 0; i < Math.min(titles.length, snippets.length, numResults); i++) {
-            if (snippets[i]) results.push(`${titles[i]}: ${snippets[i]}`);
-          }
-          resolve(results.join("\n"));
-        } catch { resolve(""); }
-      });
+  // Helper: fetch URL and return body text
+  const fetchUrl = (url: string): Promise<string> => {
+    return new Promise(async (resolve) => {
+      try {
+        const resp = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+          signal: AbortSignal.timeout(8000),
+          redirect: "follow",
+        });
+        resolve(await resp.text());
+      } catch { resolve(""); }
     });
-    req.on("error", () => resolve(""));
-    req.on("timeout", () => { req.destroy(); resolve(""); });
-  });
+  };
+
+  // Try DuckDuckGo HTML search
+  const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  let html = await fetchUrl(ddgUrl);
+  if (html) {
+    const snippets = [...html.matchAll(/class="result__snippet"[^>]*>(.*?)<\/a>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
+    const titles = [...html.matchAll(/class="result__a"[^>]*>(.*?)<\/a>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
+    const results: string[] = [];
+    for (let i = 0; i < Math.min(titles.length, snippets.length, numResults); i++) {
+      if (snippets[i]) results.push(`${titles[i]}: ${snippets[i]}`);
+    }
+    if (results.length > 0) return results.join("\n");
+  }
+
+  // Fallback: try Brave Search (no API key needed for HTML)
+  const braveUrl = `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`;
+  html = await fetchUrl(braveUrl);
+  if (html) {
+    const snippets = [...html.matchAll(/class="snippet-description"[^>]*>(.*?)<\/p>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
+    const titles = [...html.matchAll(/class="snippet-title"[^>]*>(.*?)<\/span>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
+    const results: string[] = [];
+    for (let i = 0; i < Math.min(titles.length, snippets.length, numResults); i++) {
+      if (snippets[i]) results.push(`${titles[i]}: ${snippets[i]}`);
+    }
+    if (results.length > 0) return results.join("\n");
+  }
+
+  return "";
 }
 
 async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
