@@ -1,5 +1,5 @@
-const CACHE_NAME = 'portol-v10';
-const STATIC_CACHE = 'portol-static-v10';
+const CACHE_NAME = 'portol-v11';
+const STATIC_CACHE = 'portol-static-v11';
 const PRECACHE_URLS = [
   '/#/',
   '/index.html',

@@ -142,7 +142,7 @@ export async function registerRoutes(
       if (uid !== "anon") {
         bustCache(`stats:${uid}`);
         bustCache(`profile-detail:${uid}:`);
-        bustCache(`dashboard-enhanced:`);
+        bustCache(`enhanced:`);
       } else {
         bustAllCaches();
       }
@@ -177,7 +177,8 @@ export async function registerRoutes(
       if (msg.includes('timeout') || msg.includes('ETIMEDOUT')) {
         return res.status(504).json({ error: "Request timed out.", reply: "That took too long. Could you try a simpler question, or try again?" });
       }
-      res.status(500).json({ error: "Failed to process message", reply: "Something went wrong. Please try again." });
+      const detail = process.env.NODE_ENV !== 'production' ? msg : undefined;
+      res.status(500).json({ error: "Failed to process message", reply: `Something went wrong: ${msg.slice(0, 200)}. Please try again.`, detail });
     }
   }));
 
