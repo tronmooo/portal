@@ -14,6 +14,48 @@ function getClient(): Anthropic {
 }
 
 // ============================================================
+// ASSET VALUATION — AI-powered market value estimation
+// ============================================================
+
+async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
+  const valuableTypes = ["vehicle", "asset", "property", "investment"];
+  if (!valuableTypes.includes(profile.type)) return null;
+
+  const fieldDesc = Object.entries(profile.fields || {})
+    .filter(([k, v]) => v && !k.startsWith("_"))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(", ");
+
+  if (!fieldDesc && !profile.name) return null;
+
+  try {
+    const response = await getClient().messages.create({
+      model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+      max_tokens: 200,
+      messages: [{
+        role: "user",
+        content: `Estimate the current US market value of this ${profile.type}: "${profile.name}". Details: ${fieldDesc}.\n\nReturn ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<brief method>", "range": "<low-high range>"}\n\nBe realistic. For vehicles use current used car market data. For electronics use current resale values (account for depreciation). For property use general market knowledge. Return 0 if you truly cannot estimate.`,
+      }],
+    });
+
+    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        estimatedValue: Number(parsed.value) || 0,
+        confidence: parsed.confidence || "low",
+        method: parsed.method || "AI estimate",
+        details: parsed.range || "",
+      };
+    }
+  } catch (e) {
+    console.error("[Valuation] Failed:", e);
+  }
+  return null;
+}
+
+// ============================================================
 // CONTEXT CACHE — short-lived cache for AI context data (avoids repeated DB queries)
 // ============================================================
 
@@ -1536,6 +1578,17 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["query"],
     },
   },
+  {
+    name: "revalue_asset",
+    description: "Re-estimate the current market value of a vehicle, asset, or property profile. Use when the user asks 'what is my car worth?', 'update value of my house', 'how much is my iPhone worth now?'",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        profileName: { type: "string", description: "Name of the asset/vehicle/property profile to revalue" },
+      },
+      required: ["profileName"],
+    },
+  },
 ];
 
 // ============================================================
@@ -2000,6 +2053,26 @@ async function executeTool(name: string, input: any): Promise<any> {
         } catch (e) {
           logger.warn("ai", `Failed to auto-create purchase expense: ${e}`);
         }
+      }
+
+      // Auto-estimate asset value for valuable profile types (best-effort, non-blocking)
+      try {
+        const valuation = await estimateAssetValue({ type: input.type || "asset", name: input.name, fields: input.fields || {} });
+        if (valuation && valuation.estimatedValue > 0) {
+          await storage.updateProfile(newProfile.id, {
+            fields: {
+              ...newProfile.fields,
+              currentValue: valuation.estimatedValue,
+              valuationMethod: valuation.method,
+              valuationConfidence: valuation.confidence,
+              valuationRange: valuation.details,
+              valuationDate: new Date().toISOString().slice(0, 10),
+            },
+          });
+          logger.info("ai", `Auto-valued "${input.name}" at $${valuation.estimatedValue} (${valuation.confidence})`);
+        }
+      } catch (e) {
+        logger.warn("ai", `Auto-valuation failed for "${input.name}": ${e}`);
       }
 
       return newProfile;
@@ -3080,6 +3153,40 @@ async function executeTool(name: string, input: any): Promise<any> {
           data: "__LAZY_LOAD__",
         },
         totalMatches: candidates.length,
+      };
+    }
+
+    case "revalue_asset": {
+      const profiles = await storage.getProfiles();
+      const profile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.profileName)));
+      if (!profile) return { error: "Profile not found: " + input.profileName };
+
+      const valuation = await estimateAssetValue({ type: profile.type, name: profile.name, fields: profile.fields });
+      if (!valuation || valuation.estimatedValue === 0) {
+        return { error: "Could not estimate value for " + profile.name };
+      }
+
+      const oldValue = profile.fields?.currentValue || profile.fields?.purchasePrice || 0;
+      await storage.updateProfile(profile.id, {
+        fields: {
+          ...profile.fields,
+          currentValue: valuation.estimatedValue,
+          valuationMethod: valuation.method,
+          valuationConfidence: valuation.confidence,
+          valuationRange: valuation.details,
+          valuationDate: new Date().toISOString().slice(0, 10),
+          previousValue: oldValue,
+        },
+      });
+
+      return {
+        name: profile.name,
+        previousValue: oldValue,
+        currentValue: valuation.estimatedValue,
+        confidence: valuation.confidence,
+        method: valuation.method,
+        range: valuation.details,
+        change: valuation.estimatedValue - Number(oldValue),
       };
     }
 

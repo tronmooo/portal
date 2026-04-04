@@ -899,6 +899,42 @@ function InfoTab({
         );
       })()}
 
+      {/* ── Asset Valuation Card ── */}
+      {["vehicle", "asset", "property", "investment"].includes(profile.type) && profile.fields?.currentValue != null && profile.fields?.valuationMethod && (() => {
+        const f = profile.fields;
+        const currentVal = Number(f.currentValue) || 0;
+        const purchaseVal = Number(f.purchasePrice) || 0;
+        const change = purchaseVal > 0 ? currentVal - purchaseVal : 0;
+        const changePct = purchaseVal > 0 ? ((change / purchaseVal) * 100) : 0;
+        const confidenceColor = f.valuationConfidence === "high" ? "bg-green-500/15 text-green-400" : f.valuationConfidence === "medium" ? "bg-amber-500/15 text-amber-400" : "bg-muted text-muted-foreground";
+        return (
+          <Card className="p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase">AI Valuation</p>
+              {f.valuationConfidence && (
+                <Badge variant="secondary" className={`text-[10px] capitalize ${confidenceColor}`}>
+                  {f.valuationConfidence} confidence
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-baseline gap-2">
+              <p className="text-lg font-bold tabular-nums">{formatCurrency(currentVal)}</p>
+              {change !== 0 && (
+                <span className={`text-xs font-medium flex items-center gap-0.5 ${change > 0 ? "text-green-500" : "text-red-500"}`}>
+                  {change > 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                  {change > 0 ? "+" : ""}{changePct.toFixed(1)}%
+                </span>
+              )}
+            </div>
+            <div className="mt-2 space-y-0.5">
+              {f.valuationMethod && <p className="text-[11px] text-muted-foreground">Method: {f.valuationMethod}</p>}
+              {f.valuationRange && <p className="text-[11px] text-muted-foreground">Range: {f.valuationRange}</p>}
+              {f.valuationDate && <p className="text-[11px] text-muted-foreground">Valued: {f.valuationDate}</p>}
+            </div>
+          </Card>
+        );
+      })()}
+
       {/* ── 3. Grouped Field Sections (type-aware) ── */}
       {groups.length > 0 ? (
         groups.map(group => {
