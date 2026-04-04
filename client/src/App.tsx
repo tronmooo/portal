@@ -177,7 +177,7 @@ function AppRouter() {
         <Route path="/reset-password" component={ResetPasswordPage} />
         <Route path="/privacy" component={PrivacyPage} />
         <Route path="/terms" component={TermsPage} />
-        <Route path="/dashboard/artifacts" component={ArtifactsPage} />
+        <Route path="/dashboard/documents" component={ArtifactsPage} />
         <Route path="/dashboard/finance" component={FinancePage} />
         <Route path="/dashboard/habits" component={HabitsPage} />
         <Route path="/dashboard/journal" component={JournalPage} />

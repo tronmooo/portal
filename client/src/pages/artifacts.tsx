@@ -100,7 +100,7 @@ function NoteCard({ artifact }: { artifact: Artifact }) {
 }
 
 export default function ArtifactsPage() {
-  useEffect(() => { document.title = "Artifacts — Portol"; }, []);
+  useEffect(() => { document.title = "Documents — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [createType, setCreateType] = useState<"checklist" | "note">("checklist");
@@ -147,7 +147,7 @@ export default function ArtifactsPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Artifacts</h1>
+            <h1 className="text-lg font-semibold">Documents</h1>
           </div>
           <p className="text-xs text-muted-foreground">{artifacts.length} checklists & notes</p>
         </div>

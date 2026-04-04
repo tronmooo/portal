@@ -652,10 +652,10 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
     { title: "Loan Details", fields: [
       { key: "lender", label: "Lender" }, { key: "loanBalance", label: "Balance" },
       { key: "interestRate", label: "Interest Rate" }, { key: "monthlyPayment", label: "Monthly Payment" },
-      { key: "originalAmount", label: "Original Amount" },
+      { key: "originalAmount", label: "Original Amount" }, { key: "termMonths", label: "Term (months)" },
     ]},
     { title: "Status", fields: [
-      { key: "remainingBalance", label: "Remaining" }, { key: "startDate", label: "Start Date" },
+      { key: "remainingBalance", label: "Remaining" }, { key: "loanStartDate", label: "Start Date" },
       { key: "maturityDate", label: "Maturity Date" },
     ]},
   ],
@@ -1547,8 +1547,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   }
 
   const loanPrincipal = Number(profile.fields.originalAmount || profile.fields.loanBalance || profile.fields.remainingBalance || profile.fields.balance || 0);
-  const loanRate = Number(profile.fields.interestRate || profile.fields.rate || 0);
-  const loanTerm = Number(profile.fields.termMonths || profile.fields.term || 0);
+  const loanRate = Number(profile.fields.interestRate || profile.fields.rate || profile.fields.apr || 0);
+  const loanTerm = Number(profile.fields.termMonths || profile.fields.loanTerm || profile.fields.term || 0);
   const loanMonthlyPayment = Number(profile.fields.monthlyPayment || 0);
 
   // Derive term from monthly payment if not provided
@@ -3939,22 +3939,66 @@ const DEFAULT_TABS: TabDef[] = [
 
 // ─── Loan Tab ─────────────────────────────────────────────────────────
 function LoanTab({ profile, obligations }: { profile: any; obligations: any[] }) {
-  const loanBalance = Number(profile.fields?.loanBalance || profile.fields?.balance || 0);
-  const interestRate = Number(profile.fields?.interestRate || profile.fields?.apr || 0);
+  const { toast } = useToast();
+  // Normalized field access — check all possible field names
+  const loanBalance = Number(profile.fields?.originalAmount || profile.fields?.loanBalance || profile.fields?.remainingBalance || profile.fields?.balance || 0);
+  const interestRate = Number(profile.fields?.interestRate || profile.fields?.rate || profile.fields?.apr || 0);
   const monthlyPayment = Number(profile.fields?.monthlyPayment || 0);
-  const loanTerm = Number(profile.fields?.loanTerm || 0); // months
-  const startDate = profile.fields?.loanStartDate || profile.fields?.purchaseDate || profile.createdAt?.slice(0, 10);
+  const termMonths = Number(profile.fields?.termMonths || profile.fields?.loanTerm || profile.fields?.term || 0);
+  const lender = profile.fields?.lender || "";
+  const startDate = profile.fields?.loanStartDate || profile.fields?.startDate || profile.fields?.purchaseDate || "";
+
+  const hasLoanData = loanBalance > 0 || interestRate > 0 || monthlyPayment > 0;
+
+  // Inline edit form state
+  const [editing, setEditing] = useState(false);
+  const [formBalance, setFormBalance] = useState(String(loanBalance || ""));
+  const [formRate, setFormRate] = useState(String(interestRate || ""));
+  const [formTerm, setFormTerm] = useState(String(termMonths || ""));
+  const [formPayment, setFormPayment] = useState(String(monthlyPayment || ""));
+  const [formLender, setFormLender] = useState(lender);
+  const [formStartDate, setFormStartDate] = useState(startDate);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const fields: Record<string, any> = {};
+      if (formBalance) fields.originalAmount = formBalance;
+      if (formBalance) fields.loanBalance = formBalance;
+      if (formRate) fields.interestRate = formRate;
+      if (formTerm) fields.termMonths = formTerm;
+      if (formPayment) fields.monthlyPayment = formPayment;
+      if (formLender) fields.lender = formLender;
+      if (formStartDate) fields.loanStartDate = formStartDate;
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+    },
+    onSuccess: () => {
+      toast({ title: "Loan details saved" });
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // Derive term from monthly payment if not provided
+  const derivedTermLocal = termMonths || (() => {
+    if (!loanBalance || !interestRate || !monthlyPayment) return 0;
+    const r = interestRate / 100 / 12;
+    if (r === 0) return Math.round(loanBalance / monthlyPayment);
+    return Math.round(-Math.log(1 - (loanBalance * r) / monthlyPayment) / Math.log(1 + r));
+  })();
 
   // Calculate amortization schedule
   const schedule: { month: number; payment: number; principal: number; interest: number; balance: number }[] = [];
-  if (loanBalance > 0 && monthlyPayment > 0 && interestRate > 0) {
+  if (loanBalance > 0 && interestRate > 0 && derivedTermLocal > 0) {
     const monthlyRate = interestRate / 100 / 12;
+    const calcPayment = monthlyRate === 0
+      ? loanBalance / derivedTermLocal
+      : loanBalance * (monthlyRate * Math.pow(1 + monthlyRate, derivedTermLocal)) / (Math.pow(1 + monthlyRate, derivedTermLocal) - 1);
     let remaining = loanBalance;
-    let month = 0;
-    while (remaining > 0 && month < 360) {
-      month++;
+    for (let month = 1; month <= derivedTermLocal && remaining > 0.005; month++) {
       const interestCharge = remaining * monthlyRate;
-      const principalPaid = Math.min(monthlyPayment - interestCharge, remaining);
+      const principalPaid = Math.min(calcPayment - interestCharge, remaining);
       remaining = Math.max(0, remaining - principalPaid);
       schedule.push({
         month,
@@ -3981,25 +4025,113 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
 
   return (
     <div className="space-y-4">
-      {/* Loan Summary KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <Card className="p-3 text-center">
-          <p className="text-[10px] text-muted-foreground">Balance</p>
-          <p className="text-sm font-bold tabular-nums">${loanBalance.toLocaleString()}</p>
+      {/* Inline edit form / KPIs */}
+      {editing || !hasLoanData ? (
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-semibold">{hasLoanData ? "Edit Loan Details" : "Add Loan Details"}</h3>
+            {hasLoanData && (
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(false)} data-testid="button-cancel-loan-edit">
+                Cancel
+              </Button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-muted-foreground mb-1 block">Loan Balance ($)</label>
+              <Input
+                type="number" placeholder="e.g. 25000" value={formBalance}
+                onChange={e => setFormBalance(e.target.value)}
+                data-testid="input-loan-balance"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground mb-1 block">Interest Rate (%)</label>
+              <Input
+                type="number" step="0.01" placeholder="e.g. 5.5" value={formRate}
+                onChange={e => setFormRate(e.target.value)}
+                data-testid="input-loan-rate"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground mb-1 block">Term (months)</label>
+              <Input
+                type="number" placeholder="e.g. 60" value={formTerm}
+                onChange={e => setFormTerm(e.target.value)}
+                data-testid="input-loan-term"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground mb-1 block">Monthly Payment ($)</label>
+              <Input
+                type="number" step="0.01" placeholder="e.g. 477" value={formPayment}
+                onChange={e => setFormPayment(e.target.value)}
+                data-testid="input-loan-payment"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground mb-1 block">Lender</label>
+              <Input
+                placeholder="e.g. Chase" value={formLender}
+                onChange={e => setFormLender(e.target.value)}
+                data-testid="input-loan-lender"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground mb-1 block">Start Date</label>
+              <Input
+                type="date" value={formStartDate}
+                onChange={e => setFormStartDate(e.target.value)}
+                data-testid="input-loan-start-date"
+              />
+            </div>
+          </div>
+          <Button
+            size="sm" className="w-full mt-3 h-8 text-xs"
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending || (!formBalance && !formRate)}
+            data-testid="button-save-loan-details"
+          >
+            {saveMutation.isPending ? "Saving..." : "Save Loan Details"}
+          </Button>
         </Card>
-        <Card className="p-3 text-center">
-          <p className="text-[10px] text-muted-foreground">Rate</p>
-          <p className="text-sm font-bold tabular-nums">{interestRate}%</p>
-        </Card>
-        <Card className="p-3 text-center">
-          <p className="text-[10px] text-muted-foreground">Monthly</p>
-          <p className="text-sm font-bold tabular-nums">${monthlyPayment.toLocaleString()}</p>
-        </Card>
-        <Card className="p-3 text-center">
-          <p className="text-[10px] text-muted-foreground">Payoff</p>
-          <p className="text-sm font-bold tabular-nums">{payoffDate || "—"}</p>
-        </Card>
-      </div>
+      ) : (
+        <>
+          {/* Loan Summary KPIs */}
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold text-muted-foreground">Loan Summary</h3>
+            <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => {
+              setFormBalance(String(loanBalance || ""));
+              setFormRate(String(interestRate || ""));
+              setFormTerm(String(termMonths || ""));
+              setFormPayment(String(monthlyPayment || ""));
+              setFormLender(lender);
+              setFormStartDate(startDate);
+              setEditing(true);
+            }} data-testid="button-edit-loan">
+              <Pencil className="h-3 w-3" /> Edit
+            </Button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <Card className="p-3 text-center">
+              <p className="text-[10px] text-muted-foreground">Balance</p>
+              <p className="text-sm font-bold tabular-nums">{formatCurrency(loanBalance)}</p>
+            </Card>
+            <Card className="p-3 text-center">
+              <p className="text-[10px] text-muted-foreground">Rate</p>
+              <p className="text-sm font-bold tabular-nums">{interestRate}%</p>
+            </Card>
+            <Card className="p-3 text-center">
+              <p className="text-[10px] text-muted-foreground">Monthly</p>
+              <p className="text-sm font-bold tabular-nums">{formatCurrency(monthlyPayment)}</p>
+            </Card>
+            <Card className="p-3 text-center">
+              <p className="text-[10px] text-muted-foreground">Payoff</p>
+              <p className="text-sm font-bold tabular-nums">{payoffDate || "—"}</p>
+            </Card>
+          </div>
+        </>
+      )}
 
       {/* Payoff Summary */}
       {schedule.length > 0 && (
@@ -4008,11 +4140,11 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
           <div className="grid grid-cols-3 gap-3 text-center">
             <div>
               <p className="text-[10px] text-muted-foreground">Total Interest</p>
-              <p className="text-sm font-bold text-red-400">${Math.round(totalInterest).toLocaleString()}</p>
+              <p className="text-sm font-bold text-red-400">{formatCurrency(totalInterest)}</p>
             </div>
             <div>
               <p className="text-[10px] text-muted-foreground">Total Cost</p>
-              <p className="text-sm font-bold">${Math.round(totalCost).toLocaleString()}</p>
+              <p className="text-sm font-bold">{formatCurrency(totalCost)}</p>
             </div>
             <div>
               <p className="text-[10px] text-muted-foreground">Months Left</p>
@@ -4023,9 +4155,9 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
           <div className="mt-3">
             <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
               <span>Paid off</span>
-              <span>{loanTerm > 0 ? `${Math.round((1 - schedule.length / loanTerm) * 100)}%` : "—"}</span>
+              <span>{derivedTermLocal > 0 ? `${Math.round((1 - schedule.length / derivedTermLocal) * 100)}%` : "—"}</span>
             </div>
-            <Progress value={loanTerm > 0 ? Math.round((1 - schedule.length / loanTerm) * 100) : 0} className="h-2" />
+            <Progress value={derivedTermLocal > 0 ? Math.round((1 - schedule.length / derivedTermLocal) * 100) : 0} className="h-2" />
           </div>
         </Card>
       )}
@@ -4049,10 +4181,10 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
                 {schedule.slice(0, 12).map(row => (
                   <tr key={row.month} className="border-b border-border/30">
                     <td className="py-1 pr-2 text-muted-foreground">{row.month}</td>
-                    <td className="text-right py-1 px-2">${row.payment.toLocaleString()}</td>
-                    <td className="text-right py-1 px-2 text-green-500">${row.principal.toLocaleString()}</td>
-                    <td className="text-right py-1 px-2 text-red-400">${row.interest.toLocaleString()}</td>
-                    <td className="text-right py-1 pl-2 font-medium">${row.balance.toLocaleString()}</td>
+                    <td className="text-right py-1 px-2">{formatCurrency(row.payment)}</td>
+                    <td className="text-right py-1 px-2 text-green-500">{formatCurrency(row.principal)}</td>
+                    <td className="text-right py-1 px-2 text-red-400">{formatCurrency(row.interest)}</td>
+                    <td className="text-right py-1 pl-2 font-medium">{formatCurrency(row.balance)}</td>
                   </tr>
                 ))}
                 {schedule.length > 15 && (
@@ -4061,10 +4193,10 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
                 {schedule.length > 12 && schedule.slice(-3).map(row => (
                   <tr key={row.month} className="border-b border-border/30">
                     <td className="py-1 pr-2 text-muted-foreground">{row.month}</td>
-                    <td className="text-right py-1 px-2">${row.payment.toLocaleString()}</td>
-                    <td className="text-right py-1 px-2 text-green-500">${row.principal.toLocaleString()}</td>
-                    <td className="text-right py-1 px-2 text-red-400">${row.interest.toLocaleString()}</td>
-                    <td className="text-right py-1 pl-2 font-medium">${row.balance.toLocaleString()}</td>
+                    <td className="text-right py-1 px-2">{formatCurrency(row.payment)}</td>
+                    <td className="text-right py-1 px-2 text-green-500">{formatCurrency(row.principal)}</td>
+                    <td className="text-right py-1 px-2 text-red-400">{formatCurrency(row.interest)}</td>
+                    <td className="text-right py-1 pl-2 font-medium">{formatCurrency(row.balance)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -4088,13 +4220,6 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
               </div>
             ))}
           </div>
-        </Card>
-      )}
-
-      {/* Empty state */}
-      {!loanBalance && !interestRate && linkedObs.length === 0 && (
-        <Card className="p-6 text-center">
-          <p className="text-xs text-muted-foreground">No loan data yet. Edit this profile to add loan details (balance, interest rate, monthly payment).</p>
         </Card>
       )}
     </div>
@@ -4242,6 +4367,34 @@ export default function ProfileDetailPage() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  const avatarMutation = useMutation({
+    mutationFn: async (base64: string) => {
+      await apiRequest("PATCH", `/api/profiles/${id}`, { avatar: base64 });
+    },
+    onSuccess: () => {
+      toast({ title: "Profile picture updated" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to update picture", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Please choose an image under 2MB", variant: "destructive" });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      avatarMutation.mutate(result);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const { data: profile, isLoading, error, refetch } = useQuery<ProfileDetail>({
     queryKey: ["/api/profiles", id, "detail"],
@@ -4308,13 +4461,18 @@ export default function ProfileDetailPage() {
     );
   }
 
+  const linkedTypes = ["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance"];
+  const isLinkedType = linkedTypes.includes(profile.type);
+  const backHref = isLinkedType ? "/trackers" : "/profiles";
+  const backLabel = isLinkedType ? "Back to Linked" : "Back to Profiles";
+
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="page-profile-detail">
       {/* Hero Header */}
       <div className={`bg-gradient-to-b ${profileGradient(profile.type)} px-4 md:px-6 pt-4 pb-6`}>
         <div className="flex items-center justify-between mb-3">
-          <Link href="/profiles" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-back-profiles">
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to Profiles
+          <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-back-profiles">
+            <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
           </Link>
           <div className="flex gap-1.5">
             <Button
@@ -4339,9 +4497,35 @@ export default function ProfileDetailPage() {
         </div>
 
         <div className="flex items-start gap-4">
-          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${profileAccent(profile.type)}`}>
-            {profileIcon(profile.type)}
-          </div>
+          <input
+            ref={avatarInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleAvatarChange}
+            data-testid="input-avatar-upload"
+          />
+          <button
+            className={`relative w-14 h-14 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ${profileAccent(profile.type)}`}
+            onClick={() => avatarInputRef.current?.click()}
+            disabled={avatarMutation.isPending}
+            title="Change profile picture"
+            data-testid="button-avatar-upload"
+          >
+            {profile.avatar ? (
+              <img src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />
+            ) : (
+              profileIcon(profile.type)
+            )}
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              <Camera className="h-4 w-4 text-white" />
+            </div>
+            {avatarMutation.isPending && (
+              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                <RefreshCw className="h-4 w-4 text-white animate-spin" />
+              </div>
+            )}
+          </button>
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-semibold" data-testid="text-profile-detail-name">{profile.name}</h1>
             <div className="flex flex-wrap items-center gap-2 mt-1.5">

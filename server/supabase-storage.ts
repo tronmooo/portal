@@ -394,13 +394,13 @@ export class SupabaseStorage implements IStorage {
       this.getProfiles(),
     ]);
 
-    // Collect IDs from junction tables + JSONB arrays (union — covers both during transition)
-    const trackerIds = new Set([...(ptRows.data || []).map(r => r.tracker_id), ...profile.linkedTrackers]);
-    const expenseIds = new Set([...(peRows.data || []).map(r => r.expense_id), ...profile.linkedExpenses]);
-    const taskIds = new Set([...(pkRows.data || []).map(r => r.task_id), ...profile.linkedTasks]);
-    const eventIds = new Set([...(pvRows.data || []).map(r => r.event_id), ...profile.linkedEvents]);
-    const documentIds = new Set([...(pdRows.data || []).map(r => r.document_id), ...profile.documents]);
-    const obligationIds = new Set([...(poRows.data || []).map(r => r.obligation_id)]);
+    // STRICT: Only use junction tables — JSONB arrays on profiles are legacy/polluted and cause cross-profile data leaks
+    const trackerIds = new Set((ptRows.data || []).map(r => r.tracker_id));
+    const expenseIds = new Set((peRows.data || []).map(r => r.expense_id));
+    const taskIds = new Set((pkRows.data || []).map(r => r.task_id));
+    const eventIds = new Set((pvRows.data || []).map(r => r.event_id));
+    const documentIds = new Set((pdRows.data || []).map(r => r.document_id));
+    const obligationIds = new Set((poRows.data || []).map(r => r.obligation_id));
 
     // Fetch only the specific related entities using targeted .in() queries
     const allIds = {
@@ -429,12 +429,16 @@ export class SupabaseStorage implements IStorage {
       return [...merged.values()].map(rowMapper);
     };
     // For trackers and obligations, we need entries/payments — fetch them in bulk
-    // ALSO pre-fetch tracker IDs linked via JSONB `linked_profiles` (not in junction tables)
-    const { data: jsonbLinkedTrackerRows } = await this.supabase
+    // Also pre-fetch tracker IDs that have this profile in their own linked_profiles JSONB
+    const { data: entityLinkedTrackerRows } = await this.supabase
       .from("trackers").select("id").eq("user_id", this.userId).contains("linked_profiles", [id]);
-    const jsonbLinkedTrackerIds = (jsonbLinkedTrackerRows || []).map((r: any) => r.id);
-    const trackerIdsArr = [...new Set([...allIds.trackers, ...jsonbLinkedTrackerIds])];
-    const obligationIdsArr = [...new Set([...allIds.obligations])];
+    const entityLinkedTrackerIds = (entityLinkedTrackerRows || []).map((r: any) => r.id);
+    // Pre-fetch obligation IDs that have this profile in their linked_profiles
+    const { data: entityLinkedObligationRows } = await this.supabase
+      .from("obligations").select("id").eq("user_id", this.userId).contains("linked_profiles", [id]);
+    const entityLinkedObligationIds = (entityLinkedObligationRows || []).map((r: any) => r.id);
+    const trackerIdsArr = [...new Set([...allIds.trackers, ...entityLinkedTrackerIds])];
+    const obligationIdsArr = [...new Set([...allIds.obligations, ...entityLinkedObligationIds])];
     const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
       trackerIdsArr.length > 0
         ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIdsArr).order("timestamp", { ascending: false }).then(r => r.data || [])
@@ -535,6 +539,8 @@ export class SupabaseStorage implements IStorage {
         break;
       case "subscription":
         eventDefs.push({ fieldKey: "renewalDate", titleFn: (n) => `\u{1F504} ${n} — Renewal`, category: "finance", recurrence: "monthly", color: "#D19900" });
+        eventDefs.push({ fieldKey: "nextPayment", titleFn: (n) => `\u{1F4B0} ${n} — Payment Due`, category: "finance", recurrence: "monthly", color: "#BB653B" });
+        eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F504} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#D19900" });
         break;
       case "loan":
         eventDefs.push({ fieldKey: "nextPayment", titleFn: (n) => `\u{1F4B0} ${n} — Payment Due`, category: "finance", recurrence: "monthly", color: "#BB653B" });
@@ -600,15 +606,18 @@ export class SupabaseStorage implements IStorage {
     const updateData: any = {
       type: merged.type, name: merged.name, avatar: merged.avatar || null,
       fields: merged.fields, tags: merged.tags, notes: merged.notes,
-      documents: merged.documents, linked_trackers: merged.linkedTrackers,
-      linked_expenses: merged.linkedExpenses, linked_tasks: merged.linkedTasks,
-      linked_events: merged.linkedEvents, updated_at: now,
+      documents: merged.documents, updated_at: now,
+      // JSONB linked_trackers/expenses/tasks/events are deprecated — junction tables are source of truth
     };
     // Optional FK fields
     if (data.linkedObligationId !== undefined) updateData.linked_obligation_id = data.linkedObligationId || null;
     if (data.parentProfileId !== undefined) updateData.parent_profile_id = data.parentProfileId || null;
     const { error } = await this.supabase.from("profiles").update(updateData).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+
+    // Auto-generate calendar events from updated profile date fields (dedup logic prevents duplicates)
+    await this.autoGenerateProfileEvents(id, merged.type, merged.name, merged.fields || {});
+
     return this.getProfile(id);
   }
 
@@ -777,28 +786,13 @@ export class SupabaseStorage implements IStorage {
       );
     }
 
-    // Also write to JSONB arrays (backward compat — will be removed in Phase 6)
-    let field: string | undefined;
-    let snakeField: string | undefined;
-    switch (entityType) {
-      case "tracker":
-        if (!profile.linkedTrackers.includes(entityId)) { profile.linkedTrackers.push(entityId); field = "linkedTrackers"; snakeField = "linked_trackers"; }
-        break;
-      case "expense":
-        if (!profile.linkedExpenses.includes(entityId)) { profile.linkedExpenses.push(entityId); field = "linkedExpenses"; snakeField = "linked_expenses"; }
-        break;
-      case "task":
-        if (!profile.linkedTasks.includes(entityId)) { profile.linkedTasks.push(entityId); field = "linkedTasks"; snakeField = "linked_tasks"; }
-        break;
-      case "event":
-        if (!profile.linkedEvents.includes(entityId)) { profile.linkedEvents.push(entityId); field = "linkedEvents"; snakeField = "linked_events"; }
-        break;
-      case "document":
-        if (!profile.documents.includes(entityId)) { profile.documents.push(entityId); field = "documents"; snakeField = "documents"; }
-        break;
-    }
-    if (field && snakeField) {
-      await this.supabase.from("profiles").update({ [snakeField]: (profile as any)[field] }).eq("id", profileId).eq("user_id", this.userId);
+    // JSONB arrays on profiles are deprecated — junction tables are the sole source of truth.
+    // Documents still use the profile JSONB `documents` array (no junction table yet)
+    if (entityType === "document") {
+      if (!profile.documents.includes(entityId)) {
+        profile.documents.push(entityId);
+        await this.supabase.from("profiles").update({ documents: profile.documents }).eq("id", profileId).eq("user_id", this.userId);
+      }
     }
   }
 
@@ -815,41 +809,19 @@ export class SupabaseStorage implements IStorage {
         .eq("user_id", this.userId);
     }
 
-    // Also remove from JSONB arrays (backward compat)
-    let field: string | undefined;
-    let snakeField: string | undefined;
-    switch (entityType) {
-      case "tracker":
-        profile.linkedTrackers = profile.linkedTrackers.filter(id => id !== entityId);
-        field = "linkedTrackers"; snakeField = "linked_trackers";
-        break;
-      case "expense":
-        profile.linkedExpenses = profile.linkedExpenses.filter(id => id !== entityId);
-        field = "linkedExpenses"; snakeField = "linked_expenses";
-        break;
-      case "task":
-        profile.linkedTasks = profile.linkedTasks.filter(id => id !== entityId);
-        field = "linkedTasks"; snakeField = "linked_tasks";
-        break;
-      case "event":
-        profile.linkedEvents = profile.linkedEvents.filter(id => id !== entityId);
-        field = "linkedEvents"; snakeField = "linked_events";
-        break;
-      case "document":
-        profile.documents = profile.documents.filter(id => id !== entityId);
-        field = "documents"; snakeField = "documents";
-        break;
+    // JSONB arrays on profiles are deprecated — junction tables are the sole source of truth.
+    // Documents still use the profile JSONB `documents` array (no junction table yet)
+    if (entityType === "document") {
+      profile.documents = profile.documents.filter(id => id !== entityId);
+      await this.supabase.from("profiles").update({ documents: profile.documents }).eq("id", profileId).eq("user_id", this.userId);
     }
-    if (field && snakeField) {
-      await this.supabase.from("profiles").update({ [snakeField]: (profile as any)[field] }).eq("id", profileId).eq("user_id", this.userId);
-      // Also remove from entity_links table
-      await this.supabase.from("entity_links").delete()
-        .eq("user_id", this.userId)
-        .eq("source_type", "profile")
-        .eq("source_id", profileId)
-        .eq("target_type", entityType)
-        .eq("target_id", entityId);
-    }
+    // Also remove from entity_links table
+    await this.supabase.from("entity_links").delete()
+      .eq("user_id", this.userId)
+      .eq("source_type", "profile")
+      .eq("source_id", profileId)
+      .eq("target_type", entityType)
+      .eq("target_id", entityId);
   }
 
   /**

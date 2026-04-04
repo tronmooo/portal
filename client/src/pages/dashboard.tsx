@@ -339,7 +339,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
               )}
             </div>
           </ScrollArea>
-          <ViewPageLink href="/dashboard/artifacts" label="View All Documents" />
+          <ViewPageLink href="/dashboard/documents" label="View All Documents" />
         </DialogContent>
       </Dialog>
     </>
