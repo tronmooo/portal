@@ -17,6 +17,34 @@ function getClient(): Anthropic {
 // ASSET VALUATION — AI-powered market value estimation
 // ============================================================
 
+// Live web search for current market data
+async function webSearch(query: string, numResults = 5): Promise<string> {
+  const https = await import("https");
+  return new Promise((resolve) => {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const req = https.default.get(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" },
+      timeout: 8000,
+    }, (res: any) => {
+      let data = "";
+      res.on("data", (chunk: string) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const snippets = [...data.matchAll(/class="result__snippet"[^>]*>(.*?)<\/a>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
+          const titles = [...data.matchAll(/class="result__a"[^>]*>(.*?)<\/a>/gs)].map(m => m[1].replace(/<[^>]+>/g, "").trim());
+          const results: string[] = [];
+          for (let i = 0; i < Math.min(titles.length, snippets.length, numResults); i++) {
+            if (snippets[i]) results.push(`${titles[i]}: ${snippets[i]}`);
+          }
+          resolve(results.join("\n"));
+        } catch { resolve(""); }
+      });
+    });
+    req.on("error", () => resolve(""));
+    req.on("timeout", () => { req.destroy(); resolve(""); });
+  });
+}
+
 async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
   const valuableTypes = ["vehicle", "asset", "property", "investment"];
   if (!valuableTypes.includes(profile.type)) return null;
@@ -28,24 +56,62 @@ async function estimateAssetValue(profile: { type: string; name: string; fields:
 
   if (!fieldDesc && !profile.name) return null;
 
+  // Build search query based on asset type
+  let searchQuery = "";
+  const f = profile.fields || {};
+  if (profile.type === "vehicle") {
+    const year = f.year || f.modelYear || "";
+    const make = f.make || "";
+    const model = f.model || "";
+    const mileage = f.mileage || "";
+    searchQuery = `${year} ${make} ${model} used car value price ${mileage ? mileage + " miles" : ""} 2026 Kelley Blue Book`.trim();
+  } else if (profile.type === "property") {
+    const address = f.address || "";
+    const city = f.city || "";
+    const state = f.state || "";
+    const zip = f.zip || f.zipCode || "";
+    searchQuery = `${address} ${city} ${state} ${zip} home value estimate 2026 Zillow`.trim();
+    if (searchQuery.length < 15) searchQuery = `${profile.name} home value estimate 2026`;
+  } else if (f.assetSubtype === "collectible" || f.assetSubtype === "business") {
+    searchQuery = `${profile.name} ${f.brand || ""} ${f.category || ""} value price estimate 2026`.trim();
+  } else {
+    // Electronics, generic assets
+    const brand = f.brand || "";
+    const model = f.model || "";
+    searchQuery = `${brand} ${model || profile.name} used resale value price 2026`.trim();
+  }
+
+  // Do live web search
+  let searchResults = "";
   try {
+    searchResults = await webSearch(searchQuery);
+    console.log(`[Valuation] Search query: "${searchQuery}" → ${searchResults.length} chars`);
+  } catch (e) {
+    console.warn("[Valuation] Web search failed:", e);
+  }
+
+  try {
+    const prompt = searchResults
+      ? `You have LIVE web search results for pricing this ${profile.type}. Use ONLY the search data to determine the value — do NOT guess or use outdated knowledge.\n\nAsset: "${profile.name}"\nDetails: ${fieldDesc}\n\n--- LIVE SEARCH RESULTS ---\n${searchResults}\n--- END SEARCH RESULTS ---\n\nBased on the search results above, return ONLY a JSON object:\n{"value": <number — the most accurate current value from search results>, "confidence": "high|medium|low", "method": "<source used, e.g. Zillow, Edmunds, KBB>", "range": "$X - $Y"}\n\nRules:\n- Use the EXACT prices from search results when available\n- For vehicles, use the fair market/trade-in range from the results\n- For homes, use the Zillow or Redfin estimate from search results\n- Return 0 only if search results have NO pricing data at all\n- confidence=high if exact match found, medium if similar model/area, low if rough estimate`
+      : `Estimate the current US market value of this ${profile.type}: "${profile.name}". Details: ${fieldDesc}.\n\nReturn ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<brief method>", "range": "<low-high range>"}\n\nBe realistic. Return 0 if you truly cannot estimate.`;
+
     const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
-      max_tokens: 200,
-      messages: [{
-        role: "user",
-        content: `Estimate the current US market value of this ${profile.type}: "${profile.name}". Details: ${fieldDesc}.\n\nReturn ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<brief method>", "range": "<low-high range>"}\n\nBe realistic. For vehicles use current used car market data. For electronics use current resale values (account for depreciation). For property use general market knowledge. Return 0 if you truly cannot estimate.`,
-      }],
+      max_tokens: 300,
+      messages: [{ role: "user", content: prompt }],
     });
 
     const text = response.content[0]?.type === "text" ? response.content[0].text : "";
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
+      const method = searchResults
+        ? `Live search: ${parsed.method || "web data"}`
+        : `AI estimate: ${parsed.method || "general knowledge"}`;
       return {
         estimatedValue: Number(parsed.value) || 0,
         confidence: parsed.confidence || "low",
-        method: parsed.method || "AI estimate",
+        method,
         details: parsed.range || "",
       };
     }
@@ -1580,7 +1646,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "revalue_asset",
-    description: "Re-estimate the current market value of a vehicle, asset, or property profile. Use when the user asks 'what is my car worth?', 'update value of my house', 'how much is my iPhone worth now?'",
+    description: "Re-estimate the current market value of a vehicle, asset, or property profile using LIVE web search data from Zillow, KBB, Edmunds, etc. Use when the user asks 'what is my car worth?', 'update value of my house', 'how much is my iPhone worth now?'",
     input_schema: {
       type: "object" as const,
       properties: {
