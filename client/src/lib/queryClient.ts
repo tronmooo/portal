@@ -60,10 +60,10 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false, // Don't refetch when switching back to tab (causes flash)
-      refetchOnMount: "always", // Always refetch on mount but show cached data instantly
-      staleTime: 30000, // 30s — data stays fresh longer, less background refetching
-      gcTime: 10 * 60 * 1000, // Keep cached data for 10 minutes
+      refetchOnWindowFocus: false, // Don't refetch when switching tabs
+      refetchOnMount: true, // Refetch on mount if stale
+      staleTime: 0, // Data is always stale — refetch on every mount, but show cached instantly
+      gcTime: 10 * 60 * 1000, // Keep cached data for 10 minutes (shows instantly while refetching)
       retry: (failureCount, error) => {
         // Don't retry auth errors or client errors
         if (error instanceof Error) {
