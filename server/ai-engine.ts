@@ -2499,7 +2499,8 @@ async function executeTool(name: string, input: any): Promise<any> {
         const profiles = await storage.getProfiles();
         const obNameLower = (input.name || "").toLowerCase();
         // Extract the service name (strip common suffixes like "subscription", "premium", "payment")
-        const serviceName = (input.name || "").replace(/\s*(subscription|premium|plus|pro|payment|bill|membership|plan|monthly|annual|yearly)\s*/gi, "").trim() || input.name || "";
+        // Use word boundaries (\b) so we don't accidentally strip parts of words (e.g. "Planet" contains "plan")
+        const serviceName = (input.name || "").replace(/\b(subscription|premium|plus|pro|payment|bill|membership|plan|monthly|annual|yearly)\b/gi, "").replace(/\s{2,}/g, " ").trim() || input.name || "";
         const serviceNameLower = serviceName.toLowerCase();
         // When creating for a specific person, only match existing profiles owned by THAT person
         let targetParentId: string | undefined;
@@ -2537,7 +2538,8 @@ async function executeTool(name: string, input: any): Promise<any> {
               parentProfileId: parentId,
             });
             // Link the obligation to the new profile + set the FK for dedup
-            await autoLinkToProfiles("obligation", newObligation.id, serviceName);
+            // Pass the forProfile so autoLink knows NOT to also link to self
+            await autoLinkToProfiles("obligation", newObligation.id, serviceName, input.forProfile);
             try { await storage.linkProfileTo(newProfile.id, "obligation", newObligation.id); } catch (linkErr: any) { logger.warn("ai", `Failed to link obligation ${newObligation.id} to profile ${newProfile.id}: ${linkErr?.message}`); }
             try { await updateEntityLinkedProfiles("obligation", newObligation.id, newProfile.id); } catch (linkErr: any) { logger.warn("ai", `Failed to update linked profiles for obligation ${newObligation.id}: ${linkErr?.message}`); }
             // Set linked_obligation_id for subscription/loan dedup (Phase 7)
