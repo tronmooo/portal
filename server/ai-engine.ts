@@ -897,7 +897,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Profiles ---
   {
     name: "create_profile",
-    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Loan: lender, amount, apr, term, monthlyPayment. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty. Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday. IMPORTANT: When creating a vehicle, asset, subscription, loan, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.",
+    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Loan: lender, amount, apr, term, monthlyPayment. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday. IMPORTANT: When creating a vehicle, asset, subscription, loan, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -2015,17 +2015,40 @@ async function executeTool(name: string, input: any): Promise<any> {
           if (selfProfile) parentProfileId = selfProfile.id;
         }
       }
+      // Auto-detect asset subtype based on name and context
+      const finalFields = { ...(input.fields || {}) };
+      if ((input.type === "asset" || (!input.type && isChildType)) && !finalFields.assetSubtype) {
+        const nameLC = (input.name || "").toLowerCase();
+        const allText = `${nameLC} ${(input.notes || "").toLowerCase()}`;
+        if (/\b(credit\s*card|visa|mastercard|amex|discover|card\s*ending)\b/.test(allText)) {
+          finalFields.assetSubtype = "credit_card";
+        } else if (/\b(checking|savings|bank\s*account|debit|banking)\b/.test(allText)) {
+          finalFields.assetSubtype = "bank_account";
+        } else if (/\b(domain|website|app|saas|hosting|url|\.(com|io|net|org))\b/.test(allText)) {
+          finalFields.assetSubtype = "digital_asset";
+        } else if (/\b(business|company|llc|corp|inc|venture|startup|enterprise)\b/.test(allText)) {
+          finalFields.assetSubtype = "business";
+        } else if (/\b(collectible|art|painting|nft|card\s*collection|coin|stamp|antique|memorabilia|rare|vintage|figurine)\b/.test(allText)) {
+          finalFields.assetSubtype = "collectible";
+        } else if (/\b(owe|lent|receivable|loan\s*to|money\s*owed)\b/.test(allText)) {
+          finalFields.assetSubtype = "loan_receivable";
+        } else {
+          finalFields.assetSubtype = "high_value_item";
+        }
+        logger.info("ai", `Auto-detected asset subtype: ${finalFields.assetSubtype} for "${input.name}"`);
+      }
+
       const newProfile = await storage.createProfile({
         type: input.type || "person",
         name: input.name,
-        fields: input.fields || {},
+        fields: finalFields,
         tags: input.tags || [],
         notes: input.notes || "",
         parentProfileId,
       });
 
       // Auto-create purchase expense for assets/vehicles with a purchase price
-      const purchasePrice = input.fields?.purchasePrice || input.fields?.cost || input.fields?.price;
+      const purchasePrice = finalFields?.purchasePrice || finalFields?.cost || finalFields?.price;
       if (purchasePrice && Number(purchasePrice) > 0 && childTypes.includes(input.type || "")) {
         try {
           const expCategory = input.type === "vehicle" ? "vehicle" : "shopping";
@@ -2057,7 +2080,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
       // Auto-estimate asset value for valuable profile types (best-effort, non-blocking)
       try {
-        const valuation = await estimateAssetValue({ type: input.type || "asset", name: input.name, fields: input.fields || {} });
+        const valuation = await estimateAssetValue({ type: input.type || "asset", name: input.name, fields: finalFields });
         if (valuation && valuation.estimatedValue > 0) {
           await storage.updateProfile(newProfile.id, {
             fields: {

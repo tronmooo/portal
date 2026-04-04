@@ -734,6 +734,63 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
       { key: "warranty", label: "Warranty Until" },
     ]},
   ],
+  // Asset subtype overrides
+  bank_account: [
+    { title: "Account", fields: [
+      { key: "bankName", label: "Bank" }, { key: "accountType", label: "Account Type" },
+      { key: "accountNumber", label: "Account #" }, { key: "routingNumber", label: "Routing #" },
+      { key: "balance", label: "Balance" }, { key: "interestRate", label: "APY" },
+    ]},
+  ],
+  credit_card: [
+    { title: "Card Details", fields: [
+      { key: "issuer", label: "Issuer" }, { key: "lastFour", label: "Last 4" },
+      { key: "creditLimit", label: "Credit Limit" }, { key: "balance", label: "Balance" },
+      { key: "apr", label: "APR" }, { key: "annualFee", label: "Annual Fee" },
+    ]},
+    { title: "Rewards", fields: [
+      { key: "rewardsType", label: "Rewards Type" }, { key: "rewardsBalance", label: "Rewards Balance" },
+    ]},
+  ],
+  digital_asset: [
+    { title: "Digital Asset", fields: [
+      { key: "domain", label: "Domain/URL" }, { key: "platform", label: "Platform" },
+      { key: "status", label: "Status" }, { key: "currentValue", label: "Est. Value" },
+    ]},
+    { title: "Access", fields: [
+      { key: "loginUrl", label: "Login URL" }, { key: "username", label: "Username" },
+      { key: "registrar", label: "Registrar" }, { key: "expirationDate", label: "Expiration" },
+    ]},
+  ],
+  business: [
+    { title: "Business", fields: [
+      { key: "businessName", label: "Business Name" }, { key: "ownershipPercent", label: "Ownership %" },
+      { key: "valuation", label: "Valuation" }, { key: "entityType", label: "Entity Type" },
+      { key: "ein", label: "EIN" }, { key: "industry", label: "Industry" },
+    ]},
+  ],
+  collectible: [
+    { title: "Item", fields: [
+      { key: "category", label: "Category" }, { key: "brand", label: "Brand/Artist" },
+      { key: "purchasePrice", label: "Purchase Price" }, { key: "currentValue", label: "Current Value" },
+      { key: "condition", label: "Condition" }, { key: "rarity", label: "Rarity" },
+    ]},
+    { title: "Provenance", fields: [
+      { key: "purchaseDate", label: "Acquired" }, { key: "seller", label: "Seller" },
+      { key: "authenticationId", label: "Auth. ID" },
+    ]},
+  ],
+  loan_receivable: [
+    { title: "Loan", fields: [
+      { key: "borrower", label: "Borrower" }, { key: "loanBalance", label: "Balance Owed" },
+      { key: "interestRate", label: "Interest Rate" }, { key: "monthlyPayment", label: "Monthly Payment" },
+      { key: "originalAmount", label: "Original Amount" }, { key: "termMonths", label: "Term (months)" },
+    ]},
+    { title: "Status", fields: [
+      { key: "loanStartDate", label: "Start Date" }, { key: "maturityDate", label: "Due Date" },
+      { key: "status", label: "Status" },
+    ]},
+  ],
   insurance: [
     { title: "Policy", fields: [
       { key: "provider", label: "Provider" }, { key: "premium", label: "Premium" },
@@ -849,7 +906,8 @@ function InfoTab({
   const trackersCount = (profile.relatedTrackers || []).length;
 
   // ── Field groups ──
-  const groups = FIELD_GROUPS[profile.type] ?? [];
+  const assetSub = profile.type === "asset" ? (profile.fields?.assetSubtype || null) : null;
+  const groups = (assetSub && FIELD_GROUPS[assetSub]) ? FIELD_GROUPS[assetSub] : (FIELD_GROUPS[profile.type] ?? []);
   const groupedKeys = new Set(groups.flatMap(g => g.fields.map(f => f.key)));
   const extraFields = Object.entries(profile.fields).filter(
     ([k, v]) => !groupedKeys.has(k) && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
@@ -3811,6 +3869,15 @@ function EditProfileDialog({
       { key: "startDate", label: "Start Date", placeholder: "YYYY-MM-DD" },
       { key: "endDate", label: "End Date", placeholder: "YYYY-MM-DD" },
     ],
+    asset: [
+      { key: "assetSubtype", label: "Asset Type", placeholder: "high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable" },
+      { key: "brand", label: "Brand", placeholder: "Apple, Samsung..." },
+      { key: "model", label: "Model", placeholder: "" },
+      { key: "purchaseDate", label: "Purchase Date", placeholder: "YYYY-MM-DD" },
+      { key: "purchasePrice", label: "Purchase Price", placeholder: "" },
+      { key: "currentValue", label: "Current Value", placeholder: "" },
+      { key: "serialNumber", label: "Serial #", placeholder: "" },
+    ],
   };
 
   // Merge existing fields + suggested fields for this type
@@ -3996,6 +4063,59 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "timeline", label: "Activity", testId: "tab-timeline" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
 ];
+
+// ── Asset subtype tab configs ──
+const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
+  bank_account: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Transactions", testId: "tab-finances" },
+    { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
+    { value: "trackers", label: "Statements", testId: "tab-trackers" },
+    { value: "insights", label: "Insights", testId: "tab-insights" },
+  ],
+  credit_card: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Transactions", testId: "tab-finances" },
+    { value: "payments", label: "Payments", testId: "tab-payments" },
+    { value: "rewards", label: "Rewards", testId: "tab-rewards" },
+    { value: "trackers", label: "Statements", testId: "tab-trackers" },
+  ],
+  digital_asset: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "access", label: "Access", testId: "tab-access" },
+    { value: "billing", label: "Billing", testId: "tab-billing" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
+  ],
+  business: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Financials", testId: "tab-finances" },
+    { value: "tasks", label: "Operations", testId: "tab-tasks" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "insights", label: "Insights", testId: "tab-insights" },
+  ],
+  collectible: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "valuation", label: "Valuation", testId: "tab-valuation" },
+    { value: "finances", label: "History", testId: "tab-finances" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
+  ],
+  loan_receivable: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Amortization", testId: "tab-loan" },
+    { value: "finances", label: "Payments", testId: "tab-finances" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "notes", label: "Notes", testId: "tab-notes" },
+  ],
+  high_value_item: [
+    { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "warranty", label: "Warranty", testId: "tab-warranty" },
+    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
+  ],
+};
 
 // ─── Loan Tab ─────────────────────────────────────────────────────────
 function LoanTab({ profile, obligations }: { profile: any; obligations: any[] }) {
@@ -4286,8 +4406,340 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
   );
 }
 
+// ============================================================
+// ASSET SUBTYPE TAB COMPONENTS
+// ============================================================
+
+function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const f = profile.fields || {};
+  const endDate = f.warrantyEndDate || f.warranty;
+  const isActive = endDate ? new Date(endDate) > new Date() : false;
+  const claims = (profile.relatedExpenses || []).filter((e: any) => (e.category || "").toLowerCase().includes("warranty"));
+  const warrantyFields = [
+    { key: "warrantyEndDate", label: "Warranty Until" },
+    { key: "warrantyProvider", label: "Provider" },
+    { key: "coverageType", label: "Coverage" },
+    { key: "protectionPlan", label: "Protection Plan" },
+    { key: "purchaseDate", label: "Purchase Date" },
+    { key: "purchasePrice", label: "Purchase Price" },
+  ];
+  return (
+    <div className="space-y-3" data-testid="warranty-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Warranty Status</span>
+            <Badge variant={isActive ? "default" : "destructive"} className="text-[10px]">
+              {isActive ? "Active" : endDate ? "Expired" : "Unknown"}
+            </Badge>
+          </div>
+          {warrantyFields.map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+        </CardContent>
+      </Card>
+      {claims.length > 0 && (
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Warranty Claims ({claims.length})</p>
+            {claims.map((c: any) => (
+              <div key={c.id} className="flex justify-between py-1.5 border-b border-border/30 last:border-0">
+                <span className="text-xs">{c.description || "Claim"}</span>
+                <span className="text-xs font-medium">{c.amount ? formatCurrency(Number(c.amount)) : "—"}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const f = profile.fields || {};
+  const rewardsFields = [
+    { key: "rewardsType", label: "Rewards Type" },
+    { key: "rewardsBalance", label: "Rewards Balance" },
+    { key: "pointsPerDollar", label: "Points per Dollar" },
+  ];
+  const balance = Number(f.rewardsBalance) || 0;
+  const ppd = Number(f.pointsPerDollar) || 1;
+  const redemptionValue = ppd > 0 ? (balance / (ppd * 100)).toFixed(2) : "0.00";
+  return (
+    <div className="space-y-3" data-testid="rewards-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Rewards Program</p>
+          {rewardsFields.map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+          {balance > 0 && (
+            <div className="flex items-center justify-between mt-3 pt-2 border-t border-border/30">
+              <span className="text-xs text-muted-foreground">Est. Redemption Value</span>
+              <span className="text-sm font-bold text-green-600">${redemptionValue}</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function AccessTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const f = profile.fields || {};
+  const [showApiKey, setShowApiKey] = useState(false);
+  const accessFields = [
+    { key: "loginUrl", label: "Login URL" },
+    { key: "username", label: "Username" },
+    { key: "registrar", label: "Registrar" },
+    { key: "hostingProvider", label: "Hosting" },
+    { key: "dnsProvider", label: "DNS Provider" },
+  ];
+  return (
+    <div className="space-y-3" data-testid="access-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Access & Credentials</p>
+          {f.loginUrl && (
+            <div className="flex items-center justify-between py-2 border-b border-border/30">
+              <span className="text-xs text-muted-foreground">Login URL</span>
+              <a href={String(f.loginUrl).startsWith("http") ? String(f.loginUrl) : `https://${f.loginUrl}`} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-primary hover:underline flex items-center gap-1" data-testid="link-login-url">
+                {String(f.loginUrl).replace(/^https?:\/\//, "").slice(0, 30)}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          )}
+          {accessFields.filter(af => af.key !== "loginUrl").map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+          {f.apiKey && (
+            <div className="flex items-center justify-between py-2 border-b border-border/30">
+              <span className="text-xs text-muted-foreground">API Key</span>
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-mono">{showApiKey ? String(f.apiKey) : "••••••••••••"}</span>
+                <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => setShowApiKey(!showApiKey)} data-testid="button-toggle-apikey">
+                  <Eye className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          )}
+          {!f.loginUrl && (
+            <GroupedInlineField profileId={profileId} fieldKey="loginUrl" label="Login URL" value={f.loginUrl} onSaved={onChanged} />
+          )}
+          <GroupedInlineField profileId={profileId} fieldKey="apiKey" label="API Key" value={f.apiKey} onSaved={onChanged} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function InsightsTab({ profile }: { profile: any }) {
+  const f = profile.fields || {};
+  const expenses = profile.relatedExpenses || [];
+  const isBank = f.assetSubtype === "bank_account";
+
+  // Group expenses by category
+  const catMap: Record<string, number> = {};
+  expenses.forEach((e: any) => {
+    const cat = e.category || "Uncategorized";
+    catMap[cat] = (catMap[cat] || 0) + (Number(e.amount) || 0);
+  });
+  const sorted = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
+  const total = sorted.reduce((s, [, v]) => s + v, 0);
+
+  return (
+    <div className="space-y-3" data-testid="insights-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            {isBank ? "Spending Breakdown" : "Revenue & Expenses"}
+          </p>
+          {sorted.length > 0 ? (
+            <div className="space-y-1.5">
+              {sorted.slice(0, 8).map(([cat, amt]) => (
+                <div key={cat} className="flex items-center justify-between py-1">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div className="h-2 rounded-full bg-primary/60" style={{ width: `${Math.max(8, (amt / (total || 1)) * 100)}%` }} />
+                    <span className="text-xs truncate">{cat}</span>
+                  </div>
+                  <span className="text-xs font-medium tabular-nums ml-2">{formatCurrency(amt)}</span>
+                </div>
+              ))}
+              <div className="flex justify-between pt-2 mt-1 border-t border-border/30">
+                <span className="text-xs font-semibold">Total</span>
+                <span className="text-xs font-bold tabular-nums">{formatCurrency(total)}</span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-4">No expense data yet</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ValuationTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const f = profile.fields || {};
+  const purchase = Number(f.purchasePrice) || 0;
+  const current = Number(f.currentValue) || 0;
+  const change = current - purchase;
+  const changePct = purchase > 0 ? ((change / purchase) * 100).toFixed(1) : null;
+  const valuationFields = [
+    { key: "currentValue", label: "Current Value" },
+    { key: "purchasePrice", label: "Purchase Price" },
+    { key: "condition", label: "Condition" },
+    { key: "lastAppraisedDate", label: "Last Appraised" },
+    { key: "marketNotes", label: "Market Notes" },
+  ];
+  return (
+    <div className="space-y-3" data-testid="valuation-tab">
+      {purchase > 0 && current > 0 && (
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground">Value Change</p>
+                <p className={`text-lg font-bold tabular-nums ${change >= 0 ? "text-green-600" : "text-red-500"}`}>
+                  {change >= 0 ? "+" : ""}{formatCurrency(change)}
+                </p>
+              </div>
+              {changePct && (
+                <Badge variant={change >= 0 ? "default" : "destructive"} className="text-xs">
+                  {change >= 0 ? <TrendingUp className="h-3 w-3 mr-1" /> : <TrendingDown className="h-3 w-3 mr-1" />}
+                  {changePct}%
+                </Badge>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Valuation Details</p>
+          {valuationFields.map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function LinkedSubsTab({ profile }: { profile: any }) {
+  const children = (profile.childProfiles || []).filter((c: any) => c.type === "subscription");
+  const totalMonthly = children.reduce((sum: number, c: any) => sum + (Number(c.fields?.cost) || 0), 0);
+  return (
+    <div className="space-y-3" data-testid="linked-subs-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Linked Subscriptions</span>
+            {totalMonthly > 0 && <Badge variant="outline" className="text-[10px]">{formatCurrency(totalMonthly)}/mo</Badge>}
+          </div>
+          {children.length > 0 ? (
+            <div className="divide-y divide-border/30">
+              {children.map((sub: any) => (
+                <div key={sub.id} className="flex items-center justify-between py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium truncate">{sub.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{sub.fields?.frequency || "monthly"}</p>
+                  </div>
+                  <span className="text-xs font-medium tabular-nums">{sub.fields?.cost ? formatCurrency(Number(sub.fields.cost)) : "—"}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-4">No subscriptions linked to this account</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const { toast } = useToast();
+  const f = profile.fields || {};
+  const paymentFields = [
+    { key: "nextPaymentDate", label: "Next Due" },
+    { key: "minimumPayment", label: "Minimum Payment" },
+    { key: "autopay", label: "Autopay" },
+  ];
+  const paymentHistory = (profile.relatedExpenses || []).filter((e: any) =>
+    (e.category || "").toLowerCase().includes("payment")
+  ).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const [showRecord, setShowRecord] = useState(false);
+  const [payAmt, setPayAmt] = useState("");
+  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+
+  const recordMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/profiles/${profileId}/expenses`, {
+        description: `Payment - ${profile.name}`, amount: payAmt, date: payDate, category: "payment",
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Payment recorded" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onChanged();
+      setShowRecord(false);
+      setPayAmt("");
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-3" data-testid="payments-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Payment Info</p>
+          {paymentFields.map(({ key, label }) => (
+            <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
+          ))}
+          <div className="mt-3">
+            {!showRecord ? (
+              <Button variant="outline" size="sm" className="w-full text-xs h-7" onClick={() => setShowRecord(true)} data-testid="button-record-payment">
+                <Plus className="h-3 w-3 mr-1" /> Record Payment
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Input className="h-7 text-xs flex-1" placeholder="Amount" value={payAmt} onChange={e => setPayAmt(e.target.value)} data-testid="input-payment-amount" />
+                <Input className="h-7 text-xs w-28" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} data-testid="input-payment-date" />
+                <Button size="sm" className="h-7 text-xs px-2" onClick={() => recordMutation.mutate()} disabled={recordMutation.isPending || !payAmt} data-testid="button-save-payment">
+                  {recordMutation.isPending ? "…" : "Save"}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 text-xs px-1" onClick={() => setShowRecord(false)}>✕</Button>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      {paymentHistory.length > 0 && (
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Payment History</p>
+            <div className="divide-y divide-border/30">
+              {paymentHistory.slice(0, 10).map((p: any) => (
+                <div key={p.id} className="flex justify-between py-1.5">
+                  <span className="text-xs text-muted-foreground">{p.date ? new Date(p.date).toLocaleDateString() : "—"}</span>
+                  <span className="text-xs font-medium tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function getTabsForType(type: string, profile?: any): TabDef[] {
-  const baseTabs = ENTITY_TABS[type] || DEFAULT_TABS;
+  const assetSubtype = type === "asset" && profile?.fields?.assetSubtype ? String(profile.fields.assetSubtype) : null;
+  const baseTabs = assetSubtype
+    ? (ASSET_SUBTYPE_TABS[assetSubtype] || ASSET_SUBTYPE_TABS.high_value_item)
+    : (ENTITY_TABS[type] || DEFAULT_TABS);
   
   // If no profile data provided, return all tabs for this type
   if (!profile) return baseTabs;
@@ -4319,6 +4771,13 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "billing": return true;
         case "impact": return true;
         case "details": return true;
+        case "warranty": return true;
+        case "rewards": return true;
+        case "access": return true;
+        case "insights": return true;
+        case "valuation": return true;
+        case "linked-subs": return true;
+        case "payments": return true;
         default: return false;
       }
     })();
@@ -4327,7 +4786,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "health", "loan-detail", "billing", "impact", "details"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "payments"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -5197,6 +5656,48 @@ export default function ProfileDetailPage() {
               {tabValues.has("details") && (
                 <TabsContent value="details" className="mt-4 px-1 sm:px-0">
                   <SubscriptionDetailsTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("warranty") && (
+                <TabsContent value="warranty" className="mt-4 px-1 sm:px-0">
+                  <WarrantyTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("rewards") && (
+                <TabsContent value="rewards" className="mt-4 px-1 sm:px-0">
+                  <RewardsTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("access") && (
+                <TabsContent value="access" className="mt-4 px-1 sm:px-0">
+                  <AccessTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("insights") && (
+                <TabsContent value="insights" className="mt-4 px-1 sm:px-0">
+                  <InsightsTab profile={profile} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("valuation") && (
+                <TabsContent value="valuation" className="mt-4 px-1 sm:px-0">
+                  <ValuationTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("linked-subs") && (
+                <TabsContent value="linked-subs" className="mt-4 px-1 sm:px-0">
+                  <LinkedSubsTab profile={profile} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("payments") && (
+                <TabsContent value="payments" className="mt-4 px-1 sm:px-0">
+                  <PaymentsTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
