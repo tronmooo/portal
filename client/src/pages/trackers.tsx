@@ -124,12 +124,12 @@ import { useToast } from "@/hooks/use-toast";
 // ── Chart Color Scheme ─────────────────────────────────────────────────────────
 
 const CHART_COLORS = {
-  primary: "#20808D",
-  secondary: "#A84B2F",
-  tertiary: "#1B474D",
-  light: "#BCE2E7",
-  warning: "#944454",
-  gold: "#FFC553",
+  primary: "hsl(var(--chart-1))",
+  secondary: "hsl(var(--chart-2))",
+  tertiary: "hsl(var(--chart-3))",
+  light: "hsl(var(--chart-1) / 0.2)",
+  warning: "hsl(var(--chart-5))",
+  gold: "hsl(var(--chart-4))",
 };
 
 // ── Time Range Filter ──────────────────────────────────────────────────────────

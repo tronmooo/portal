@@ -30,7 +30,8 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
+import { motion } from "framer-motion";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // Keep lightweight pages as direct imports
@@ -160,6 +161,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function ScrollToTop() {
+  const [location] = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location]);
+  return null;
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
@@ -214,16 +223,20 @@ setInterval(async () => {
 function App() {
   return (
     <ThemeProvider>
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:bg-primary focus:text-primary-foreground focus:px-4 focus:py-2 focus:rounded">
+        Skip to content
+      </a>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
         <TooltipProvider>
           <ErrorBoundary>
           <Router hook={useHashLocation}>
+            <ScrollToTop />
             <AuthGate>
             <CommandSearchProvider>
               <KeyboardShortcuts />
               <SidebarProvider style={sidebarStyle as React.CSSProperties}>
-                <div className="flex h-screen w-full">
+                <div className="flex h-screen w-full max-w-[90rem] mx-auto">
                   {/* Sidebar hidden on mobile */}
                   <div className="hidden md:block">
                     <AppSidebar />
@@ -247,8 +260,10 @@ function App() {
                         <ProfileButton />
                       </div>
                     </header>
-                    <main className="flex-1 overflow-hidden pb-[60px] md:pb-0">
-                      <AppRouter />
+                    <main id="main-content" className="flex-1 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0">
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.15 }} className="h-full">
+                        <AppRouter />
+                      </motion.div>
                     </main>
                   </div>
                 </div>

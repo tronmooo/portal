@@ -50,17 +50,17 @@ const SUGGESTIONS = [
 ];
 
 const PROFILE_TYPE_COLORS: Record<string, string> = {
-  person: "bg-blue-100 text-blue-700",
-  self: "bg-purple-100 text-purple-700",
-  pet: "bg-green-100 text-green-700",
-  vehicle: "bg-orange-100 text-orange-700",
-  asset: "bg-yellow-100 text-yellow-700",
-  loan: "bg-red-100 text-red-700",
-  investment: "bg-emerald-100 text-emerald-700",
-  subscription: "bg-pink-100 text-pink-700",
-  medical: "bg-rose-100 text-rose-700",
-  account: "bg-indigo-100 text-indigo-700",
-  property: "bg-cyan-100 text-cyan-700",
+  person: "bg-primary/10 text-primary",
+  self: "bg-primary/10 text-primary",
+  pet: "bg-chart-3/10 text-chart-3",
+  vehicle: "bg-chart-2/10 text-chart-2",
+  asset: "bg-chart-4/10 text-chart-4",
+  loan: "bg-destructive/10 text-destructive",
+  investment: "bg-chart-3/10 text-chart-3",
+  subscription: "bg-chart-5/10 text-chart-5",
+  medical: "bg-destructive/10 text-destructive",
+  account: "bg-chart-1/10 text-chart-1",
+  property: "bg-chart-1/10 text-chart-1",
 };
 
 function ProfileTypeBadge({ type }: { type: string }) {
