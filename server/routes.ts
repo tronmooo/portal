@@ -128,6 +128,20 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // Prevent caching of ALL API responses — UI must always reflect current DB state
+  app.use("/api", (req, res, next) => {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    next();
+  });
+
+  // Version endpoint — frontend polls this to detect new deploys
+  const BUILD_VERSION = Date.now().toString(36);
+  app.get("/api/version", (req, res) => {
+    res.json({ version: BUILD_VERSION });
+  });
+
   // Rate limit all write operations (POST/PATCH/DELETE) — 60 writes per minute per user
   app.use("/api", (req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
@@ -568,11 +582,8 @@ export async function registerRoutes(
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = (req as AuthenticatedRequest).userId || "anon";
-    const cacheKey = `stats:${userId}:${filterIds?.join(",") || 'all'}`;
-    const cached = getCached(cacheKey);
-    if (cached) return res.json(cached);
+    // No cache — dashboard stats must always reflect current DB state
     const stats = await storage.getStats(undefined, filterIds);
-    setCache(cacheKey, stats, 15000);
     res.json(stats);
   }));
 
@@ -581,11 +592,8 @@ export async function registerRoutes(
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = (req as AuthenticatedRequest).userId || "anon";
-    const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || 'all'}`;
-    const cached = getCached(cacheKey);
-    if (cached) return res.json(cached);
+    // No cache — dashboard must always reflect current DB state
     const data = await storage.getDashboardEnhanced(undefined, filterIds);
-    setCache(cacheKey, data, 15000);
     res.json(data);
   }));
 
@@ -682,13 +690,9 @@ export async function registerRoutes(
     res.json(profile);
   }));
   app.get("/api/profiles/:id/detail", asyncHandler(async (req, res) => {
-    const userId = (req as AuthenticatedRequest).userId || "anon";
-    const cacheKey = `profile-detail:${userId}:${req.params.id}`;
-    const cached = getCached(cacheKey);
-    if (cached) return res.json(cached);
+    // NO cache — profile detail must always reflect current DB state (Principle 5)
     const detail = await storage.getProfileDetail(req.params.id);
     if (!detail) return res.status(404).json({ error: "Not found" });
-    setCache(cacheKey, detail, 10000);
     res.json(detail);
   }));
   app.post("/api/profiles", asyncHandler(async (req, res) => {

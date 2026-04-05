@@ -195,6 +195,22 @@ const sidebarStyle = {
   "--sidebar-width-icon": "3rem",
 };
 
+// Detect new deploys and force reload — prevents stale UI after deployments
+let _knownVersion: string | null = null;
+setInterval(async () => {
+  try {
+    const res = await fetch("/api/version", { cache: "no-store" });
+    if (res.ok) {
+      const { version } = await res.json();
+      if (_knownVersion && version !== _knownVersion) {
+        console.log("[Version] New deploy detected, reloading...");
+        window.location.reload();
+      }
+      _knownVersion = version;
+    }
+  } catch { /* offline, ignore */ }
+}, 30000); // Check every 30 seconds
+
 function App() {
   return (
     <ThemeProvider>
