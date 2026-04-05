@@ -187,11 +187,11 @@ export default function SettingsPage() {
                 <p className="text-sm font-medium" data-testid="text-user-email">{user?.email || "Not signed in"}</p>
                 {memberSince && <p className="text-xs text-muted-foreground">Member since {memberSince}</p>}
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant="secondary" className="text-[10px]">
+                  <Badge variant="secondary" className="text-xs">
                     <Shield className="h-2.5 w-2.5 mr-1" /> Authenticated
                   </Badge>
                   {(user as any)?.app_metadata?.provider && (
-                    <Badge variant="outline" className="text-[10px] capitalize">
+                    <Badge variant="outline" className="text-xs capitalize">
                       {(user as any).app_metadata.provider === "google" ? "Google" : "Email"}
                     </Badge>
                   )}
@@ -207,15 +207,15 @@ export default function SettingsPage() {
               <div className="grid grid-cols-3 gap-2">
                 <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                   <p className="text-lg font-bold tabular-nums">{profiles.length}</p>
-                  <p className="text-[10px] text-muted-foreground">Profiles</p>
+                  <p className="text-xs text-muted-foreground">Profiles</p>
                 </div>
                 <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                   <p className="text-lg font-bold tabular-nums">{stats?.activeTasks || 0}</p>
-                  <p className="text-[10px] text-muted-foreground">Active Tasks</p>
+                  <p className="text-xs text-muted-foreground">Active Tasks</p>
                 </div>
                 <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                   <p className="text-lg font-bold tabular-nums">{stats?.totalTrackers || 0}</p>
-                  <p className="text-[10px] text-muted-foreground">Trackers</p>
+                  <p className="text-xs text-muted-foreground">Trackers</p>
                 </div>
               </div>
             </div>
@@ -282,10 +282,10 @@ export default function SettingsPage() {
                     </Button>
                   </div>
                   {newPassword && newPassword.length < 6 && (
-                    <p className="text-[10px] text-destructive">Password must be at least 6 characters</p>
+                    <p className="text-xs text-destructive">Password must be at least 6 characters</p>
                   )}
                   {confirmPassword && newPassword !== confirmPassword && (
-                    <p className="text-[10px] text-destructive">Passwords don't match</p>
+                    <p className="text-xs text-destructive">Passwords don't match</p>
                   )}
                 </div>
               ) : (
@@ -368,7 +368,7 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Fast-Path Commands</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Instant logging (weight, BP, mood) bypasses AI for speed</p>
               </div>
-              <Badge className="text-[10px] bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
+              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
@@ -376,7 +376,7 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Auto-Expense from Documents</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Automatically create expenses when scanning receipts</p>
               </div>
-              <Badge className="text-[10px] bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
+              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
@@ -384,7 +384,7 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Smart Data Routing</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">AI routes extracted data to correct profile, calendar, and trackers</p>
               </div>
-              <Badge className="text-[10px] bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
+              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
             </div>
           </CardContent>
         </Card>
@@ -490,7 +490,7 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Authentication</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Supabase Auth with JWT tokens</p>
               </div>
-              <Badge className="text-[10px] bg-green-500/10 text-green-600 border-green-500/20">
+              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">
                 <Shield className="h-2.5 w-2.5 mr-1" /> Secure
               </Badge>
             </div>
@@ -500,7 +500,7 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Data Storage</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Supabase PostgreSQL with Row Level Security</p>
               </div>
-              <Badge className="text-[10px] bg-green-500/10 text-green-600 border-green-500/20">
+              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">
                 <HardDrive className="h-2.5 w-2.5 mr-1" /> Encrypted
               </Badge>
             </div>
@@ -510,7 +510,7 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Document Storage</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Files stored in Supabase Storage, scoped per user</p>
               </div>
-              <Badge className="text-[10px] bg-green-500/10 text-green-600 border-green-500/20">
+              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">
                 <Lock className="h-2.5 w-2.5 mr-1" /> Private
               </Badge>
             </div>
@@ -547,7 +547,7 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground mt-0.5">Sync events to/from Google Calendar</p>
                 </div>
               </div>
-              <Badge variant="outline" className="text-[10px]">Available</Badge>
+              <Badge variant="outline" className="text-xs">Available</Badge>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
@@ -560,7 +560,7 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground mt-0.5">Import health data from iPhone</p>
                 </div>
               </div>
-              <Badge variant="outline" className="text-[10px]">Coming Soon</Badge>
+              <Badge variant="outline" className="text-xs">Coming Soon</Badge>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
@@ -573,7 +573,7 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground mt-0.5">Auto-import bank transactions</p>
                 </div>
               </div>
-              <Badge variant="outline" className="text-[10px]">Coming Soon</Badge>
+              <Badge variant="outline" className="text-xs">Coming Soon</Badge>
             </div>
           </CardContent>
         </Card>

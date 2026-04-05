@@ -71,7 +71,7 @@ function PageLoader() {
 function ThemeToggle() {
   const { theme, toggle } = useTheme();
   return (
-    <Button variant="ghost" size="icon" onClick={toggle} className="h-8 w-8" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} data-testid="button-theme-toggle">
+    <Button variant="ghost" size="icon" onClick={toggle} className="h-9 w-9" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} data-testid="button-theme-toggle">
       {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </Button>
   );
@@ -80,7 +80,7 @@ function ThemeToggle() {
 function CalendarButton() {
   const [, navigate] = useLocation();
   return (
-    <Button variant="ghost" size="icon" onClick={() => navigate("/calendar")} className="h-8 w-8" title="Calendar" aria-label="Open calendar" data-testid="button-calendar-header">
+    <Button variant="ghost" size="icon" onClick={() => navigate("/calendar")} className="h-9 w-9" title="Calendar" aria-label="Open calendar" data-testid="button-calendar-header">
       <Calendar className="h-4 w-4" />
     </Button>
   );
@@ -89,7 +89,7 @@ function CalendarButton() {
 function SettingsButton() {
   const [, navigate] = useLocation();
   return (
-    <Button variant="ghost" size="icon" onClick={() => navigate("/settings")} className="h-8 w-8" title="Settings" aria-label="Open settings" data-testid="button-settings-header">
+    <Button variant="ghost" size="icon" onClick={() => navigate("/settings")} className="h-9 w-9" title="Settings" aria-label="Open settings" data-testid="button-settings-header">
       <Settings className="h-4 w-4" />
     </Button>
   );
@@ -102,8 +102,8 @@ function ProfileButton() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" title="Account" data-testid="button-profile-avatar">
-          <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
+        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" title="Account" data-testid="button-profile-avatar">
+          <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary">
             {initial}
           </div>
         </Button>

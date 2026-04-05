@@ -101,7 +101,7 @@ function getExpirationStatus(key: string, value: any): "expired" | "soon" | "val
 function ExpirationBadge({ status }: { status: "expired" | "soon" | "valid" }) {
   if (status === "expired") {
     return (
-      <Badge variant="destructive" className="text-[10px] px-1.5 py-0 gap-1">
+      <Badge variant="destructive" className="text-xs px-1.5 py-0 gap-1">
         <AlertCircle className="h-2.5 w-2.5" />
         EXPIRED
       </Badge>
@@ -109,14 +109,14 @@ function ExpirationBadge({ status }: { status: "expired" | "soon" | "valid" }) {
   }
   if (status === "soon") {
     return (
-      <Badge className="text-[10px] px-1.5 py-0 gap-1 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
+      <Badge className="text-xs px-1.5 py-0 gap-1 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
         <Clock className="h-2.5 w-2.5" />
         Expiring Soon
       </Badge>
     );
   }
   return (
-    <Badge className="text-[10px] px-1.5 py-0 gap-1 bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30">
+    <Badge className="text-xs px-1.5 py-0 gap-1 bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30">
       <ShieldCheck className="h-2.5 w-2.5" />
       Valid
     </Badge>
@@ -546,7 +546,7 @@ export default function DocumentViewer({
       <div className="px-3 py-2 flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs font-medium truncate">{name}</p>
-          <p className="text-[10px] text-muted-foreground uppercase">{isPdf ? "PDF" : mimeType.split("/")[1]}</p>
+          <p className="text-xs text-muted-foreground uppercase">{isPdf ? "PDF" : mimeType.split("/")[1]}</p>
         </div>
         <ShareButton id={id} name={name} mimeType={mimeType} data={data} size="icon" />
       </div>
@@ -607,7 +607,7 @@ export function DocumentViewerDialog({
           <DialogTitle className="text-sm flex items-center gap-2">
             <FileText className="h-4 w-4" />
             {name}
-            {docType && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal">{docType.replace(/_/g, ' ')}</span>}
+            {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal">{docType.replace(/_/g, ' ')}</span>}
           </DialogTitle>
         </DialogHeader>
 
@@ -632,7 +632,7 @@ export function DocumentViewerDialog({
             {/* Extracted data section */}
             {extractedData && Object.keys(extractedData).length > 0 && (
               <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
-                <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Extracted Data</p>
+                <p className="text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider mb-1">Extracted Data</p>
                 <div className="grid grid-cols-2 gap-x-3">
                   {Object.entries(extractedData)
                     .filter(([_, v]) => v != null && v !== '')
@@ -642,8 +642,8 @@ export function DocumentViewerDialog({
                       if (!display || display === 'null' || display === 'undefined') return null;
                       return (
                         <div key={key} className="flex justify-between items-baseline py-[2px] gap-1">
-                          <span className="text-[9px] text-muted-foreground shrink-0 truncate">{formatFieldKey(key)}</span>
-                          <span className="text-[9px] font-medium text-foreground text-right truncate">{display}</span>
+                          <span className="text-xs-tight text-muted-foreground shrink-0 truncate">{formatFieldKey(key)}</span>
+                          <span className="text-xs-tight font-medium text-foreground text-right truncate">{display}</span>
                         </div>
                       );
                     })}
@@ -745,12 +745,12 @@ function ExtractedDataPanel({
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="text-sm font-semibold truncate" data-testid="text-doc-name">{doc.name}</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               {doc.createdAt ? new Date(doc.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : ""}
             </p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <Badge className={cn("text-[10px] px-1.5 py-0 capitalize border", getDocTypeBadgeColor(doc.type))} data-testid="badge-doc-type">
+            <Badge className={cn("text-xs px-1.5 py-0 capitalize border", getDocTypeBadgeColor(doc.type))} data-testid="badge-doc-type">
               {(doc.type || "other").replace(/_/g, " ")}
             </Badge>
             <Button
@@ -772,7 +772,7 @@ function ExtractedDataPanel({
 
           {/* Extracted data fields */}
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
               Extracted Fields
             </p>
             <div className="space-y-1" data-testid="extracted-data-list">
@@ -796,7 +796,7 @@ function ExtractedDataPanel({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                           {formatFieldLabel(key)}
                         </span>
                         {expStatus && <ExpirationBadge status={expStatus} />}
@@ -885,7 +885,7 @@ function ExtractedDataPanel({
 
           {/* Linked profiles */}
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
               Linked Profiles
             </p>
             {linkedProfileObjects.length > 0 && (
@@ -915,7 +915,7 @@ function ExtractedDataPanel({
             {/* Link to profile dropdown */}
             {linkingProfile ? (
               <div className="rounded-md border border-border bg-muted/20 overflow-hidden" data-testid="link-profile-dropdown">
-                <p className="text-[10px] px-2 py-1 border-b border-border text-muted-foreground font-medium">
+                <p className="text-xs px-2 py-1 border-b border-border text-muted-foreground font-medium">
                   Select a profile
                 </p>
                 {profiles.filter((p) => !(doc.linkedProfiles || []).includes(p.id)).length === 0 && (
@@ -932,7 +932,7 @@ function ExtractedDataPanel({
                     >
                       <Link2 className="h-3 w-3 text-muted-foreground shrink-0" />
                       <span className="truncate">{p.name}</span>
-                      <span className="text-[10px] text-muted-foreground ml-auto capitalize">{p.type}</span>
+                      <span className="text-xs text-muted-foreground ml-auto capitalize">{p.type}</span>
                     </button>
                   ))}
                 <div className="border-t border-border p-1">
@@ -966,10 +966,10 @@ function ExtractedDataPanel({
           {/* Tags */}
           {doc.tags && doc.tags.length > 0 && (
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">Tags</p>
+              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">Tags</p>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
                 {doc.tags.map((tag) => (
-                  <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">{tag}</Badge>
+                  <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">{tag}</Badge>
                 ))}
               </div>
             </div>

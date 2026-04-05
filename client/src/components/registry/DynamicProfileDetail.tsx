@@ -1018,16 +1018,16 @@ function ProfileOverviewHeader({
                   <p className="text-xs text-muted-foreground mt-0.5 truncate">{subtitle}</p>
                 )}
                 <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                  <Badge variant="secondary" className="text-[10px] font-medium">
+                  <Badge variant="secondary" className="text-xs font-medium">
                     {categoryLabel}
                   </Badge>
                   {badgeVal && badgeVal !== secondaryVal && (
-                    <Badge variant="outline" className="text-[10px]">
+                    <Badge variant="outline" className="text-xs">
                       {String(badgeVal)}
                     </Badge>
                   )}
                   {condition && (
-                    <Badge variant="outline" className={`text-[10px] ${getConditionBadgeClass(condition)}`}>
+                    <Badge variant="outline" className={`text-xs ${getConditionBadgeClass(condition)}`}>
                       {condition}
                     </Badge>
                   )}
@@ -1049,7 +1049,7 @@ function ProfileOverviewHeader({
               <div className="mt-3 flex items-center gap-4 flex-wrap">
                 {valueVal && (
                   <div>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{config.valueLabel}</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">{config.valueLabel}</p>
                     <p className="text-sm font-semibold tabular-nums">
                       {formatWidgetValue(valueVal, config.valueFormat)}
                     </p>
@@ -1057,7 +1057,7 @@ function ProfileOverviewHeader({
                 )}
                 {profile.parentProfile && (
                   <div>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Linked Profile</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Linked Profile</p>
                     <Link href={`/profiles/${profile.parentProfile.id}`}>
                       <a className="text-xs text-primary hover:underline flex items-center gap-1">
                         <ExternalLink className="h-3 w-3" />
@@ -1082,7 +1082,7 @@ function ProfileOverviewHeader({
         {profile.tags && profile.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-3">
             {profile.tags.map((tag: string) => (
-              <Badge key={tag} variant="outline" className="text-[10px]">
+              <Badge key={tag} variant="outline" className="text-xs">
                 {tag}
               </Badge>
             ))}
@@ -1145,7 +1145,7 @@ function SummaryWidgetGrid({
                 </div>
                 <div>
                   <p className="text-sm font-semibold leading-tight">{widget.title}</p>
-                  <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">{widget.subtitle}</p>
+                  <p className="text-xs text-muted-foreground leading-tight mt-0.5">{widget.subtitle}</p>
                 </div>
               </div>
               {targetTab && (
@@ -1335,7 +1335,7 @@ function InlineField({
           }}
           autoFocus
         />
-        <Button size="sm" className="h-6 text-[10px] px-2" onClick={save}>Save</Button>
+        <Button size="sm" className="h-6 text-xs px-2" onClick={save}>Save</Button>
         <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => { setDraft(value || ""); setEditing(false); }}>
           <X className="h-3 w-3" />
         </Button>
@@ -1402,12 +1402,12 @@ function ExpandableSection({
           <div className="flex items-center gap-2">
             <p className="text-sm font-semibold leading-tight">{title}</p>
             {badge && (
-              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border ${badge.color}`}>
+              <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full border ${badge.color}`}>
                 {badge.label}
               </span>
             )}
           </div>
-          <p className="text-[11px] text-muted-foreground leading-tight mt-0.5 truncate">{subtitle}</p>
+          <p className="text-xs-loose text-muted-foreground leading-tight mt-0.5 truncate">{subtitle}</p>
         </div>
 
         {/* Summary pills — shown when collapsed */}
@@ -1415,7 +1415,7 @@ function ExpandableSection({
           <div className="hidden sm:flex items-center gap-3 shrink-0">
             {summaryItems.slice(0, 3).map((item) => (
               <div key={item.label} className="text-right">
-                <p className="text-[10px] text-muted-foreground leading-tight">{item.label}</p>
+                <p className="text-xs text-muted-foreground leading-tight">{item.label}</p>
                 <p className="text-xs font-semibold tabular-nums leading-tight">{item.value || "—"}</p>
               </div>
             ))}
@@ -1458,7 +1458,7 @@ function QuickActionBar({ actions }: { actions: { label: string; icon: React.Ele
             key={action.label}
             type="button"
             onClick={action.onClick}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-2 py-1 rounded-md border border-dashed border-border hover:border-border/80 hover:bg-muted/40 transition-colors"
+            className="flex items-center gap-1 text-xs-loose text-muted-foreground hover:text-foreground px-2 py-1 rounded-md border border-dashed border-border hover:border-border/80 hover:bg-muted/40 transition-colors"
           >
             <ActionIcon className="h-3 w-3" />
             {action.label}
@@ -1613,7 +1613,7 @@ function ExpandableProfileSections({
             <div className="w-3 h-3 rounded-full border border-muted-foreground/50 shrink-0" />
             <span className="text-xs flex-1 truncate">{t.title ?? t.name ?? "Task"}</span>
             {t.dueDate && (
-              <span className={`text-[10px] shrink-0 ${
+              <span className={`text-xs shrink-0 ${
                 new Date(t.dueDate).getTime() < Date.now() ? "text-destructive" : "text-muted-foreground"
               }`}>
                 {new Date(t.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
@@ -1639,7 +1639,7 @@ function ExpandableProfileSections({
             <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <span className="text-xs flex-1 truncate">{d.name ?? "Document"}</span>
             {d.type && (
-              <Badge variant="secondary" className="text-[10px] capitalize shrink-0">{d.type}</Badge>
+              <Badge variant="secondary" className="text-xs capitalize shrink-0">{d.type}</Badge>
             )}
           </div>
         ))}
@@ -2570,7 +2570,7 @@ function DocumentsSection({
                       <p className="text-sm font-medium truncate">{doc.name}</p>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         {doc.type && (
-                          <Badge variant="secondary" className="text-[10px] capitalize">
+                          <Badge variant="secondary" className="text-xs capitalize">
                             {doc.type}
                           </Badge>
                         )}
@@ -2582,13 +2582,13 @@ function DocumentsSection({
                           })}
                         </span>
                         {expStatus === "expired" && expDate && (
-                          <Badge variant="destructive" className="text-[10px] gap-0.5">
+                          <Badge variant="destructive" className="text-xs gap-0.5">
                             <AlertCircle className="h-2.5 w-2.5" />
                             Expired
                           </Badge>
                         )}
                         {expStatus === "soon" && expDate && (
-                          <Badge className="text-[10px] gap-0.5 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
+                          <Badge className="text-xs gap-0.5 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
                             <AlertCircle className="h-2.5 w-2.5" />
                             Expiring soon
                           </Badge>
@@ -2716,7 +2716,7 @@ function ActivitySection({ timeline }: { timeline: any[] }) {
                 })}
               </p>
             </div>
-            <Badge variant="secondary" className="text-[10px] capitalize shrink-0 h-fit">
+            <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">
               {entry.type}
             </Badge>
           </div>

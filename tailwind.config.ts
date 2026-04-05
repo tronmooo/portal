@@ -6,7 +6,10 @@ export default {
   theme: {
     extend: {
       fontSize: {
-        '2xs': ['0.625rem', { lineHeight: '0.875rem' }],
+        '2xs': ['0.5rem', { lineHeight: '0.75rem' }],       // 8px
+        'xs-tight': ['0.5625rem', { lineHeight: '0.75rem' }], // 9px
+        'xs': ['0.625rem', { lineHeight: '0.875rem' }],      // 10px — overrides default 12px
+        'xs-loose': ['0.6875rem', { lineHeight: '1rem' }],   // 11px
       },
       borderRadius: {
         lg: ".5625rem", /* 9px */

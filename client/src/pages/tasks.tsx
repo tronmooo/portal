@@ -300,7 +300,7 @@ function TaskItem({
                 </span>
               )}
               {task.tags?.map(tag => (
-                <Badge key={tag} variant="outline" className="text-[10px] h-5">{tag}</Badge>
+                <Badge key={tag} variant="outline" className="text-xs h-5">{tag}</Badge>
               ))}
             </div>
           </div>

@@ -177,7 +177,7 @@ function HabitCard({ habit }: { habit: Habit }) {
               <span className="text-xs">Best: {habit.longestStreak}d</span>
             </div>
           )}
-          <Badge variant="outline" className="text-[10px] h-5">{habit.frequency}{targetPerDay > 1 ? ` ${targetPerDay}x` : ""}</Badge>
+          <Badge variant="outline" className="text-xs h-5">{habit.frequency}{targetPerDay > 1 ? ` ${targetPerDay}x` : ""}</Badge>
         </div>
 
         {/* 14-day grid */}
@@ -187,7 +187,7 @@ function HabitCard({ habit }: { habit: Habit }) {
             return (
               <div
                 key={i}
-                className="w-5 h-5 rounded-sm flex items-center justify-center text-[8px]"
+                className="w-5 h-5 rounded-sm flex items-center justify-center text-2xs"
                 style={{
                   backgroundColor: day.done ? (habit.color || "#4F98A3") : partial ? (habit.color || "#4F98A3") : "var(--color-muted)",
                   opacity: day.done ? 1 : partial ? 0.5 : 0.3,
@@ -199,7 +199,7 @@ function HabitCard({ habit }: { habit: Habit }) {
             );
           })}
         </div>
-        <div className="flex justify-between text-[9px] text-muted-foreground mt-1">
+        <div className="flex justify-between text-xs-tight text-muted-foreground mt-1">
           <span>14 days ago</span>
           <span>Today</span>
         </div>

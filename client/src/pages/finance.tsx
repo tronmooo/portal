@@ -223,19 +223,19 @@ export default function FinancePage() {
         return (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Total Spent</p>
+              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">Total Spent</p>
               <p className="text-lg font-bold tabular-nums mt-0.5" data-testid="text-total-spent">${total.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
             </div>
             <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">This Month</p>
+              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">This Month</p>
               <p className="text-lg font-bold tabular-nums mt-0.5">${monthTotal.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
             </div>
             <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Asset Value</p>
+              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">Asset Value</p>
               <p className="text-lg font-bold tabular-nums mt-0.5 text-green-600">${totalAssetValue.toLocaleString()}</p>
             </div>
             <div className="rounded-lg border p-2.5">
-              <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Monthly Bills</p>
+              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">Monthly Bills</p>
               <p className="text-lg font-bold tabular-nums mt-0.5 text-amber-600">${monthlyLiabilities.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
             </div>
           </div>
@@ -274,25 +274,25 @@ export default function FinancePage() {
         return (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">This Month</p>
+              <p className="text-xs text-muted-foreground uppercase">This Month</p>
               <p className="text-lg font-bold tabular-nums">${thisMonthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="text-[10px] text-muted-foreground">{thisMonthExpenses.length} expenses</p>
+              <p className="text-xs text-muted-foreground">{thisMonthExpenses.length} expenses</p>
             </Card>
             <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">Monthly Bills</p>
+              <p className="text-xs text-muted-foreground uppercase">Monthly Bills</p>
               <p className="text-lg font-bold tabular-nums">${monthlyBills.toLocaleString()}</p>
-              <p className="text-[10px] text-muted-foreground">{obligations?.length || 0} obligations</p>
+              <p className="text-xs text-muted-foreground">{obligations?.length || 0} obligations</p>
             </Card>
             <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">Assets</p>
+              <p className="text-xs text-muted-foreground uppercase">Assets</p>
               <p className="text-lg font-bold tabular-nums text-green-500">${assetValue.toLocaleString()}</p>
             </Card>
             <Card className="p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">Net Worth</p>
+              <p className="text-xs text-muted-foreground uppercase">Net Worth</p>
               <p className={`text-lg font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>
                 ${netWorth.toLocaleString()}
               </p>
-              {liabilities > 0 && <p className="text-[10px] text-muted-foreground">Liabilities: ${liabilities.toLocaleString()}</p>}
+              {liabilities > 0 && <p className="text-xs text-muted-foreground">Liabilities: ${liabilities.toLocaleString()}</p>}
             </Card>
           </div>
         );

@@ -107,7 +107,7 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
               <p className="text-xs text-muted-foreground leading-relaxed">{f.desc}</p>
               <div className="space-y-1">
                 {f.examples.map((ex, i) => (
-                  <p key={i} className="text-[11px] text-primary/80 font-mono">{ex}</p>
+                  <p key={i} className="text-xs-loose text-primary/80 font-mono">{ex}</p>
                 ))}
               </div>
             </div>
@@ -125,7 +125,7 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
           {EXAMPLE_COMMANDS.map((ex, i) => (
             <div key={i} className="flex items-center gap-2 rounded-lg border border-border/30 bg-card/50 px-3 py-2">
               <span className="text-xs font-mono text-foreground/90 flex-1">{ex.cmd}</span>
-              <span className="text-[10px] font-medium text-primary/70 bg-primary/10 px-1.5 py-0.5 rounded shrink-0">{ex.tag}</span>
+              <span className="text-xs font-medium text-primary/70 bg-primary/10 px-1.5 py-0.5 rounded shrink-0">{ex.tag}</span>
             </div>
           ))}
         </div>

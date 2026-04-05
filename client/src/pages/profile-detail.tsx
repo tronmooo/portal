@@ -358,7 +358,7 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
         )}
 
         {/* Generated timestamp */}
-        <p className="text-[10px] text-muted-foreground pt-1" data-testid="text-ai-summary-generated">
+        <p className="text-xs text-muted-foreground pt-1" data-testid="text-ai-summary-generated">
           Generated {generatedAgo}
         </p>
       </CardContent>
@@ -407,22 +407,22 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
         {entry.data?.computed && Object.keys(entry.data.computed).length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-1.5">
             {entry.data.computed.caloriesBurned && (
-              <Badge variant="secondary" className="text-[10px]">{entry.data.computed.caloriesBurned} cal burned</Badge>
+              <Badge variant="secondary" className="text-xs">{entry.data.computed.caloriesBurned} cal burned</Badge>
             )}
             {entry.data.computed.pace && (
-              <Badge variant="secondary" className="text-[10px]">{entry.data.computed.pace}</Badge>
+              <Badge variant="secondary" className="text-xs">{entry.data.computed.pace}</Badge>
             )}
             {entry.data.computed.heartRateZone && (
-              <Badge variant="secondary" className="text-[10px] capitalize">{entry.data.computed.heartRateZone.replace("_", " ")}</Badge>
+              <Badge variant="secondary" className="text-xs capitalize">{entry.data.computed.heartRateZone.replace("_", " ")}</Badge>
             )}
             {entry.data.computed.caloriesConsumed && (
-              <Badge variant="secondary" className="text-[10px]">{entry.data.computed.caloriesConsumed} cal</Badge>
+              <Badge variant="secondary" className="text-xs">{entry.data.computed.caloriesConsumed} cal</Badge>
             )}
             {entry.data.computed.sleepQuality && (
-              <Badge variant="secondary" className="text-[10px] capitalize">{entry.data.computed.sleepQuality} sleep</Badge>
+              <Badge variant="secondary" className="text-xs capitalize">{entry.data.computed.sleepQuality} sleep</Badge>
             )}
             {entry.data.computed.bloodPressureCategory && (
-              <Badge variant="secondary" className="text-[10px] capitalize">{entry.data.computed.bloodPressureCategory.replace(/_/g, " ")}</Badge>
+              <Badge variant="secondary" className="text-xs capitalize">{entry.data.computed.bloodPressureCategory.replace(/_/g, " ")}</Badge>
             )}
           </div>
         )}
@@ -432,7 +432,7 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
           })}
         </p>
       </div>
-      <Badge variant="secondary" className="text-[10px] capitalize shrink-0 h-fit">{entry.type}</Badge>
+      <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">{entry.type}</Badge>
     </div>
   );
 }
@@ -643,8 +643,8 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
         }}
         autoFocus
       />
-      <Button size="sm" className="h-6 text-[10px] px-2" onClick={save} disabled={saving}>{saving ? "…" : "Save"}</Button>
-      <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1" onClick={() => setEditing(false)} disabled={saving}>✕</Button>
+      <Button size="sm" className="h-6 text-xs px-2" onClick={save} disabled={saving}>{saving ? "…" : "Save"}</Button>
+      <Button size="sm" variant="ghost" className="h-6 text-xs px-1" onClick={() => setEditing(false)} disabled={saving}>✕</Button>
     </div>
   );
 }
@@ -930,7 +930,7 @@ function InfoTab({
                 {subtitleParts.length > 0 && (
                   <p className="text-xs text-muted-foreground mt-0.5 truncate">{subtitleParts.join(" · ")}</p>
                 )}
-                <Badge variant="secondary" className={`text-[10px] mt-1 capitalize ${profileAccent(profile.type)}`}>
+                <Badge variant="secondary" className={`text-xs mt-1 capitalize ${profileAccent(profile.type)}`}>
                   {profile.type}
                 </Badge>
               </div>
@@ -938,7 +938,7 @@ function InfoTab({
             <div className="flex flex-col items-end gap-1.5 shrink-0">
               {keyValueEntry && (
                 <div className="text-right">
-                  <p className="text-[10px] text-muted-foreground">{keyValueEntry.label}</p>
+                  <p className="text-xs text-muted-foreground">{keyValueEntry.label}</p>
                   <p className="text-base font-bold leading-tight">{keyValueEntry.value}</p>
                 </div>
               )}
@@ -954,7 +954,7 @@ function InfoTab({
       <div className="grid grid-cols-4 gap-2">
         <Card className="p-2.5 text-center">
           <p className="text-base font-bold">{docsCount}</p>
-          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
             <FileText className="h-2.5 w-2.5" /> Docs
           </p>
         </Card>
@@ -962,19 +962,19 @@ function InfoTab({
           <p className="text-base font-bold">
             {expensesTotal > 0 ? `$${expensesTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "0"}
           </p>
-          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
             <DollarSign className="h-2.5 w-2.5" /> Spent
           </p>
         </Card>
         <Card className="p-2.5 text-center">
           <p className="text-base font-bold">{openTasksCount}</p>
-          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
             <ListTodo className="h-2.5 w-2.5" /> Tasks
           </p>
         </Card>
         <Card className="p-2.5 text-center">
           <p className="text-base font-bold">{trackersCount}</p>
-          <p className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5">
+          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
             <Activity className="h-2.5 w-2.5" /> Trackers
           </p>
         </Card>
@@ -993,21 +993,21 @@ function InfoTab({
         return (
           <Card className="p-3" data-testid="card-subscription-insights">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase">Subscription Insights</p>
-              <Badge variant="secondary" className={`text-[10px] capitalize ${statusColor}`} data-testid="badge-subscription-status">{subStatus}</Badge>
+              <p className="text-xs font-semibold text-muted-foreground uppercase">Subscription Insights</p>
+              <Badge variant="secondary" className={`text-xs capitalize ${statusColor}`} data-testid="badge-subscription-status">{subStatus}</Badge>
             </div>
             <div className="grid grid-cols-3 gap-3 text-center">
               <div>
                 <p className="text-sm font-bold tabular-nums">${cost.toLocaleString()}/mo</p>
-                <p className="text-[10px] text-muted-foreground">Monthly Cost</p>
+                <p className="text-xs text-muted-foreground">Monthly Cost</p>
               </div>
               <div>
                 <p className="text-sm font-bold tabular-nums">${Math.round(totalPaid).toLocaleString()}</p>
-                <p className="text-[10px] text-muted-foreground">Total Paid ({monthsActive}mo)</p>
+                <p className="text-xs text-muted-foreground">Total Paid ({monthsActive}mo)</p>
               </div>
               <div>
                 <p className="text-sm font-bold tabular-nums">{daysUntilRenewal != null ? (daysUntilRenewal > 0 ? `${daysUntilRenewal}d` : "Due") : "—"}</p>
-                <p className="text-[10px] text-muted-foreground">Until Renewal</p>
+                <p className="text-xs text-muted-foreground">Until Renewal</p>
               </div>
             </div>
             <SubscriptionQuickActions profileId={profile.id} status={subStatus} onChanged={handleSaved} onEdit={onEdit} />
@@ -1026,9 +1026,9 @@ function InfoTab({
         return (
           <Card className="p-3">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase">AI Valuation</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase">AI Valuation</p>
               {f.valuationConfidence && (
-                <Badge variant="secondary" className={`text-[10px] capitalize ${confidenceColor}`}>
+                <Badge variant="secondary" className={`text-xs capitalize ${confidenceColor}`}>
                   {f.valuationConfidence} confidence
                 </Badge>
               )}
@@ -1043,9 +1043,9 @@ function InfoTab({
               )}
             </div>
             <div className="mt-2 space-y-0.5">
-              {f.valuationMethod && <p className="text-[11px] text-muted-foreground">Method: {f.valuationMethod}</p>}
-              {f.valuationRange && <p className="text-[11px] text-muted-foreground">Range: {f.valuationRange}</p>}
-              {f.valuationDate && <p className="text-[11px] text-muted-foreground">Valued: {f.valuationDate}</p>}
+              {f.valuationMethod && <p className="text-xs-loose text-muted-foreground">Method: {f.valuationMethod}</p>}
+              {f.valuationRange && <p className="text-xs-loose text-muted-foreground">Range: {f.valuationRange}</p>}
+              {f.valuationDate && <p className="text-xs-loose text-muted-foreground">Valued: {f.valuationDate}</p>}
             </div>
           </Card>
         );
@@ -1179,7 +1179,7 @@ function InfoTab({
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{child.name}</p>
-                      <p className="text-[10px] text-muted-foreground capitalize">
+                      <p className="text-xs text-muted-foreground capitalize">
                         {child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : child.fields?.currentValue ? ` · $${child.fields.currentValue}` : ""}
                       </p>
                     </div>
@@ -1213,7 +1213,7 @@ function InfoTab({
             <div className="flex items-center gap-1.5 flex-wrap">
               <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
               {profile.tags.map(tag => (
-                <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>
+                <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
               ))}
             </div>
           </CardContent>
@@ -1371,9 +1371,9 @@ function DocumentsTab({
           />
           {docTypes.length > 1 && (
             <div className="flex items-center gap-1 flex-wrap">
-              <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({documents.length})</button>
+              <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({documents.length})</button>
               {docTypes.map(t => (
-                <button key={t} onClick={() => setDocTypeFilter(t)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{t} ({documents.filter(d => d.type === t).length})</button>
+                <button key={t} onClick={() => setDocTypeFilter(t)} className={`px-2 py-0.5 rounded text-xs font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{t} ({documents.filter(d => d.type === t).length})</button>
               ))}
             </div>
           )}
@@ -1448,22 +1448,22 @@ function DocumentsTab({
                         />
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <Badge variant="secondary" className="text-[10px] capitalize">{doc.type}</Badge>
+                        <Badge variant="secondary" className="text-xs capitalize">{doc.type}</Badge>
                         <span className="text-xs text-muted-foreground">
                           {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                         </span>
                         {expStatus === "expired" && expDate && (
-                          <Badge variant="destructive" className="text-[10px] gap-0.5">
+                          <Badge variant="destructive" className="text-xs gap-0.5">
                             <AlertCircle className="h-2.5 w-2.5" /> Expired {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                           </Badge>
                         )}
                         {expStatus === "soon" && expDate && (
-                          <Badge className="text-[10px] gap-0.5 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
+                          <Badge className="text-xs gap-0.5 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
                             <AlertCircle className="h-2.5 w-2.5" /> Expires {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                           </Badge>
                         )}
                         {doc.extractedData && Object.keys(doc.extractedData).length > 0 && (
-                          <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                          <span className="text-xs text-muted-foreground flex items-center gap-0.5">
                             {expandedDocId === doc.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                             {Object.keys(doc.extractedData).length} fields
                           </span>
@@ -1511,7 +1511,7 @@ function DocumentsTab({
                     <div className="border-t bg-muted/30 px-4 py-2.5 grid grid-cols-2 gap-x-4 gap-y-1.5">
                       {Object.entries(doc.extractedData).map(([key, value]) => (
                         <div key={key} className="min-w-0">
-                          <span className="text-[10px] text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim()}</span>
+                          <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim()}</span>
                           <p className="text-xs font-medium truncate">{String(value)}</p>
                         </div>
                       ))}
@@ -1835,25 +1835,25 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       <div className="grid grid-cols-2 gap-3">
         <Card>
           <CardContent className="p-4">
-            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">Total Spent</p>
+            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">Total Spent</p>
             <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(totalSpent)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">This Month</p>
+            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">This Month</p>
             <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(thisMonth)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">Monthly Burn</p>
+            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">Monthly Burn</p>
             <p className="text-xl font-bold tabular-nums text-amber-600 dark:text-amber-400">{formatCurrency(monthlyBurn)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">Outstanding</p>
+            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">Outstanding</p>
             <p className="text-xl font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(outstanding)}</p>
           </CardContent>
         </Card>
@@ -1895,7 +1895,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                             {new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                           </span>
                           {expense.category && (
-                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{expense.category}</Badge>
+                            <Badge variant="secondary" className="text-xs px-1.5 py-0">{expense.category}</Badge>
                           )}
                         </div>
                       </div>
@@ -1967,17 +1967,17 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                         <div className="flex items-center gap-2">
                           <p className="text-sm font-medium truncate">{ob.name}</p>
                           {ob.autopay && (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-green-600 border-green-500/40">Autopay</Badge>
+                            <Badge variant="outline" className="text-xs px-1.5 py-0 text-green-600 border-green-500/40">Autopay</Badge>
                           )}
                           {urgency === "overdue" && (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-red-600 border-red-500/40">Overdue</Badge>
+                            <Badge variant="outline" className="text-xs px-1.5 py-0 text-red-600 border-red-500/40">Overdue</Badge>
                           )}
                           {urgency === "soon" && (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-600 border-amber-500/40">Due soon</Badge>
+                            <Badge variant="outline" className="text-xs px-1.5 py-0 text-amber-600 border-amber-500/40">Due soon</Badge>
                           )}
                         </div>
                         <div className="flex items-center gap-2 mt-1">
-                          <Badge variant="secondary" className="text-[10px]">{ob.frequency}</Badge>
+                          <Badge variant="secondary" className="text-xs">{ob.frequency}</Badge>
                           {ob.nextDueDate && (
                             <span className="text-xs text-muted-foreground">Next: {ob.nextDueDate}</span>
                           )}
@@ -1987,7 +1987,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                     </div>
                     {ob.payments && ob.payments.length > 0 && (
                       <div className="mt-2 space-y-1">
-                        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Recent payments</p>
+                        <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Recent payments</p>
                         {ob.payments.slice(-3).reverse().map(p => (
                           <div key={p.id} className="flex items-center justify-between text-xs">
                             <span className="text-muted-foreground">{p.date}</span>
@@ -2018,17 +2018,17 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
             {/* Key stats row */}
             <div className="grid grid-cols-3 gap-3">
               <div className="text-center">
-                <p className="text-[11px] text-muted-foreground mb-1">Monthly Payment</p>
+                <p className="text-xs-loose text-muted-foreground mb-1">Monthly Payment</p>
                 <p className="text-lg font-bold tabular-nums text-orange-600 dark:text-orange-400">
                   {amortRows.length > 0 ? formatCurrency(amortRows[0].payment) : "—"}
                 </p>
               </div>
               <div className="text-center">
-                <p className="text-[11px] text-muted-foreground mb-1">Total Interest</p>
+                <p className="text-xs-loose text-muted-foreground mb-1">Total Interest</p>
                 <p className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(totalInterest)}</p>
               </div>
               <div className="text-center">
-                <p className="text-[11px] text-muted-foreground mb-1">Payoff Date</p>
+                <p className="text-xs-loose text-muted-foreground mb-1">Payoff Date</p>
                 <p className="text-base font-bold text-foreground">{payoffDate || "—"}</p>
               </div>
             </div>
@@ -2036,7 +2036,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
             {/* Area chart: balance / cumulative principal / cumulative interest */}
             {amortChartSample.length > 1 && (
               <div>
-                <p className="text-[11px] text-muted-foreground mb-2">Balance &amp; Cumulative Paid Over Time</p>
+                <p className="text-xs-loose text-muted-foreground mb-2">Balance &amp; Cumulative Paid Over Time</p>
                 <ResponsiveContainer width="100%" height={180}>
                   <AreaChart data={amortChartSample} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                     <defs>
@@ -2066,9 +2066,9 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                   </AreaChart>
                 </ResponsiveContainer>
                 <div className="flex items-center gap-4 justify-center mt-1">
-                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 inline-block" /><span className="text-[11px] text-muted-foreground">Remaining Balance</span></div>
-                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block" /><span className="text-[11px] text-muted-foreground">Principal Paid</span></div>
-                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500 inline-block" /><span className="text-[11px] text-muted-foreground">Interest Paid</span></div>
+                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 inline-block" /><span className="text-xs-loose text-muted-foreground">Remaining Balance</span></div>
+                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block" /><span className="text-xs-loose text-muted-foreground">Principal Paid</span></div>
+                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500 inline-block" /><span className="text-xs-loose text-muted-foreground">Interest Paid</span></div>
                 </div>
               </div>
             )}
@@ -2151,15 +2151,15 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
               />
               <div className="grid grid-cols-3 gap-3 mt-2">
                 <div className="text-center p-3 rounded-lg bg-muted/50">
-                  <p className="text-[11px] text-muted-foreground mb-1">New Payoff</p>
+                  <p className="text-xs-loose text-muted-foreground mb-1">New Payoff</p>
                   <p className="text-sm font-bold text-foreground">{newPayoffDate || "—"}</p>
                 </div>
                 <div className="text-center p-3 rounded-lg bg-green-500/10">
-                  <p className="text-[11px] text-muted-foreground mb-1">Months Saved</p>
+                  <p className="text-xs-loose text-muted-foreground mb-1">Months Saved</p>
                   <p className="text-sm font-bold text-green-600">{monthsSaved}</p>
                 </div>
                 <div className="text-center p-3 rounded-lg bg-green-500/10">
-                  <p className="text-[11px] text-muted-foreground mb-1">Interest Saved</p>
+                  <p className="text-xs-loose text-muted-foreground mb-1">Interest Saved</p>
                   <p className="text-sm font-bold text-green-600">{formatCurrency(interestSaved)}</p>
                 </div>
               </div>
@@ -2462,7 +2462,7 @@ function TrackerCard_Profile({
             <p className="text-sm font-semibold truncate">{tracker.name}</p>
             <div className="flex items-center gap-1.5 mt-0.5">
               {tracker.category && (
-                <Badge variant="secondary" className="text-[10px]">{tracker.category}</Badge>
+                <Badge variant="secondary" className="text-xs">{tracker.category}</Badge>
               )}
               <span className="text-xs text-muted-foreground">{tracker.entries.length} entries</span>
             </div>
@@ -2480,13 +2480,13 @@ function TrackerCard_Profile({
 
         {/* Action buttons row - always visible */}
         <div className="flex gap-1.5 mb-2">
-          <Button variant="secondary" size="sm" className="h-6 text-[10px] px-2 gap-1" onClick={() => onLogEntry(tracker.id)} data-testid={`button-log-entry-${tracker.id}`}>
+          <Button variant="secondary" size="sm" className="h-6 text-xs px-2 gap-1" onClick={() => onLogEntry(tracker.id)} data-testid={`button-log-entry-${tracker.id}`}>
             <Plus className="h-3 w-3" /> Log Entry
           </Button>
-          <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2 gap-1 text-muted-foreground" onClick={() => onUnlink(tracker.id)} data-testid={`button-unlink-tracker-${tracker.id}`}>
+          <Button variant="ghost" size="sm" className="h-6 text-xs px-2 gap-1 text-muted-foreground" onClick={() => onUnlink(tracker.id)} data-testid={`button-unlink-tracker-${tracker.id}`}>
             <Unlink className="h-3 w-3" /> Unlink
           </Button>
-          <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2 gap-1 text-destructive" onClick={() => onDeleteTracker(tracker.id)} data-testid={`button-delete-tracker-${tracker.id}`}>
+          <Button variant="ghost" size="sm" className="h-6 text-xs px-2 gap-1 text-destructive" onClick={() => onDeleteTracker(tracker.id)} data-testid={`button-delete-tracker-${tracker.id}`}>
             <Trash2 className="h-3 w-3" /> Delete
           </Button>
         </div>
@@ -2531,7 +2531,7 @@ function TrackerCard_Profile({
                     {entry.notes && <span className="text-muted-foreground truncate max-w-[100px]" title={entry.notes}>{entry.notes}</span>}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                    <span className="text-muted-foreground text-[10px]">
+                    <span className="text-muted-foreground text-xs">
                       {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                     </span>
                     <Button
@@ -2552,7 +2552,7 @@ function TrackerCard_Profile({
               <Button
                 variant="ghost"
                 size="sm"
-                className="mt-1 h-6 text-[10px] w-full flex items-center gap-1 text-muted-foreground"
+                className="mt-1 h-6 text-xs w-full flex items-center gap-1 text-muted-foreground"
                 onClick={() => setExpanded(v => !v)}
                 data-testid={`button-expand-${tracker.id}`}
               >
@@ -3140,7 +3140,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       {/* ── Section 1: Vitals Dashboard ── */}
       {vitalCards.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
             <Heart className="h-3 w-3" /> Latest Vitals
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -3148,15 +3148,15 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
               const trendColor = trend === "up" ? "text-green-500" : trend === "down" ? "text-red-500" : "text-muted-foreground";
               return (
                 <div key={tracker.id} className="rounded-lg border bg-card p-3 flex flex-col gap-1.5">
-                  <p className="text-[10px] text-muted-foreground truncate font-medium">{tracker.name}</p>
+                  <p className="text-xs text-muted-foreground truncate font-medium">{tracker.name}</p>
                   <div className="flex items-end justify-between">
                     <div className="flex items-baseline gap-1">
                       <span className="text-xl font-bold tabular-nums leading-none">
                         {typeof latest === "number" ? latest.toLocaleString(undefined, { maximumFractionDigits: 1 }) : latest}
                       </span>
-                      {tracker.unit && <span className="text-[10px] text-muted-foreground">{tracker.unit}</span>}
+                      {tracker.unit && <span className="text-xs text-muted-foreground">{tracker.unit}</span>}
                     </div>
-                    <div className={`flex items-center gap-0.5 text-[10px] font-medium ${trendColor}`}>
+                    <div className={`flex items-center gap-0.5 text-xs font-medium ${trendColor}`}>
                       {trend === "up" && <ArrowUp className="h-3 w-3" />}
                       {trend === "down" && <ArrowDown className="h-3 w-3" />}
                       {trend === "flat" && <Minus className="h-3 w-3" />}
@@ -3173,10 +3173,10 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
                   )}
                   <div className="flex items-center justify-between">
                     {avg7 != null && (
-                      <span className="text-[9px] text-muted-foreground">7d avg {avg7.toFixed(1)}</span>
+                      <span className="text-xs-tight text-muted-foreground">7d avg {avg7.toFixed(1)}</span>
                     )}
                     {lastDate && (
-                      <span className="text-[9px] text-muted-foreground ml-auto">{lastDate}</span>
+                      <span className="text-xs-tight text-muted-foreground ml-auto">{lastDate}</span>
                     )}
                   </div>
                 </div>
@@ -3189,7 +3189,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       {/* ── Section 2: Trend Charts ── */}
       {topChartTrackers.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
             <Activity className="h-3 w-3" /> Trends
           </p>
           <div className="space-y-2">
@@ -3229,7 +3229,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
 
       {/* ── Section 3: All Trackers (expandable) ── */}
       <div>
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
           <HeartPulse className="h-3 w-3" /> All Trackers
         </p>
         <div className="space-y-2">
@@ -3257,9 +3257,9 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold truncate">{t.name}</p>
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        {t.category && <Badge variant="secondary" className="text-[9px] py-0">{t.category}</Badge>}
-                        <span className="text-[10px] text-muted-foreground">{t.entries?.length || 0} entries</span>
-                        {lastDate && <span className="text-[10px] text-muted-foreground">· last {lastDate}</span>}
+                        {t.category && <Badge variant="secondary" className="text-xs-tight py-0">{t.category}</Badge>}
+                        <span className="text-xs text-muted-foreground">{t.entries?.length || 0} entries</span>
+                        {lastDate && <span className="text-xs text-muted-foreground">· last {lastDate}</span>}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -3289,7 +3289,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
                                 </span>
                                 {entry.notes && <span className="text-muted-foreground truncate max-w-[100px]" title={entry.notes}>{entry.notes}</span>}
                               </div>
-                              <span className="text-[10px] text-muted-foreground shrink-0 ml-2">
+                              <span className="text-xs text-muted-foreground shrink-0 ml-2">
                                 {new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                               </span>
                             </div>
@@ -3353,7 +3353,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       {/* ── Section 5: AI Health Insights ── */}
       {insights.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
             <Sparkles className="h-3 w-3" /> Insights
           </p>
           <div className="space-y-1.5">
@@ -3435,7 +3435,7 @@ function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
             {f !== "all" && (() => { const FI = TIMELINE_ICONS[f] || Activity; return <FI className="h-3 w-3" />; })()}
             {f === "all" ? "All" : f}
             {f !== "all" && typeCounts[f] && (
-              <Badge variant="secondary" className="text-[9px] h-4 px-1 ml-0.5">{typeCounts[f]}</Badge>
+              <Badge variant="secondary" className="text-xs-tight h-4 px-1 ml-0.5">{typeCounts[f]}</Badge>
             )}
           </Button>
         ))}
@@ -3444,7 +3444,7 @@ function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
       {/* Grouped entries */}
       {groups.filter(g => g.items.length > 0).map(g => (
         <div key={g.label}>
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">{g.label}</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">{g.label}</p>
           <Card>
             <CardContent className="pt-3 pb-1">
               <div className="divide-y divide-border">
@@ -3635,14 +3635,14 @@ function TasksTab({
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`text-sm font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}>{task.title}</span>
                       {task.priority && (
-                        <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium capitalize border ${PRIORITY_BADGE[task.priority] || "bg-muted text-muted-foreground"}`}>
+                        <span className={`text-xs rounded-full px-1.5 py-0.5 font-medium capitalize border ${PRIORITY_BADGE[task.priority] || "bg-muted text-muted-foreground"}`}>
                           {task.priority}
                         </span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       {task.status && !isDone && (
-                        <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium capitalize ${statusBadge(task.status)}`}>
+                        <span className={`text-xs rounded-full px-1.5 py-0.5 font-medium capitalize ${statusBadge(task.status)}`}>
                           {task.status.replace("-", " ")}
                         </span>
                       )}
@@ -4225,7 +4225,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] text-muted-foreground mb-1 block">Loan Balance ($)</label>
+              <label className="text-xs text-muted-foreground mb-1 block">Loan Balance ($)</label>
               <Input
                 type="number" placeholder="e.g. 25000" value={formBalance}
                 onChange={e => setFormBalance(e.target.value)}
@@ -4233,7 +4233,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
               />
             </div>
             <div>
-              <label className="text-[10px] text-muted-foreground mb-1 block">Interest Rate (%)</label>
+              <label className="text-xs text-muted-foreground mb-1 block">Interest Rate (%)</label>
               <Input
                 type="number" step="0.01" placeholder="e.g. 5.5" value={formRate}
                 onChange={e => setFormRate(e.target.value)}
@@ -4241,7 +4241,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
               />
             </div>
             <div>
-              <label className="text-[10px] text-muted-foreground mb-1 block">Term (months)</label>
+              <label className="text-xs text-muted-foreground mb-1 block">Term (months)</label>
               <Input
                 type="number" placeholder="e.g. 60" value={formTerm}
                 onChange={e => setFormTerm(e.target.value)}
@@ -4249,7 +4249,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
               />
             </div>
             <div>
-              <label className="text-[10px] text-muted-foreground mb-1 block">Monthly Payment ($)</label>
+              <label className="text-xs text-muted-foreground mb-1 block">Monthly Payment ($)</label>
               <Input
                 type="number" step="0.01" placeholder="e.g. 477" value={formPayment}
                 onChange={e => setFormPayment(e.target.value)}
@@ -4257,7 +4257,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
               />
             </div>
             <div>
-              <label className="text-[10px] text-muted-foreground mb-1 block">Lender</label>
+              <label className="text-xs text-muted-foreground mb-1 block">Lender</label>
               <Input
                 placeholder="e.g. Chase" value={formLender}
                 onChange={e => setFormLender(e.target.value)}
@@ -4265,7 +4265,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
               />
             </div>
             <div>
-              <label className="text-[10px] text-muted-foreground mb-1 block">Start Date</label>
+              <label className="text-xs text-muted-foreground mb-1 block">Start Date</label>
               <Input
                 type="date" value={formStartDate}
                 onChange={e => setFormStartDate(e.target.value)}
@@ -4306,19 +4306,19 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <Card className="p-3 text-center">
-              <p className="text-[10px] text-muted-foreground">Balance</p>
+              <p className="text-xs text-muted-foreground">Balance</p>
               <p className="text-sm font-bold tabular-nums">{formatCurrency(loanBalance)}</p>
             </Card>
             <Card className="p-3 text-center">
-              <p className="text-[10px] text-muted-foreground">Rate</p>
+              <p className="text-xs text-muted-foreground">Rate</p>
               <p className="text-sm font-bold tabular-nums">{interestRate}%</p>
             </Card>
             <Card className="p-3 text-center">
-              <p className="text-[10px] text-muted-foreground">Monthly</p>
+              <p className="text-xs text-muted-foreground">Monthly</p>
               <p className="text-sm font-bold tabular-nums">{formatCurrency(monthlyPayment)}</p>
             </Card>
             <Card className="p-3 text-center">
-              <p className="text-[10px] text-muted-foreground">Payoff</p>
+              <p className="text-xs text-muted-foreground">Payoff</p>
               <p className="text-sm font-bold tabular-nums">{payoffDate || "—"}</p>
             </Card>
           </div>
@@ -4331,21 +4331,21 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
           <h3 className="text-xs font-semibold mb-2">Payoff Summary</h3>
           <div className="grid grid-cols-3 gap-3 text-center">
             <div>
-              <p className="text-[10px] text-muted-foreground">Total Interest</p>
+              <p className="text-xs text-muted-foreground">Total Interest</p>
               <p className="text-sm font-bold text-red-400">{formatCurrency(totalInterest)}</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground">Total Cost</p>
+              <p className="text-xs text-muted-foreground">Total Cost</p>
               <p className="text-sm font-bold">{formatCurrency(totalCost)}</p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground">Months Left</p>
+              <p className="text-xs text-muted-foreground">Months Left</p>
               <p className="text-sm font-bold">{schedule.length}</p>
             </div>
           </div>
           {/* Progress bar */}
           <div className="mt-3">
-            <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+            <div className="flex justify-between text-xs text-muted-foreground mb-1">
               <span>Paid off</span>
               <span>{derivedTermLocal > 0 ? `${Math.round((1 - schedule.length / derivedTermLocal) * 100)}%` : "—"}</span>
             </div>
@@ -4407,7 +4407,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
                 <span>{ob.name}</span>
                 <div className="flex items-center gap-2">
                   <span className="font-medium">${ob.amount}/mo</span>
-                  <Badge variant="outline" className="text-[9px]">{ob.frequency}</Badge>
+                  <Badge variant="outline" className="text-xs-tight">{ob.frequency}</Badge>
                 </div>
               </div>
             ))}
@@ -4456,7 +4456,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Warranty Status</span>
-            <Badge variant={isActive ? "default" : "destructive"} className="text-[10px]">
+            <Badge variant={isActive ? "default" : "destructive"} className="text-xs">
               {isActive ? "Active" : endDate ? "Expired" : "Unknown"}
             </Badge>
           </div>
@@ -4469,7 +4469,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Warranty Claims ({claims.length})</p>
-            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-claim"><Plus className="h-3 w-3" />Add Claim</Button>}
+            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-claim"><Plus className="h-3 w-3" />Add Claim</Button>}
           </div>
           {showAdd && (
             <div className="flex items-center gap-2 mb-2">
@@ -4541,7 +4541,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Redemptions ({redemptions.length})</p>
-            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-redemption"><Plus className="h-3 w-3" />Record Redemption</Button>}
+            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-redemption"><Plus className="h-3 w-3" />Record Redemption</Button>}
           </div>
           {showAdd && (
             <div className="flex items-center gap-2 mb-2">
@@ -4556,7 +4556,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
             <div key={r.id} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
               <div className="min-w-0 flex-1">
                 <span className="text-xs">{r.description || "Redemption"}</span>
-                <span className="text-[10px] text-muted-foreground ml-2">{r.date ? new Date(r.date).toLocaleDateString() : ""}</span>
+                <span className="text-xs text-muted-foreground ml-2">{r.date ? new Date(r.date).toLocaleDateString() : ""}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium tabular-nums">{r.amount ? formatCurrency(Number(r.amount)) : "—"}</span>
@@ -4636,7 +4636,7 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
       <CardContent className="pt-4 pb-3">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Saved Credentials ({credentials.length})</p>
-          {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-credential"><Plus className="h-3 w-3" />Add Credential</Button>}
+          {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-credential"><Plus className="h-3 w-3" />Add Credential</Button>}
         </div>
         {showAdd && (
           <div className="flex items-center gap-2 mb-2">
@@ -4651,10 +4651,10 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
           <div key={i} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
             <div className="min-w-0 flex-1">
               <span className="text-xs font-medium">{c.label}</span>
-              {c.username && <span className="text-[10px] text-muted-foreground ml-2">{c.username}</span>}
+              {c.username && <span className="text-xs text-muted-foreground ml-2">{c.username}</span>}
             </div>
             <div className="flex items-center gap-2">
-              {c.url && <a href={c.url.startsWith("http") ? c.url : `https://${c.url}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline" data-testid={`link-cred-${i}`}><ExternalLink className="h-3 w-3" /></a>}
+              {c.url && <a href={c.url.startsWith("http") ? c.url : `https://${c.url}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline" data-testid={`link-cred-${i}`}><ExternalLink className="h-3 w-3" /></a>}
               <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-cred-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
             </div>
           </div>
@@ -4775,7 +4775,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
       <CardContent className="pt-4 pb-3">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Appraisals ({appraisals.length})</p>
-          {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-appraisal"><Plus className="h-3 w-3" />Add Appraisal</Button>}
+          {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-appraisal"><Plus className="h-3 w-3" />Add Appraisal</Button>}
         </div>
         {showAdd && (
           <div className="flex items-center gap-2 mb-2">
@@ -4790,10 +4790,10 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
           <div key={i} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
             <div className="min-w-0 flex-1">
               <span className="text-xs font-medium">{a.value ? `$${a.value}` : "—"}</span>
-              {a.source && <span className="text-[10px] text-muted-foreground ml-2">{a.source}</span>}
+              {a.source && <span className="text-xs text-muted-foreground ml-2">{a.source}</span>}
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground tabular-nums">{a.date ? new Date(a.date).toLocaleDateString() : ""}</span>
+              <span className="text-xs text-muted-foreground tabular-nums">{a.date ? new Date(a.date).toLocaleDateString() : ""}</span>
               <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-appraisal-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
             </div>
           </div>
@@ -4812,7 +4812,7 @@ function LinkedSubsTab({ profile }: { profile: any }) {
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Linked Subscriptions</span>
-            {totalMonthly > 0 && <Badge variant="outline" className="text-[10px]">{formatCurrency(totalMonthly)}/mo</Badge>}
+            {totalMonthly > 0 && <Badge variant="outline" className="text-xs">{formatCurrency(totalMonthly)}/mo</Badge>}
           </div>
           {children.length > 0 ? (
             <div className="divide-y divide-border/30">
@@ -4820,7 +4820,7 @@ function LinkedSubsTab({ profile }: { profile: any }) {
                 <div key={sub.id} className="flex items-center justify-between py-2">
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium truncate">{sub.name}</p>
-                    <p className="text-[10px] text-muted-foreground">{sub.fields?.frequency || "monthly"}</p>
+                    <p className="text-xs text-muted-foreground">{sub.fields?.frequency || "monthly"}</p>
                   </div>
                   <span className="text-xs font-medium tabular-nums">{sub.fields?.cost ? formatCurrency(Number(sub.fields.cost)) : "—"}</span>
                 </div>
@@ -5084,7 +5084,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                     <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
                     <span className="text-xs truncate">{ev.title}</span>
                   </div>
-                  <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{ev.date ? new Date(ev.date).toLocaleDateString() : "—"}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums shrink-0">{ev.date ? new Date(ev.date).toLocaleDateString() : "—"}</span>
                 </div>
               ))}
             </div>
@@ -5109,7 +5109,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                 <div key={exp.id} className="group flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`payment-row-${exp.id}`}>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium truncate">{exp.description || "Payment"}</p>
-                    <p className="text-[10px] text-muted-foreground tabular-nums">{new Date(exp.date).toLocaleDateString()}</p>
+                    <p className="text-xs text-muted-foreground tabular-nums">{new Date(exp.date).toLocaleDateString()}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
@@ -5220,19 +5220,19 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
     <div className="space-y-4" data-testid="subscription-impact-tab">
       {/* Spending Summary */}
       <Card className="p-3">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Spending Summary</p>
+        <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Spending Summary</p>
         <div className="grid grid-cols-3 gap-3 text-center">
           <div>
             <p className="text-sm font-bold tabular-nums">{thisMonthTotal > 0 ? `$${thisMonthTotal.toFixed(2)}` : "—"}</p>
-            <p className="text-[10px] text-muted-foreground">This Month</p>
+            <p className="text-xs text-muted-foreground">This Month</p>
           </div>
           <div>
             <p className="text-sm font-bold tabular-nums">{thisYearTotal > 0 ? `$${thisYearTotal.toFixed(2)}` : "—"}</p>
-            <p className="text-[10px] text-muted-foreground">This Year</p>
+            <p className="text-xs text-muted-foreground">This Year</p>
           </div>
           <div>
             <p className="text-sm font-bold tabular-nums">{lifetimeEstimate > 0 ? `$${Math.round(lifetimeEstimate).toLocaleString()}` : "—"}</p>
-            <p className="text-[10px] text-muted-foreground">Lifetime</p>
+            <p className="text-xs text-muted-foreground">Lifetime</p>
           </div>
         </div>
       </Card>
@@ -5240,21 +5240,21 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
       {/* 12-Month Projection */}
       <Card className="p-3">
         <div className="flex items-center justify-between">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase">12-Month Projection</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase">12-Month Projection</p>
           <Target className="h-3.5 w-3.5 text-muted-foreground" />
         </div>
         <p className="text-lg font-bold tabular-nums mt-1" data-testid="text-12mo-projection">
           {monthlyCost > 0 ? `$${Math.round(projection12).toLocaleString()}` : "—"}
         </p>
         {monthlyCost > 0 && (
-          <p className="text-[10px] text-muted-foreground">${monthlyCost.toFixed(2)}/mo × 12 months</p>
+          <p className="text-xs text-muted-foreground">${monthlyCost.toFixed(2)}/mo × 12 months</p>
         )}
       </Card>
 
       {/* Category */}
       {category && (
         <Card className="p-3">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">Category</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Category</p>
           <Badge variant="secondary" className="text-xs capitalize" data-testid="badge-sub-category">{category}</Badge>
         </Card>
       )}
@@ -5262,18 +5262,18 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
       {/* Cost Over Time */}
       {sortedMonths.length >= 3 && (
         <Card className="p-3">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Cost Over Time</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Cost Over Time</p>
           <div className="space-y-1">
             {sortedMonths.map(([month, total]) => {
               const maxVal = Math.max(...sortedMonths.map(m => m[1]));
               const pct = maxVal > 0 ? (total / maxVal) * 100 : 0;
               return (
                 <div key={month} className="flex items-center gap-2">
-                  <span className="text-[10px] text-muted-foreground w-14 shrink-0 tabular-nums">{month}</span>
+                  <span className="text-xs text-muted-foreground w-14 shrink-0 tabular-nums">{month}</span>
                   <div className="flex-1 h-4 bg-muted/30 rounded overflow-hidden">
                     <div className="h-full bg-pink-500/40 rounded" style={{ width: `${pct}%` }} />
                   </div>
-                  <span className="text-[10px] font-medium tabular-nums w-16 text-right">${total.toFixed(2)}</span>
+                  <span className="text-xs font-medium tabular-nums w-16 text-right">${total.toFixed(2)}</span>
                 </div>
               );
             })}
@@ -5284,11 +5284,11 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
       {/* Linked To */}
       {parentId && parentQuery.data && (
         <Card className="p-3">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">Linked To</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Linked To</p>
           <Link href={`/profiles/${parentId}`} className="text-xs font-medium text-primary hover:underline" data-testid="link-parent-profile">
             {parentQuery.data.name || "Parent Profile"}
           </Link>
-          <p className="text-[10px] text-muted-foreground capitalize">{parentQuery.data.type}</p>
+          <p className="text-xs text-muted-foreground capitalize">{parentQuery.data.type}</p>
         </Card>
       )}
     </div>
@@ -5359,13 +5359,13 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold">Notes</span>
             {!isEditingNotes ? (
-              <Button size="sm" variant="outline" className="h-6 text-[10px] gap-1" onClick={() => setIsEditingNotes(true)} data-testid="button-edit-detail-notes">
+              <Button size="sm" variant="outline" className="h-6 text-xs gap-1" onClick={() => setIsEditingNotes(true)} data-testid="button-edit-detail-notes">
                 <Pencil className="h-2.5 w-2.5" /> Edit
               </Button>
             ) : (
               <div className="flex gap-1">
-                <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => { setNotes(profile.notes || ""); setIsEditingNotes(false); }}>Cancel</Button>
-                <Button size="sm" className="h-6 text-[10px]" onClick={() => saveNotesMutation.mutate()} disabled={saveNotesMutation.isPending} data-testid="button-save-detail-notes">
+                <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => { setNotes(profile.notes || ""); setIsEditingNotes(false); }}>Cancel</Button>
+                <Button size="sm" className="h-6 text-xs" onClick={() => saveNotesMutation.mutate()} disabled={saveNotesMutation.isPending} data-testid="button-save-detail-notes">
                   {saveNotesMutation.isPending ? "Saving..." : "Save"}
                 </Button>
               </div>
@@ -5401,7 +5401,7 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
                     <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
                       <p className="text-xs font-medium truncate">{doc.name}</p>
-                      <p className="text-[10px] text-muted-foreground">{doc.type}{doc.expirationDate ? ` · Exp: ${new Date(doc.expirationDate).toLocaleDateString()}` : ""}</p>
+                      <p className="text-xs text-muted-foreground">{doc.type}{doc.expirationDate ? ` · Exp: ${new Date(doc.expirationDate).toLocaleDateString()}` : ""}</p>
                     </div>
                   </div>
                 </div>
@@ -5469,7 +5469,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold">Notes</h3>
             {updatedAt && (
-              <span className="text-[10px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 Last edited {new Date(updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
               </span>
             )}
@@ -5496,7 +5496,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
               placeholder="Add notes about this profile..."
               data-testid="textarea-notes"
             />
-            <p className="text-[10px] text-muted-foreground mt-1 text-right">{notes.length} characters</p>
+            <p className="text-xs text-muted-foreground mt-1 text-right">{notes.length} characters</p>
           </div>
         ) : currentNotes ? (
           <div className="rounded-lg border bg-muted/30 p-4 text-sm whitespace-pre-wrap min-h-[100px]">
@@ -5695,7 +5695,7 @@ export default function ProfileDetailPage() {
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
               <Badge variant="secondary" className="text-xs capitalize">{profile.type}</Badge>
               {profile.tags.map(tag => (
-                <Badge key={tag} variant="outline" className="text-[10px]">
+                <Badge key={tag} variant="outline" className="text-xs">
                   <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
                 </Badge>
               ))}
@@ -5722,7 +5722,7 @@ export default function ProfileDetailPage() {
               {stats.map(stat => (
                 <div key={stat.label} className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
                   <p className="text-lg font-semibold tabular-nums">{stat.value}</p>
-                  <p className="text-[10px] text-muted-foreground">{stat.label}</p>
+                  <p className="text-xs text-muted-foreground">{stat.label}</p>
                 </div>
               ))}
             </div>
@@ -5763,7 +5763,7 @@ export default function ProfileDetailPage() {
                   {/* All trackers at bottom of Overview */}
                   {profile.relatedTrackers.length > 0 && (
                     <div className="mt-4">
-                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>
                       <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
                         {profile.relatedTrackers.map((t: any) => {
                           const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
@@ -5773,10 +5773,10 @@ export default function ProfileDetailPage() {
                             <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs font-medium truncate">{t.name}</p>
-                                <p className="text-[10px] text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
+                                <p className="text-xs text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
                               </div>
                               <span className="text-sm font-bold tabular-nums">{displayVal}</span>
-                              {t.unit && <span className="text-[10px] text-muted-foreground">{t.unit}</span>}
+                              {t.unit && <span className="text-xs text-muted-foreground">{t.unit}</span>}
                             </div>
                           );
                         })}

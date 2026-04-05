@@ -511,21 +511,21 @@ function EventDetailDialog({
           <div className="flex items-center gap-2 flex-wrap">
             <Badge
               variant="outline"
-              className="text-[10px] h-5"
+              className="text-xs h-5"
               style={{ borderColor: item.color, color: item.color }}
             >
               {TYPE_LABELS[item.type]}
             </Badge>
             {item.category && item.type === "event" && (
               <Badge
-                className="text-[10px] h-5 text-white"
+                className="text-xs h-5 text-white"
                 style={{ backgroundColor: item.color }}
               >
                 {CATEGORY_LABELS[item.category as EventCategory] || item.category}
               </Badge>
             )}
             {item.meta?.recurrence && item.meta.recurrence !== "none" && (
-              <Badge variant="outline" className="text-[10px] h-5">
+              <Badge variant="outline" className="text-xs h-5">
                 <Repeat className="h-2.5 w-2.5 mr-0.5" />{item.meta.recurrence}
               </Badge>
             )}
@@ -566,7 +566,7 @@ function EventDetailDialog({
               {item.meta?.priority && (
                 <Badge
                   variant="outline"
-                  className={`text-[10px] h-5 ml-auto ${
+                  className={`text-xs h-5 ml-auto ${
                     item.meta.priority === "high" ? "border-red-500 text-red-500" :
                     item.meta.priority === "medium" ? "border-amber-500 text-amber-500" :
                     "border-muted-foreground"
@@ -584,7 +584,7 @@ function EventDetailDialog({
               <CreditCard className="h-3.5 w-3.5 text-muted-foreground" />
               <span>${item.meta?.amount} \u2014 {item.meta?.frequency}</span>
               {item.meta?.autopay && (
-                <Badge variant="outline" className="text-[10px] h-5 text-green-600 border-green-600">autopay</Badge>
+                <Badge variant="outline" className="text-xs h-5 text-green-600 border-green-600">autopay</Badge>
               )}
             </div>
           )}
@@ -594,7 +594,7 @@ function EventDetailDialog({
             <div className="flex items-center gap-2 flex-wrap">
               <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               {linkedProfileNames.map((name, i) => (
-                <Badge key={i} variant="secondary" className="text-[10px] h-5">
+                <Badge key={i} variant="secondary" className="text-xs h-5">
                   {name}
                 </Badge>
               ))}
@@ -679,15 +679,15 @@ function DayAgenda({
               </p>
               <div className="flex items-center gap-1.5 mt-0.5">
                 {item.time && (
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-xs text-muted-foreground">
                     {item.time}{item.endTime ? ` \u2013 ${item.endTime}` : ""}
                   </span>
                 )}
                 {item.allDay && !item.time && (
-                  <span className="text-[10px] text-muted-foreground">All day</span>
+                  <span className="text-xs text-muted-foreground">All day</span>
                 )}
                 {item.location && (
-                  <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                  <span className="text-xs text-muted-foreground flex items-center gap-0.5">
                     <MapPin className="h-2 w-2" />{item.location}
                   </span>
                 )}
@@ -695,7 +695,7 @@ function DayAgenda({
             </div>
             <Badge
               variant="outline"
-              className="text-[8px] h-4 px-1 shrink-0 opacity-60 group-hover:opacity-100"
+              className="text-2xs h-4 px-1 shrink-0 opacity-60 group-hover:opacity-100"
               style={{ borderColor: item.color, color: item.color }}
             >
               {TYPE_LABELS[item.type]}
@@ -881,14 +881,14 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" data-testid="btn-next-month">
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="outline" size="sm" onClick={goToday} className="h-6 text-[10px] px-2" data-testid="btn-today">
+          <Button variant="outline" size="sm" onClick={goToday} className="h-6 text-xs px-2" data-testid="btn-today">
             Today
           </Button>
           {/* View mode toggle */}
           <div className="flex items-center bg-muted/50 rounded-md p-0.5">
             {(["month", "week", "day"] as const).map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)}
-                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${viewMode === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${viewMode === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
                 {mode.charAt(0).toUpperCase() + mode.slice(1)}
               </button>
             ))}
@@ -930,7 +930,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         ].map(f => (
           <button
             key={f.key}
-            className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all ${
+            className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-all ${
               filterType === f.key
                 ? "bg-primary text-primary-foreground border-transparent"
                 : "border-border/50 text-muted-foreground hover:bg-muted"
@@ -950,7 +950,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             {WEEKDAYS.map(d => (
               <div
                 key={d}
-                className="text-center text-[9px] font-medium text-muted-foreground py-1 uppercase tracking-wider"
+                className="text-center text-xs-tight font-medium text-muted-foreground py-1 uppercase tracking-wider"
               >
                 {d}
               </div>
@@ -981,9 +981,9 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                   data-testid={`day-cell-${day.date}`}
                 >
                   <span
-                    className={`text-[10px] md:text-xs leading-none ${
+                    className={`text-xs md:text-xs leading-none ${
                       isToday
-                        ? "font-bold text-primary bg-primary/20 rounded-full w-4 h-4 md:w-5 md:h-5 flex items-center justify-center text-[9px] md:text-xs"
+                        ? "font-bold text-primary bg-primary/20 rounded-full w-4 h-4 md:w-5 md:h-5 flex items-center justify-center text-xs-tight md:text-xs"
                         : "font-medium"
                     }`}
                   >
@@ -998,7 +998,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                         {dayItems.slice(0, 2).map(item => (
                           <div
                             key={item.id}
-                            className={`text-[9px] leading-tight truncate px-1 py-0.5 rounded ${item.completed ? 'line-through opacity-50' : ''}`}
+                            className={`text-xs-tight leading-tight truncate px-1 py-0.5 rounded ${item.completed ? 'line-through opacity-50' : ''}`}
                             style={{
                               backgroundColor: `${item.color}18`,
                               color: item.color,
@@ -1049,13 +1049,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                 return (
                   <div key={wd.date} className={`p-1.5 min-h-[120px] ${isToday ? "bg-primary/5" : ""}`}>
                     <div className={`text-center mb-1 ${isToday ? "font-bold text-primary" : "text-muted-foreground"}`}>
-                      <div className="text-[9px] uppercase">{wd.label}</div>
+                      <div className="text-xs-tight uppercase">{wd.label}</div>
                       <div className="text-sm">{wd.num}</div>
                     </div>
                     <div className="space-y-0.5">
                       {dayItems.map(item => (
                         <button key={item.id} onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
-                          className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate hover:bg-muted/50 transition-colors"
+                          className="w-full text-left px-1 py-0.5 rounded text-xs truncate hover:bg-muted/50 transition-colors"
                           style={{ borderLeft: `2px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
                           {item.time ? <span className="text-muted-foreground mr-1">{item.time.slice(0,5)}</span> : null}
                           {item.title}
@@ -1086,13 +1086,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             </div>
             {allDayItems.length > 0 && (
               <div className="px-3 py-2 border-b border-border bg-muted/10">
-                <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">All Day</p>
+                <p className="text-xs font-medium text-muted-foreground uppercase mb-1">All Day</p>
                 {allDayItems.map(item => (
                   <button key={item.id} onClick={() => setDetailItem(item)}
                     className="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-muted/50 transition-colors"
                     style={{ borderLeft: `3px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
                     <span className="text-xs">{item.title}</span>
-                    <Badge variant="outline" className="text-[9px] ml-auto">{item.type}</Badge>
+                    <Badge variant="outline" className="text-xs-tight ml-auto">{item.type}</Badge>
                   </button>
                 ))}
               </div>
@@ -1108,9 +1108,9 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                   <div className="w-1 h-6 rounded-full shrink-0" style={{ backgroundColor: TYPE_COLORS[item.type] || "#888" }} />
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium truncate">{item.title}</p>
-                    {item.description && <p className="text-[10px] text-muted-foreground truncate">{item.description}</p>}
+                    {item.description && <p className="text-xs text-muted-foreground truncate">{item.description}</p>}
                   </div>
-                  <Badge variant="outline" className="text-[9px] shrink-0">{item.type}</Badge>
+                  <Badge variant="outline" className="text-xs-tight shrink-0">{item.type}</Badge>
                 </button>
               ))}
             </div>
@@ -1123,7 +1123,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         <div className="px-4 pt-3 pb-1 flex items-center justify-between">
           <div>
             <h3 className="text-xs font-semibold">{fmtDateFull(selectedDate)}</h3>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {filteredAgenda.length} item{filteredAgenda.length !== 1 ? "s" : ""}
             </p>
           </div>

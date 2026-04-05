@@ -12,6 +12,7 @@ export function EmptyState({
   return (
     <div
       className="flex flex-col items-center justify-center py-8 text-center"
+      role="status"
       data-testid="empty-state"
     >
       <Icon className="h-8 w-8 text-muted-foreground/50 mb-2" />

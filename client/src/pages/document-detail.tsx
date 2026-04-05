@@ -78,7 +78,7 @@ function getExpirationStatus(key: string, value: any): "expired" | "soon" | "val
 function ExpirationBadge({ status }: { status: "expired" | "soon" | "valid" }) {
   if (status === "expired") {
     return (
-      <Badge variant="destructive" className="text-[10px] px-1.5 py-0 gap-1">
+      <Badge variant="destructive" className="text-xs px-1.5 py-0 gap-1">
         <AlertCircle className="h-2.5 w-2.5" />
         EXPIRED
       </Badge>
@@ -86,14 +86,14 @@ function ExpirationBadge({ status }: { status: "expired" | "soon" | "valid" }) {
   }
   if (status === "soon") {
     return (
-      <Badge className="text-[10px] px-1.5 py-0 gap-1 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
+      <Badge className="text-xs px-1.5 py-0 gap-1 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
         <Clock className="h-2.5 w-2.5" />
         Expiring Soon
       </Badge>
     );
   }
   return (
-    <Badge className="text-[10px] px-1.5 py-0 gap-1 bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30">
+    <Badge className="text-xs px-1.5 py-0 gap-1 bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30">
       <ShieldCheck className="h-2.5 w-2.5" />
       Valid
     </Badge>
@@ -380,7 +380,7 @@ function DataPanel({
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold truncate" data-testid="text-doc-name">{doc.name}</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5" data-testid="text-doc-date">
+            <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-doc-date">
               {doc.createdAt
                 ? new Date(doc.createdAt).toLocaleDateString("en-US", {
                     month: "short",
@@ -392,7 +392,7 @@ function DataPanel({
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <Badge
-              className={cn("text-[10px] px-1.5 py-0 capitalize border", getDocTypeBadgeColor(doc.type))}
+              className={cn("text-xs px-1.5 py-0 capitalize border", getDocTypeBadgeColor(doc.type))}
               data-testid="badge-doc-type"
             >
               {(doc.type || "other").replace(/_/g, " ")}
@@ -416,7 +416,7 @@ function DataPanel({
 
           {/* Extracted fields */}
           <section>
-            <h3 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
               Extracted Fields
             </h3>
             <div className="space-y-1" data-testid="extracted-data-list">
@@ -440,7 +440,7 @@ function DataPanel({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
-                        <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                           {formatFieldLabel(key)}
                         </span>
                         {expStatus && <ExpirationBadge status={expStatus} />}
@@ -540,7 +540,7 @@ function DataPanel({
 
           {/* Linked profiles */}
           <section>
-            <h3 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
               Linked Profiles
             </h3>
 
@@ -570,7 +570,7 @@ function DataPanel({
 
             {linkingProfile ? (
               <div className="rounded-md border border-border bg-card overflow-hidden shadow-sm" data-testid="link-profile-dropdown">
-                <p className="text-[10px] px-3 py-1.5 border-b border-border text-muted-foreground font-semibold uppercase tracking-wide bg-muted/10">
+                <p className="text-xs px-3 py-1.5 border-b border-border text-muted-foreground font-semibold uppercase tracking-wide bg-muted/10">
                   Select a profile
                 </p>
                 {profiles.filter((p) => !(doc.linkedProfiles || []).includes(p.id)).length === 0 && (
@@ -587,7 +587,7 @@ function DataPanel({
                     >
                       <Link2 className="h-3 w-3 text-muted-foreground shrink-0" />
                       <span className="truncate font-medium">{p.name}</span>
-                      <span className="text-[10px] text-muted-foreground ml-auto capitalize">{p.type}</span>
+                      <span className="text-xs text-muted-foreground ml-auto capitalize">{p.type}</span>
                     </button>
                   ))}
                 <div className="border-t border-border p-1.5">
@@ -621,10 +621,10 @@ function DataPanel({
           {/* Tags */}
           {doc.tags && doc.tags.length > 0 && (
             <section>
-              <h3 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">Tags</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">Tags</h3>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
                 {doc.tags.map((tag) => (
-                  <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">{tag}</Badge>
+                  <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">{tag}</Badge>
                 ))}
               </div>
             </section>

@@ -44,7 +44,7 @@ export function AppSidebar() {
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={isActive} data-testid={`nav-${item.label.toLowerCase()}`}>
-                      <Link href={item.href}>
+                      <Link href={item.href} aria-current={isActive ? "page" : undefined}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.label}</span>
                       </Link>

@@ -167,7 +167,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
             />
             <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="flex-1 truncate">{p.name}</span>
-            <span className="text-[10px] text-muted-foreground/50 shrink-0">{p.type}</span>
+            <span className="text-xs text-muted-foreground/50 shrink-0">{p.type}</span>
           </button>
         );
       })}
@@ -186,7 +186,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
         <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
         <span className="truncate max-w-[100px]">{label}</span>
         {selectedCount > 0 && (
-          <Badge variant="secondary" className="h-4 px-1 text-[9px] ml-0.5">
+          <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">
             {selectedCount}
           </Badge>
         )}

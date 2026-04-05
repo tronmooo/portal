@@ -66,22 +66,22 @@ function ObligationCard({ ob }: { ob: Obligation }) {
               </h3>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-lg font-semibold">${ob.amount.toLocaleString()}</span>
-                <Badge variant="outline" className="text-[10px] h-5">
+                <Badge variant="outline" className="text-xs h-5">
                   <Repeat className="h-2.5 w-2.5 mr-0.5" />{ob.frequency}
                 </Badge>
               </div>
               <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
                 <Calendar className="h-3 w-3" />
                 <span>Due: {dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                {isOverdue && <Badge variant="destructive" className="text-[10px] h-4 ml-1">{Math.abs(daysUntilDue)}d overdue</Badge>}
-                {isDueSoon && !isOverdue && <Badge className="text-[10px] h-4 ml-1 bg-yellow-500/20 text-yellow-600 border-yellow-500/30">{daysUntilDue === 0 ? "Today" : `${daysUntilDue}d`}</Badge>}
+                {isOverdue && <Badge variant="destructive" className="text-xs h-4 ml-1">{Math.abs(daysUntilDue)}d overdue</Badge>}
+                {isDueSoon && !isOverdue && <Badge className="text-xs h-4 ml-1 bg-yellow-500/20 text-yellow-600 border-yellow-500/30">{daysUntilDue === 0 ? "Today" : `${daysUntilDue}d`}</Badge>}
               </div>
               {ob.autopay && (
-                <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">
+                <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
                   <CheckCircle className="h-2.5 w-2.5 text-green-500" /> Autopay enabled
                 </div>
               )}
-              {ob.notes && <p className="text-[10px] text-muted-foreground mt-1">{ob.notes}</p>}
+              {ob.notes && <p className="text-xs text-muted-foreground mt-1">{ob.notes}</p>}
             </div>
           </div>
           <Button
@@ -99,10 +99,10 @@ function ObligationCard({ ob }: { ob: Obligation }) {
         {/* Payment history */}
         {ob.payments.length > 0 && (
           <div className="mt-3 pt-2 border-t border-border">
-            <p className="text-[10px] text-muted-foreground mb-1">Recent payments</p>
+            <p className="text-xs text-muted-foreground mb-1">Recent payments</p>
             <div className="flex gap-2 overflow-x-auto">
               {ob.payments.slice(-3).map(p => (
-                <div key={p.id} className="text-[10px] text-muted-foreground bg-muted rounded px-2 py-0.5 shrink-0">
+                <div key={p.id} className="text-xs text-muted-foreground bg-muted rounded px-2 py-0.5 shrink-0">
                   ${p.amount} — {new Date(p.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                   {p.method && ` (${p.method})`}
                 </div>
@@ -259,15 +259,15 @@ export default function ObligationsPage() {
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-3">
         <Card className="p-3">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Monthly Total</p>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide">Monthly Total</p>
           <p className="text-lg font-bold">${monthlyTotal.toFixed(0)}</p>
         </Card>
         <Card className="p-3">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Active</p>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide">Active</p>
           <p className="text-lg font-bold">{obligations.length}</p>
         </Card>
         <Card className="p-3">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Due This Week</p>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide">Due This Week</p>
           <p className={`text-lg font-bold ${upcomingCount > 0 ? "text-yellow-500" : ""}`}>{upcomingCount}</p>
         </Card>
       </div>

@@ -39,7 +39,7 @@ function ChecklistCard({ artifact }: { artifact: Artifact }) {
           <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
             <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
           </div>
-          <span className="text-[10px] text-muted-foreground">{done}/{total}</span>
+          <span className="text-xs text-muted-foreground">{done}/{total}</span>
         </div>
       </CardHeader>
       <CardContent className="pb-3">
@@ -61,7 +61,7 @@ function ChecklistCard({ artifact }: { artifact: Artifact }) {
         {artifact.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
             {artifact.tags.map((t, i) => (
-              <span key={i} className="text-[10px] text-muted-foreground">#{t}</span>
+              <span key={i} className="text-xs text-muted-foreground">#{t}</span>
             ))}
           </div>
         )}
@@ -87,11 +87,11 @@ function NoteCard({ artifact }: { artifact: Artifact }) {
         {artifact.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
             {artifact.tags.map((t, i) => (
-              <span key={i} className="text-[10px] text-muted-foreground">#{t}</span>
+              <span key={i} className="text-xs text-muted-foreground">#{t}</span>
             ))}
           </div>
         )}
-        <p className="text-[10px] text-muted-foreground mt-2">
+        <p className="text-xs text-muted-foreground mt-2">
           Updated {new Date(artifact.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
         </p>
       </CardContent>

@@ -123,14 +123,7 @@ import { useToast } from "@/hooks/use-toast";
 
 // ── Chart Color Scheme ─────────────────────────────────────────────────────────
 
-const CHART_COLORS = {
-  primary: "hsl(var(--chart-1))",
-  secondary: "hsl(var(--chart-2))",
-  tertiary: "hsl(var(--chart-3))",
-  light: "hsl(var(--chart-1) / 0.2)",
-  warning: "hsl(var(--chart-5))",
-  gold: "hsl(var(--chart-4))",
-};
+import { CHART_COLORS } from "@/lib/chart-colors";
 
 // ── Time Range Filter ──────────────────────────────────────────────────────────
 
@@ -180,7 +173,7 @@ function ComputedBadges({ computed }: { computed?: ComputedData }) {
   return (
     <div className="flex flex-wrap gap-1 mt-1.5">
       {badges.map(b => (
-        <span key={b.label} className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium capitalize ${b.color}`}>
+        <span key={b.label} className={`text-xs px-1.5 py-0.5 rounded-md font-medium capitalize ${b.color}`}>
           {b.label}
         </span>
       ))}
@@ -222,7 +215,7 @@ function StatsRow({ entries, primaryField, unit, isBP }: { entries: TrackerEntry
       <div className="grid grid-cols-5 gap-1 mt-3" data-testid="stats-row">
         {stats.map((s) => (
           <div key={s.label} className="text-center rounded-md bg-muted/40 px-1.5 py-1.5">
-            <div className="text-[10px] text-muted-foreground">{s.label}</div>
+            <div className="text-xs text-muted-foreground">{s.label}</div>
             <div className="text-xs font-semibold tabular-nums mt-0.5">{s.value}</div>
           </div>
         ))}
@@ -254,7 +247,7 @@ function StatsRow({ entries, primaryField, unit, isBP }: { entries: TrackerEntry
     <div className="grid grid-cols-5 gap-1 mt-3" data-testid="stats-row">
       {stats.map((s) => (
         <div key={s.label} className="text-center rounded-md bg-muted/40 px-1.5 py-1.5">
-          <div className="text-[10px] text-muted-foreground">{s.label}</div>
+          <div className="text-xs text-muted-foreground">{s.label}</div>
           <div className="text-xs font-semibold tabular-nums mt-0.5">{s.value}</div>
         </div>
       ))}
@@ -342,7 +335,7 @@ function WeightDetailChart({
     <div className="space-y-3">
       {/* Weight line chart */}
       <div>
-        <p className="text-[10px] text-muted-foreground font-medium mb-1 uppercase tracking-wide">Weight Trend</p>
+        <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Weight Trend</p>
         <ResponsiveContainer width="100%" height={180}>
           <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -357,7 +350,7 @@ function WeightDetailChart({
       {/* BMI trend with normal range shading */}
       {chartData.some((d) => d.bmi !== null) && (
         <div>
-          <p className="text-[10px] text-muted-foreground font-medium mb-1 uppercase tracking-wide">BMI Trend</p>
+          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">BMI Trend</p>
           <ResponsiveContainer width="100%" height={160}>
             <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -372,7 +365,7 @@ function WeightDetailChart({
               <Line type="monotone" dataKey="bmi" stroke={CHART_COLORS.tertiary} strokeWidth={2} dot={{ r: 3, fill: CHART_COLORS.tertiary }} activeDot={{ r: 5 }} connectNulls name="BMI" />
             </LineChart>
           </ResponsiveContainer>
-          <div className="flex gap-3 mt-1 text-[10px] text-muted-foreground">
+          <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
             <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.primary }} className="inline-block w-2 h-2 rounded-sm opacity-40" />Normal (18.5–25)</span>
             <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.gold }} className="inline-block w-2 h-2 rounded-sm opacity-70" />Overweight (25–30)</span>
             <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.secondary }} className="inline-block w-2 h-2 rounded-sm opacity-70" />Obese (30+)</span>
@@ -418,7 +411,7 @@ function BloodPressureDetailChart({ entries }: { entries: TrackerEntry[] }) {
           <Line type="monotone" dataKey="diastolic" stroke={CHART_COLORS.primary} strokeWidth={2} dot={{ r: 3, fill: CHART_COLORS.primary }} activeDot={{ r: 5 }} connectNulls name="Diastolic" />
         </LineChart>
       </ResponsiveContainer>
-      <div className="flex gap-3 mt-2 text-[10px] text-muted-foreground">
+      <div className="flex gap-3 mt-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-1"><span style={{ background: "#20808D" }} className="inline-block w-2 h-2 rounded-sm opacity-30" />Normal (&lt;120/80)</span>
         <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.gold }} className="inline-block w-2 h-2 rounded-sm opacity-60" />Elevated (120–129)</span>
         <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.secondary }} className="inline-block w-2 h-2 rounded-sm opacity-60" />High (≥130)</span>
@@ -474,7 +467,7 @@ function SleepDetailChart({ entries, primaryField }: { entries: TrackerEntry[]; 
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-      <div className="flex gap-3 mt-2 text-[10px] text-muted-foreground">
+      <div className="flex gap-3 mt-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.primary }} className="inline-block w-2 h-2 rounded-sm" />Excellent</span>
         <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.tertiary }} className="inline-block w-2 h-2 rounded-sm" />Good</span>
         <span className="flex items-center gap-1"><span style={{ background: CHART_COLORS.gold }} className="inline-block w-2 h-2 rounded-sm" />Fair</span>
@@ -513,7 +506,7 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
       {/* Pace trend */}
       {chartData.some((d) => d.pace !== null) && (
         <div>
-          <p className="text-[10px] text-muted-foreground font-medium mb-1 uppercase tracking-wide">Pace Trend (lower = faster)</p>
+          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Pace Trend (lower = faster)</p>
           <ResponsiveContainer width="100%" height={150}>
             <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -529,7 +522,7 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
       {/* Cumulative distance */}
       {chartData.some((d) => d.cumulativeDistance !== null) && (
         <div>
-          <p className="text-[10px] text-muted-foreground font-medium mb-1 uppercase tracking-wide">Cumulative Distance (mi)</p>
+          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Cumulative Distance (mi)</p>
           <ResponsiveContainer width="100%" height={130}>
             <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -551,7 +544,7 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
       {/* Calories burned */}
       {chartData.some((d) => d.calories !== null) && (
         <div>
-          <p className="text-[10px] text-muted-foreground font-medium mb-1 uppercase tracking-wide">Calories Burned</p>
+          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Calories Burned</p>
           <ResponsiveContainer width="100%" height={120}>
             <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -615,7 +608,7 @@ function ExpandedDetailView({
         {timeRangeBtns.map((btn) => (
           <button
             key={btn.value}
-            className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors ${
+            className={`px-2.5 py-0.5 rounded text-xs-loose font-medium transition-colors ${
               timeRange === btn.value
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -626,7 +619,7 @@ function ExpandedDetailView({
             {btn.label}
           </button>
         ))}
-        <span className="text-[10px] text-muted-foreground ml-2">
+        <span className="text-xs text-muted-foreground ml-2">
           {filteredEntries.length} entries
         </span>
       </div>
@@ -818,7 +811,7 @@ function AddEntryDialog({
               data-testid="textarea-entry-notes"
             />
           </div>
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Secondary data (calories, pace, etc.) will be computed automatically.
           </p>
         </div>
@@ -985,11 +978,11 @@ function TrackerCard({
                 }
                 return null;
               })()}
-              <span className="text-[10px] text-muted-foreground">· {tracker.entries.length} {tracker.entries.length === 1 ? 'entry' : 'entries'}</span>
+              <span className="text-xs text-muted-foreground">· {tracker.entries.length} {tracker.entries.length === 1 ? 'entry' : 'entries'}</span>
               {linkedProfileNames.map(p => {
                 const PIcon = PROFILE_TYPE_ICONS[p.type] || User;
                 return (
-                  <span key={p.id} className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded-md" data-testid={`badge-profile-${p.id}`}>
+                  <span key={p.id} className="inline-flex items-center gap-0.5 text-xs text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded-md" data-testid={`badge-profile-${p.id}`}>
                     {p.avatar ? (
                       <img src={p.avatar} alt={p.name} className="h-2.5 w-2.5 rounded-full object-cover" />
                     ) : (
@@ -1102,7 +1095,7 @@ function TrackerCard({
               <ExpandedDetailView tracker={tracker} primaryField={primaryField} />
             )}
 
-            <p className="text-[10px] text-muted-foreground mt-2">
+            <p className="text-xs text-muted-foreground mt-2">
               Last:{" "}
               {new Date(lastEntry.timestamp).toLocaleDateString(undefined, {
                 month: "short",
@@ -1194,15 +1187,15 @@ function EntryRow({
             {isEntryBP ? `${bpS}/${bpD}` : (primaryVal !== undefined ? String(primaryVal) : "—")}
           </span>
           {isEntryBP ? (
-            <span className="text-muted-foreground text-[10px]">mmHg</span>
+            <span className="text-muted-foreground text-xs">mmHg</span>
           ) : tracker.unit ? (
-            <span className="text-muted-foreground text-[10px]">{tracker.unit}</span>
+            <span className="text-muted-foreground text-xs">{tracker.unit}</span>
           ) : null}
           {!isEntryBP && otherFields.map((f) => {
             const v = entry.values[f.name];
             if (v === undefined || v === "" || f.name === "_notes") return null;
             return (
-              <span key={f.name} className="text-muted-foreground text-[10px]">
+              <span key={f.name} className="text-muted-foreground text-xs">
                 {f.name}: {String(v)}{f.unit ? ` ${f.unit}` : ""}
               </span>
             );
@@ -1212,7 +1205,7 @@ function EntryRow({
           <p className="text-muted-foreground mt-0.5 truncate">{entryNotes}</p>
         )}
         <ComputedBadges computed={entry.computed} />
-        <span className="text-muted-foreground text-[10px]">
+        <span className="text-muted-foreground text-xs">
           {new Date(entry.timestamp).toLocaleDateString(undefined, {
             month: "short",
             day: "numeric",
@@ -1460,7 +1453,7 @@ function CreateTrackerDialog({
                   )}
 
                   {i === 0 && (
-                    <p className="text-[10px] text-muted-foreground">Primary field (used for chart & main value)</p>
+                    <p className="text-xs text-muted-foreground">Primary field (used for chart & main value)</p>
                   )}
                 </div>
               ))}
@@ -1661,19 +1654,19 @@ function TrackerSummary({ trackers, profiles }: { trackers: Tracker[]; profiles?
     <div className="grid grid-cols-4 gap-1.5" data-testid="tracker-summary">
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-weekly-entries">
         <span className="text-sm font-bold tabular-nums" style={{ color: CHART_COLORS.primary }}>{weeklyEntries}</span>
-        <span className="text-[9px] text-muted-foreground">This Week</span>
+        <span className="text-xs-tight text-muted-foreground">This Week</span>
       </div>
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-most-active">
-        <span className="text-[10px] font-bold truncate w-full text-center" style={{ color: CHART_COLORS.tertiary }}>{mostActive.count > 0 ? cleanTrackerName(mostActive.name, profiles, mostActive.lp) : "—"}</span>
-        <span className="text-[9px] text-muted-foreground">{mostActive.count > 0 ? `${mostActive.count} entries` : "Most Active"}</span>
+        <span className="text-xs font-bold truncate w-full text-center" style={{ color: CHART_COLORS.tertiary }}>{mostActive.count > 0 ? cleanTrackerName(mostActive.name, profiles, mostActive.lp) : "—"}</span>
+        <span className="text-xs-tight text-muted-foreground">{mostActive.count > 0 ? `${mostActive.count} entries` : "Most Active"}</span>
       </div>
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-best-streak">
         <span className="text-sm font-bold tabular-nums" style={{ color: CHART_COLORS.gold }}>{bestStreak.streak > 0 ? `${bestStreak.streak}d` : "—"}</span>
-        <span className="text-[9px] text-muted-foreground truncate w-full text-center">{bestStreak.name ? cleanTrackerName(bestStreak.name, profiles) : "Streak"}</span>
+        <span className="text-xs-tight text-muted-foreground truncate w-full text-center">{bestStreak.name ? cleanTrackerName(bestStreak.name, profiles) : "Streak"}</span>
       </div>
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-health-score">
         <span className={`text-sm font-bold tabular-nums ${healthScoreColor}`}>{healthScore !== null ? healthScore : "—"}</span>
-        <span className="text-[9px] text-muted-foreground">{healthScore !== null ? (healthScore >= 80 ? "Excellent" : healthScore >= 60 ? "Good" : "Low") : "Health"}</span>
+        <span className="text-xs-tight text-muted-foreground">{healthScore !== null ? (healthScore >= 80 ? "Excellent" : healthScore >= 60 ? "Good" : "Low") : "Health"}</span>
       </div>
     </div>
   );
@@ -1813,29 +1806,29 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
         {stats && (
           <>
             <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Latest</p>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Latest</p>
               <p className="text-lg font-bold tabular-nums">{typeof stats.latest === "number" ? stats.latest.toFixed(1) : stats.latest}</p>
-              <p className="text-[10px] text-muted-foreground">{tracker.unit || ""}</p>
+              <p className="text-xs text-muted-foreground">{tracker.unit || ""}</p>
             </div>
             <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Average</p>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Average</p>
               <p className="text-lg font-bold tabular-nums">{stats.avg.toFixed(1)}</p>
-              <p className="text-[10px] text-muted-foreground">{timeRange === "all" ? "all time" : timeRange}</p>
+              <p className="text-xs text-muted-foreground">{timeRange === "all" ? "all time" : timeRange}</p>
             </div>
             <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Trend</p>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Trend</p>
               <div className="flex items-center justify-center gap-1">
                 {stats.trendPct > 1 ? <ArrowUpRight className="w-4 h-4 text-orange-500" /> :
                  stats.trendPct < -1 ? <ArrowDownRight className="w-4 h-4 text-green-500" /> :
                  <MinusIcon className="w-4 h-4 text-muted-foreground" />}
                 <span className="text-lg font-bold tabular-nums">{Math.abs(stats.trendPct).toFixed(1)}%</span>
               </div>
-              <p className="text-[10px] text-muted-foreground">{stats.trendPct > 1 ? "up" : stats.trendPct < -1 ? "down" : "stable"}</p>
+              <p className="text-xs text-muted-foreground">{stats.trendPct > 1 ? "up" : stats.trendPct < -1 ? "down" : "stable"}</p>
             </div>
             <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Streak</p>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Streak</p>
               <p className="text-lg font-bold tabular-nums">{streak}</p>
-              <p className="text-[10px] text-muted-foreground">{streak === 1 ? "day" : "days"}</p>
+              <p className="text-xs text-muted-foreground">{streak === 1 ? "day" : "days"}</p>
             </div>
           </>
         )}
@@ -1845,12 +1838,12 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
       <div className="flex items-center gap-1">
         {timeRangeBtns.map(btn => (
           <button key={btn.value}
-            className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors ${timeRange === btn.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+            className={`px-2.5 py-0.5 rounded text-xs-loose font-medium transition-colors ${timeRange === btn.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
             onClick={() => setTimeRange(btn.value)}>
             {btn.label}
           </button>
         ))}
-        <span className="text-[10px] text-muted-foreground ml-2">{filtered.length} entries</span>
+        <span className="text-xs text-muted-foreground ml-2">{filtered.length} entries</span>
       </div>
 
       {/* Chart */}
@@ -1900,14 +1893,14 @@ function TrendsTabContent({ tracker, primaryField }: { tracker: Tracker; primary
       {thisWeekAvg != null && lastWeekAvg != null && (
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-muted/50 rounded-lg p-3">
-            <p className="text-[10px] text-muted-foreground uppercase">This Week Avg</p>
+            <p className="text-xs text-muted-foreground uppercase">This Week Avg</p>
             <p className="text-lg font-bold tabular-nums">{thisWeekAvg.toFixed(1)} <span className="text-xs font-normal text-muted-foreground">{tracker.unit || ""}</span></p>
-            <p className="text-[10px] text-muted-foreground">{thisWeek.length} entries</p>
+            <p className="text-xs text-muted-foreground">{thisWeek.length} entries</p>
           </div>
           <div className="bg-muted/50 rounded-lg p-3">
-            <p className="text-[10px] text-muted-foreground uppercase">Last Week Avg</p>
+            <p className="text-xs text-muted-foreground uppercase">Last Week Avg</p>
             <p className="text-lg font-bold tabular-nums">{lastWeekAvg.toFixed(1)} <span className="text-xs font-normal text-muted-foreground">{tracker.unit || ""}</span></p>
-            <p className="text-[10px] text-muted-foreground">{lastWeek.length} entries</p>
+            <p className="text-xs text-muted-foreground">{lastWeek.length} entries</p>
           </div>
         </div>
       )}
@@ -1989,26 +1982,26 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
         {/* Macro averages */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-muted/50 rounded-lg p-3 text-center">
-            <p className="text-[10px] text-muted-foreground uppercase">Avg Protein</p>
+            <p className="text-xs text-muted-foreground uppercase">Avg Protein</p>
             <p className="text-base font-bold tabular-nums">{entries.length > 0 ? (macroTotals.protein / entries.length).toFixed(0) : 0}g</p>
           </div>
           <div className="bg-muted/50 rounded-lg p-3 text-center">
-            <p className="text-[10px] text-muted-foreground uppercase">Avg Carbs</p>
+            <p className="text-xs text-muted-foreground uppercase">Avg Carbs</p>
             <p className="text-base font-bold tabular-nums">{entries.length > 0 ? (macroTotals.carbs / entries.length).toFixed(0) : 0}g</p>
           </div>
           <div className="bg-muted/50 rounded-lg p-3 text-center">
-            <p className="text-[10px] text-muted-foreground uppercase">Avg Fat</p>
+            <p className="text-xs text-muted-foreground uppercase">Avg Fat</p>
             <p className="text-base font-bold tabular-nums">{entries.length > 0 ? (macroTotals.fat / entries.length).toFixed(0) : 0}g</p>
           </div>
         </div>
         {macroTotals.sugar > 0 && (
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-[10px] text-muted-foreground uppercase">Total Sugar</p>
+              <p className="text-xs text-muted-foreground uppercase">Total Sugar</p>
               <p className="text-base font-bold tabular-nums">{macroTotals.sugar.toFixed(0)}g</p>
             </div>
             <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-[10px] text-muted-foreground uppercase">Total Fiber</p>
+              <p className="text-xs text-muted-foreground uppercase">Total Fiber</p>
               <p className="text-base font-bold tabular-nums">{macroTotals.fiber.toFixed(0)}g</p>
             </div>
           </div>
@@ -2189,9 +2182,9 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
         <div className="grid grid-cols-2 gap-2">
           {fieldStats.map(s => (
             <div key={s.field} className="bg-muted/50 rounded-lg p-3">
-              <p className="text-[10px] text-muted-foreground uppercase">{s.field}</p>
+              <p className="text-xs text-muted-foreground uppercase">{s.field}</p>
               <p className="text-base font-bold tabular-nums">{s.avg?.toFixed(1)}</p>
-              <p className="text-[10px] text-muted-foreground">min: {s.min?.toFixed(1)} / max: {s.max?.toFixed(1)}</p>
+              <p className="text-xs text-muted-foreground">min: {s.min?.toFixed(1)} / max: {s.max?.toFixed(1)}</p>
             </div>
           ))}
         </div>
@@ -2310,19 +2303,19 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
     <div className="space-y-3">
       {/* Filter bar */}
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[10px] text-muted-foreground">({filtered.length})</span>
+        <span className="text-xs text-muted-foreground">({filtered.length})</span>
         {/* Profile filter chips */}
         {hasMultipleProfiles && profiles && (
           <div className="flex items-center gap-1 overflow-x-auto flex-nowrap max-w-[60vw] scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
             <button onClick={() => setProfileFilter("all")}
-              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${profileFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${profileFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               All
             </button>
             {profileIdsInEntries.map(pid => {
               const p = profiles.find(pr => pr.id === pid);
               return p ? (
                 <button key={pid} onClick={() => setProfileFilter(pid)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${profileFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+                  className={`px-2 py-0.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${profileFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
                   {p.name}
                 </button>
               ) : null;
@@ -2334,7 +2327,7 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
           {(["all", "7d", "30d", "90d"] as const).map(range => (
             <button key={range}
               onClick={() => setDateFilter(range)}
-              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${dateFilter === range ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${dateFilter === range ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               {range === "all" ? "All" : range}
             </button>
           ))}
@@ -2376,25 +2369,25 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
               <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
                 <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
                 {delta != null && delta !== 0 && (
-                  <span className={`text-[10px] font-medium tabular-nums ${delta < 0 ? "text-green-600" : "text-orange-500"}`}>
+                  <span className={`text-xs font-medium tabular-nums ${delta < 0 ? "text-green-600" : "text-orange-500"}`}>
                     {delta > 0 ? "+" : ""}{delta.toFixed(1)}
                   </span>
                 )}
                 {!isBPEntry && allVals.filter(([k]) => k !== primaryField).length > 0 && (
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-xs text-muted-foreground">
                     {allVals.filter(([k]) => k !== primaryField).map(([k, v]) => `${k}: ${v}`).join(", ")}
                   </span>
                 )}
                 {(notes || entry.notes) && (
-                  <span className="text-[10px] text-muted-foreground italic truncate max-w-[140px]">"{notes || entry.notes}"</span>
+                  <span className="text-xs text-muted-foreground italic truncate max-w-[140px]">"{notes || entry.notes}"</span>
                 )}
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
                 <div className="text-right">
-                  <span className="text-[10px] text-muted-foreground tabular-nums block">
+                  <span className="text-xs text-muted-foreground tabular-nums block">
                     {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                   </span>
-                  <span className="text-[9px] text-muted-foreground/70 tabular-nums block">
+                  <span className="text-xs-tight text-muted-foreground/70 tabular-nums block">
                     {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
@@ -2579,10 +2572,10 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
               <div key={g.id} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => openEdit(g)} data-testid={`tracker-goal-${g.id}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{g.title}</span>
-                  <Badge variant={g.status === "completed" ? "default" : "secondary"} className="text-[10px] capitalize">{g.status}</Badge>
+                  <Badge variant={g.status === "completed" ? "default" : "secondary"} className="text-xs capitalize">{g.status}</Badge>
                 </div>
                 <Progress value={pct} className="h-2" />
-                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span>{g.current} / {g.target} {g.unit} ({pct}%)</span>
                   {daysLeft != null && daysLeft > 0 && <span>{daysLeft} days left</span>}
                 </div>
@@ -2708,7 +2701,7 @@ function TrackerDetailDialog({
                     {tabs.map(tab => {
                       const Icon = tab.icon;
                       return (
-                        <TabsTrigger key={tab.id} value={tab.id} className="text-[11px] px-2.5 py-1 h-7 gap-1 data-[state=active]:bg-background" data-testid={`tab-${tab.id}`}>
+                        <TabsTrigger key={tab.id} value={tab.id} className="text-xs-loose px-2.5 py-1 h-7 gap-1 data-[state=active]:bg-background" data-testid={`tab-${tab.id}`}>
                           <Icon className="w-3 h-3" />
                           {tab.label}
                         </TabsTrigger>
@@ -3015,7 +3008,7 @@ export default function TrackersPage() {
             </button>
           </Link>
           <h1 className="text-sm font-semibold" data-testid="text-trackers-title">Linked</h1>
-          <span className="text-[10px] text-muted-foreground">{filteredTrackers.length} trackers</span>
+          <span className="text-xs text-muted-foreground">{filteredTrackers.length} trackers</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="flex items-center border rounded-md p-0.5">
@@ -3074,7 +3067,7 @@ export default function TrackersPage() {
               <button
                 key={s}
                 onClick={() => setSectionFilter(s)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${sectionFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${sectionFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
                 data-testid={`filter-section-${s}`}
               >
                 {labels[s]}
@@ -3121,7 +3114,7 @@ export default function TrackersPage() {
         return (
           <div className="space-y-1.5">
             <button onClick={() => toggleSection("profiles")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-profiles">
-              <h2 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Assets & Vehicles ({childProfiles.length})</h2>
+              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Assets & Vehicles ({childProfiles.length})</h2>
               {collapsedSections.has("profiles") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
             </button>
             {!collapsedSections.has("profiles") && (
@@ -3137,10 +3130,10 @@ export default function TrackersPage() {
                       <Link key={child.id} href={`/profiles/${child.id}`}>
                         <div className="flex items-center gap-2 px-2 py-[6px] hover:bg-muted/40 active:bg-muted/60 cursor-pointer transition-colors" data-testid={`button-view-child-${child.id}`}>
                           <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="text-[11px] font-medium truncate flex-1">{child.name}</span>
-                          {detail && <span className="text-[9px] text-muted-foreground truncate max-w-[80px]">{detail}</span>}
-                          {year && <span className="text-[9px] text-muted-foreground tabular-nums">{year}</span>}
-                          {price && <span className="text-[10px] font-medium tabular-nums">${Number(price).toLocaleString()}</span>}
+                          <span className="text-xs-loose font-medium truncate flex-1">{child.name}</span>
+                          {detail && <span className="text-xs-tight text-muted-foreground truncate max-w-[80px]">{detail}</span>}
+                          {year && <span className="text-xs-tight text-muted-foreground tabular-nums">{year}</span>}
+                          {price && <span className="text-xs font-medium tabular-nums">${Number(price).toLocaleString()}</span>}
                           <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
                         </div>
                       </Link>
@@ -3181,8 +3174,8 @@ export default function TrackersPage() {
                     <Link key={sub.id} href={`/profiles/${sub.id}`}>
                       <div className="flex items-center gap-2 px-2 py-[6px] hover:bg-muted/40 active:bg-muted/60 cursor-pointer transition-colors" data-testid={`sub-card-${sub.id}`}>
                         <CreditCard className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="text-[11px] font-medium truncate flex-1">{sub.name}</span>
-                        {cost && <span className="text-[10px] font-medium tabular-nums">${cost}/{String(freq).slice(0, 3)}</span>}
+                        <span className="text-xs-loose font-medium truncate flex-1">{sub.name}</span>
+                        {cost && <span className="text-xs font-medium tabular-nums">${cost}/{String(freq).slice(0, 3)}</span>}
                         <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
                       </div>
                     </Link>
@@ -3204,7 +3197,7 @@ export default function TrackersPage() {
           <div className="flex items-center gap-2">
             {/* Profile selector for upload — link doc to a specific profile */}
             <Select value={uploadProfileId} onValueChange={setUploadProfileId}>
-              <SelectTrigger className="w-[120px] h-7 text-[10px]" data-testid="select-upload-profile">
+              <SelectTrigger className="w-[120px] h-7 text-xs" data-testid="select-upload-profile">
                 <SelectValue placeholder="For: Auto-detect" />
               </SelectTrigger>
               <SelectContent>
@@ -3260,7 +3253,7 @@ export default function TrackersPage() {
               <div className="flex items-center gap-1.5 overflow-x-auto flex-nowrap scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
                 <button
                   onClick={() => setDocTypeFilter("all")}
-                  className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                   data-testid="filter-doctype-all"
                 >All ({profileFilteredDocs.length})</button>
                 {docTypes.map(t => {
@@ -3269,7 +3262,7 @@ export default function TrackersPage() {
                     <button
                       key={t}
                       onClick={() => setDocTypeFilter(t)}
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                       data-testid={`filter-doctype-${t}`}
                     >
                       {t.replace(/_/g, " ")} ({count})
@@ -3308,14 +3301,14 @@ export default function TrackersPage() {
                     <button className="flex-1 min-w-0 text-left" onClick={() => setViewingDoc(doc)}>
                       <p className="text-sm font-medium truncate text-primary hover:underline">{doc.name}</p>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <Badge variant="secondary" className="text-[10px] capitalize">{doc.type?.replace(/_/g, " ")}</Badge>
-                        <span className="text-[10px] text-muted-foreground">
+                        <Badge variant="secondary" className="text-xs capitalize">{doc.type?.replace(/_/g, " ")}</Badge>
+                        <span className="text-xs text-muted-foreground">
                           {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                         </span>
                         {doc.linkedProfiles?.length > 0 && (() => {
                           const linkedNames = doc.linkedProfiles.map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
                           return linkedNames.length > 0 ? (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">
                               {linkedNames.join(", ")}
                             </span>
                           ) : null;
@@ -3556,25 +3549,25 @@ export default function TrackersPage() {
               >
                 {/* Left: Name + category */}
                 <div className="min-w-0 w-[120px] md:w-[160px] shrink-0">
-                  <p className="text-[11px] font-medium truncate leading-tight">
+                  <p className="text-xs-loose font-medium truncate leading-tight">
                     {cleanTrackerName(tracker.name, profiles || undefined, tracker.linkedProfiles)}
                   </p>
                   <div className="flex items-center gap-1">
-                    {linkedProfile && <span className="text-[8px] px-1 rounded bg-primary/10 text-primary">{linkedProfile.name}</span>}
-                    <span className="text-[8px] text-muted-foreground capitalize">{tracker.category}</span>
+                    {linkedProfile && <span className="text-2xs px-1 rounded bg-primary/10 text-primary">{linkedProfile.name}</span>}
+                    <span className="text-2xs text-muted-foreground capitalize">{tracker.category}</span>
                   </div>
                 </div>
                 {/* Middle: KPI chips (scrollable) */}
                 <div className="flex items-center gap-1.5 flex-1 overflow-x-auto min-w-0 scrollbar-hide">
                   {kpis.slice(0, 4).map((kpi, ki) => (
                     <div key={ki} className="flex items-center gap-0.5 bg-muted/40 rounded px-1.5 py-0.5 shrink-0">
-                      <span className="text-[8px] text-muted-foreground">{kpi.label}</span>
-                      <span className={`text-[9px] font-bold tabular-nums ${kpi.color || ""}`}>{kpi.value}</span>
+                      <span className="text-2xs text-muted-foreground">{kpi.label}</span>
+                      <span className={`text-xs-tight font-bold tabular-nums ${kpi.color || ""}`}>{kpi.value}</span>
                     </div>
                   ))}
                 </div>
                 {/* Right: Updated */}
-                <span className="text-[8px] text-muted-foreground shrink-0 w-8 text-right">{lastUpdated}</span>
+                <span className="text-2xs text-muted-foreground shrink-0 w-8 text-right">{lastUpdated}</span>
               </div>
             );
           })}

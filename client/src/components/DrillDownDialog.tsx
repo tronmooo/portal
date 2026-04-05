@@ -102,16 +102,16 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
                         <p className="text-xs font-medium truncate">{item.label}</p>
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           {item.category && (
-                            <Badge variant="outline" className="text-[9px] h-4 capitalize">{item.category}</Badge>
+                            <Badge variant="outline" className="text-xs-tight h-4 capitalize">{item.category}</Badge>
                           )}
                           {item.profile && (
-                            <Badge variant="secondary" className="text-[9px] h-4">{item.profile}</Badge>
+                            <Badge variant="secondary" className="text-xs-tight h-4">{item.profile}</Badge>
                           )}
                           {item.date && (
-                            <span className="text-[10px] text-muted-foreground">{item.date}</span>
+                            <span className="text-xs text-muted-foreground">{item.date}</span>
                           )}
                           {item.sub && (
-                            <span className="text-[10px] text-muted-foreground">{item.sub}</span>
+                            <span className="text-xs text-muted-foreground">{item.sub}</span>
                           )}
                         </div>
                       </div>
@@ -125,40 +125,40 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
               {expenses && expenses.length > 0 && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">All Expenses</p>
-                    <span className="text-[10px] text-muted-foreground">{expenses.length} items</span>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">All Expenses</p>
+                    <span className="text-xs text-muted-foreground">{expenses.length} items</span>
                   </div>
                   <ScrollArea className="max-h-[40vh]">
                     <div className="divide-y divide-border/30">
                       {expenses.map((exp) => (
                         <div key={exp.id} className="py-1.5 flex items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-medium truncate">{exp.description}</p>
+                            <p className="text-xs-loose font-medium truncate">{exp.description}</p>
                             <div className="flex items-center gap-1.5 mt-0.5">
-                              <span className="text-[10px] text-muted-foreground">{fmtDate(exp.date)}</span>
+                              <span className="text-xs text-muted-foreground">{fmtDate(exp.date)}</span>
                               {exp.category && (
-                                <Badge variant="outline" className="text-[8px] h-3.5 capitalize">{exp.category}</Badge>
+                                <Badge variant="outline" className="text-2xs h-3.5 capitalize">{exp.category}</Badge>
                               )}
                               {exp.vendor && (
-                                <span className="text-[10px] text-muted-foreground/70">{exp.vendor}</span>
+                                <span className="text-xs text-muted-foreground/70">{exp.vendor}</span>
                               )}
                             </div>
                           </div>
-                          <span className="text-[11px] font-bold tabular-nums shrink-0">{fmtMoney(exp.amount)}</span>
+                          <span className="text-xs-loose font-bold tabular-nums shrink-0">{fmtMoney(exp.amount)}</span>
                         </div>
                       ))}
                     </div>
                   </ScrollArea>
                   {/* Footer total + reconciliation */}
                   <div className="mt-2 pt-2 border-t border-border flex items-center justify-between">
-                    <span className="text-[10px] font-semibold text-muted-foreground uppercase">Total</span>
+                    <span className="text-xs font-semibold text-muted-foreground uppercase">Total</span>
                     <span className="text-xs font-bold tabular-nums">{fmtMoney(expenseTotal)}</span>
                   </div>
                   {expenseMatch === true && (
-                    <p className="text-[10px] text-green-600 dark:text-green-400 mt-1">&#10003; Matches category total</p>
+                    <p className="text-xs text-green-600 dark:text-green-400 mt-1">&#10003; Matches category total</p>
                   )}
                   {expenseMatch === false && (
-                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">&#9888; Discrepancy: {fmtMoney(discrepancy)}</p>
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">&#9888; Discrepancy: {fmtMoney(discrepancy)}</p>
                   )}
                 </div>
               )}
@@ -167,22 +167,22 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
               {tasks && tasks.length > 0 && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Tasks</p>
-                    <span className="text-[10px] text-muted-foreground">{tasks.length} items</span>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tasks</p>
+                    <span className="text-xs text-muted-foreground">{tasks.length} items</span>
                   </div>
                   <ScrollArea className="max-h-[40vh]">
                     <div className="divide-y divide-border/30">
                       {tasks.map((t) => (
                         <div key={t.id} className="py-1.5 flex items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <p className={`text-[11px] font-medium truncate ${t.status === "done" ? "line-through text-muted-foreground" : ""}`}>{t.title}</p>
+                            <p className={`text-xs-loose font-medium truncate ${t.status === "done" ? "line-through text-muted-foreground" : ""}`}>{t.title}</p>
                             <div className="flex items-center gap-1.5 mt-0.5">
-                              <Badge variant={t.status === "done" ? "secondary" : "outline"} className="text-[8px] h-3.5">{t.status === "done" ? "done" : "todo"}</Badge>
+                              <Badge variant={t.status === "done" ? "secondary" : "outline"} className="text-2xs h-3.5">{t.status === "done" ? "done" : "todo"}</Badge>
                               {t.priority && (
-                                <Badge variant="outline" className={`text-[8px] h-3.5 ${PRIORITY_CLR[t.priority] || ""}`}>{t.priority}</Badge>
+                                <Badge variant="outline" className={`text-2xs h-3.5 ${PRIORITY_CLR[t.priority] || ""}`}>{t.priority}</Badge>
                               )}
                               {t.dueDate && (
-                                <span className="text-[10px] text-muted-foreground">{fmtDate(t.dueDate)}</span>
+                                <span className="text-xs text-muted-foreground">{fmtDate(t.dueDate)}</span>
                               )}
                             </div>
                           </div>
@@ -197,31 +197,31 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
               {obligations && obligations.length > 0 && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Obligations</p>
-                    <span className="text-[10px] text-muted-foreground">{obligations.length} items</span>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Obligations</p>
+                    <span className="text-xs text-muted-foreground">{obligations.length} items</span>
                   </div>
                   <ScrollArea className="max-h-[40vh]">
                     <div className="divide-y divide-border/30">
                       {obligations.map((o) => (
                         <div key={o.id} className="py-1.5 flex items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-medium truncate">{o.name}</p>
+                            <p className="text-xs-loose font-medium truncate">{o.name}</p>
                             <div className="flex items-center gap-1.5 mt-0.5">
                               {o.frequency && (
-                                <Badge variant="outline" className="text-[8px] h-3.5 capitalize">{o.frequency}</Badge>
+                                <Badge variant="outline" className="text-2xs h-3.5 capitalize">{o.frequency}</Badge>
                               )}
                               {o.nextDueDate && (
-                                <span className="text-[10px] text-muted-foreground">due {fmtDate(o.nextDueDate)}</span>
+                                <span className="text-xs text-muted-foreground">due {fmtDate(o.nextDueDate)}</span>
                               )}
                             </div>
                           </div>
-                          <span className="text-[11px] font-bold tabular-nums shrink-0">{fmtMoney(o.amount)}</span>
+                          <span className="text-xs-loose font-bold tabular-nums shrink-0">{fmtMoney(o.amount)}</span>
                         </div>
                       ))}
                     </div>
                   </ScrollArea>
                   <div className="mt-2 pt-2 border-t border-border flex items-center justify-between">
-                    <span className="text-[10px] font-semibold text-muted-foreground uppercase">Total</span>
+                    <span className="text-xs font-semibold text-muted-foreground uppercase">Total</span>
                     <span className="text-xs font-bold tabular-nums">{fmtMoney(obligations.reduce((s, o) => s + o.amount, 0))}</span>
                   </div>
                 </div>

@@ -563,7 +563,7 @@ export function CommandSearch() {
                 >
                   <action.icon className="shrink-0 text-muted-foreground" />
                   <span className="text-sm">{action.label}</span>
-                  <kbd className="ml-auto pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+                  <kbd className="ml-auto pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-xs font-medium text-muted-foreground opacity-100">
                     {action.shortcut}
                   </kbd>
                 </CommandItem>
@@ -591,7 +591,7 @@ export function CommandSearchTrigger() {
     >
       <Search className="h-3.5 w-3.5" />
       <span className="hidden sm:inline text-xs">Search</span>
-      <kbd className="hidden sm:inline-flex pointer-events-none h-4 select-none items-center gap-1 rounded border bg-muted px-1 font-mono text-[10px] font-medium text-muted-foreground">
+      <kbd className="hidden sm:inline-flex pointer-events-none h-4 select-none items-center gap-1 rounded border bg-muted px-1 font-mono text-xs font-medium text-muted-foreground">
         ⌘K
       </kbd>
     </button>

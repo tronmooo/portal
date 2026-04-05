@@ -118,9 +118,9 @@ function CollapsibleSection({
         <Icon className="h-3.5 w-3.5 text-primary shrink-0" />
         <h2 className="text-xs font-semibold">{label}</h2>
         {count !== undefined && (
-          <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
+          <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
         )}
-        {sub && <span className="text-[10px] text-muted-foreground ml-1 truncate">{sub}</span>}
+        {sub && <span className="text-xs text-muted-foreground ml-1 truncate">{sub}</span>}
         <div className="ml-auto flex items-center gap-1.5 shrink-0">
           {headerRight}
           {open ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
@@ -147,7 +147,7 @@ function MiniStat({
         {trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
         {trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
       </div>
-      <p className="text-[10px] text-muted-foreground leading-tight mt-1 text-center truncate w-full">{label}</p>
+      <p className="text-xs text-muted-foreground leading-tight mt-1 text-center truncate w-full">{label}</p>
     </div>
   );
 }
@@ -175,7 +175,7 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
   return (
     <button
       onClick={() => navigate(href.replace("#", ""))}
-      className="flex items-center gap-1 text-[10px] text-primary hover:underline mt-2"
+      className="flex items-center gap-1 text-xs text-primary hover:underline mt-2"
     >
       <ExternalLink className="h-2.5 w-2.5" /> {label}
     </button>
@@ -247,7 +247,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
               <span className="text-sm tabular-nums">{formatMoney(finSnap?.totalMonthlySpend || 0)}</span>
             </div>
             {finSnap?.lastMonthTotal > 0 && (
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 vs last month: {formatMoney(finSnap.lastMonthTotal)} ({finSnap.spendTrend > 0 ? "+" : ""}{finSnap.spendTrend}%)
               </p>
             )}
@@ -273,7 +273,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                     className={`flex items-center justify-between p-2 rounded-lg border ${urgent ? "border-red-500/30 bg-red-500/5" : soon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"}`}>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{bill.name}</p>
-                      <p className={`text-[10px] ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
+                      <p className={`text-xs ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
                         {daysUntilStr(bill.daysUntil)}
                         {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
                       </p>
@@ -319,11 +319,11 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                     <FileText className={`h-3.5 w-3.5 shrink-0 ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`} />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{doc.documentName}</p>
-                      <p className={`text-[10px] ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>
+                      <p className={`text-xs ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>
                         {doc.fieldName}: {fmtDate(doc.expirationDate)} ({daysUntilStr(doc.daysUntil)})
                       </p>
                     </div>
-                    <Badge variant="outline" className={`shrink-0 text-[9px] px-1.5 py-0 h-4 ${
+                    <Badge variant="outline" className={`shrink-0 text-xs-tight px-1.5 py-0 h-4 ${
                       expired ? "border-red-500/40 text-red-500" : expiringSoon ? "border-amber-500/40 text-amber-500" : ""
                     }`}>
                       {expired ? "Expired" : expiringSoon ? "Soon" : "Upcoming"}
@@ -412,8 +412,8 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
                   <div className="flex-1 min-w-0">
                     <p className="text-xs truncate">{t.title}</p>
                     <div className="flex items-center gap-1.5">
-                      <Badge variant="outline" className={`text-[9px] px-1 py-0 h-3.5 ${PRIORITY_CLR[t.priority] || ""}`}>{t.priority}</Badge>
-                      {t.dueDate && <span className="text-[9px] text-muted-foreground">{fmtDate(t.dueDate)}</span>}
+                      <Badge variant="outline" className={`text-xs-tight px-1 py-0 h-3.5 ${PRIORITY_CLR[t.priority] || ""}`}>{t.priority}</Badge>
+                      {t.dueDate && <span className="text-xs-tight text-muted-foreground">{fmtDate(t.dueDate)}</span>}
                     </div>
                   </div>
                   <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
@@ -422,11 +422,11 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
               ))}
               {doneTasks.length > 0 && (
                 <div className="pt-2 border-t border-border/30">
-                  <p className="text-[10px] text-muted-foreground mb-1">{doneTasks.length} recently completed</p>
+                  <p className="text-xs text-muted-foreground mb-1">{doneTasks.length} recently completed</p>
                   {doneTasks.map((t: any) => (
                     <div key={t.id} className="flex items-center gap-2 py-1 text-muted-foreground">
                       <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
-                      <span className="text-[10px] line-through truncate">{t.title}</span>
+                      <span className="text-xs line-through truncate">{t.title}</span>
                     </div>
                   ))}
                 </div>
@@ -587,8 +587,8 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
   }) {
     return (
       <div className="flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5" style={{ borderLeftColor: accentColor }}>
-        <span className="text-[10px] font-medium truncate flex-1 leading-tight">{title}</span>
-        <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">{detail}</span>
+        <span className="text-xs font-medium truncate flex-1 leading-tight">{title}</span>
+        <span className="text-xs-tight text-muted-foreground shrink-0 tabular-nums">{detail}</span>
         <div className="flex items-center shrink-0 ml-0.5">
           {sourceType === "task" && (
             <>
@@ -631,7 +631,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
         {hiddenCount > 0 && (
           <button
             onClick={() => setSheetOpen(true)}
-            className="mt-1.5 w-full text-center text-[10px] text-primary hover:underline py-1"
+            className="mt-1.5 w-full text-center text-xs text-primary hover:underline py-1"
           >
             +{hiddenCount} more item{hiddenCount !== 1 ? "s" : ""} need attention
           </button>
@@ -678,7 +678,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
       {events.length === 0 ? (
         <div className="text-center py-4">
           <Calendar className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
-          <p className="text-[10px] text-muted-foreground">No events today</p>
+          <p className="text-xs text-muted-foreground">No events today</p>
         </div>
       ) : (
         <div className="divide-y divide-border/30">
@@ -687,12 +687,12 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
               onClick={() => navigate("/calendar")}
               className="flex items-center gap-1.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors rounded px-1 -mx-1">
               <Clock className="h-3 w-3 text-primary shrink-0" />
-              <span className="text-[10px] font-medium text-primary tabular-nums shrink-0 w-10">
+              <span className="text-xs font-medium text-primary tabular-nums shrink-0 w-10">
                 {ev.time || "All day"}
               </span>
-              <span className="text-[11px] truncate flex-1">{ev.title}</span>
+              <span className="text-xs-loose truncate flex-1">{ev.title}</span>
               {ev.location && (
-                <span className="text-[9px] text-muted-foreground flex items-center gap-0.5 shrink-0">
+                <span className="text-xs-tight text-muted-foreground flex items-center gap-0.5 shrink-0">
                   <MapPin className="h-2 w-2" />{ev.location}
                 </span>
               )}
@@ -701,7 +701,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
           {hiddenCount > 0 && (
             <button
               onClick={() => navigate("/calendar")}
-              className="w-full text-center text-[10px] text-primary hover:underline py-1.5"
+              className="w-full text-center text-xs text-primary hover:underline py-1.5"
             >
               +{hiddenCount} more event{hiddenCount !== 1 ? "s" : ""}
             </button>
@@ -738,14 +738,14 @@ function HealthSection({ data }: { data: any[] }) {
               onClick={() => setSelectedTracker(item)}
               className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-muted-foreground truncate" title={item.name}>{item.name}</p>
+                <p className="text-xs text-muted-foreground truncate" title={item.name}>{item.name}</p>
                 <div className="flex items-center gap-1">
                   <span className="text-sm font-bold tabular-nums">{item.dailyTotal != null ? item.dailyTotal : item.latestValue}</span>
-                  {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}{item.dailyTotal != null ? " today" : ""}</span>}
+                  {item.unit && <span className="text-xs text-muted-foreground">{item.unit}{item.dailyTotal != null ? " today" : ""}</span>}
                   <TrendIcon trend={item.trend} />
                 </div>
               </div>
-              <span className="text-[9px] text-muted-foreground">avg: {item.average}</span>
+              <span className="text-xs-tight text-muted-foreground">avg: {item.average}</span>
             </div>
           ))}
         </div>
@@ -836,8 +836,8 @@ function ObligationsSection({ data }: { data: any[] }) {
           className="w-full flex items-center gap-1.5 py-1 text-left hover:bg-muted/30 rounded px-1 -mx-1 transition-colors"
         >
           <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-          <span className="text-[10px] font-semibold flex-1" style={{ color }}>{title}</span>
-          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{bills.length} · {formatMoney(groupTotal)}</span>
+          <span className="text-xs font-semibold flex-1" style={{ color }}>{title}</span>
+          <span className="text-xs text-muted-foreground tabular-nums shrink-0">{bills.length} · {formatMoney(groupTotal)}</span>
           {expanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
         </button>
         {expanded && (
@@ -846,9 +846,9 @@ function ObligationsSection({ data }: { data: any[] }) {
               <div key={bill.id}
                 onClick={() => setSelectedBill(bill)}
                 className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-muted/40 rounded transition-colors">
-                <span className="text-[10px] truncate flex-1">{bill.name}</span>
-                {bill.autopay && <span className="text-[9px] text-green-500 shrink-0">autopay</span>}
-                <span className="text-[10px] font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+                <span className="text-xs truncate flex-1">{bill.name}</span>
+                {bill.autopay && <span className="text-xs-tight text-green-500 shrink-0">autopay</span>}
+                <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
               </div>
             ))}
           </div>
@@ -918,9 +918,9 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium truncate">{goal.title}</span>
-          <span className="text-[10px] text-muted-foreground shrink-0 ml-2">No target set</span>
+          <span className="text-xs text-muted-foreground shrink-0 ml-2">No target set</span>
         </div>
-        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{goal.current} {goal.unit}</span>
           {daysLeft != null && daysLeft > 0 && <span>{daysLeft}d left</span>}
         </div>
@@ -932,12 +932,12 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
     <div className="space-y-1">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium truncate">{goal.title}</span>
-        <span className="text-[10px] text-muted-foreground shrink-0 ml-2">
+        <span className="text-xs text-muted-foreground shrink-0 ml-2">
           {isComplete ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 inline" /> : `${pct}%`}
         </span>
       </div>
       <Progress value={pct} className="h-1.5" />
-      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{goal.current} / {goal.target} {goal.unit}{(!goal.current && !isComplete) ? " · 0%" : ""}</span>
         {daysLeft != null && daysLeft > 0 && <span>{daysLeft}d left</span>}
         {daysLeft != null && daysLeft <= 0 && goal.status === "active" && <span className="text-destructive">overdue</span>}
@@ -1044,14 +1044,14 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   {/* Goal info — tap to open actions */}
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActionGoal(g)}>
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium truncate">{g.title}</span>
-                      <span className="text-[10px] text-muted-foreground tabular-nums ml-2 shrink-0">{pct}%</span>
+                      <span className="text-xs-loose font-medium truncate">{g.title}</span>
+                      <span className="text-xs text-muted-foreground tabular-nums ml-2 shrink-0">{pct}%</span>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
                         <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
                       </div>
-                      {daysLeft !== null && <span className="text-[9px] text-muted-foreground shrink-0">{daysLeft}d left</span>}
+                      {daysLeft !== null && <span className="text-xs-tight text-muted-foreground shrink-0">{daysLeft}d left</span>}
                     </div>
                   </div>
                 </div>
@@ -1059,9 +1059,9 @@ function GoalsSection({ profileId }: { profileId?: string }) {
             })}
             {completedGoals.length > 0 && (
               <div className="pt-1.5 mt-1 border-t border-border/30">
-                <p className="text-[9px] text-muted-foreground mb-0.5">{completedGoals.length} completed</p>
+                <p className="text-xs-tight text-muted-foreground mb-0.5">{completedGoals.length} completed</p>
                 {completedGoals.slice(0, 2).map(g => (
-                  <div key={g.id} className="flex items-center gap-1.5 py-0.5 text-[10px] text-muted-foreground/60">
+                  <div key={g.id} className="flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground/60">
                     <CheckCircle2 className="h-3 w-3 text-green-500/60 shrink-0" />
                     <span className="line-through truncate">{g.title}</span>
                   </div>
@@ -1133,7 +1133,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                         key={inc}
                         variant="outline"
                         size="sm"
-                        className="h-7 text-[10px] flex-1"
+                        className="h-7 text-xs flex-1"
                         onClick={() => {
                           updateMutation.mutate({ id: actionGoal.id, current: Math.min(currentVal + inc, actionGoal.target) });
                           setActionGoal(null);
@@ -1299,31 +1299,31 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
           <button onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
-            <p className="text-[10px] text-muted-foreground">Spending</p>
+            <p className="text-xs text-muted-foreground">Spending</p>
             <p className="text-sm font-bold tabular-nums text-red-400">${monthlySpend.toLocaleString()}</p>
-            <p className="text-[9px] text-muted-foreground">{monthExpenses.length} this month</p>
+            <p className="text-xs-tight text-muted-foreground">{monthExpenses.length} this month</p>
           </button>
           <button onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
-            <p className="text-[10px] text-muted-foreground">Income</p>
+            <p className="text-xs text-muted-foreground">Income</p>
             <p className="text-sm font-bold tabular-nums text-green-500">${monthlyIncome.toLocaleString()}</p>
-            <p className="text-[9px] text-muted-foreground">{(incomes || []).length} sources</p>
+            <p className="text-xs-tight text-muted-foreground">{(incomes || []).length} sources</p>
           </button>
           <button onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
-            <p className="text-[10px] text-muted-foreground">Cash Flow</p>
+            <p className="text-xs text-muted-foreground">Cash Flow</p>
             <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-red-500"}`}>
               {cashFlow >= 0 ? "+" : ""}${cashFlow.toLocaleString()}
             </p>
-            <p className="text-[9px] text-muted-foreground">income - spending</p>
+            <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
           <button onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
-            <p className="text-[10px] text-muted-foreground">Net Worth</p>
+            <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
-            <p className="text-[9px] text-muted-foreground">assets - liabilities</p>
+            <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
           </button>
         </div>
         {recentExpenses.length > 0 && (
           <div className="space-y-0.5">
-            <p className="text-[10px] font-medium text-muted-foreground uppercase">Recent Expenses</p>
+            <p className="text-xs font-medium text-muted-foreground uppercase">Recent Expenses</p>
             {recentExpenses.slice(0, 5).map((exp: any) => (
               <div key={exp.id} className="flex items-center justify-between py-1 text-xs">
                 <span className="truncate flex-1">{exp.description || "Expense"}</span>
@@ -1332,7 +1332,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             ))}
           </div>
         )}
-        <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 w-full" onClick={() => navigate("/dashboard/finance")}>
+        <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 w-full" onClick={() => navigate("/dashboard/finance")}>
           View All Finance →
         </Button>
       </div>
@@ -1450,8 +1450,8 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
       <div className="space-y-2">
         <p className="text-xs leading-relaxed">{summary}</p>
         <div className="flex items-center justify-between">
-          {lastGenerated && <span className="text-[10px] text-muted-foreground">Generated at {lastGenerated}</span>}
-          <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1" onClick={generateSummary} disabled={loading}>
+          {lastGenerated && <span className="text-xs text-muted-foreground">Generated at {lastGenerated}</span>}
+          <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={generateSummary} disabled={loading}>
             <RotateCcw className={`h-2.5 w-2.5 ${loading ? "animate-spin" : ""}`} /> Refresh
           </Button>
         </div>
@@ -1513,7 +1513,7 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
       <div className="space-y-1.5">
         {groups.map((group, gi) => (
           <div key={gi}>
-            <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-0.5 mt-1 first:mt-0">{group.hourLabel}</p>
+            <p className="text-xs-tight text-muted-foreground/60 uppercase tracking-wider mb-0.5 mt-1 first:mt-0">{group.hourLabel}</p>
             {group.items.map((item, i) => {
               const Icon = ACTIVITY_ICONS[item.type] || Activity;
               const route = ACTIVITY_ROUTES[item.type];
@@ -1655,7 +1655,7 @@ function CustomizeDialog({
                     {section.label}
                   </span>
                   <button onClick={() => cycleColumn(section.id)}
-                    className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${columnBadgeColor(section.column)}`}
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${columnBadgeColor(section.column)}`}
                     data-testid={`btn-column-${section.id}`}>
                     {columnLabel(section.column)}
                   </button>

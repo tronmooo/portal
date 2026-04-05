@@ -66,7 +66,7 @@ const PROFILE_TYPE_COLORS: Record<string, string> = {
 function ProfileTypeBadge({ type }: { type: string }) {
   const colorClass = PROFILE_TYPE_COLORS[type] ?? "bg-muted text-muted-foreground";
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${colorClass}`}>
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${colorClass}`}>
       {type}
     </span>
   );
@@ -242,7 +242,7 @@ function ExtractionConfirmation({
           Review extracted data
         </span>
         <select
-          className="text-[10px] bg-muted border border-border rounded px-1.5 py-0.5 text-foreground max-w-[140px]"
+          className="text-xs bg-muted border border-border rounded px-1.5 py-0.5 text-foreground max-w-[140px]"
           value={selectedProfileId || ""}
           onChange={(e) => setSelectedProfileId(e.target.value || undefined)}
           data-testid="select-extraction-profile"
@@ -274,13 +274,13 @@ function ExtractionConfirmation({
                   <Calendar className="h-3 w-3 text-blue-500" />
                 )}
               </div>
-              <span className="text-[11px] text-muted-foreground truncate block">
+              <span className="text-xs-loose text-muted-foreground truncate block">
                 {typeof field.value === 'object' && field.value !== null
                   ? JSON.stringify(field.value).replace(/[{}"/]/g, '').replace(/,/g, ', ')
                   : String(field.value)}
               </span>
               {field.isDate && field.suggestedEvent && field.selected && (
-                <span className="text-[10px] text-blue-600 dark:text-blue-400">
+                <span className="text-xs text-blue-600 dark:text-blue-400">
                   Will create: {field.suggestedEvent}
                 </span>
               )}
@@ -291,9 +291,9 @@ function ExtractionConfirmation({
 
       {extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
         <div className="pt-1.5 border-t border-border/50">
-          <span className="text-[10px] text-muted-foreground font-medium">Tracker entries:</span>
+          <span className="text-xs text-muted-foreground font-medium">Tracker entries:</span>
           {extraction.trackerEntries.map((entry: any, idx: number) => (
-            <div key={idx} className="text-[11px] text-foreground ml-2">
+            <div key={idx} className="text-xs-loose text-foreground ml-2">
               {entry.trackerName}: {JSON.stringify(entry.values)}
             </div>
           ))}
@@ -442,7 +442,7 @@ function AttachmentPanel({
               })}
             </div>
             {selectedProfileId !== "none" && selectedProfileId !== "" && (
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {selectedProfileId.split(",").filter(Boolean).length} profile(s) selected
               </p>
             )}
@@ -614,7 +614,7 @@ function BatchAttachmentPanel({
 
                   {/* Filename (truncated) */}
                   <p
-                    className="text-[11px] font-medium truncate px-0.5"
+                    className="text-xs-loose font-medium truncate px-0.5"
                     title={att.name}
                     data-testid={`text-batch-filename-${idx}`}
                   >
@@ -628,7 +628,7 @@ function BatchAttachmentPanel({
                     disabled={profilesLoading || isSending}
                   >
                     <SelectTrigger
-                      className="w-full h-7 text-[10px]"
+                      className="w-full h-7 text-xs"
                       data-testid={`select-batch-file-profile-${idx}`}
                     >
                       <SelectValue placeholder="No profile" />
@@ -700,7 +700,7 @@ function SlowResponseHint() {
     return () => clearTimeout(t);
   }, []);
   if (!show) return null;
-  return <span className="text-[10px] text-muted-foreground animate-in fade-in">Still working… complex requests take longer</span>;
+  return <span className="text-xs text-muted-foreground animate-in fade-in">Still working… complex requests take longer</span>;
 }
 
 const WELCOME_MSG: ChatMessage = {
@@ -1337,7 +1337,7 @@ export default function ChatPage() {
                               {typeof profile === "string" && profile && <span>→ {profile}</span>}
                             </div>
                             {warnings.length > 0 && (
-                              <div className="text-amber-500 text-[10px]">
+                              <div className="text-amber-500 text-xs">
                                 ⚠ {warnings.join(", ")}
                               </div>
                             )}
@@ -1350,7 +1350,7 @@ export default function ChatPage() {
 
                 {/* Timestamp */}
                 <div className="mt-1.5 flex justify-end">
-                  <span className="text-[10px] text-muted-foreground/60">
+                  <span className="text-xs text-muted-foreground/60">
                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
@@ -1452,7 +1452,7 @@ export default function ChatPage() {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-[11px] gap-1 border-dashed w-full"
+                className="h-7 text-xs-loose gap-1 border-dashed w-full"
                 onClick={() => { setMessages([WELCOME_MSG]); }}
                 data-testid="button-reset-chat-mobile"
               >

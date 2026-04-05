@@ -1058,13 +1058,13 @@ function ProfileCard({
               {(profile.tags?.length > 0 || linkedCount > 0) && (
                 <div className="mt-2 flex items-center gap-2 flex-wrap">
                   {profile.tags?.slice(0, 3).map((tag) => (
-                    <Badge key={tag} variant="outline" className="text-[10px]">
+                    <Badge key={tag} variant="outline" className="text-xs">
                       <Tag className="h-2 w-2 mr-0.5" />
                       {tag}
                     </Badge>
                   ))}
                   {linkedCount > 0 && (
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-xs text-muted-foreground">
                       {linkedCount} linked items
                     </span>
                   )}
