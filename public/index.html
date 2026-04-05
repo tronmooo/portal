@@ -34,9 +34,16 @@
   <body>
     <div id="root"></div>
     <script>
+      // UNREGISTER all service workers and clear all caches
+      // The app is data-driven and must never serve stale cached content
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          registrations.forEach(reg => reg.unregister());
+        });
+      }
+      if ('caches' in window) {
+        caches.keys().then(names => {
+          names.forEach(name => caches.delete(name));
         });
       }
     </script>
