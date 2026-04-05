@@ -3606,6 +3606,13 @@ async function resolveForProfile(forProfile: string | undefined, text: string): 
 }
 
 async function autoLinkToProfiles(entityType: string, entityId: string, text: string, explicitProfileName?: string): Promise<void> {
+  // HARD BLOCK: Profile-exclusive types are NEVER auto-linked.
+  // They get their profile set exactly once at creation time.
+  // This function should never be called for them, but guard anyway.
+  if (PROFILE_EXCLUSIVE_TYPES.has(entityType)) {
+    logger.warn("ai", `autoLinkToProfiles BLOCKED for profile-exclusive type: ${entityType}`);
+    return;
+  }
   logger.info("ai", `autoLinkToProfiles: type=${entityType} text="${text?.substring(0, 50)}" explicit="${explicitProfileName}"`);
   if (!text && !explicitProfileName) return;
   try {
@@ -3790,7 +3797,35 @@ async function cleanupCrossLinks(): Promise<{ fixed: number; audited: number }> 
 }
 
 // Helper: update an entity's linkedProfiles array to include a profile ID
+// Profile-exclusive types: ONE owner only. Same set as SupabaseStorage.PROFILE_EXCLUSIVE.
+const PROFILE_EXCLUSIVE_TYPES = new Set(["tracker", "habit", "goal", "journal"]);
+
+async function getEntityLinkedProfiles(entityType: string, entityId: string): Promise<string[]> {
+  try {
+    switch (entityType) {
+      case "tracker": { const t = await storage.getTracker(entityId); return t?.linkedProfiles || []; }
+      case "habit": { const h = (await storage.getHabits()).find(h => h.id === entityId); return (h as any)?.linkedProfiles || []; }
+      case "goal": { const g = (await storage.getGoals()).find(g => g.id === entityId); return (g as any)?.linkedProfiles || []; }
+      case "journal": { const j = (await storage.getJournalEntries()).find(j => j.id === entityId); return (j as any)?.linkedProfiles || []; }
+      default: return [];
+    }
+  } catch { return []; }
+}
+
 async function updateEntityLinkedProfiles(entityType: string, entityId: string, profileId: string): Promise<void> {
+  // ENFORCEMENT: For profile-exclusive types, check if entity already has a different owner.
+  // If it does, REJECT the link silently — this prevents all cross-profile contamination.
+  if (PROFILE_EXCLUSIVE_TYPES.has(entityType)) {
+    const existing = await getEntityLinkedProfiles(entityType, entityId);
+    if (existing.length > 0 && !existing.includes(profileId)) {
+      console.warn(`[ISOLATION] BLOCKED updateEntityLinkedProfiles: ${entityType} ${entityId.slice(0,8)} already owned by ${existing[0].slice(0,8)}, rejecting ${profileId.slice(0,8)}`);
+      return;
+    }
+  }
+
+  // Also sync to junction table via linkProfileTo (which has its own guard)
+  try { await storage.linkProfileTo(profileId, entityType, entityId); } catch (e: any) { /* dup OK */ }
+
   switch (entityType) {
     case "tracker": {
       const tracker = await storage.getTracker(entityId);

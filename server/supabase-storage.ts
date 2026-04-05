@@ -774,11 +774,40 @@ export class SupabaseStorage implements IStorage {
     artifact: { table: "profile_artifacts", entityCol: "artifact_id" },
   };
 
+  // Profile-exclusive entity types: ONE owner only. Adding a second profile is BLOCKED.
+  private static readonly PROFILE_EXCLUSIVE: Set<string> = new Set(["tracker", "habit", "goal", "journal"]);
+
   async linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void> {
     const profile = await this.getProfile(profileId);
     if (!profile) return;
 
-    // Write to junction table (new source of truth)
+    // ════════════════════════════════════════════════════════════════
+    // ENFORCEMENT GUARD: Profile-exclusive entities can have ONE owner.
+    // If the entity already belongs to a DIFFERENT profile, REJECT.
+    // This is the single architectural boundary that prevents all
+    // cross-profile data leakage. No code path can bypass this.
+    // ════════════════════════════════════════════════════════════════
+    const tableMap: Record<string, string> = {
+      tracker: "trackers", expense: "expenses", task: "tasks",
+      event: "events", obligation: "obligations", document: "documents",
+      habit: "habits", goal: "goals",
+    };
+    const entityTable = tableMap[entityType];
+
+    if (SupabaseStorage.PROFILE_EXCLUSIVE.has(entityType) && entityTable) {
+      const { data: entityRow } = await this.supabase
+        .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single();
+      if (entityRow) {
+        const current: string[] = entityRow.linked_profiles || [];
+        if (current.length > 0 && !current.includes(profileId)) {
+          // BLOCKED: entity already belongs to a different profile
+          console.warn(`[ISOLATION] BLOCKED: ${entityType} ${entityId.slice(0,8)} already belongs to ${current[0].slice(0,8)}, rejecting link to ${profileId.slice(0,8)}`);
+          return; // Hard reject — do not write anything
+        }
+      }
+    }
+
+    // Write to junction table
     const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
     if (jt) {
       await this.supabase.from(jt.table).upsert(
@@ -787,8 +816,7 @@ export class SupabaseStorage implements IStorage {
       );
     }
 
-    // JSONB arrays on profiles are deprecated — junction tables are the sole source of truth.
-    // Documents still use the profile JSONB `documents` array (no junction table yet)
+    // Documents still use profile JSONB `documents` array
     if (entityType === "document") {
       if (!profile.documents.includes(entityId)) {
         profile.documents.push(entityId);
@@ -796,13 +824,7 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    // Sync entity's linked_profiles JSONB (source of truth for profile filtering)
-    const tableMap: Record<string, string> = {
-      tracker: "trackers", expense: "expenses", task: "tasks",
-      event: "events", obligation: "obligations", document: "documents",
-      habit: "habits", goal: "goals",
-    };
-    const entityTable = tableMap[entityType];
+    // Sync entity's linked_profiles JSONB
     if (entityTable) {
       const { data: entityRow } = await this.supabase
         .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single();
