@@ -100,6 +100,7 @@ export interface ChatMessage {
     trackerEntries?: Array<{ trackerName: string; values: Record<string, any> }>;
     documentPreview?: { id: string; name: string; mimeType: string; data: string };
   };
+  results?: Array<Record<string, any>>;
 }
 
 // ============================================================

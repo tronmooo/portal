@@ -1949,6 +1949,145 @@ function summarizeSingleItem(item: any): any {
 }
 
 // ============================================================
+// SCHEMA VALIDATION — enforce data structure before DB writes
+// ============================================================
+interface ValidationResult {
+  valid: boolean;
+  normalized: Record<string, any>;
+  warnings: string[];
+  errors: string[];
+}
+
+function validateToolInput(toolName: string, input: Record<string, any>): ValidationResult {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const normalized = { ...input };
+
+  switch (toolName) {
+    case "create_expense": {
+      // Amount must be a positive number
+      const amt = Number(normalized.amount);
+      if (!amt || amt <= 0 || !isFinite(amt)) errors.push(`Invalid amount: ${normalized.amount}`);
+      else normalized.amount = Math.round(amt * 100) / 100; // Round to cents
+      // Description required
+      if (!normalized.description?.trim()) errors.push("Description is required");
+      else normalized.description = normalized.description.trim();
+      // Date must be valid YYYY-MM-DD
+      if (normalized.date && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date)) {
+        warnings.push(`Date "${normalized.date}" is not YYYY-MM-DD format — using today`);
+        normalized.date = new Date().toISOString().slice(0, 10);
+      }
+      if (!normalized.date) normalized.date = new Date().toISOString().slice(0, 10);
+      // Category must be from allowed list
+      const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards"];
+      if (normalized.category && !validCategories.includes(normalized.category)) {
+        warnings.push(`Category "${normalized.category}" is not standard — defaulting to "general"`);
+        normalized.category = "general";
+      }
+      if (!normalized.category) normalized.category = "general";
+      break;
+    }
+    case "create_task": {
+      if (!normalized.title?.trim()) errors.push("Task title is required");
+      else normalized.title = normalized.title.trim();
+      if (normalized.dueDate && !/^\d{4}-\d{2}-\d{2}/.test(normalized.dueDate)) {
+        warnings.push(`Due date "${normalized.dueDate}" is not valid — clearing`);
+        normalized.dueDate = undefined;
+      }
+      if (!normalized.priority) normalized.priority = "medium";
+      const validPriorities = ["low", "medium", "high", "urgent"];
+      if (!validPriorities.includes(normalized.priority)) {
+        warnings.push(`Priority "${normalized.priority}" is not valid — defaulting to "medium"`);
+        normalized.priority = "medium";
+      }
+      break;
+    }
+    case "create_event": {
+      if (!normalized.title?.trim()) errors.push("Event title is required");
+      else normalized.title = normalized.title.trim();
+      if (!normalized.date) errors.push("Event date is required");
+      else if (!/^\d{4}-\d{2}-\d{2}/.test(normalized.date)) {
+        errors.push(`Event date "${normalized.date}" is not valid YYYY-MM-DD format`);
+      }
+      break;
+    }
+    case "create_habit": {
+      if (!normalized.name?.trim()) errors.push("Habit name is required");
+      else normalized.name = normalized.name.trim();
+      const validFreqs = ["daily", "weekly", "weekdays", "weekends", "custom"];
+      if (normalized.frequency && !validFreqs.includes(normalized.frequency)) {
+        warnings.push(`Frequency "${normalized.frequency}" is not standard — defaulting to "daily"`);
+        normalized.frequency = "daily";
+      }
+      if (!normalized.frequency) normalized.frequency = "daily";
+      break;
+    }
+    case "create_obligation": {
+      if (!normalized.name?.trim()) errors.push("Obligation name is required");
+      else normalized.name = normalized.name.trim();
+      const amt2 = Number(normalized.amount);
+      if (!amt2 || amt2 <= 0) errors.push(`Invalid amount: ${normalized.amount}`);
+      else normalized.amount = Math.round(amt2 * 100) / 100;
+      const validFreqs2 = ["monthly", "yearly", "weekly", "biweekly", "quarterly", "one-time"];
+      if (normalized.frequency && !validFreqs2.includes(normalized.frequency)) {
+        warnings.push(`Frequency "${normalized.frequency}" — defaulting to "monthly"`);
+        normalized.frequency = "monthly";
+      }
+      if (!normalized.frequency) normalized.frequency = "monthly";
+      break;
+    }
+    case "log_tracker_entry": {
+      if (!normalized.trackerName?.trim()) errors.push("Tracker name is required");
+      if (!normalized.values || Object.keys(normalized.values).length === 0) errors.push("Entry values are required");
+      // Ensure numeric values are actually numbers
+      if (normalized.values) {
+        for (const [k, v] of Object.entries(normalized.values)) {
+          if (k === "_notes" || k === "item") continue;
+          if (typeof v === "string" && !isNaN(Number(v))) {
+            normalized.values[k] = Number(v);
+          }
+        }
+      }
+      break;
+    }
+    case "create_profile": {
+      if (!normalized.name?.trim()) errors.push("Profile name is required");
+      else normalized.name = normalized.name.trim();
+      const validTypes = ["person", "pet", "vehicle", "asset", "subscription", "loan", "investment", "property", "account", "insurance", "medical"];
+      if (normalized.type && !validTypes.includes(normalized.type)) {
+        warnings.push(`Type "${normalized.type}" is not standard — defaulting to "person"`);
+        normalized.type = "person";
+      }
+      break;
+    }
+    case "create_goal": {
+      if (!normalized.title?.trim()) errors.push("Goal title is required");
+      else normalized.title = normalized.title.trim();
+      if (normalized.target != null) {
+        const t = Number(normalized.target);
+        if (isNaN(t)) warnings.push(`Target "${normalized.target}" is not a number`);
+        else normalized.target = t;
+      }
+      break;
+    }
+    case "journal_entry": {
+      if (!normalized.content?.trim() && !normalized.mood) errors.push("Journal entry needs content or mood");
+      break;
+    }
+    // Read-only tools and updates don't need strict validation
+    default:
+      break;
+  }
+
+  return {
+    valid: errors.length === 0,
+    normalized,
+    warnings,
+    errors,
+  };
+}
+
+// ============================================================
 // TOOL EXECUTION — maps tool names to storage operations
 // ============================================================
 
@@ -4033,7 +4172,19 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           seenCreates.add(key);
         }
         try {
-          const result = await executeTool(toolUse.name, toolUse.input);
+          // Validate input before executing
+          const validation = validateToolInput(toolUse.name, toolUse.input as Record<string, any>);
+          if (!validation.valid) {
+            logger.warn("ai", `Validation failed for ${toolUse.name}: ${validation.errors.join(", ")}`);
+            const errorResult = { error: `Validation failed: ${validation.errors.join(". ")}`, validationErrors: validation.errors };
+            toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult) });
+            allActions.push({ type: mapToolToActionType(toolUse.name), category: "ai" as any, data: { ...(toolUse.input as any), _validationError: validation.errors.join(". ") } });
+            continue;
+          }
+          if (validation.warnings.length > 0) {
+            logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
+          }
+          const result = await executeTool(toolUse.name, validation.normalized);
           
           // Invalidate context cache after any write operation
           const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
@@ -4047,6 +4198,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
           allActions.push({ type: actionType, category: "ai", data: { ...inp, _entityId: entityId || undefined } });
           if (result) allResults.push(result);
+          if (validation.warnings.length > 0 && result) {
+            result._validationWarnings = validation.warnings;
+          }
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;

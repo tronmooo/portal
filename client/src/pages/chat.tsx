@@ -772,6 +772,7 @@ export default function ChatPage() {
         content: data.reply,
         timestamp: new Date().toISOString(),
         actions: data.actions,
+        results: data.results,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
       };
@@ -809,6 +810,7 @@ export default function ChatPage() {
         content: data.reply,
         timestamp: new Date().toISOString(),
         actions: data.actions,
+        results: data.results,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
         pendingExtraction: data.pendingExtraction,
@@ -868,6 +870,7 @@ export default function ChatPage() {
         content,
         timestamp: new Date().toISOString(),
         actions: data.results.flatMap((r) => r.actions || []),
+        results: data.results.flatMap((r) => r.results || []),
         documentPreviews: allPreviews,
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -1303,6 +1306,43 @@ export default function ChatPage() {
                             </button>
                           )}
                         </Badge>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Structured confirmation cards */}
+                {msg.results && msg.results.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {msg.results.slice(0, 10).map((result: any, ri: number) => {
+                      if (!result || result.error) return null;
+                      // Determine what type of entity was created
+                      const name = result.title || result.name || result.description || "";
+                      const type = result.type || result.category || "";
+                      const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
+                      const date = result.date || result.dueDate || result.nextDueDate || "";
+                      const profile = result.forProfile || result.linkedProfiles?.[0] || "";
+                      const warnings = result._validationWarnings || [];
+                      
+                      if (!name && !amount) return null; // Skip empty results
+                      
+                      return (
+                        <div key={ri} className="flex items-start gap-2 text-xs bg-muted/30 rounded-lg px-3 py-2 border border-border/30" data-testid={`confirmation-card-${ri}`}>
+                          <div className="flex-1 min-w-0 space-y-0.5">
+                            <div className="font-medium text-foreground truncate">{name}</div>
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+                              {type && <span>{type}</span>}
+                              {amount && <span className="tabular-nums">{amount}</span>}
+                              {date && <span>{date.slice(0, 10)}</span>}
+                              {typeof profile === "string" && profile && <span>→ {profile}</span>}
+                            </div>
+                            {warnings.length > 0 && (
+                              <div className="text-amber-500 text-[10px]">
+                                ⚠ {warnings.join(", ")}
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
