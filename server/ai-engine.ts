@@ -1723,7 +1723,8 @@ BEHAVIOR:
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
 - TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
-- NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something, NEVER say "I've already created it" — the user may have DELETED it. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. This is critical: users delete profiles and re-create them. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
+- LIVE DATABASE CONTEXT: The data snapshot above (Profiles, Trackers, Tasks, etc.) is fetched FRESH from the database at the start of every message. It reflects ALL manual edits, deletions, and UI changes. Trust THIS data over conversation history. If the data snapshot doesn't list something, it does NOT exist — even if conversation history says you created it. Conversation history can be stale; the data snapshot is always current.
+- NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - BIAS TO ACTION: When the user asks to create, schedule, or add something, DO IT immediately. Do NOT ask for unnecessary details. If they say "schedule a doctor appointment for Mom next week", create a task with title "Schedule doctor appointment for Mom" and due date next week. Don't ask which doctor, what time, etc. — the user can fill in details later. The goal is to capture the intent quickly, not interrogate the user.
@@ -3907,7 +3908,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     }
   } catch { /* fall through to AI */ }
 
-  // Build rich context from current data (uses short-lived cache to avoid redundant DB hits)
+  // ALWAYS invalidate cache at the start of every chat request so AI sees the CURRENT database state.
+  // This ensures manual UI edits (creates, deletes, updates) are reflected immediately.
+  invalidateContextCache(userId);
   const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
@@ -3915,12 +3918,16 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => `${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("; ") || "none"}`,
     `Trackers (${trackers.length}): ${trackers.slice(0, 25).map(t => {
       const last = t.entries[t.entries.length - 1];
-      return `${t.name} (${t.category}, ${t.entries.length} entries${last ? `, latest: ${JSON.stringify(last.values).slice(0,60)}` : ""})`;
+      const ownerNames = (t.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || pid.slice(0,8)).join(",");
+      return `${t.name} (${t.category}, owner:${ownerNames || "unlinked"}, ${t.entries.length} entries${last ? `, latest: ${JSON.stringify(last.values).slice(0,60)}` : ""})`;
     }).join("; ") || "none"}`,
     `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
     `Recent Expenses (last 10): ${expenses.slice(-10).map(e => `$${e.amount} - ${e.description} (${e.date?.slice(0,10)})`).join("; ") || "none"}`,
     `Upcoming Events (next 10): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 10).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
-    `Habits (${habits.length}): ${habits.slice(0, 20).map(h => `${h.name} (${h.frequency}, ${h.currentStreak}d streak)`).join("; ") || "none"}`,
+    `Habits (${habits.length}): ${habits.slice(0, 20).map(h => {
+      const hOwner = (h.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || pid.slice(0,8)).join(",");
+      return `${h.name} (${h.frequency}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
+    }).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
     `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
     `Documents (${documents.length}): ${documents.slice(0, 20).map(d => {
