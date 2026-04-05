@@ -1692,7 +1692,13 @@ BEHAVIOR:
 - Be concise and confirm what you did after each action.
 - Handle multiple actions in one message when appropriate.
 - When the user mentions an existing entity, match it by name (partial matching is fine).
-- CRITICAL NUTRITION DETECTION: When a user mentions ANY food or drink consumption, ALWAYS log it as a NUTRITION tracker entry with estimated calories, protein, carbs, fat, sugar — NOT as an expense. This includes:
+- CRITICAL NUTRITION DETECTION: When a user mentions ANY food or drink consumption for ANY profile (person, pet, or self), ALWAYS log it to that profile's NUTRITION/CALORIES tracker. Each profile has their OWN nutrition tracker — NEVER log Rex's food to your Calories tracker or vice versa.
+  ROUTING RULES:
+  - "I ate X" → trackerName: "Calories" (your tracker), forProfile: omit or "Me"
+  - "Rex ate X" / "Rex's food" → trackerName: "Calories", forProfile: "Rex" (the system will find or create Rex's own tracker)
+  - "Mom ate X" → trackerName: "Calories", forProfile: "Mom"
+  NEVER route food/nutrition to a Weight tracker, Running tracker, or any non-nutrition tracker. Food = nutrition/calories tracker ALWAYS.
+  This includes:
   - Eating: "ate a sandwich", "had lunch", "ate chicken", "had pizza"
   - Drinking: "drank a Coke", "had coffee", "drank a smoothie", "had a beer", "drank water"
   - Snacking: "had some chips", "ate candy", "grabbed a donut"
@@ -2459,9 +2465,17 @@ async function executeTool(name: string, input: any): Promise<any> {
       }
 
       // Find the right tracker: prefer one linked to the target profile
-      const nameMatches = trackers.filter(
-        t => t.name.toLowerCase() === trackerName || t.name.toLowerCase().includes(trackerName)
-      );
+      // Nutrition aliases: "Calories", "Nutrition", "Food" all match each other
+      const nutritionAliases = ["calories", "nutrition", "food", "diet", "meal"];
+      const isNutritionSearch = nutritionAliases.some(a => trackerName.includes(a));
+      const nameMatches = trackers.filter(t => {
+        const tn = t.name.toLowerCase();
+        // Exact or contains match
+        if (tn === trackerName || tn.includes(trackerName)) return true;
+        // Nutrition alias matching: searching for "Calories" also matches "Nutrition" trackers and vice versa
+        if (isNutritionSearch && (nutritionAliases.some(a => tn.includes(a)) || t.category === "nutrition")) return true;
+        return false;
+      });
       let tracker = nameMatches.length <= 1 ? nameMatches[0]
         : (targetProfileId
             ? nameMatches.find(t => (t.linkedProfiles || []).includes(targetProfileId!))
@@ -2526,16 +2540,12 @@ async function executeTool(name: string, input: any): Promise<any> {
       const newTracker = await storage.createTracker({
         name: trackerDisplayName,
         category: autoCategory,
+        linkedProfiles: targetProfileId ? [targetProfileId] : undefined,
         fields: Object.keys(input.values || {}).filter(k => k !== '_notes').map(k => ({
           name: k,
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
-      });
-      // Link ONLY to the target profile — no autoLinkToProfiles to prevent cross-contamination
-      if (targetProfileId) {
-        try { await storage.linkProfileTo(targetProfileId, "tracker", newTracker.id); } catch (e: any) { /* ignore dup */ }
-        try { await updateEntityLinkedProfiles("tracker", newTracker.id, targetProfileId); } catch (e: any) { /* ignore */ }
-      }
+      } as any);
       const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId } as any);
       return entry;
     }

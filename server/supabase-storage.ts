@@ -1015,9 +1015,18 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createTracker(data: InsertTracker): Promise<Tracker> {
-    // Dedup: check for existing tracker with same name (case-insensitive)
+    // Dedup: check for existing tracker with same name AND same profile (case-insensitive)
+    // Different profiles CAN have same-named trackers (e.g., "Calories" for Me and "Calories - Rex" for Rex)
     const existing = await this.getTrackers();
-    const dup = existing.find(t => t.name.toLowerCase() === data.name.toLowerCase());
+    const requestedProfiles = (data as any).linkedProfiles || [];
+    const dup = existing.find(t => {
+      if (t.name.toLowerCase() !== data.name.toLowerCase()) return false;
+      // If no profile specified, any match is a dup
+      if (requestedProfiles.length === 0) return true;
+      // If profile specified, only match if the existing tracker has the same profile
+      const existingLp = t.linkedProfiles || [];
+      return requestedProfiles.some((pid: string) => existingLp.includes(pid));
+    });
     if (dup) return dup;
 
     const id = randomUUID();
