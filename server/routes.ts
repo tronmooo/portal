@@ -939,7 +939,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (jsonStr.startsWith("```")) {
         jsonStr = jsonStr.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
       }
-      const aiData = JSON.parse(jsonStr);
+      let aiData: any;
+      try {
+        aiData = JSON.parse(jsonStr);
+      } catch {
+        aiData = {};
+      }
 
       const result = {
         summary: aiData.summary || "No summary available.",
@@ -1122,14 +1127,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
   app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
-    if (typeof (storage as any).restoreTask === 'function') {
-      const ok = await (storage as any).restoreTask(req.params.id);
-      if (!ok) return res.status(404).json({ error: "Task not found" });
-      const task = await storage.getTask(req.params.id);
-      res.json(task || { id: req.params.id, restored: true });
-    } else {
-      res.status(501).json({ error: "Restore not supported" });
-    }
+    const ok = await storage.restoreTask(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Task not found" });
+    const task = await storage.getTask(req.params.id);
+    res.json(task || { id: req.params.id, restored: true });
   }));
 
   // ---- Expenses ----
@@ -1350,13 +1351,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(updatedHabit || checkin);
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
-    if (typeof (storage as any).deleteHabitCheckin === 'function') {
-      const ok = await (storage as any).deleteHabitCheckin(req.params.id, req.params.checkinId);
-      if (!ok) return res.status(404).json({ error: "Checkin not found" });
-      res.json({ success: true });
-    } else {
-      res.status(501).json({ error: "Checkin deletion not supported" });
-    }
+    const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
+    if (!ok) return res.status(404).json({ error: "Checkin not found" });
+    res.json({ success: true });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {
@@ -1372,14 +1369,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id/restore", asyncHandler(async (req, res) => {
-    if (typeof (storage as any).restoreHabit === 'function') {
-      const ok = await (storage as any).restoreHabit(req.params.id);
-      if (!ok) return res.status(404).json({ error: "Habit not found" });
-      const habit = await storage.getHabit(req.params.id);
-      res.json(habit || { id: req.params.id, restored: true });
-    } else {
-      res.status(501).json({ error: "Restore not supported" });
-    }
+    const ok = await storage.restoreHabit(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Habit not found" });
+    const habit = await storage.getHabit(req.params.id);
+    res.json(habit || { id: req.params.id, restored: true });
   }));
 
   // ---- Obligations ----
@@ -1902,12 +1895,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Data Cleanup ----
   // Migrate base64 documents from DB to Supabase Storage
   app.post("/api/cleanup/migrate-documents-to-storage", asyncHandler(async (_req, res) => {
-    if (typeof (storage as any).migrateDocumentsToStorage === 'function') {
-      const result = await (storage as any).migrateDocumentsToStorage();
-      res.json(result);
-    } else {
-      res.json({ migrated: 0, errors: ["Not using Supabase storage"] });
-    }
+    const result = await storage.migrateDocumentsToStorage();
+    res.json(result);
   }));
 
   app.post("/api/cleanup/tracker-entries", asyncHandler(async (req, res) => {
@@ -2626,7 +2615,12 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       if (jsonStr.startsWith("```")) {
         jsonStr = jsonStr.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
       }
-      const digestData = JSON.parse(jsonStr);
+      let digestData: any;
+      try {
+        digestData = JSON.parse(jsonStr);
+      } catch {
+        digestData = {};
+      }
 
       // Build week summary
       const weekSummary = {
@@ -2777,8 +2771,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   app.post("/api/entity-links", asyncHandler(async (req, res) => {
     try {
-      const parsed = insertEntityLinkSchema.parse(req.body);
-      const link = await storage.createEntityLink(parsed);
+      const parsed = insertEntityLinkSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      const link = await storage.createEntityLink(parsed.data);
       res.json(link);
     } catch (err: any) {
       console.error("Create entity link error:", err);
@@ -2799,7 +2794,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   // ---- Income ----
   app.get("/api/incomes", asyncHandler(async (req, res) => {
-    let incomes = await (storage as any).getIncomes();
+    let incomes = await storage.getIncomes();
     // Support profile filtering: ?profileIds=x,y or ?profileId=x
     const fps = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
@@ -2814,18 +2809,18 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   }));
 
   app.post("/api/incomes", asyncHandler(async (req, res) => {
-    const income = await (storage as any).createIncome(req.body);
+    const income = await storage.createIncome(req.body);
     res.status(201).json(income);
   }));
 
   app.patch("/api/incomes/:id", asyncHandler(async (req, res) => {
-    const income = await (storage as any).updateIncome(req.params.id, req.body);
+    const income = await storage.updateIncome(req.params.id, req.body);
     if (!income) return res.status(404).json({ error: "Not found" });
     res.json(income);
   }));
 
   app.delete("/api/incomes/:id", asyncHandler(async (req, res) => {
-    const ok = await (storage as any).deleteIncome(req.params.id);
+    const ok = await storage.deleteIncome(req.params.id);
     res.json({ success: ok });
   }));
 
@@ -3087,7 +3082,12 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         timeout: 30000,
         encoding: "utf-8",
       });
-      const result = JSON.parse(stdout);
+      let result: any;
+      try {
+        result = JSON.parse(stdout);
+      } catch {
+        result = {};
+      }
 
       // Mark the event as synced
       await storage.updateEvent(event.id, { source: "external" } as Partial<CalendarEvent>);

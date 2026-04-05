@@ -8,7 +8,11 @@ import type { ParsedAction } from "@shared/schema";
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
   if (!_client) {
-    _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new Error("ANTHROPIC_API_KEY environment variable is not set");
+    }
+    _client = new Anthropic({ apiKey });
   }
   return _client;
 }

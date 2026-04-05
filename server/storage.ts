@@ -24,6 +24,7 @@ import {
   type MoodLevel,
   type Goal, type InsertGoal,
   type EntityLink, type InsertEntityLink,
+  type Income, type InsertIncome,
   MOOD_SCORES,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -155,6 +156,18 @@ export interface IStorage {
   // Preferences
   getPreference(key: string): Promise<string | null>;
   setPreference(key: string, value: string): Promise<void>;
+
+  // Income
+  getIncomes(): Promise<Income[]>;
+  createIncome(data: InsertIncome): Promise<Income>;
+  updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined>;
+  deleteIncome(id: string): Promise<boolean>;
+
+  // Soft-delete restore & misc
+  restoreTask(id: string): Promise<boolean>;
+  restoreHabit(id: string): Promise<boolean>;
+  deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean>;
+  migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }>;
 }
 
 // ---- Human-readable tracker value formatting ----
@@ -1652,6 +1665,29 @@ export class MemStorage implements IStorage {
   async setPreference(key: string, value: string): Promise<void> {
     this.preferences.set(key, value);
   }
+
+  // Income stubs (in-memory)
+  private incomes = new Map<string, Income>();
+  async getIncomes(): Promise<Income[]> { return Array.from(this.incomes.values()); }
+  async createIncome(data: InsertIncome): Promise<Income> {
+    const income: Income = { ...data, id: randomUUID(), createdAt: new Date().toISOString() } as Income;
+    this.incomes.set(income.id, income);
+    return income;
+  }
+  async updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined> {
+    const existing = this.incomes.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...data };
+    this.incomes.set(id, updated);
+    return updated;
+  }
+  async deleteIncome(id: string): Promise<boolean> { return this.incomes.delete(id); }
+
+  // Soft-delete restore stubs
+  async restoreTask(_id: string): Promise<boolean> { return false; }
+  async restoreHabit(_id: string): Promise<boolean> { return false; }
+  async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
+  async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
 }
 
 // Storage factory — uses Supabase if env vars are set, otherwise falls back to SQLite
