@@ -117,7 +117,7 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
     } catch (err: any) {
       console.error(`[API Error] ${req.method} ${req.path}:`, err?.message || err);
       if (!res.headersSent) {
-        res.status(500).json({ error: err?.message || "Internal server error" });
+        res.status(500).json({ error: "Internal server error" });
       }
     }
   };
@@ -192,7 +192,7 @@ export async function registerRoutes(
         return res.status(504).json({ error: "Request timed out.", reply: "That took too long. Could you try a simpler question, or try again?" });
       }
       const detail = process.env.NODE_ENV !== 'production' ? msg : undefined;
-      res.status(500).json({ error: "Failed to process message", reply: `Something went wrong: ${msg.slice(0, 200)}. Please try again.`, detail });
+      res.status(500).json({ error: "Failed to process message", reply: "Something went wrong. Please try again.", ...(detail !== undefined && { detail }) });
     }
   }));
 
@@ -664,7 +664,7 @@ export async function registerRoutes(
       .select("*")
       .order("category")
       .order("sort_order");
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error("[api]", error.message); return res.status(500).json({ error: "Failed to load data" }); }
     res.json(data);
   }));
 
@@ -788,7 +788,8 @@ export async function registerRoutes(
       }
       res.json({ ok: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || "Link failed" });
+      console.error("[profile-link]", err?.message || err);
+      res.status(500).json({ error: "Link failed" });
     }
   }));
 
@@ -1281,7 +1282,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const doc = await storage.createDocument(req.body);
       res.status(201).json(doc);
     } catch (err: any) {
-      res.status(400).json({ error: err.message || "Failed to create document" });
+      console.error("[documents]", err?.message || err);
+      res.status(400).json({ error: "Failed to create document" });
     }
   }));
   app.patch("/api/documents/:id", asyncHandler(async (req, res) => {
@@ -1534,7 +1536,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const parsed = insertMemorySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     try { res.status(201).json(await storage.saveMemory(parsed.data)); }
-    catch (err: any) { res.status(500).json({ error: err.message || "Failed to save memory" }); }
+    catch (err: any) { console.error("[memories]", err?.message || err); res.status(500).json({ error: "Failed to save memory" }); }
   }));
   app.get("/api/memories/recall", asyncHandler(async (req, res) => {
     const q = (req.query.q as string) || "";
@@ -2781,7 +2783,8 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       res.json(link);
     } catch (err: any) {
       console.error("Create entity link error:", err);
-      res.status(400).json({ error: err.message || "Failed to create entity link" });
+      console.error("[entity-link]", err?.message || err);
+      res.status(400).json({ error: "Failed to create entity link" });
     }
   }));
 
@@ -2838,7 +2841,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       .eq("user_id", (storage as any).userId)
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error("[api]", error.message); return res.status(500).json({ error: "Failed to load data" }); }
     res.json(data || []);
   }));
 
