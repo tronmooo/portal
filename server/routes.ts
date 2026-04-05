@@ -100,12 +100,12 @@ function isValidDateStr(d: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
 }
 
-// Pagination helper — applies ?limit= and ?offset= to any array
-function paginate<T>(items: T[], req: any): { data: T[]; total: number; limit: number; offset: number } {
-  const total = items.length;
-  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || total, 1), 500);
+// Pagination helper — applies ?limit= and ?offset= to any array and sets X-Total-Count header
+function paginate<T>(items: T[], req: any, res: any): T[] {
+  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 100, 1), 500);
   const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
-  return { data: items.slice(offset, offset + limit), total, limit, offset };
+  res.set("X-Total-Count", String(items.length));
+  return items.slice(offset, offset + limit);
 }
 
 // Wrap async route handlers to catch unhandled errors and send 500 instead of crashing
@@ -683,7 +683,7 @@ export async function registerRoutes(
   }));
 
   // ---- Profiles ----
-  app.get("/api/profiles", asyncHandler(async (req, res) => { const items = await storage.getProfiles(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
+  app.get("/api/profiles", asyncHandler(async (req, res) => { const items = await storage.getProfiles(); res.json(paginate(items, req, res)); }));
   app.get("/api/profiles/:id", asyncHandler(async (req, res) => {
     const profile = await storage.getProfile(req.params.id);
     if (!profile) return res.status(404).json({ error: "Not found" });
@@ -976,7 +976,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = items.filter(t => (t.linkedProfiles || []).some(pid => ids.includes(pid)));
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);
@@ -1096,7 +1096,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return lp.some(id => filterProfileIds.includes(id)) || (hasSelf && lp.length === 0);
       });
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
     const tasks = await storage.getTasks();
@@ -1164,7 +1164,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.query.to && typeof req.query.to === "string") {
       items = items.filter(e => e.date <= (req.query.to as string));
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.get("/api/expenses/:id", asyncHandler(async (req, res) => {
     const expense = await storage.getExpense(req.params.id);
@@ -1218,7 +1218,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = items.filter(e => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
@@ -1264,7 +1264,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Documents ----
-  app.get("/api/documents", asyncHandler(async (req, res) => { const items = await storage.getDocuments(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
+  app.get("/api/documents", asyncHandler(async (req, res) => { const items = await storage.getDocuments(); res.json(paginate(items, req, res)); }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
@@ -1333,7 +1333,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return lp.includes(fp) || (isSelf && lp.length === 0);
       });
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
@@ -1397,7 +1397,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return lp.includes(fp) || (isSelf && lp.length === 0);
       });
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
@@ -1451,7 +1451,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = items.filter(a => (a.linkedProfiles || []).some(pid => ids.includes(pid)));
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.get("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const artifact = await storage.getArtifact(req.params.id);
@@ -1496,7 +1496,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // Journal entries are personal — only show for self profile
       if (!isSelf) { items = []; }
     }
-    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+    res.json(paginate(items, req, res));
   }));
   app.post("/api/journal", asyncHandler(async (req, res) => {
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
@@ -1564,7 +1564,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Domains ----
-  app.get("/api/domains", asyncHandler(async (req, res) => { const items = await storage.getDomains(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
+  app.get("/api/domains", asyncHandler(async (req, res) => { const items = await storage.getDomains(); res.json(paginate(items, req, res)); }));
   app.post("/api/domains", asyncHandler(async (req, res) => {
     const parsed = insertDomainSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
@@ -2681,7 +2681,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
           return false;
         });
       }
-      res.json(goals.slice(0, 500));
+      res.json(paginate(goals, req, res));
     } catch (err: any) {
       console.error("Goals error:", err);
       res.status(500).json({ error: "Failed to get goals" });
