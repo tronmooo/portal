@@ -4159,6 +4159,13 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
     },
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
+  const clearLoanMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields: { originalAmount: null, loanBalance: null, interestRate: null, termMonths: null, monthlyPayment: null, lender: null, loanStartDate: null } });
+    },
+    onSuccess: () => { toast({ title: "Loan data cleared" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/profiles"] }); },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
 
   // Derive term from monthly payment if not provided
   const derivedTermLocal = termMonths || (() => {
@@ -4280,17 +4287,22 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
           {/* Loan Summary KPIs */}
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-semibold text-muted-foreground">Loan Summary</h3>
-            <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => {
-              setFormBalance(String(loanBalance || ""));
-              setFormRate(String(interestRate || ""));
-              setFormTerm(String(termMonths || ""));
-              setFormPayment(String(monthlyPayment || ""));
-              setFormLender(lender);
-              setFormStartDate(startDate);
-              setEditing(true);
-            }} data-testid="button-edit-loan">
-              <Pencil className="h-3 w-3" /> Edit
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => {
+                setFormBalance(String(loanBalance || ""));
+                setFormRate(String(interestRate || ""));
+                setFormTerm(String(termMonths || ""));
+                setFormPayment(String(monthlyPayment || ""));
+                setFormLender(lender);
+                setFormStartDate(startDate);
+                setEditing(true);
+              }} data-testid="button-edit-loan">
+                <Pencil className="h-3 w-3" /> Edit
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-destructive hover:text-destructive" onClick={() => clearLoanMutation.mutate()} disabled={clearLoanMutation.isPending} data-testid="button-clear-loan">
+                <Trash2 className="h-3 w-3" /> {clearLoanMutation.isPending ? "Clearing..." : "Clear"}
+              </Button>
+            </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <Card className="p-3 text-center">
@@ -4415,6 +4427,21 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
   const endDate = f.warrantyEndDate || f.warranty;
   const isActive = endDate ? new Date(endDate) > new Date() : false;
   const claims = (profile.relatedExpenses || []).filter((e: any) => (e.category || "").toLowerCase().includes("warranty"));
+  const [showAdd, setShowAdd] = useState(false);
+  const [claimDesc, setClaimDesc] = useState("");
+  const [claimAmt, setClaimAmt] = useState("");
+  const [claimDate, setClaimDate] = useState(new Date().toISOString().slice(0, 10));
+  const addClaimMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/expenses", { description: claimDesc || "Warranty Claim", amount: Number(claimAmt), date: claimDate, category: "warranty_claim", linkedProfiles: [profileId] });
+      return res.json();
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); setShowAdd(false); setClaimDesc(""); setClaimAmt(""); onChanged(); },
+  });
+  const deleteClaimMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+  });
   const warrantyFields = [
     { key: "warrantyEndDate", label: "Warranty Until" },
     { key: "warrantyProvider", label: "Provider" },
@@ -4438,19 +4465,32 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
           ))}
         </CardContent>
       </Card>
-      {claims.length > 0 && (
-        <Card>
-          <CardContent className="pt-4 pb-3">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Warranty Claims ({claims.length})</p>
-            {claims.map((c: any) => (
-              <div key={c.id} className="flex justify-between py-1.5 border-b border-border/30 last:border-0">
-                <span className="text-xs">{c.description || "Claim"}</span>
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Warranty Claims ({claims.length})</p>
+            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-claim"><Plus className="h-3 w-3" />Add Claim</Button>}
+          </div>
+          {showAdd && (
+            <div className="flex items-center gap-2 mb-2">
+              <Input className="h-7 text-xs flex-1" placeholder="Description" value={claimDesc} onChange={e => setClaimDesc(e.target.value)} data-testid="input-claim-desc" />
+              <Input className="h-7 text-xs w-20" placeholder="Amount" value={claimAmt} onChange={e => setClaimAmt(e.target.value)} data-testid="input-claim-amount" />
+              <Input className="h-7 text-xs w-28" type="date" value={claimDate} onChange={e => setClaimDate(e.target.value)} data-testid="input-claim-date" />
+              <Button size="sm" className="h-7 text-xs px-2" onClick={() => addClaimMutation.mutate()} disabled={addClaimMutation.isPending} data-testid="button-save-claim">Save</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs px-1" onClick={() => setShowAdd(false)} data-testid="button-cancel-claim">✕</Button>
+            </div>
+          )}
+          {claims.length > 0 ? claims.map((c: any) => (
+            <div key={c.id} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
+              <span className="text-xs">{c.description || "Claim"}</span>
+              <div className="flex items-center gap-2">
                 <span className="text-xs font-medium">{c.amount ? formatCurrency(Number(c.amount)) : "—"}</span>
+                <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteClaimMutation.mutate(c.id)} data-testid={`button-delete-claim-${c.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
               </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+            </div>
+          )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No claims recorded</p>}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -4465,6 +4505,22 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
   const balance = Number(f.rewardsBalance) || 0;
   const ppd = Number(f.pointsPerDollar) || 1;
   const redemptionValue = ppd > 0 ? (balance / (ppd * 100)).toFixed(2) : "0.00";
+  const redemptions = (profile.relatedExpenses || []).filter((e: any) => (e.category || "").toLowerCase().includes("reward") || (e.category || "").toLowerCase().includes("redemption"));
+  const [showAdd, setShowAdd] = useState(false);
+  const [redDesc, setRedDesc] = useState("");
+  const [redPts, setRedPts] = useState("");
+  const [redDate, setRedDate] = useState(new Date().toISOString().slice(0, 10));
+  const addRedemptionMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/expenses", { description: redDesc || "Rewards Redemption", amount: Number(redPts), date: redDate, category: "rewards_redemption", linkedProfiles: [profileId] });
+      return res.json();
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); setShowAdd(false); setRedDesc(""); setRedPts(""); onChanged(); },
+  });
+  const deleteRedemptionMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+  });
   return (
     <div className="space-y-3" data-testid="rewards-tab">
       <Card>
@@ -4479,6 +4535,35 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
               <span className="text-sm font-bold text-green-600">${redemptionValue}</span>
             </div>
           )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Redemptions ({redemptions.length})</p>
+            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-redemption"><Plus className="h-3 w-3" />Record Redemption</Button>}
+          </div>
+          {showAdd && (
+            <div className="flex items-center gap-2 mb-2">
+              <Input className="h-7 text-xs flex-1" placeholder="Description" value={redDesc} onChange={e => setRedDesc(e.target.value)} data-testid="input-redemption-desc" />
+              <Input className="h-7 text-xs w-20" placeholder="Points" value={redPts} onChange={e => setRedPts(e.target.value)} data-testid="input-redemption-points" />
+              <Input className="h-7 text-xs w-28" type="date" value={redDate} onChange={e => setRedDate(e.target.value)} data-testid="input-redemption-date" />
+              <Button size="sm" className="h-7 text-xs px-2" onClick={() => addRedemptionMutation.mutate()} disabled={addRedemptionMutation.isPending} data-testid="button-save-redemption">Save</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs px-1" onClick={() => setShowAdd(false)} data-testid="button-cancel-redemption">✕</Button>
+            </div>
+          )}
+          {redemptions.length > 0 ? redemptions.map((r: any) => (
+            <div key={r.id} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
+              <div className="min-w-0 flex-1">
+                <span className="text-xs">{r.description || "Redemption"}</span>
+                <span className="text-[10px] text-muted-foreground ml-2">{r.date ? new Date(r.date).toLocaleDateString() : ""}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium tabular-nums">{r.amount ? formatCurrency(Number(r.amount)) : "—"}</span>
+                <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteRedemptionMutation.mutate(r.id)} data-testid={`button-delete-redemption-${r.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+              </div>
+            </div>
+          )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No redemptions recorded</p>}
         </CardContent>
       </Card>
     </div>
@@ -4529,7 +4614,53 @@ function AccessTab({ profile, profileId, onChanged }: { profile: any; profileId:
           <GroupedInlineField profileId={profileId} fieldKey="apiKey" label="API Key" value={f.apiKey} onSaved={onChanged} />
         </CardContent>
       </Card>
+      <CredentialsList profileId={profileId} fields={f} onChanged={onChanged} />
     </div>
+  );
+}
+
+function CredentialsList({ profileId, fields, onChanged }: { profileId: string; fields: any; onChanged: () => void }) {
+  const credentials: { label: string; username: string; url: string }[] = (() => { try { return Array.isArray(fields.credentials) ? fields.credentials : JSON.parse(fields.credentials || "[]"); } catch { return []; } })();
+  const [showAdd, setShowAdd] = useState(false);
+  const [cLabel, setCLabel] = useState("");
+  const [cUser, setCUser] = useState("");
+  const [cUrl, setCUrl] = useState("");
+  const saveMutation = useMutation({
+    mutationFn: async (updatedCreds: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { ...fields, credentials: updatedCreds } }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); onChanged(); },
+  });
+  const handleAdd = () => { saveMutation.mutate([...credentials, { label: cLabel, username: cUser, url: cUrl }]); setShowAdd(false); setCLabel(""); setCUser(""); setCUrl(""); };
+  const handleDelete = (idx: number) => { saveMutation.mutate(credentials.filter((_, i) => i !== idx)); };
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Saved Credentials ({credentials.length})</p>
+          {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-credential"><Plus className="h-3 w-3" />Add Credential</Button>}
+        </div>
+        {showAdd && (
+          <div className="flex items-center gap-2 mb-2">
+            <Input className="h-7 text-xs flex-1" placeholder="Label" value={cLabel} onChange={e => setCLabel(e.target.value)} data-testid="input-cred-label" />
+            <Input className="h-7 text-xs flex-1" placeholder="Username" value={cUser} onChange={e => setCUser(e.target.value)} data-testid="input-cred-username" />
+            <Input className="h-7 text-xs flex-1" placeholder="URL" value={cUrl} onChange={e => setCUrl(e.target.value)} data-testid="input-cred-url" />
+            <Button size="sm" className="h-7 text-xs px-2" onClick={handleAdd} disabled={saveMutation.isPending || !cLabel} data-testid="button-save-credential">Save</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs px-1" onClick={() => setShowAdd(false)} data-testid="button-cancel-credential">✕</Button>
+          </div>
+        )}
+        {credentials.length > 0 ? credentials.map((c, i) => (
+          <div key={i} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
+            <div className="min-w-0 flex-1">
+              <span className="text-xs font-medium">{c.label}</span>
+              {c.username && <span className="text-[10px] text-muted-foreground ml-2">{c.username}</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              {c.url && <a href={c.url.startsWith("http") ? c.url : `https://${c.url}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline" data-testid={`link-cred-${i}`}><ExternalLink className="h-3 w-3" /></a>}
+              <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-cred-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+            </div>
+          </div>
+        )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No saved credentials</p>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -4622,7 +4753,53 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
           ))}
         </CardContent>
       </Card>
+      <AppraisalsList profileId={profileId} fields={f} onChanged={onChanged} />
     </div>
+  );
+}
+
+function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; fields: any; onChanged: () => void }) {
+  const appraisals: { date: string; value: string; source: string }[] = (() => { try { return Array.isArray(fields.appraisals) ? fields.appraisals : JSON.parse(fields.appraisals || "[]"); } catch { return []; } })();
+  const [showAdd, setShowAdd] = useState(false);
+  const [aDate, setADate] = useState(new Date().toISOString().slice(0, 10));
+  const [aValue, setAValue] = useState("");
+  const [aSource, setASource] = useState("");
+  const saveMutation = useMutation({
+    mutationFn: async (updated: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { ...fields, appraisals: updated } }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); onChanged(); },
+  });
+  const handleAdd = () => { saveMutation.mutate([...appraisals, { date: aDate, value: aValue, source: aSource }]); setShowAdd(false); setAValue(""); setASource(""); };
+  const handleDelete = (idx: number) => { saveMutation.mutate(appraisals.filter((_, i) => i !== idx)); };
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Appraisals ({appraisals.length})</p>
+          {!showAdd && <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-appraisal"><Plus className="h-3 w-3" />Add Appraisal</Button>}
+        </div>
+        {showAdd && (
+          <div className="flex items-center gap-2 mb-2">
+            <Input className="h-7 text-xs w-28" type="date" value={aDate} onChange={e => setADate(e.target.value)} data-testid="input-appraisal-date" />
+            <Input className="h-7 text-xs w-24" placeholder="Value" value={aValue} onChange={e => setAValue(e.target.value)} data-testid="input-appraisal-value" />
+            <Input className="h-7 text-xs flex-1" placeholder="Source" value={aSource} onChange={e => setASource(e.target.value)} data-testid="input-appraisal-source" />
+            <Button size="sm" className="h-7 text-xs px-2" onClick={handleAdd} disabled={saveMutation.isPending || !aValue} data-testid="button-save-appraisal">Save</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs px-1" onClick={() => setShowAdd(false)} data-testid="button-cancel-appraisal">✕</Button>
+          </div>
+        )}
+        {appraisals.length > 0 ? appraisals.map((a, i) => (
+          <div key={i} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
+            <div className="min-w-0 flex-1">
+              <span className="text-xs font-medium">{a.value ? `$${a.value}` : "—"}</span>
+              {a.source && <span className="text-[10px] text-muted-foreground ml-2">{a.source}</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground tabular-nums">{a.date ? new Date(a.date).toLocaleDateString() : ""}</span>
+              <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-appraisal-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+            </div>
+          </div>
+        )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No appraisals recorded</p>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -4689,6 +4866,10 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
+  const deletePayMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+  });
 
   return (
     <div className="space-y-3" data-testid="payments-tab">
@@ -4722,9 +4903,12 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Payment History</p>
             <div className="divide-y divide-border/30">
               {paymentHistory.slice(0, 10).map((p: any) => (
-                <div key={p.id} className="flex justify-between py-1.5">
+                <div key={p.id} className="group flex justify-between items-center py-1.5">
                   <span className="text-xs text-muted-foreground">{p.date ? new Date(p.date).toLocaleDateString() : "—"}</span>
-                  <span className="text-xs font-medium tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
+                    <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deletePayMutation.mutate(p.id)} data-testid={`button-delete-payment-${p.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -4864,6 +5048,10 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
     },
     onError: (err: Error) => toast({ title: "Failed to sync", description: formatApiError(err), variant: "destructive" }),
   });
+  const deleteSubPayMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+  });
 
   return (
     <div className="space-y-4" data-testid="subscription-billing-tab">
@@ -4918,12 +5106,15 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
           {expenses.length > 0 ? (
             <div className="space-y-0.5">
               {expenses.map((exp) => (
-                <div key={exp.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`payment-row-${exp.id}`}>
+                <div key={exp.id} className="group flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`payment-row-${exp.id}`}>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium truncate">{exp.description || "Payment"}</p>
                     <p className="text-[10px] text-muted-foreground tabular-nums">{new Date(exp.date).toLocaleDateString()}</p>
                   </div>
-                  <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
+                    <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteSubPayMutation.mutate(exp.id)} data-testid={`button-delete-sub-payment-${exp.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                  </div>
                 </div>
               ))}
             </div>

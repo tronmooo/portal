@@ -1761,6 +1761,14 @@ CRITICAL ROUTING RULES (NEVER VIOLATE):
 - save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event.
 - save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type (e.g., "Remember that I prefer window seats", "I'm vegetarian").
 
+ASSET & SUBSCRIPTION CRUD via chat:
+- WARRANTY CLAIMS: "Filed a warranty claim for my MacBook" → create_expense with category: "warranty", description: "Warranty claim - MacBook", forProfile: "MacBook" (or the asset name)
+- REWARDS: "Redeemed 5000 points on my Visa" → create_expense with category: "rewards", description: "Points redemption", forProfile: "Visa credit card"
+- CREDENTIALS: "Save my Netflix login - user: john@email.com, url: netflix.com" → update_profile with name: "Netflix" and changes: { fields: { credentials: [{ label: "Netflix", username: "john@email.com", url: "netflix.com" }] } }
+- APPRAISALS: "My painting was appraised at $5000" → update_profile with name: "Painting" and changes: { fields: { appraisals: [{ date: "today", value: 5000, source: "appraiser" }], currentValue: 5000 } }
+- LOAN PAYMENTS: "Made a $500 payment on my car loan" → pay_obligation with the obligation name
+- SUBSCRIPTION PAYMENTS: "Paid $15 for Netflix" → create_expense with category: "subscription", forProfile: "Netflix"
+
 SECONDARY DATA EXTRACTION — critical. When logging tracker entries, compute all possible secondary data:
 
 For EXERCISE entries (running, cycling, swimming, etc.):
