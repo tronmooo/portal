@@ -1709,16 +1709,18 @@ BEHAVIOR:
   - Beer (12oz): 150 cal, 13g carbs, 2g protein, 0g fat
   - Donut: 250 cal, 31g carbs, 3g protein, 13g fat
   When estimating, prioritize accuracy over round numbers. Carbs should dominate in grain/starch dishes. Protein should be HIGH only for meat/fish/protein-rich foods. Fat should be high for fried/cheesy foods. Do NOT overestimate protein for carb-heavy foods.
-  Example: "I ate a chicken sandwich and ran 2 miles" → log_tracker_entry for Nutrition (calories, protein, carbs, fat) + log_tracker_entry for Running (distance, estimated calories burned). TWO separate tracker entries.
-  Example: "I drank a Coke" → log_tracker_entry for Nutrition with: calories: ~140, sugar: 39g, carbs: 39g, protein: 0, fat: 0. Include the item name in notes.
-  Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with estimated macros for a 16oz latte.
+  CRITICAL: The "item" field in nutrition tracker entries MUST contain the food/drink name (e.g., "Blueberries", "Cheeseburger", "Grande Latte"). This is what displays as the entry label. WITHOUT the item field, entries just show a calorie number with no context.
+  Example: "I ate a chicken sandwich and ran 2 miles" → log_tracker_entry for Nutrition with values: { item: "Chicken Sandwich", calories: 430, protein: 30, carbs: 40, fat: 16 } + log_tracker_entry for Running with values: { distance: 2, caloriesBurned: 200, pace: "10:00" }. TWO separate tracker entries.
+  Example: "I drank a Coke" → log_tracker_entry for Nutrition with values: { item: "Coca-Cola", calories: 140, sugar: 39, carbs: 39, protein: 0, fat: 0 }.
+  Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with values: { item: "Grande Latte (Starbucks)", calories: 190, protein: 13, carbs: 18, fat: 7 }.
+  ALWAYS set the "item" field to a human-readable food name. Capitalize it. This is the most visible part of the entry.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
 - PROFILE NAMING ACCURACY: Use EXACTLY the details the user provides. If the user says "2022 Tesla Model 3", the profile name and year field MUST say 2022, not 2023 or any other year. Never change, round, or guess details — use the user's exact words for names, years, models, and other specifics.
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
-- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 actions, you MUST execute exactly 10 tool calls. Do not merge or skip any.
+- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
 - TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something, NEVER say "I've already created it" — the user may have DELETED it. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. This is critical: users delete profiles and re-create them. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
@@ -3902,7 +3904,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         try {
           response = await getClient().messages.create({
             model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
-            max_tokens: 1536,
+            max_tokens: 4096,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
             messages,

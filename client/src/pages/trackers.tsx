@@ -2340,12 +2340,15 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
           </div>
         ) : filtered.map((entry, idx) => {
           const val = entry.values[primaryField];
-          const allVals = Object.entries(entry.values).filter(([k, v]) => v != null && v !== "" && k !== "_notes");
+          const allVals = Object.entries(entry.values).filter(([k, v]) => v != null && v !== "" && k !== "_notes" && k !== "item");
           const notes = entry.values["_notes"] as string | undefined;
+          const itemName = entry.values["item"] as string | undefined;
           const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"];
           const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"];
           const isBPEntry = typeof bpS === "number" && typeof bpD === "number";
+          const isNutrition = tracker.category === "nutrition" || tracker.name.toLowerCase().includes("nutrition") || tracker.name.toLowerCase().includes("calorie");
           const displayVal = isBPEntry ? `${bpS}/${bpD} mmHg`
+            : isNutrition && itemName ? `${itemName} — ${val ?? "?"} ${tracker.unit || "cal"}`
             : val != null ? `${val} ${tracker.unit || ""}`
             : allVals.length > 0 ? allVals.map(([k, v]) => `${k}: ${v}`).join(", ")
             : "(empty)";
@@ -3367,6 +3370,8 @@ export default function TrackersPage() {
             const rv = last?.values;
             const pv = typeof rv === 'string' ? (() => { try { return JSON.parse(rv); } catch { return null; } })() : rv;
             const latestVal = pv?.[pf] ?? (pv ? Object.values(pv).find(v => typeof v === 'number') : null);
+            const latestItem = pv?.["item"] as string | undefined;
+            const isNutritionTracker = tracker.category === "nutrition" || tracker.name.toLowerCase().includes("nutrition") || tracker.name.toLowerCase().includes("calorie");
 
             // 7d average
             const week = entries.filter(e => Date.now() - new Date(e.timestamp).getTime() < 7 * 86400000);
@@ -3392,6 +3397,8 @@ export default function TrackersPage() {
               const sys = pv.systolic || pv.sys || latestVal;
               const dia = pv.diastolic || pv.dia;
               displayVal = dia ? `${sys}/${dia}` : String(sys || "—");
+            } else if (isNutritionTracker && latestItem) {
+              displayVal = latestItem;
             } else if (latestVal != null) {
               displayVal = typeof latestVal === 'number' ? Number(latestVal).toFixed(1) : String(latestVal);
             }
