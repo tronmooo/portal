@@ -2292,9 +2292,47 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "log_tracker_entry": {
       const trackers = await storage.getTrackers();
       const trackerName = (input.trackerName || "").toLowerCase();
-      const tracker = trackers.find(
+
+      // Resolve forProfile FIRST so we can match the right tracker
+      const profiles = await storage.getProfiles();
+      let targetProfileId: string | undefined;
+      if (input.forProfile) {
+        const match = profiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
+        if (match) targetProfileId = match.id;
+      }
+      // If no forProfile specified, default to self
+      if (!targetProfileId) {
+        const selfProfile = profiles.find(p => p.type === "self");
+        if (selfProfile) targetProfileId = selfProfile.id;
+      }
+
+      // Find the right tracker: prefer one linked to the target profile
+      const nameMatches = trackers.filter(
         t => t.name.toLowerCase() === trackerName || t.name.toLowerCase().includes(trackerName)
       );
+      let tracker = nameMatches.length <= 1 ? nameMatches[0]
+        : (targetProfileId
+            ? nameMatches.find(t => (t.linkedProfiles || []).includes(targetProfileId!))
+              || nameMatches[0] // fallback to first match if none linked to target
+            : nameMatches[0]);
+
+      // If the found tracker belongs to a DIFFERENT profile, create a new one for the target
+      if (tracker && targetProfileId && nameMatches.length > 0) {
+        const trackerProfiles = tracker.linkedProfiles || [];
+        const belongsToOther = trackerProfiles.length > 0 && !trackerProfiles.includes(targetProfileId);
+        if (belongsToOther) {
+          // Check if there's already a tracker for this profile
+          const ownTracker = nameMatches.find(t => (t.linkedProfiles || []).includes(targetProfileId!));
+          if (ownTracker) {
+            tracker = ownTracker;
+          } else {
+            // Create a new tracker for the target profile instead of using someone else's
+            logger.info("ai", `Tracker "${tracker.name}" belongs to another profile — creating one for target profile`);
+            tracker = undefined as any; // fall through to auto-create below
+          }
+        }
+      }
+
       // Merge notes into values if provided
       const entryValues = { ...input.values };
       if (input.notes) entryValues._notes = input.notes;
@@ -2303,7 +2341,6 @@ async function executeTool(name: string, input: any): Promise<any> {
         const twoMinAgo = Date.now() - 120000;
         const recentDup = tracker.entries.find(e => {
           if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
-          // Compare primary numeric values
           const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           if (existingNums.length === 0 || newNums.length === 0) return false;
@@ -2311,18 +2348,10 @@ async function executeTool(name: string, input: any): Promise<any> {
         });
         if (recentDup) {
           logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
-          return recentDup; // Return existing instead of creating duplicate
+          return recentDup;
         }
-        // Resolve forProfile to actual profile ID
-        let forProfileId: string | undefined;
-        if (input.forProfile) {
-          const profiles = await storage.getProfiles();
-          const match = profiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
-          if (match) forProfileId = match.id;
-        }
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: forProfileId } as any);
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId } as any);
         await autoLinkToProfiles("tracker", tracker.id, tracker.name, input.forProfile);
-        // Auto-update any linked goals (e.g., running 1.5 mi updates 5K goal progress)
         await autoUpdateGoalProgress(tracker.id, entryValues);
         return entry;
       }
@@ -2340,22 +2369,32 @@ async function executeTool(name: string, input: any): Promise<any> {
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       });
-      // Resolve forProfile for new tracker entries too
-      let newForProfileId: string | undefined;
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        const match = profiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
-        if (match) newForProfileId = match.id;
-      }
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: newForProfileId } as any);
+      // Use already-resolved targetProfileId
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId } as any);
       await autoLinkToProfiles("tracker", newTracker.id, input.trackerName || "", input.forProfile);
       return entry;
     }
 
     case "create_tracker": {
-      // Dedup: check for existing tracker with same name
+      // Dedup: check for existing tracker with same name AND same profile
       const existingTrackers = await storage.getTrackers();
-      const dupTracker = existingTrackers.find(t => t.name.toLowerCase() === (input.name || "").toLowerCase());
+      const ctProfiles = await storage.getProfiles();
+      let ctTargetId: string | undefined;
+      if (input.forProfile) {
+        const match = ctProfiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
+        if (match) ctTargetId = match.id;
+      }
+      if (!ctTargetId) {
+        const selfP = ctProfiles.find(p => p.type === "self");
+        if (selfP) ctTargetId = selfP.id;
+      }
+      // Only match duplicates within the same profile — different profiles can have same tracker names
+      const dupTracker = existingTrackers.find(t => {
+        if (t.name.toLowerCase() !== (input.name || "").toLowerCase()) return false;
+        const lp = t.linkedProfiles || [];
+        if (lp.length === 0) return true; // unowned tracker = global match
+        return ctTargetId ? lp.includes(ctTargetId) : true;
+      });
       if (dupTracker) return dupTracker;
 
       const newTracker = await storage.createTracker({
