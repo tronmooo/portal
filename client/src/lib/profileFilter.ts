@@ -14,12 +14,18 @@ interface FilterState {
   selectedNames: string[]; // parallel array for display
 }
 
+// Clean up old storage keys to prevent stale filter state
+try {
+  localStorage.removeItem("portol_profile_filter_v2");
+  localStorage.removeItem("portol_profile_filter");
+  sessionStorage.removeItem("portol_profile_filter");
+} catch {}
+
 let _state: FilterState = loadFromStorage();
 
 function loadFromStorage(): FilterState {
   try {
-    // Try localStorage first (persistent), then sessionStorage (legacy)
-    const raw = localStorage.getItem(LOCAL_KEY) || sessionStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(LOCAL_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
   return { mode: "everyone", selectedIds: [], selectedNames: [] };
