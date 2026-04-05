@@ -795,6 +795,25 @@ export class SupabaseStorage implements IStorage {
         await this.supabase.from("profiles").update({ documents: profile.documents }).eq("id", profileId).eq("user_id", this.userId);
       }
     }
+
+    // Sync entity's linked_profiles JSONB (source of truth for profile filtering)
+    const tableMap: Record<string, string> = {
+      tracker: "trackers", expense: "expenses", task: "tasks",
+      event: "events", obligation: "obligations", document: "documents",
+      habit: "habits", goal: "goals",
+    };
+    const entityTable = tableMap[entityType];
+    if (entityTable) {
+      const { data: entityRow } = await this.supabase
+        .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single();
+      if (entityRow) {
+        const current: string[] = entityRow.linked_profiles || [];
+        if (!current.includes(profileId)) {
+          await this.supabase.from(entityTable).update({ linked_profiles: [...current, profileId] })
+            .eq("id", entityId).eq("user_id", this.userId);
+        }
+      }
+    }
   }
 
   async unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void> {
@@ -823,6 +842,26 @@ export class SupabaseStorage implements IStorage {
       .eq("source_id", profileId)
       .eq("target_type", entityType)
       .eq("target_id", entityId);
+
+    // Sync entity's linked_profiles JSONB (remove profile)
+    const tableMap: Record<string, string> = {
+      tracker: "trackers", expense: "expenses", task: "tasks",
+      event: "events", obligation: "obligations", document: "documents",
+      habit: "habits", goal: "goals",
+    };
+    const entityTable = tableMap[entityType];
+    if (entityTable) {
+      const { data: entityRow } = await this.supabase
+        .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single();
+      if (entityRow) {
+        const current: string[] = entityRow.linked_profiles || [];
+        const updated = current.filter(id => id !== profileId);
+        if (updated.length !== current.length) {
+          await this.supabase.from(entityTable).update({ linked_profiles: updated })
+            .eq("id", entityId).eq("user_id", this.userId);
+        }
+      }
+    }
   }
 
   /**
@@ -961,21 +1000,21 @@ export class SupabaseStorage implements IStorage {
 
     const id = randomUUID();
     const now = new Date().toISOString();
-    // Auto-link to self profile if no profiles are being set
-    let initialLinkedProfiles: string[] = [];
-    const selfProfile = await this.getSelfProfile();
-    if (selfProfile) {
-      initialLinkedProfiles = [selfProfile.id];
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = (data as any).linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
     }
     const { error } = await this.supabase.from("trackers").insert({
       id, user_id: this.userId, name: data.name, category: data.category || "custom",
       unit: data.unit || null, icon: data.icon || null, fields: data.fields || [],
-      linked_profiles: initialLinkedProfiles, created_at: now,
+      linked_profiles: linkedProfiles, created_at: now,
     });
     if (error) throw error;
-    // Also update the self profile's linkedTrackers
-    if (selfProfile) {
-      await this.linkProfileTo(selfProfile.id, "tracker", id);
+    // Link to profiles via junction table
+    for (const pId of linkedProfiles) {
+      await this.linkProfileTo(pId, "tracker", id);
     }
     this.logActivity("tracker", `Created tracker: ${data.name}`);
     return (await this.getTracker(id))!;
@@ -1081,6 +1120,7 @@ export class SupabaseStorage implements IStorage {
   async deleteTracker(id: string): Promise<boolean> {
     // Delete entries first, then the tracker
     await this.supabase.from("tracker_entries").delete().eq("tracker_id", id).eq("user_id", this.userId);
+    await this.supabase.from("profile_trackers").delete().eq("tracker_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -1138,6 +1178,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteTask(id: string): Promise<boolean> {
+    await this.supabase.from("profile_tasks").delete().eq("task_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("tasks").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -1201,6 +1242,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteExpense(id: string): Promise<boolean> {
+    await this.supabase.from("profile_expenses").delete().eq("expense_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("expenses").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -1315,6 +1357,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteEvent(id: string): Promise<boolean> {
+    await this.supabase.from("profile_events").delete().eq("event_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("events").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -1792,6 +1835,8 @@ export class SupabaseStorage implements IStorage {
     } catch (e: any) {
       console.error(`[deleteDocument] Profile cleanup error for ${id}:`, e.message);
     }
+    // Clean junction table
+    await this.supabase.from("profile_documents").delete().eq("document_id", id).eq("user_id", this.userId);
     // Soft delete the document
     const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     if (error) {
@@ -1995,13 +2040,22 @@ export class SupabaseStorage implements IStorage {
   async createObligation(data: InsertObligation): Promise<Obligation> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    // Auto-link to self profile if no profiles specified
+    let linkedProfiles = (data as any).linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("obligations").insert({
       id, user_id: this.userId, name: data.name, amount: data.amount,
       frequency: data.frequency || "monthly", category: data.category || "general",
       next_due_date: data.nextDueDate, autopay: data.autopay || false,
-      linked_profiles: (data as any).linkedProfiles || [], notes: data.notes || null, created_at: now,
+      linked_profiles: linkedProfiles, notes: data.notes || null, created_at: now,
     });
     if (error) throw error;
+    for (const pId of linkedProfiles) {
+      await this.linkProfileTo(pId, "obligation", id);
+    }
     this.logActivity("obligation", `Created obligation: ${data.name}`);
 
     // NOTE: Calendar events for obligations are generated dynamically by
@@ -2051,6 +2105,7 @@ export class SupabaseStorage implements IStorage {
 
   async deleteObligation(id: string): Promise<boolean> {
     await this.supabase.from("obligation_payments").delete().eq("obligation_id", id).eq("user_id", this.userId);
+    await this.supabase.from("profile_obligations").delete().eq("obligation_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("obligations").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }

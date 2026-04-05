@@ -3881,6 +3881,14 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
       break;
     }
   }
+
+  // Also sync to junction table (secondary index)
+  try {
+    await storage.linkProfileTo(profileId, entityType, entityId);
+  } catch (e: any) {
+    // Non-fatal: JSONB is the source of truth, junction is secondary
+    console.error(`[updateEntityLinkedProfiles] junction sync failed for ${entityType}/${entityId}:`, e.message);
+  }
 }
 
 // ============================================================

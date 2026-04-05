@@ -1205,7 +1205,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Events ----
-  app.get("/api/events", asyncHandler(async (req, res) => { const items = await storage.getEvents(); if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); } }));
+  app.get("/api/events", asyncHandler(async (req, res) => {
+    let items = await storage.getEvents();
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      items = items.filter(e => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
+    }
+    if (req.query.limit) { res.json(paginate(items, req)); } else { res.json(items.slice(0, 500)); }
+  }));
   app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: "Not found" });
@@ -1305,8 +1313,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Habits ----
   app.get("/api/habits", asyncHandler(async (req, res) => {
     let items = await storage.getHabits();
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
-    if (fp) {
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      items = items.filter(item => (item.linkedProfiles || []).some(pid => ids.includes(pid)));
+    } else if (fp) {
       const allProfiles = await storage.getProfiles();
       const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
       items = items.filter(item => {
