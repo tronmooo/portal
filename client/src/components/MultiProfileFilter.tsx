@@ -62,6 +62,33 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
     notify();
   }, [notify]);
 
+  // Validate stored filter IDs against actual profiles — fix corrupted localStorage
+  useEffect(() => {
+    if (!profiles || profiles.length === 0) return;
+    const current = getProfileFilter();
+    if (current.mode === "selected" && current.selectedIds.length > 0) {
+      const validIds = profiles.map(p => p.id);
+      const validSelected = current.selectedIds.filter(id => validIds.includes(id));
+      if (validSelected.length !== current.selectedIds.length) {
+        // Some stored IDs don't match any profile — clear the filter
+        console.warn("[Filter] Clearing invalid stored filter IDs");
+        setFilterEveryone();
+        notify();
+      } else {
+        // Verify names match (fix name/ID mismatch)
+        const correctedNames = validSelected.map(id => {
+          const p = profiles.find(pr => pr.id === id);
+          return p?.name || "Unknown";
+        });
+        const namesChanged = correctedNames.some((n, i) => n !== current.selectedNames[i]);
+        if (namesChanged) {
+          setFilterSelected(validSelected, correctedNames);
+          notify();
+        }
+      }
+    }
+  }, [profiles]);
+
   const typeFiltered = (profiles || []).filter(p => {
     if (profileTypes && profileTypes.length > 0) {
       return profileTypes.includes(p.type);
