@@ -3429,7 +3429,11 @@ export default function TrackersPage() {
               return `${Math.floor(hrs / 24)}d`;
             })() : "—";
 
-            const linkedProfile = profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
+            // Show owner badge: prefer the profile that matches the active filter to avoid showing "Rex" when filtering by "Me"
+            const linkedProfile = (filterMode === "selected" && filterIds.length > 0)
+              ? (profiles?.find(p => filterIds.includes(p.id) && tracker.linkedProfiles?.includes(p.id))
+                || profiles?.find(p => tracker.linkedProfiles?.includes(p.id)))
+              : profiles?.find(p => tracker.linkedProfiles?.includes(p.id));
 
             // === Dynamic KPIs per tracker type ===
             type KPI = { label: string; value: string; color?: string };
