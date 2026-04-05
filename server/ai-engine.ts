@@ -2351,7 +2351,8 @@ async function executeTool(name: string, input: any): Promise<any> {
           return recentDup;
         }
         const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId } as any);
-        await autoLinkToProfiles("tracker", tracker.id, tracker.name, input.forProfile);
+        // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
+        // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, entryValues);
         return entry;
       }
@@ -2361,17 +2362,29 @@ async function executeTool(name: string, input: any): Promise<any> {
       if (["nutrition","food","diet","meal","calories"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
       else if (["running","cycling","swimming","workout","exercise","walk"].some(k => nameLC.includes(k))) autoCategory = "fitness";
       else if (["weight","blood","bp","sleep","heart","cholesterol"].some(k => nameLC.includes(k))) autoCategory = "health";
+
+      // If creating for a non-self profile, append profile name to avoid name conflicts
+      // (DB has unique constraint on user_id + name)
+      let trackerDisplayName = input.trackerName || "Custom";
+      if (targetProfileId && targetProfileId !== profiles.find(p => p.type === "self")?.id) {
+        const targetProfile = profiles.find(p => p.id === targetProfileId);
+        if (targetProfile) trackerDisplayName = `${trackerDisplayName} - ${targetProfile.name}`;
+      }
+
       const newTracker = await storage.createTracker({
-        name: input.trackerName || "Custom",
+        name: trackerDisplayName,
         category: autoCategory,
         fields: Object.keys(input.values || {}).filter(k => k !== '_notes').map(k => ({
           name: k,
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       });
-      // Use already-resolved targetProfileId
+      // Link ONLY to the target profile — no autoLinkToProfiles to prevent cross-contamination
+      if (targetProfileId) {
+        try { await storage.linkProfileTo(targetProfileId, "tracker", newTracker.id); } catch (e: any) { /* ignore dup */ }
+        try { await updateEntityLinkedProfiles("tracker", newTracker.id, targetProfileId); } catch (e: any) { /* ignore */ }
+      }
       const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId } as any);
-      await autoLinkToProfiles("tracker", newTracker.id, input.trackerName || "", input.forProfile);
       return entry;
     }
 
