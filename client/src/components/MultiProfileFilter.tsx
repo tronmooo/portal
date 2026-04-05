@@ -7,7 +7,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
 import {
-  getProfileFilter, setFilterEveryone, toggleFilterProfile, getFilterLabel,
+  getProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile, getFilterLabel,
   type FilterMode,
 } from "@/lib/profileFilter";
 import { Filter, Users, User, Dog, Car, CreditCard, Package, Stethoscope, Building, Landmark, ChevronDown, X } from "lucide-react";

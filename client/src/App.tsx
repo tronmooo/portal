@@ -206,19 +206,21 @@ const sidebarStyle = {
 
 // Detect new deploys and force reload — prevents stale UI after deployments
 let _knownVersion: string | null = null;
-setInterval(async () => {
-  try {
-    const res = await fetch("/api/version", { cache: "no-store" });
-    if (res.ok) {
-      const { version } = await res.json();
-      if (_knownVersion && version !== _knownVersion) {
-        console.log("[Version] New deploy detected, reloading...");
-        window.location.reload();
+let _versionInterval: ReturnType<typeof setInterval> | null = null;
+if (!_versionInterval) {
+  _versionInterval = setInterval(async () => {
+    try {
+      const res = await fetch("/api/version", { cache: "no-store" });
+      if (res.ok) {
+        const { version } = await res.json();
+        if (_knownVersion && version !== _knownVersion) {
+          window.location.reload();
+        }
+        _knownVersion = version;
       }
-      _knownVersion = version;
-    }
-  } catch { /* offline, ignore */ }
-}, 30000); // Check every 30 seconds
+    } catch { /* offline, ignore */ }
+  }, 30000);
+}
 
 function App() {
   return (

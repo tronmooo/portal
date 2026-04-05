@@ -430,27 +430,11 @@ export async function registerRoutes(
         const VEHICLE_FIELDS = new Set(['make', 'model', 'year', 'vin', 'licensePlate', 'mileage', 'serviceType', 'registrationNumber', 'engineType', 'fuelType', 'color']);
 
         const profileFields: Record<string, any> = {};
-        const expenseData: { amount: number; description: string; category: string } | null = null;
 
         for (const field of confirmedFields) {
           const key = field.key;
           const val = unwrap(field.value);
-
-          // Route to profile personal info
-          if (PERSONAL_FIELDS.has(key) || VEHICLE_FIELDS.has(key)) {
-            profileFields[key] = val;
-          }
-
-          // Route financial amounts to expense creation
-          if (FINANCE_FIELDS.has(key) && val) {
-            const amount = typeof val === 'number' ? val : parseFloat(String(val));
-            if (amount && isFinite(amount) && amount > 0 && !expenseData) {
-              // Will create expense below
-              (expenseData as any) || Object.assign({}, { amount, description: '', category: 'general' });
-            }
-          }
-
-          // ALL fields go to profile.fields as well (generic storage)
+          // All fields go to profile.fields
           profileFields[key] = val;
         }
 
@@ -655,10 +639,10 @@ export async function registerRoutes(
 
   // ---- Profile Type Definitions (Registry) ----
   app.get("/api/profile-types", asyncHandler(async (_req, res) => {
-    const sb = createClient(
-      process.env.VITE_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supaUrl = process.env.VITE_SUPABASE_URL;
+    const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supaUrl || !supaKey) return res.json([]);
+    const sb = createClient(supaUrl, supaKey);
     const { data, error } = await sb
       .from("profile_type_definitions")
       .select("*")
@@ -669,10 +653,10 @@ export async function registerRoutes(
   }));
 
   app.get("/api/profile-types/:typeKey", asyncHandler(async (req, res) => {
-    const sb = createClient(
-      process.env.VITE_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supaUrl = process.env.VITE_SUPABASE_URL;
+    const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supaUrl || !supaKey) return res.status(501).json({ error: "Profile types not available in this environment" });
+    const sb = createClient(supaUrl, supaKey);
     const { data, error } = await sb
       .from("profile_type_definitions")
       .select("*")
@@ -1023,8 +1007,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (meaningfulKeys.length > 0 && !hasAtLeastOneValue) {
       return res.status(400).json({ error: "At least one value is required. Cannot log an empty entry." });
     }
-    if (Object.values(values).some((v: any) => typeof v === "number" && v < 0)) {
-      return res.status(400).json({ error: "Values must not be negative" });
+    // Only reject negative values for fields that can't be negative (calories, weight, distance)
+    // Allow negatives for: temperature, elevation, profit/loss, position change
+    const nonNegativeFields = new Set(['calories', 'weight', 'distance', 'duration', 'steps', 'heartRate', 'bpm', 'systolic', 'diastolic']);
+    for (const [k, v] of Object.entries(values)) {
+      if (typeof v === 'number' && v < 0 && nonNegativeFields.has(k)) {
+        return res.status(400).json({ error: `${k} cannot be negative` });
+      }
     }
     if (Object.values(values).some((v: any) => typeof v === "number" && isNaN(v))) {
       return res.status(400).json({ error: "All values must be valid numbers" });
@@ -1035,12 +1024,18 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (key === '_notes') continue;
       // Weight (human): max 1000 lbs
       if (key === 'weight' && val > 1000) return res.status(400).json({ error: `Weight ${val} lbs is unrealistic. Max: 1000 lbs.` });
-      // Weight (pet): max 500 lbs
+      // Weight (pet): max 500 lbs — check if the tracker is linked to a pet profile
       if (key === 'weight' && val > 500 && req.body.trackerId) {
-        // Check if this is a pet tracker by name
         const tracker = await storage.getTracker(req.params.id);
-        if (tracker && tracker.name.toLowerCase().includes('max')) {
-          return res.status(400).json({ error: `Pet weight ${val} lbs is unrealistic. Max: 500 lbs.` });
+        if (tracker) {
+          const profiles = await storage.getProfiles();
+          const isPetTracker = (tracker.linkedProfiles || []).some(pid => {
+            const p = profiles.find(pr => pr.id === pid);
+            return p?.type === 'pet';
+          });
+          if (isPetTracker) {
+            return res.status(400).json({ error: `Pet weight ${val} lbs is unrealistic. Max: 500 lbs.` });
+          }
         }
       }
       // Blood pressure systolic: max 300
@@ -1366,7 +1361,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
       res.json(result);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (e: any) { console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" }); }
   }));
   app.delete("/api/habits/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getHabit(req.params.id);
@@ -1554,7 +1549,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const result = await storage.updateMemory(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Memory not found" });
       res.json(result);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (e: any) { console.error("[memories]", e?.message || e); res.status(500).json({ error: "Failed to update memory" }); }
   }));
   app.delete("/api/memories/:id", asyncHandler(async (req, res) => {
     const memories = await storage.getMemories();
@@ -1579,14 +1574,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const result = await storage.updateDomain(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Domain not found" });
       res.json(result);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (e: any) { console.error("[domains]", e?.message || e); res.status(500).json({ error: "Failed to update domain" }); }
   }));
   app.delete("/api/domains/:id", asyncHandler(async (req, res) => {
     try {
       const result = await storage.deleteDomain(req.params.id);
       if (!result) return res.status(404).json({ error: "Domain not found" });
       res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (e: any) { console.error("[domains]", e?.message || e); res.status(500).json({ error: "Failed to delete domain" }); }
   }));
   app.get("/api/domains/:id/entries", asyncHandler(async (req, res) => {
     res.json(await storage.getDomainEntries(req.params.id));
@@ -2713,7 +2708,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         return res.status(400).json({ error: "Unit must be a string" });
       }
       const parsed = insertGoalSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      if (!parsed.success) return res.status(400).json({ error: "Invalid request data" });
       const goal = await storage.createGoal(parsed.data);
       res.json(goal);
     } catch (err: any) {
@@ -2778,7 +2773,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.post("/api/entity-links", asyncHandler(async (req, res) => {
     try {
       const parsed = insertEntityLinkSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      if (!parsed.success) return res.status(400).json({ error: "Invalid request data" });
       const link = await storage.createEntityLink(parsed.data);
       res.json(link);
     } catch (err: any) {
