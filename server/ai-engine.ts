@@ -2416,8 +2416,11 @@ async function executeTool(name: string, input: any): Promise<any> {
         unit: input.unit,
         fields: input.fields || [{ name: "value", type: "number" }],
       });
-      // Auto-link: scan tracker name for profile names + explicit forProfile
-      await autoLinkToProfiles("tracker", newTracker.id, input.name || "", input.forProfile);
+      // Link tracker ONLY to the resolved target profile — never use autoLinkToProfiles for trackers
+      if (ctTargetId) {
+        try { await storage.linkProfileTo(ctTargetId, "tracker", newTracker.id); } catch (e: any) { /* ignore dup */ }
+        try { await updateEntityLinkedProfiles("tracker", newTracker.id, ctTargetId); } catch (e: any) { /* ignore */ }
+      }
       return newTracker;
     }
 
@@ -3570,20 +3573,25 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
     // EXCEPTION: When forProfile is explicitly set for non-expense entities (tasks, events, habits, goals, journal),
     // do NOT auto-link to self — the item belongs to the target profile only.
     if (matchedNonSelfIds.length > 0 && selfProfile) {
-      for (const matchedId of matchedNonSelfIds) {
-        // Propagate up the parent chain (Honda → Me)
-        try { await storage.propagateEntityToAncestors(entityType, entityId, matchedId); } catch (e: any) { logger.warn("ai", `propagateEntityToAncestors failed for ${entityType} ${entityId}: ${e?.message}`); }
-      }
-      // Only add self-link when:
-      // - The entity is an expense (expenses should always show in owner's finance)
-      // - OR no explicit forProfile was provided (implicit text-based match)
-      // NEVER auto-link trackers to self when they belong to another profile (prevents cross-profile tracker pollution)
-      const shouldLinkToSelf = entityType === "expense" || (entityType !== "tracker" && !explicitProfileName);
-      if (shouldLinkToSelf) {
-        try {
-          await storage.linkProfileTo(selfProfile.id, entityType, entityId);
-          await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
-        } catch (e: any) { logger.warn("ai", `Self-link (shouldLinkToSelf) failed for ${entityType} ${entityId}: ${e?.message}`); }
+      // PROFILE-EXCLUSIVE entities: trackers, habits, goals, journal
+      // These belong to ONE profile only — never propagate up the chain or auto-link to self
+      const profileExclusive = ["tracker", "habit", "goal", "journal"];
+
+      if (!profileExclusive.includes(entityType)) {
+        for (const matchedId of matchedNonSelfIds) {
+          // Propagate up the parent chain (Honda → Me) — only for expenses, tasks, events, obligations
+          try { await storage.propagateEntityToAncestors(entityType, entityId, matchedId); } catch (e: any) { logger.warn("ai", `propagateEntityToAncestors failed for ${entityType} ${entityId}: ${e?.message}`); }
+        }
+        // Auto-link to self when:
+        // - The entity is an expense (always shows in owner's finance)
+        // - OR no explicit forProfile was provided (implicit text match)
+        const shouldLinkToSelf = entityType === "expense" || !explicitProfileName;
+        if (shouldLinkToSelf) {
+          try {
+            await storage.linkProfileTo(selfProfile.id, entityType, entityId);
+            await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
+          } catch (e: any) { logger.warn("ai", `Self-link (shouldLinkToSelf) failed for ${entityType} ${entityId}: ${e?.message}`); }
+        }
       }
     }
   } catch (err) {
