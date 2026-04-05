@@ -3564,7 +3564,8 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
       // Only add self-link when:
       // - The entity is an expense (expenses should always show in owner's finance)
       // - OR no explicit forProfile was provided (implicit text-based match)
-      const shouldLinkToSelf = entityType === "expense" || !explicitProfileName;
+      // NEVER auto-link trackers to self when they belong to another profile (prevents cross-profile tracker pollution)
+      const shouldLinkToSelf = entityType === "expense" || (entityType !== "tracker" && !explicitProfileName);
       if (shouldLinkToSelf) {
         try {
           await storage.linkProfileTo(selfProfile.id, entityType, entityId);
