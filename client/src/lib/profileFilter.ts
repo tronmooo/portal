@@ -4,7 +4,7 @@
 // Otherwise, selectedIds contains the checked profile IDs.
 
 const STORAGE_KEY = "portol_profile_filter";
-const LOCAL_KEY = "portol_profile_filter_v2"; // localStorage for persistence across sessions
+const LOCAL_KEY = "portol_profile_filter_v3"; // bumped to v3 to clear corrupted filter state
 
 export type FilterMode = "everyone" | "selected";
 

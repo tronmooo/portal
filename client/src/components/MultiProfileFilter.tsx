@@ -67,24 +67,32 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
     if (!profiles || profiles.length === 0) return;
     const current = getProfileFilter();
     if (current.mode === "selected" && current.selectedIds.length > 0) {
-      const validIds = profiles.map(p => p.id);
-      const validSelected = current.selectedIds.filter(id => validIds.includes(id));
-      if (validSelected.length !== current.selectedIds.length) {
-        // Some stored IDs don't match any profile — clear the filter
-        console.warn("[Filter] Clearing invalid stored filter IDs");
-        setFilterEveryone();
-        notify();
-      } else {
-        // Verify names match (fix name/ID mismatch)
-        const correctedNames = validSelected.map(id => {
-          const p = profiles.find(pr => pr.id === id);
-          return p?.name || "Unknown";
-        });
-        const namesChanged = correctedNames.some((n, i) => n !== current.selectedNames[i]);
-        if (namesChanged) {
-          setFilterSelected(validSelected, correctedNames);
-          notify();
+      // Verify each stored ID matches a real profile AND the name matches
+      let needsFix = false;
+      const correctedIds: string[] = [];
+      const correctedNames: string[] = [];
+      for (let i = 0; i < current.selectedIds.length; i++) {
+        const storedId = current.selectedIds[i];
+        const storedName = current.selectedNames[i] || "";
+        const profile = profiles.find(p => p.id === storedId);
+        if (!profile) {
+          needsFix = true; // ID doesn't exist
+          continue;
         }
+        // Check if stored name matches the profile's actual name
+        if (profile.name !== storedName) {
+          needsFix = true; // Name mismatch — could be wrong ID stored under wrong name
+        }
+        correctedIds.push(storedId);
+        correctedNames.push(profile.name);
+      }
+      if (needsFix) {
+        if (correctedIds.length === 0) {
+          setFilterEveryone();
+        } else {
+          setFilterSelected(correctedIds, correctedNames);
+        }
+        notify();
       }
     }
   }, [profiles]);
