@@ -4,6 +4,7 @@ import type {
   ToastActionElement,
   ToastProps,
 } from "@/components/ui/toast"
+import { announce } from "@/lib/announce"
 
 const TOAST_LIMIT = 1
 const TOAST_REMOVE_DELAY = 1000
@@ -161,6 +162,10 @@ function toast({ ...props }: Toast) {
       },
     },
   })
+
+  // Announce toast to screen readers
+  const msg = typeof props.title === "string" ? props.title : typeof props.description === "string" ? props.description : "";
+  if (msg) announce(msg);
 
   // Auto-dismiss after delay so toasts don't persist indefinitely
   setTimeout(() => {

@@ -55,6 +55,35 @@ export const getQueryFn: <T>(options: {
     return await res.json();
   };
 
+/**
+ * Helper for optimistic mutations — updates cache immediately, rolls back on error.
+ * Usage: const mutation = useOptimisticMutation("/api/expenses", createExpenseFn);
+ */
+export function optimisticMutationConfig<T>(
+  queryKey: string[],
+  mutationFn: (data: T) => Promise<any>,
+  addToCache: (old: any[], newItem: T) => any[]
+) {
+  return {
+    mutationFn,
+    onMutate: async (newData: T) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData(queryKey);
+      queryClient.setQueryData(queryKey, (old: any) => {
+        if (Array.isArray(old)) return addToCache(old, newData);
+        return old;
+      });
+      return { previous };
+    },
+    onError: (_err: any, _data: T, context: any) => {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey });
+    },
+  };
+}
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

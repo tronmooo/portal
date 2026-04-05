@@ -28,6 +28,13 @@ import {
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
 
+const isProd = process.env.NODE_ENV === "production";
+const log = {
+  info: (...args: any[]) => { if (!isProd) console.log("[Portol]", ...args); },
+  warn: (...args: any[]) => console.warn("[Portol]", ...args),
+  error: (...args: any[]) => console.error("[Portol]", ...args),
+};
+
 // Simple rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 function rateLimit(key: string, maxRequests: number = 60, windowMs: number = 60000): boolean {
@@ -115,7 +122,7 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
     try {
       await fn(req, res, next);
     } catch (err: any) {
-      console.error(`[API Error] ${req.method} ${req.path}:`, err?.message || err);
+      log.error(`[API Error] ${req.method} ${req.path}:`, err?.message || err);
       if (!res.headersSent) {
         res.status(500).json({ error: "Internal server error" });
       }
@@ -127,6 +134,26 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // CORS — allow requests from the app's own domain and Capacitor
+  app.use((req, res, next) => {
+    const allowedOrigins = [
+      "https://portol.me",
+      "capacitor://localhost",
+      "ionic://localhost",
+      "http://localhost",
+      "http://localhost:5000",
+    ];
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.some(o => origin.startsWith(o))) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+  });
 
   // Prevent caching of ALL API responses — UI must always reflect current DB state
   app.use("/api", (req, res, next) => {
@@ -179,7 +206,7 @@ export async function registerRoutes(
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
-      console.error("[Chat]", msg);
+      log.error("[Chat]", msg);
       // Provide actionable error messages based on error type
       const status = err?.status || err?.error?.status || 500;
       if (status === 529 || status === 503 || msg.includes('overloaded')) {
@@ -226,7 +253,7 @@ export async function registerRoutes(
       const result = await processFileUpload(fileName, safeMime, fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
-      console.error("[Upload]", err?.message || "unknown error");
+      log.error("[Upload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process upload" });
     }
   }));
@@ -368,7 +395,7 @@ export async function registerRoutes(
 
       res.json({ results, summary });
     } catch (err: any) {
-      console.error("[BatchUpload]", err?.message || "unknown error");
+      log.error("[BatchUpload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process batch upload" });
     }
   }));
@@ -381,7 +408,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "extractionId required" });
       }
 
-      console.log(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
+      log.info(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
 
       // If no profile was selected, auto-use the self profile for personal documents
       let resolvedProfileId = targetProfileId;
@@ -390,7 +417,7 @@ export async function registerRoutes(
         const selfProfile = profiles.find((p: any) => p.type === 'self');
         if (selfProfile) {
           resolvedProfileId = selfProfile.id;
-          console.log(`[confirm-extraction] Auto-selected self profile: ${selfProfile.name} (${selfProfile.id})`);
+          log.info(`[confirm-extraction] Auto-selected self profile: ${selfProfile.name} (${selfProfile.id})`);
         }
       }
 
@@ -446,7 +473,7 @@ export async function registerRoutes(
               fields: { ...(profile.fields || {}), ...profileFields },
             });
             saved.push(`Saved ${Object.keys(profileFields).length} fields to ${profile.name}`);
-            console.log(`[confirm-extraction] Routed ${Object.keys(profileFields).length} fields to profile ${profile.name}`);
+            log.info(`[confirm-extraction] Routed ${Object.keys(profileFields).length} fields to profile ${profile.name}`);
 
             // Link the document to the profile
             try {
@@ -554,7 +581,7 @@ export async function registerRoutes(
         saved,
       });
     } catch (err: any) {
-      console.error("[ConfirmExtraction]", err?.message || "unknown error");
+      log.error("[ConfirmExtraction]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to confirm extraction" });
     }
   }));
@@ -613,7 +640,7 @@ export async function registerRoutes(
       });
       res.json(insights);
     } catch (err: any) {
-      console.error("[Insights]", err?.message || "unknown error");
+      log.error("[Insights]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate insights" });
     }
   }));
@@ -947,7 +974,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       res.json(result);
     } catch (err: any) {
-      console.error("[ProfileSummary]", err?.message || "unknown error");
+      log.error("[ProfileSummary]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate AI summary" });
     }
   }));
@@ -1878,7 +1905,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       res.json(notifications);
     } catch (err: any) {
-      console.error("[Notifications]", err?.message || "unknown error");
+      log.error("[Notifications]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to compute notifications" });
     }
   }));
@@ -1977,7 +2004,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${new Date().toISOString().slice(0, 10)}.json"`);
       res.json(data);
     } catch (err: any) {
-      console.error("[Export]", err?.message || "unknown error");
+      log.error("[Export]", err?.message || "unknown error");
       res.status(500).json({ error: "Export failed" });
     }
   }));
@@ -2093,7 +2120,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const totalFailed = Object.values(failed).reduce((s, arr) => s + arr.length, 0);
       res.json({ success: totalFailed === 0, imported, failed: totalFailed > 0 ? failed : undefined, totalFailed });
     } catch (err: any) {
-      console.error("[Import]", err?.message || "unknown error");
+      log.error("[Import]", err?.message || "unknown error");
       res.status(500).json({ error: "Import failed" });
     }
   }));

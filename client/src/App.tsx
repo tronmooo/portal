@@ -228,6 +228,8 @@ function App() {
       <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:bg-primary focus:text-primary-foreground focus:px-4 focus:py-2 focus:rounded">
         Skip to content
       </a>
+      {/* Screen reader announcements for dynamic content */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only" id="sr-announcements" />
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
         <TooltipProvider>
