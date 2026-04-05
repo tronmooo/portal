@@ -136,6 +136,21 @@ const CHART_COLORS = {
 
 type TimeRange = "7d" | "30d" | "90d" | "all";
 
+/** Strip " - ProfileName" suffix from tracker display names.
+ *  The owner badge already shows who it belongs to, so the suffix is redundant. */
+function cleanTrackerName(name: string, profiles?: { id: string; name: string }[], linkedProfiles?: string[]): string {
+  if (!profiles || !linkedProfiles) return name;
+  for (const pid of linkedProfiles) {
+    const p = profiles.find(pr => pr.id === pid);
+    if (p) {
+      const suffix = new RegExp(`\\s*-\\s*${p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+      const cleaned = name.replace(suffix, '');
+      if (cleaned !== name) return cleaned;
+    }
+  }
+  return name;
+}
+
 function filterEntriesByRange(entries: TrackerEntry[], range: TimeRange): TrackerEntry[] {
   if (range === "all") return entries;
   const now = Date.now();
@@ -1611,7 +1626,7 @@ function computeHealthScore(trackers: Tracker[]): number | null {
   return factors > 0 ? Math.round(score / factors) : null;
 }
 
-function TrackerSummary({ trackers }: { trackers: Tracker[] }) {
+function TrackerSummary({ trackers, profiles }: { trackers: Tracker[]; profiles?: { id: string; name: string }[] }) {
   if (trackers.length === 0) return null;
 
   // Entries this week
@@ -1625,9 +1640,9 @@ function TrackerSummary({ trackers }: { trackers: Tracker[] }) {
   const mostActive = trackers.reduce(
     (best, t) => {
       const count = t.entries.filter((e) => new Date(e.timestamp).getTime() >= weekAgo).length;
-      return count > best.count ? { name: t.name, count } : best;
+      return count > best.count ? { name: t.name, count, lp: t.linkedProfiles } : best;
     },
-    { name: "", count: 0 }
+    { name: "", count: 0, lp: [] as string[] }
   );
 
   // Best streak
@@ -1649,12 +1664,12 @@ function TrackerSummary({ trackers }: { trackers: Tracker[] }) {
         <span className="text-[9px] text-muted-foreground">This Week</span>
       </div>
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-most-active">
-        <span className="text-[10px] font-bold truncate w-full text-center" style={{ color: CHART_COLORS.tertiary }}>{mostActive.count > 0 ? mostActive.name : "—"}</span>
+        <span className="text-[10px] font-bold truncate w-full text-center" style={{ color: CHART_COLORS.tertiary }}>{mostActive.count > 0 ? cleanTrackerName(mostActive.name, profiles, mostActive.lp) : "—"}</span>
         <span className="text-[9px] text-muted-foreground">{mostActive.count > 0 ? `${mostActive.count} entries` : "Most Active"}</span>
       </div>
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-best-streak">
         <span className="text-sm font-bold tabular-nums" style={{ color: CHART_COLORS.gold }}>{bestStreak.streak > 0 ? `${bestStreak.streak}d` : "—"}</span>
-        <span className="text-[9px] text-muted-foreground truncate w-full text-center">{bestStreak.name || "Streak"}</span>
+        <span className="text-[9px] text-muted-foreground truncate w-full text-center">{bestStreak.name ? cleanTrackerName(bestStreak.name, profiles) : "Streak"}</span>
       </div>
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-health-score">
         <span className={`text-sm font-bold tabular-nums ${healthScoreColor}`}>{healthScore !== null ? healthScore : "—"}</span>
@@ -2658,7 +2673,7 @@ function TrackerDetailDialog({
           <div className="px-5 pt-5 pb-3 pr-12 border-b shrink-0">
             <div className="flex items-center justify-between">
               <div className="min-w-0">
-                <DialogTitle className="text-base font-semibold truncate">{tracker.name}</DialogTitle>
+                <DialogTitle className="text-base font-semibold truncate">{cleanTrackerName(tracker.name, allProfiles, tracker.linkedProfiles)}</DialogTitle>
                 <DialogDescription className="text-xs mt-0.5">
                   {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
                   {tracker.unit ? ` · ${tracker.unit}` : ""}
@@ -3075,7 +3090,7 @@ export default function TrackersPage() {
 
       {/* Summary cards */}
       {(sectionFilter === "all" || sectionFilter === "trackers") && filteredTrackers.length > 0 && (
-        <TrackerSummary trackers={filteredTrackers} />
+        <TrackerSummary trackers={filteredTrackers} profiles={profiles || undefined} />
       )}
 
       {/* Assets & Vehicles — grouped by type */}
@@ -3541,7 +3556,9 @@ export default function TrackersPage() {
               >
                 {/* Left: Name + category */}
                 <div className="min-w-0 w-[120px] md:w-[160px] shrink-0">
-                  <p className="text-[11px] font-medium truncate leading-tight">{tracker.name}</p>
+                  <p className="text-[11px] font-medium truncate leading-tight">
+                    {cleanTrackerName(tracker.name, profiles || undefined, tracker.linkedProfiles)}
+                  </p>
                   <div className="flex items-center gap-1">
                     {linkedProfile && <span className="text-[8px] px-1 rounded bg-primary/10 text-primary">{linkedProfile.name}</span>}
                     <span className="text-[8px] text-muted-foreground capitalize">{tracker.category}</span>
