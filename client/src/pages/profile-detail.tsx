@@ -459,14 +459,27 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
       });
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+    onMutate: async (newVal: string) => {
+      // Optimistic: update cache immediately so UI feels instant
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const prev = queryClient.getQueryData(["/api/profiles", profileId, "detail"]);
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old) return old;
+        const num = Number(newVal);
+        const parsed = newVal !== "" && !isNaN(num) && newVal.trim() !== "" ? num : newVal;
+        return { ...old, fields: { ...old.fields, [fieldKey]: parsed } };
+      });
       setEditing(false);
+      return { prev };
     },
-    onError: () => {
+    onError: (_err: any, _val: string, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prev);
       toast({ title: "Failed to update", variant: "destructive" });
       setValue(fieldValue);
-      setEditing(false);
+    },
+    onSettled: () => {
+      // Background refetch to sync with server
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
     },
   });
 
@@ -1755,7 +1768,6 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       setExpDate(new Date().toISOString().slice(0, 10));
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" }),
@@ -1774,7 +1786,6 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       setEditingExpense(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to update expense", description: formatApiError(err), variant: "destructive" }),
@@ -1791,7 +1802,6 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       setDeleteExpenseId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -2712,7 +2722,6 @@ function TrackersTab({
       setEntryValue(""); setEntryNotes("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" }),
@@ -2939,7 +2948,6 @@ function QuickHealthButton({ profileId, name, unit, field, category, fieldType =
       toast({ title: `${name} tracker created` });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onCreated();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -3049,8 +3057,6 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       setLogOpen(null); setLogValue("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -3489,7 +3495,6 @@ function TasksTab({
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
       onChanged();
     },
@@ -3517,7 +3522,6 @@ function TasksTab({
       setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to create task", description: formatApiError(err), variant: "destructive" }),
@@ -3534,7 +3538,6 @@ function TasksTab({
       setDeleteTaskId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -5312,13 +5315,19 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
     mutationFn: async () => {
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes });
     },
-    onSuccess: () => {
-      toast({ title: "Notes saved" });
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const prev = queryClient.getQueryData(["/api/profiles", profileId, "detail"]);
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => old ? { ...old, notes } : old);
       setIsEditingNotes(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      onChanged();
+      toast({ title: "Notes saved" });
+      return { prev };
     },
-    onError: (err: Error) => toast({ title: "Failed to save notes", description: formatApiError(err), variant: "destructive" }),
+    onError: (_err: Error, _v: void, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prev);
+      toast({ title: "Failed to save notes", variant: "destructive" });
+    },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); },
   });
 
   const uploadMutation = useMutation({
@@ -5567,8 +5576,8 @@ export default function ProfileDetailPage() {
       return res.json();
     },
     enabled: !!id,
-    staleTime: 0,
-    refetchOnMount: "always",
+    staleTime: 5000, // 5s — prevents re-fetch on rapid tab switches. Mutations invalidate immediately.
+    refetchOnMount: true,
   });
 
   const deleteMutation = useMutation({
@@ -5585,7 +5594,6 @@ export default function ProfileDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       navigate("/profiles");
     },
     onError: (err: Error) => {
@@ -5596,8 +5604,6 @@ export default function ProfileDetailPage() {
   function handleSaved() {
     queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
     queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
     refetch();
   }
