@@ -383,33 +383,51 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(id);
     if (!profile) return undefined;
 
-    const containsFilter = JSON.stringify([id]);
-
-    // OPTIMIZED: 2 parallel batches instead of 5 sequential ones (24→10 queries)
-    // Batch 1: Fetch ALL related entities via linked_profiles JSONB containment
-    // linked_profiles on entities is kept in sync atomically with junction tables
-    const [
-      allProfiles,
-      trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
-    ] = await Promise.all([
+    // OPTIMIZED: 2 parallel batches instead of 5 sequential ones (24→15 queries, 5→2 sequential waits)
+    // Batch 1: Junction table lookups + allProfiles (source of truth for entity→profile links)
+    const [ptRows, peRows, pkRows, pvRows, pdRows, poRows, allProfiles] = await Promise.all([
+      this.supabase.from("profile_trackers").select("tracker_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_expenses").select("expense_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_tasks").select("task_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_events").select("event_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_documents").select("document_id").eq("profile_id", id).eq("user_id", this.userId),
+      this.supabase.from("profile_obligations").select("obligation_id").eq("profile_id", id).eq("user_id", this.userId),
       this.getProfiles(),
-      this.supabase.from("trackers").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
-      this.supabase.from("expenses").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
-      this.supabase.from("tasks").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
-      this.supabase.from("events").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
-      this.supabase.from("documents")
-        .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
-        .eq("user_id", this.userId).contains("linked_profiles", containsFilter),
-      this.supabase.from("obligations").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
     ]);
 
-    const trackerRows = trackersRes.data || [];
-    const obligationRows = obligationsRes.data || [];
-    const trackerIds = trackerRows.map((r: any) => r.id);
-    const obligationIds = obligationRows.map((r: any) => r.id);
+    const trackerIds = (ptRows.data || []).map(r => r.tracker_id);
+    const expenseIds = (peRows.data || []).map(r => r.expense_id);
+    const taskIds = (pkRows.data || []).map(r => r.task_id);
+    const eventIds = (pvRows.data || []).map(r => r.event_id);
+    const documentIds = (pdRows.data || []).map(r => r.document_id);
+    const obligationIds = (poRows.data || []).map(r => r.obligation_id);
 
-    // Batch 2: Fetch tracker entries + obligation payments for matched entities
-    const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
+    // Batch 2: Fetch ALL entities + entries + payments in one parallel batch
+    // (Previously this was 3 separate sequential batches)
+    const [
+      trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
+      trackerEntryRows, obligationPaymentRows,
+    ] = await Promise.all([
+      trackerIds.length > 0
+        ? this.supabase.from("trackers").select("*").eq("user_id", this.userId).in("id", trackerIds).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      expenseIds.length > 0
+        ? this.supabase.from("expenses").select("*").eq("user_id", this.userId).in("id", expenseIds).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      taskIds.length > 0
+        ? this.supabase.from("tasks").select("*").eq("user_id", this.userId).in("id", taskIds).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      eventIds.length > 0
+        ? this.supabase.from("events").select("*").eq("user_id", this.userId).in("id", eventIds).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      documentIds.length > 0
+        ? this.supabase.from("documents")
+            .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
+            .eq("user_id", this.userId).in("id", documentIds).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      obligationIds.length > 0
+        ? this.supabase.from("obligations").select("*").eq("user_id", this.userId).in("id", obligationIds).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
       trackerIds.length > 0
         ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).order("timestamp", { ascending: false }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
@@ -431,12 +449,12 @@ export class SupabaseStorage implements IStorage {
     }
 
     // Map DB rows to domain objects
-    const relatedTrackers = trackerRows.map((r: any) => this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map((e: any) => this.rowToTrackerEntry(e))));
-    const relatedExpenses = (expensesRes.data || []).map((r: any) => this.rowToExpense(r));
-    const relatedTasks = (tasksRes.data || []).map((r: any) => this.rowToTask(r));
-    const relatedEvents = (eventsRes.data || []).map((r: any) => this.rowToEvent(r));
-    const relatedDocuments = (documentsRes.data || []).map((r: any) => this.rowToDocument({ ...r, file_data: "" }));
-    const relatedObligations = obligationRows.map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
+    const relatedTrackers = (trackersRes as any[]).map((r: any) => this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map((e: any) => this.rowToTrackerEntry(e))));
+    const relatedExpenses = (expensesRes as any[]).map((r: any) => this.rowToExpense(r));
+    const relatedTasks = (tasksRes as any[]).map((r: any) => this.rowToTask(r));
+    const relatedEvents = (eventsRes as any[]).map((r: any) => this.rowToEvent(r));
+    const relatedDocuments = (documentsRes as any[]).map((r: any) => this.rowToDocument({ ...r, file_data: "" }));
+    const relatedObligations = (obligationsRes as any[]).map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
 
     // Child profiles: profiles whose parentProfileId points to this profile
     const childProfiles = allProfiles.filter(p => p.parentProfileId === id);
@@ -1136,7 +1154,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getTask(id: string): Promise<Task | undefined> {
-    const { data, error } = await this.supabase.from("tasks").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("tasks").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToTask(data);
   }
@@ -1199,7 +1217,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getExpense(id: string): Promise<Expense | undefined> {
-    const { data, error } = await this.supabase.from("expenses").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("expenses").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToExpense(data);
   }
@@ -1711,7 +1729,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getDocument(id: string): Promise<Document | undefined> {
-    const { data, error } = await this.supabase.from("documents").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("documents").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const doc = this.rowToDocument(data);
 
@@ -1913,7 +1931,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getHabit(id: string): Promise<Habit | undefined> {
-    const { data, error } = await this.supabase.from("habits").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("habits").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const { data: checkins } = await this.supabase.from("habit_checkins").select("*").eq("habit_id", id).eq("user_id", this.userId).order("date", { ascending: true });
     return this.rowToHabit(data, (checkins || []).map(c => this.rowToHabitCheckin(c)));
