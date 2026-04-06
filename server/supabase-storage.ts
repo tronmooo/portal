@@ -383,95 +383,65 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(id);
     if (!profile) return undefined;
 
-    // Use junction tables for related entities (much faster than loading all + filtering)
-    const [ptRows, peRows, pkRows, pvRows, pdRows, poRows, allProfiles] = await Promise.all([
-      this.supabase.from("profile_trackers").select("tracker_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_expenses").select("expense_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_tasks").select("task_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_events").select("event_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_documents").select("document_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_obligations").select("obligation_id").eq("profile_id", id).eq("user_id", this.userId),
+    const containsFilter = JSON.stringify([id]);
+
+    // OPTIMIZED: 2 parallel batches instead of 5 sequential ones (24→10 queries)
+    // Batch 1: Fetch ALL related entities via linked_profiles JSONB containment
+    // linked_profiles on entities is kept in sync atomically with junction tables
+    const [
+      allProfiles,
+      trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
+    ] = await Promise.all([
       this.getProfiles(),
+      this.supabase.from("trackers").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
+      this.supabase.from("expenses").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
+      this.supabase.from("tasks").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
+      this.supabase.from("events").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
+      this.supabase.from("documents")
+        .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
+        .eq("user_id", this.userId).contains("linked_profiles", containsFilter),
+      this.supabase.from("obligations").select("*").eq("user_id", this.userId).contains("linked_profiles", containsFilter),
     ]);
 
-    // STRICT: Only use junction tables — JSONB arrays on profiles are legacy/polluted and cause cross-profile data leaks
-    const trackerIds = new Set((ptRows.data || []).map(r => r.tracker_id));
-    const expenseIds = new Set((peRows.data || []).map(r => r.expense_id));
-    const taskIds = new Set((pkRows.data || []).map(r => r.task_id));
-    const eventIds = new Set((pvRows.data || []).map(r => r.event_id));
-    const documentIds = new Set((pdRows.data || []).map(r => r.document_id));
-    const obligationIds = new Set((poRows.data || []).map(r => r.obligation_id));
+    const trackerRows = trackersRes.data || [];
+    const obligationRows = obligationsRes.data || [];
+    const trackerIds = trackerRows.map((r: any) => r.id);
+    const obligationIds = obligationRows.map((r: any) => r.id);
 
-    // Fetch only the specific related entities using targeted .in() queries
-    const allIds = {
-      trackers: [...trackerIds],
-      expenses: [...expenseIds],
-      tasks: [...taskIds],
-      events: [...eventIds],
-      documents: [...documentIds],
-      obligations: [...obligationIds],
-    };
-    // Debug: log what IDs we're fetching
-    if (allIds.expenses.length > 0 || allIds.trackers.length > 0) {
-      console.log(`[getProfileDetail] Profile ${id} (userId: ${this.userId}): expenses=${allIds.expenses.length}, trackers=${allIds.trackers.length}, tasks=${allIds.tasks.length}, events=${allIds.events.length}, docs=${allIds.documents.length}, obligations=${allIds.obligations.length}`);
-    }
-    // Helper: fetch rows by IDs, also include any that have this profile in linkedProfiles JSONB
-    const fetchByIds = async <T>(table: string, ids: string[], rowMapper: (r: any) => T): Promise<T[]> => {
-      if (ids.length === 0) {
-        // Still check for linkedProfiles containment
-        const { data } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
-        return (data || []).map(rowMapper);
-      }
-      const { data: byId } = await this.supabase.from(table).select("*").eq("user_id", this.userId).in("id", ids);
-      const { data: byLink } = await this.supabase.from(table).select("*").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
-      const merged = new Map<string, any>();
-      for (const r of [...(byId || []), ...(byLink || [])]) merged.set(r.id, r);
-      return [...merged.values()].map(rowMapper);
-    };
-    // For trackers and obligations, we need entries/payments — fetch them in bulk
-    // Also pre-fetch tracker IDs that have this profile in their own linked_profiles JSONB
-    const { data: entityLinkedTrackerRows } = await this.supabase
-      .from("trackers").select("id").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
-    const entityLinkedTrackerIds = (entityLinkedTrackerRows || []).map((r: any) => r.id);
-    // Pre-fetch obligation IDs that have this profile in their linked_profiles
-    const { data: entityLinkedObligationRows } = await this.supabase
-      .from("obligations").select("id").eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]));
-    const entityLinkedObligationIds = (entityLinkedObligationRows || []).map((r: any) => r.id);
-    const trackerIdsArr = [...new Set([...allIds.trackers, ...entityLinkedTrackerIds])];
-    console.log(`[getProfileDetail] Profile ${id}: junction trackers=${allIds.trackers.length}, entity-linked trackers=${entityLinkedTrackerIds.length}, total unique=${trackerIdsArr.length}`);
-    const obligationIdsArr = [...new Set([...allIds.obligations, ...entityLinkedObligationIds])];
+    // Batch 2: Fetch tracker entries + obligation payments for matched entities
     const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
-      trackerIdsArr.length > 0
-        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIdsArr).order("timestamp", { ascending: false }).then(r => r.data || [])
-        : Promise.resolve([]),
-      obligationIdsArr.length > 0
-        ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIdsArr).order("date", { ascending: false }).then(r => r.data || [])
-        : Promise.resolve([]),
+      trackerIds.length > 0
+        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).order("timestamp", { ascending: false }).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      obligationIds.length > 0
+        ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIds).order("date", { ascending: false }).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
     ]);
+
+    // Build lookup maps for entries/payments
     const entriesByTracker = new Map<string, any[]>();
     for (const e of trackerEntryRows) {
       if (!entriesByTracker.has(e.tracker_id)) entriesByTracker.set(e.tracker_id, []);
-      (entriesByTracker.get(e.tracker_id) || []).push(e);
+      entriesByTracker.get(e.tracker_id)!.push(e);
     }
     const paymentsByObligation = new Map<string, any[]>();
     for (const p of obligationPaymentRows) {
       if (!paymentsByObligation.has(p.obligation_id)) paymentsByObligation.set(p.obligation_id, []);
-      (paymentsByObligation.get(p.obligation_id) || []).push(p);
+      paymentsByObligation.get(p.obligation_id)!.push(p);
     }
-    const [relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations] = await Promise.all([
-      fetchByIds("trackers", allIds.trackers, (r: any) => this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map((e: any) => this.rowToTrackerEntry(e)))),
-      fetchByIds("expenses", allIds.expenses, (r: any) => this.rowToExpense(r)),
-      fetchByIds("tasks", allIds.tasks, (r: any) => this.rowToTask(r)),
-      fetchByIds("events", allIds.events, (r: any) => this.rowToEvent(r)),
-      fetchByIds("documents", allIds.documents, (r: any) => this.rowToDocument({ ...r, file_data: "" })), // Exclude file_data from profile detail (fetched on-demand)
-      fetchByIds("obligations", allIds.obligations, (r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p)))),
-    ]);
-    // Child profiles: profiles whose parentProfileId points to this profile
-    let childProfiles = allProfiles.filter(p => p.parentProfileId === id);
-    
-    // No orphan fallback — all child profiles must have an explicit parent_profile_id.
-    // The createProfile method auto-assigns self as parent for child types.
 
+    // Map DB rows to domain objects
+    const relatedTrackers = trackerRows.map((r: any) => this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map((e: any) => this.rowToTrackerEntry(e))));
+    const relatedExpenses = (expensesRes.data || []).map((r: any) => this.rowToExpense(r));
+    const relatedTasks = (tasksRes.data || []).map((r: any) => this.rowToTask(r));
+    const relatedEvents = (eventsRes.data || []).map((r: any) => this.rowToEvent(r));
+    const relatedDocuments = (documentsRes.data || []).map((r: any) => this.rowToDocument({ ...r, file_data: "" }));
+    const relatedObligations = obligationRows.map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
+
+    // Child profiles: profiles whose parentProfileId points to this profile
+    const childProfiles = allProfiles.filter(p => p.parentProfileId === id);
+
+    // Build timeline from all related entities
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
       for (const e of t.entries) {
@@ -1160,7 +1130,7 @@ export class SupabaseStorage implements IStorage {
   // TASKS
   // ============================================================
   async getTasks(): Promise<Task[]> {
-    const { data, error } = await this.supabase.from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null);
+    const { data, error } = await this.supabase.from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null).order("created_at", { ascending: false });
     if (error) throw error;
     return (data || []).map(r => this.rowToTask(r));
   }
@@ -1223,7 +1193,7 @@ export class SupabaseStorage implements IStorage {
   // EXPENSES
   // ============================================================
   async getExpenses(): Promise<Expense[]> {
-    const { data, error } = await this.supabase.from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null);
+    const { data, error } = await this.supabase.from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null).order("date", { ascending: false });
     if (error) throw error;
     return (data || []).map(r => this.rowToExpense(r));
   }
@@ -1331,7 +1301,7 @@ export class SupabaseStorage implements IStorage {
   // EVENTS
   // ============================================================
   async getEvents(): Promise<CalendarEvent[]> {
-    const { data, error } = await this.supabase.from("events").select("*").eq("user_id", this.userId);
+    const { data, error } = await this.supabase.from("events").select("*").eq("user_id", this.userId).order("date", { ascending: false });
     if (error) throw error;
     return (data || []).map(r => this.rowToEvent(r));
   }
@@ -1734,7 +1704,8 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await this.supabase.from("documents")
       .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
       .eq("user_id", this.userId)
-      .is("deleted_at", null);
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false });
     if (error) throw error;
     return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
   }
