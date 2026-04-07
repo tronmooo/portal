@@ -792,13 +792,23 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
 
   const handleUndo = async () => {
     if (!entityId || !endpoint) return;
+    setDeleted(true); // Optimistic — show immediately
     try {
       await apiRequest("DELETE", `/api/${endpoint}/${entityId}`);
-      setDeleted(true);
       onDeleted();
       toast({ title: "Removed" });
-      queryClient.invalidateQueries();
-    } catch { toast({ title: "Failed to undo", variant: "destructive" }); }
+      // Invalidate outside try so we don't catch its errors
+    } catch (err: any) {
+      setDeleted(false); // Roll back on real failure
+      const msg = err?.message || "";
+      toast({
+        title: "Could not undo",
+        description: msg.includes("401") ? "Session expired — try signing out and back in" : msg.includes("404") ? "Already removed" : "Please try again",
+        variant: "destructive"
+      });
+      return;
+    }
+    queryClient.invalidateQueries();
   };
 
   return (
