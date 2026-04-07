@@ -129,58 +129,56 @@ function HabitCard({ habit }: { habit: Habit }) {
           </AlertDialog>
         </div>
 
-        {/* TAP RINGS — one per required check-in */}
-        <div className="flex items-center gap-3 mb-3">
-          {Array.from({ length: targetPerDay }).map((_, idx) => {
-            const filled = idx < todayCheckins;
-            return (
+        {/* TODAY'S PROGRESS — segmented tap bar */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-muted-foreground">
+              {completedToday ? (
+                <span className="font-semibold" style={{ color: accentColor }}>Done for today ✓</span>
+              ) : todayCheckins > 0 ? (
+                <span>{todayCheckins} / {targetPerDay} — {targetPerDay - todayCheckins} more to go</span>
+              ) : (
+                <span>Tap to check in</span>
+              )}
+            </span>
+            {!completedToday && (
               <button
-                key={idx}
-                onClick={() => !filled && !checkinMutation.isPending && checkinMutation.mutate()}
-                disabled={filled || checkinMutation.isPending}
-                data-testid={`button-ring-${habit.id}-${idx}`}
-                className="relative transition-all active:scale-90"
-                title={filled ? "Completed" : `Tap to log (${idx + 1}/${targetPerDay})`}
+                onClick={() => checkinMutation.mutate()}
+                disabled={checkinMutation.isPending}
+                data-testid={`button-checkin-${habit.id}`}
+                className="text-xs px-2.5 py-1 rounded-full font-medium transition-all active:scale-95 disabled:opacity-50"
+                style={{ backgroundColor: accentColor + "22", color: accentColor, border: `1px solid ${accentColor}44` }}
               >
-                {/* Outer ring */}
-                <div
-                  className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200"
+                {checkinMutation.isPending ? "…" : `+ Check In`}
+              </button>
+            )}
+          </div>
+          {/* Segmented bar — N segments for N required check-ins */}
+          <div className="flex gap-1">
+            {Array.from({ length: targetPerDay }).map((_, idx) => {
+              const filled = idx < todayCheckins;
+              return (
+                <button
+                  key={idx}
+                  onClick={() => !filled && !checkinMutation.isPending && checkinMutation.mutate()}
+                  disabled={filled || checkinMutation.isPending}
+                  data-testid={`button-seg-${habit.id}-${idx}`}
+                  className="flex-1 h-8 rounded-lg transition-all duration-200 active:scale-y-95 flex items-center justify-center relative overflow-hidden"
                   style={{
-                    background: filled
-                      ? accentColor
-                      : "transparent",
-                    border: `2.5px solid ${filled ? accentColor : accentColor + "55"}`,
-                    boxShadow: filled ? `0 0 12px ${accentColor}55` : "none",
+                    backgroundColor: filled ? accentColor : accentColor + "1a",
+                    border: `1px solid ${filled ? accentColor : accentColor + "33"}`,
                   }}
                 >
-                  {filled ? (
-                    <Check className="h-5 w-5 text-white" strokeWidth={3} />
-                  ) : checkinMutation.isPending && idx === todayCheckins ? (
-                    <div className="h-4 w-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: accentColor, borderTopColor: "transparent" }} />
-                  ) : (
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: accentColor + "55" }} />
+                  {filled && <Check className="h-4 w-4 text-white" strokeWidth={2.5} />}
+                  {!filled && checkinMutation.isPending && idx === todayCheckins && (
+                    <div className="h-3.5 w-3.5 rounded-full border-2 animate-spin" style={{ borderColor: accentColor + "80", borderTopColor: accentColor }} />
                   )}
-                </div>
-                {/* Label */}
-                {targetPerDay > 1 && (
-                  <div className="absolute -bottom-4 left-0 right-0 text-center">
-                    <span className="text-xs text-muted-foreground">{idx + 1}</span>
-                  </div>
-                )}
-              </button>
-            );
-          })}
-          <div className="flex-1 ml-1">
-            {completedToday ? (
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: accentColor }} />
-                <span className="text-xs font-semibold" style={{ color: accentColor }}>Done for today!</span>
-              </div>
-            ) : todayCheckins > 0 ? (
-              <span className="text-xs text-muted-foreground">{targetPerDay - todayCheckins} more to go</span>
-            ) : (
-              <span className="text-xs text-muted-foreground">Tap to check in</span>
-            )}
+                  {!filled && !checkinMutation.isPending && (
+                    <span className="text-xs" style={{ color: accentColor + "99" }}>{idx + 1}</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
 

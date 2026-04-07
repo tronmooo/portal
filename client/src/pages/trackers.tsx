@@ -3129,17 +3129,34 @@ export default function TrackersPage() {
                   items.map(child => {
                     const Icon = typeIcons[child.type] || Star;
                     const fields = child.fields || {};
-                    const price = fields.cost || fields.purchasePrice || fields.amount;
+                    const currentVal = fields.currentValue;
+                    const purchaseVal = fields.cost || fields.purchasePrice || fields.amount || fields.price;
                     const year = fields.year || fields.purchaseDate?.slice(0, 4);
                     const detail = [fields.make, fields.model, fields.brand].filter(Boolean).join(' ');
+                    const hasValue = currentVal || purchaseVal;
                     return (
                       <Link key={child.id} href={`/profiles/${child.id}`}>
-                        <div className="flex items-center gap-2 px-2 py-[6px] hover:bg-muted/40 active:bg-muted/60 cursor-pointer transition-colors" data-testid={`button-view-child-${child.id}`}>
+                        <div className="flex items-center gap-2 px-3 py-2.5 hover:bg-muted/40 active:bg-muted/60 cursor-pointer transition-colors" data-testid={`button-view-child-${child.id}`}>
                           <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="text-xs-loose font-medium truncate flex-1">{child.name}</span>
-                          {detail && <span className="text-xs-tight text-muted-foreground truncate max-w-[80px]">{detail}</span>}
-                          {year && <span className="text-xs-tight text-muted-foreground tabular-nums">{year}</span>}
-                          {price && <span className="text-xs font-medium tabular-nums">${Number(price).toLocaleString()}</span>}
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs font-medium block truncate">{child.name}</span>
+                            {(detail || year) && <span className="text-xs text-muted-foreground">{[detail, year].filter(Boolean).join(' · ')}</span>}
+                          </div>
+                          <div className="text-right shrink-0">
+                            {currentVal ? (
+                              <div>
+                                <span className="text-xs font-semibold tabular-nums">${Number(currentVal).toLocaleString()}</span>
+                                <span className="block text-xs text-muted-foreground/60">est. value</span>
+                              </div>
+                            ) : purchaseVal ? (
+                              <div>
+                                <span className="text-xs font-medium tabular-nums text-muted-foreground">${Number(purchaseVal).toLocaleString()}</span>
+                                <span className="block text-xs text-muted-foreground/40">purchase</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground/40 italic">no value →</span>
+                            )}
+                          </div>
                           <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
                         </div>
                       </Link>
