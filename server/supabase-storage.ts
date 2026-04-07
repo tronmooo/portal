@@ -2161,11 +2161,11 @@ export class SupabaseStorage implements IStorage {
     return this.getObligation(id);
   }
 
-  async payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string): Promise<ObligationPayment | undefined> {
+  async payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string, date?: string): Promise<ObligationPayment | undefined> {
     const ob = await this.getObligation(obligationId);
     if (!ob) return undefined;
     const id = randomUUID();
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD only — no timestamps
+    const today = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
     const { error } = await this.supabase.from("obligation_payments").insert({
       id, user_id: this.userId, obligation_id: obligationId, amount, date: today,
       method: method || null, confirmation_number: confirmationNumber || null,

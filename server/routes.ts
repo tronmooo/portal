@@ -1483,9 +1483,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(updated);
   }));
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
-    let { amount, method, confirmationNumber } = req.body;
+    let { amount, method, confirmationNumber, date } = req.body;
     if (amount !== undefined && (typeof amount !== "number" || amount <= 0)) {
       return res.status(400).json({ error: "Payment amount must be a positive number" });
+    }
+    // Validate date if provided
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: "Date must be YYYY-MM-DD format" });
     }
     // Default to obligation's own amount if none provided
     if (amount === undefined || amount === null) {
@@ -1493,7 +1497,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (!ob) return res.status(404).json({ error: "Obligation not found" });
       amount = ob.amount;
     }
-    const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
+    const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber, date);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
     res.status(201).json(payment);
   }));
