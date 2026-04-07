@@ -474,12 +474,12 @@ export default function DocumentViewer({
 
   // Inline mode (inside chat bubble or document dialog)
   if (inline) {
-    // PDFs get full height when inside a dialog; images keep old behavior
-    const maxH = isPdf ? (expanded ? "85vh" : "75vh") : (expanded ? "85vh" : "480px");
+    // PDFs fill their parent container; images keep explicit heights
+    const maxH = expanded ? "85vh" : "480px";
     return (
       <div
         className="rounded-xl overflow-hidden border border-border bg-muted/10 flex flex-col"
-        style={isPdf ? { height: maxH } : undefined}
+        style={isPdf ? { height: '100%', minHeight: '400px' } : undefined}
         data-testid={`doc-viewer-${id}`}
       >
         <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/20 shrink-0">
@@ -628,9 +628,11 @@ export function DocumentViewerDialog({
         ) : (
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             {/* Document preview — takes all available space */}
-            <div className="flex-1 min-h-0 px-4 pb-2">
+            <div className="flex-1 min-h-0 px-4 pb-2" style={{ display: 'flex', flexDirection: 'column' }}>
               {displayData ? (
-                <DocumentViewer id={id} name={name} mimeType={mimeType} data={displayData} inline />
+                <div className="flex-1 min-h-0" style={{ height: '100%' }}>
+                  <DocumentViewer id={id} name={name} mimeType={mimeType} data={displayData} inline />
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-8 text-center">
                   <FileText className="h-10 w-10 text-muted-foreground mb-3" />
