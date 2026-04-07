@@ -1367,7 +1367,7 @@ export class SupabaseStorage implements IStorage {
   async getEvents(): Promise<CalendarEvent[]> {
     // Fetch events AND junction table links in parallel (junction is source of truth)
     const [eventsResult, junctionResult] = await Promise.all([
-      this.supabase.from("events").select("*").eq("user_id", this.userId).is("deleted_at", null).order("date", { ascending: false }),
+      this.supabase.from("events").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
       this.supabase.from("profile_events").select("event_id, profile_id").eq("user_id", this.userId),
     ]);
     if (eventsResult.error) throw eventsResult.error;
@@ -1438,8 +1438,8 @@ export class SupabaseStorage implements IStorage {
 
   async deleteEvent(id: string): Promise<boolean> {
     await this.supabase.from("profile_events").delete().eq("event_id", id).eq("user_id", this.userId);
-    // Soft delete (consistent with tasks/expenses) so events are recoverable
-    const { error } = await this.supabase.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    // Hard delete — events table doesn't have deleted_at column
+    const { error } = await this.supabase.from("events").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
