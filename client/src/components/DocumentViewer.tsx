@@ -441,44 +441,32 @@ export default function DocumentViewer({
   const renderPdf = (maxH: string) => (
     <div
       ref={containerRef}
-      className="relative overflow-hidden rounded-lg bg-muted/30"
-      style={{ maxHeight: maxH }}
+      className="relative overflow-hidden rounded-lg bg-muted/30 flex flex-col"
+      style={{ height: maxH }}
       onWheel={handleWheel}
     >
       <div
-        className="transition-transform duration-150"
+        className="flex-1 transition-transform duration-150"
         style={{
           transform: `scale(${zoom})`,
           transformOrigin: "top center",
           width: zoom > 1 ? `${100 / zoom}%` : "100%",
+          height: "100%",
         }}
       >
         <object
           data={dataUrl}
           type="application/pdf"
-          className="w-full"
-          style={{ height: maxH, minHeight: "400px" }}
+          className="w-full h-full"
+          style={{ minHeight: "100%" }}
         >
-          <div className="flex flex-col items-center justify-center p-8 text-center">
-            <FileText className="h-12 w-12 text-muted-foreground mb-3" />
-            <p className="text-sm font-medium mb-1">{name}</p>
-            <p className="text-xs text-muted-foreground mb-3">
-              PDF preview not available in this view
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const link = document.createElement("a");
-                link.href = dataUrl;
-                link.download = name;
-                link.click();
-              }}
-            >
-              <Download className="h-3.5 w-3.5 mr-1.5" />
-              Download PDF
-            </Button>
-          </div>
+          {/* Fallback: try iframe for better browser support */}
+          <iframe
+            src={dataUrl}
+            title={name}
+            className="w-full h-full border-0"
+            style={{ minHeight: "100%" }}
+          />
         </object>
       </div>
     </div>
@@ -486,13 +474,15 @@ export default function DocumentViewer({
 
   // Inline mode (inside chat bubble or document dialog)
   if (inline) {
-    const maxH = expanded ? "85vh" : "480px"; // Taller default so documents are readable
+    // PDFs get full height when inside a dialog; images keep old behavior
+    const maxH = isPdf ? (expanded ? "85vh" : "75vh") : (expanded ? "85vh" : "480px");
     return (
       <div
-        className="mt-3 rounded-xl overflow-hidden border border-border bg-muted/10"
+        className="rounded-xl overflow-hidden border border-border bg-muted/10 flex flex-col"
+        style={isPdf ? { height: maxH } : undefined}
         data-testid={`doc-viewer-${id}`}
       >
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/20">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/20 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="text-xs font-medium truncate">{name}</span>
@@ -502,15 +492,17 @@ export default function DocumentViewer({
             <ShareButton id={id} name={name} mimeType={mimeType} data={data} size="icon" />
           </div>
         </div>
-        {isImage && renderImage(maxH)}
-        {isPdf && renderPdf(maxH)}
-        {!isImage && !isPdf && (
-          <div className="p-6 text-center">
-            <FileText className="h-10 w-10 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm">{name}</p>
-            <p className="text-xs text-muted-foreground mt-1">{mimeType}</p>
-          </div>
-        )}
+        <div className="flex-1 min-h-0">
+          {isImage && renderImage(maxH)}
+          {isPdf && renderPdf("100%")}
+          {!isImage && !isPdf && (
+            <div className="p-6 text-center">
+              <FileText className="h-10 w-10 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm">{name}</p>
+              <p className="text-xs text-muted-foreground mt-1">{mimeType}</p>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -602,38 +594,57 @@ export function DocumentViewerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[95vw] md:max-w-5xl max-h-[92vh] overflow-y-auto p-4" data-testid={`dialog-doc-viewer-${id}`}>
-        <DialogHeader>
+      <DialogContent className="max-w-[96vw] md:max-w-6xl h-[92vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
+        <DialogHeader className="px-4 py-3 border-b border-border shrink-0">
           <DialogTitle className="text-sm flex items-center gap-2">
             <FileText className="h-4 w-4" />
             {name}
             {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal">{docType.replace(/_/g, ' ')}</span>}
+            {displayData && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-7 px-2"
+                onClick={() => {
+                  const link = document.createElement("a");
+                  const prefix = mimeType === "application/pdf" ? "data:application/pdf;base64," : `data:${mimeType};base64,`;
+                  link.href = displayData.startsWith("data:") ? displayData : prefix + displayData;
+                  link.download = name;
+                  link.click();
+                }}
+              >
+                <Download className="h-3.5 w-3.5 mr-1" />
+                Download
+              </Button>
+            )}
           </DialogTitle>
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center py-12">
+          <div className="flex items-center justify-center flex-1">
             <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          <div className="space-y-4">
-            {/* Document preview */}
-            {displayData ? (
-              <DocumentViewer id={id} name={name} mimeType={mimeType} data={displayData} inline />
-            ) : (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <FileText className="h-10 w-10 text-muted-foreground mb-3" />
-                <p className="text-sm font-medium">{name}</p>
-                <p className="text-xs text-muted-foreground mt-1">No preview available.</p>
-              </div>
-            )}
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {/* Document preview — takes all available space */}
+            <div className="flex-1 min-h-0 px-4 pb-2">
+              {displayData ? (
+                <DocumentViewer id={id} name={name} mimeType={mimeType} data={displayData} inline />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <FileText className="h-10 w-10 text-muted-foreground mb-3" />
+                  <p className="text-sm font-medium">{name}</p>
+                  <p className="text-xs text-muted-foreground mt-1">No preview available.</p>
+                </div>
+              )}
+            </div>
 
-            {/* Extracted data section */}
+            {/* Extracted data section — collapsed at bottom */}
             {extractedData && Object.keys(extractedData).length > 0 && (
-              <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
+              <div className="shrink-0 border-t border-border px-4 py-2 bg-muted/10 max-h-[20vh] overflow-y-auto">
                 <p className="text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider mb-1">Extracted Data</p>
-                <div className="grid grid-cols-2 gap-x-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3">
                   {Object.entries(extractedData)
                     .filter(([_, v]) => v != null && v !== '')
                     .map(([key, rawVal]) => {
@@ -1082,11 +1093,12 @@ function DocumentPreviewPanel({
                 className="w-full"
                 style={{ height: "calc(100vh - 200px)", minHeight: "400px" }}
               >
-                <div className="flex flex-col items-center justify-center p-8 text-center">
-                  <FileText className="h-12 w-12 text-muted-foreground mb-3" />
-                  <p className="text-sm font-medium mb-1">{doc.name}</p>
-                  <p className="text-xs text-muted-foreground">PDF preview not available</p>
-                </div>
+                <iframe
+                  src={dataUrl}
+                  title={doc.name}
+                  className="w-full border-0"
+                  style={{ height: "calc(100vh - 200px)", minHeight: "400px" }}
+                />
               </object>
             </div>
           </div>
