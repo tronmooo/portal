@@ -193,6 +193,52 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
 }
 
 // ============================================================
+// SAFE ENTITY MATCHING — prevents wrong-entity deletes/updates
+// ============================================================
+
+/**
+ * Safely match an entity by name/title.
+ * Prefers exact match, then starts-with, then contains.
+ * For destructive operations (delete/update), returns error with candidates when ambiguous.
+ */
+function safeMatchEntity<T extends { id: string }>(
+  items: T[],
+  searchText: string,
+  getField: (item: T) => string,
+  opts?: { isDestructive?: boolean; filter?: (item: T) => boolean }
+): { match?: T; error?: string; candidates?: Array<{ id: string; name: string }> } {
+  const search = searchText.toLowerCase().trim();
+  if (!search) return { error: "No search text provided" };
+
+  const eligible = opts?.filter ? items.filter(opts.filter) : items;
+
+  // 1. Exact match
+  const exact = eligible.find(item => getField(item).toLowerCase().trim() === search);
+  if (exact) return { match: exact };
+
+  // 2. Starts-with match
+  const startsWith = eligible.filter(item => getField(item).toLowerCase().trim().startsWith(search));
+  if (startsWith.length === 1) return { match: startsWith[0] };
+
+  // 3. Contains match
+  const contains = eligible.filter(item => getField(item).toLowerCase().includes(search));
+  if (contains.length === 1) return { match: contains[0] };
+  if (contains.length === 0) return { error: `Not found: "${searchText}"` };
+
+  // Multiple matches — for destructive ops, don't guess
+  if (opts?.isDestructive || contains.length > 3) {
+    return {
+      error: `Multiple matches for "${searchText}". Please be more specific.`,
+      candidates: contains.slice(0, 5).map(item => ({ id: item.id, name: getField(item) })),
+    };
+  }
+
+  // For non-destructive, return the best match (shortest name = most specific)
+  const best = contains.sort((a, b) => getField(a).length - getField(b).length)[0];
+  return { match: best };
+}
+
+// ============================================================
 // ACTION LOG — in-memory history of the last 20 CRUD operations
 // ============================================================
 
@@ -411,7 +457,10 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     const weight = parseFloat(weightMatch[1]);
     if (weight > 80 && weight < 500) {
       const trackers = await storage.getTrackers();
-      const weightTracker = trackers.find(t => t.name.toLowerCase() === "weight");
+      // Bail to AI if multiple weight trackers exist (ambiguous)
+      const weightTrackers = trackers.filter(t => t.name.toLowerCase().includes("weight"));
+      if (weightTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
+      const weightTracker = weightTrackers[0] || trackers.find(t => t.name.toLowerCase() === "weight");
       if (weightTracker) {
         const entry = await storage.logEntry({ trackerId: weightTracker.id, values: { weight } });
         actions.push({ type: "log_entry", category: "health", data: { trackerName: "weight", weight } });
@@ -427,7 +476,10 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   if (bpMatch) {
     const sys = parseInt(bpMatch[1]), dia = parseInt(bpMatch[2]), pulse = bpMatch[3] ? parseInt(bpMatch[3]) : undefined;
     const trackers = await storage.getTrackers();
-    const bpTracker = trackers.find(t => t.name.toLowerCase().includes("blood pressure"));
+    // Bail to AI if multiple BP trackers exist (ambiguous)
+    const bpTrackers = trackers.filter(t => t.name.toLowerCase().includes("blood pressure"));
+    if (bpTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
+    const bpTracker = bpTrackers[0];
     if (bpTracker) {
       const values: Record<string, any> = { systolic: sys, diastolic: dia };
       if (pulse) values.pulse = pulse;
@@ -444,7 +496,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   if (sleepMatch) {
     const hours = parseFloat(sleepMatch[1]);
     const trackers = await storage.getTrackers();
-    const sleepTracker = trackers.find(t => t.name.toLowerCase() === "sleep");
+    const sleepTrackers = trackers.filter(t => t.name.toLowerCase().includes("sleep"));
+    if (sleepTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
+    const sleepTracker = sleepTrackers[0] || trackers.find(t => t.name.toLowerCase() === "sleep");
     if (sleepTracker) {
       const entry = await storage.logEntry({ trackerId: sleepTracker.id, values: { hours } });
       actions.push({ type: "log_entry", category: "health", data: { trackerName: "sleep", hours } });
@@ -2042,9 +2096,9 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       // Date must be valid YYYY-MM-DD
       if (normalized.date && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date)) {
         warnings.push(`Date "${normalized.date}" is not YYYY-MM-DD format — using today`);
-        normalized.date = new Date().toISOString().slice(0, 10);
+        normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       }
-      if (!normalized.date) normalized.date = new Date().toISOString().slice(0, 10);
+      if (!normalized.date) normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       // Category must be from allowed list
       const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards"];
       if (normalized.category && !validCategories.includes(normalized.category)) {
@@ -2390,7 +2444,7 @@ async function executeTool(name: string, input: any): Promise<any> {
               valuationMethod: valuation.method,
               valuationConfidence: valuation.confidence,
               valuationRange: valuation.details,
-              valuationDate: new Date().toISOString().slice(0, 10),
+              valuationDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
             },
           });
           logger.info("ai", `Auto-valued "${input.name}" at $${valuation.estimatedValue} (${valuation.confidence})`);
@@ -2416,17 +2470,17 @@ async function executeTool(name: string, input: any): Promise<any> {
         }
       }
       
-      // If profile not found, auto-create it as a person (don't silently fail)
+      // If profile not found, return error with suggestions (don't auto-create on typos)
       if (!profile) {
-        const newProfile = await storage.createProfile({
-          name: input.name,
-          type: "person",
-          fields: input.changes?.fields || {},
-          tags: input.changes?.tags || [],
-          notes: input.changes?.notes || "",
-        });
-        logger.info("ai", `Auto-created profile "${input.name}" for update_profile (was not found)`);
-        return newProfile;
+        const suggestions = profiles
+          .filter(p => {
+            const pn = p.name.toLowerCase();
+            const sn = searchName;
+            return pn.includes(sn.slice(0, 3)) || sn.includes(pn.slice(0, 3));
+          })
+          .slice(0, 5)
+          .map(p => p.name);
+        return { error: `Profile "${input.name}" not found.${suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : " Use create_profile to create a new one."}` };
       }
       
       const changes: any = {};
@@ -2439,8 +2493,9 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_profile": {
       const profiles = await storage.getProfiles();
-      const profile = profiles.find(p => p.name.toLowerCase().includes((input.name || "").toLowerCase()));
-      if (!profile) return { error: "Profile not found: " + (input.name || "unknown") };
+      const dpResult = safeMatchEntity(profiles, input.name || "", p => p.name, { isDestructive: true });
+      if (!dpResult.match) return { error: dpResult.error || "Profile not found", candidates: dpResult.candidates };
+      const profile = dpResult.match;
       await storage.deleteProfile(profile.id);
       return { deleted: true, name: profile.name, id: profile.id };
     }
@@ -2492,17 +2547,17 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "complete_task": {
       const tasks = await storage.getTasks();
-      const task = tasks.find(t => t.title.toLowerCase().includes((input.title || "").toLowerCase()) && t.status !== "done");
-      if (!task) return { error: "Task not found: " + (input.title || "unknown") };
-      return storage.updateTask(task.id, { status: "done" });
+      const result = safeMatchEntity(tasks, input.title || "", t => t.title, { filter: t => t.status !== "done" });
+      if (!result.match) return { error: result.error || "Task not found", candidates: result.candidates };
+      return storage.updateTask(result.match.id, { status: "done" });
     }
 
     case "delete_task": {
       const tasks = await storage.getTasks();
-      const task = tasks.find(t => t.title.toLowerCase().includes((input.title || "").toLowerCase()));
-      if (!task) return { error: "Task not found: " + (input.title || "unknown") };
-      await storage.deleteTask(task.id);
-      return { deleted: true, title: task.title, id: task.id };
+      const result = safeMatchEntity(tasks, input.title || "", t => t.title, { isDestructive: true });
+      if (!result.match) return { error: result.error || "Task not found", candidates: result.candidates };
+      await storage.deleteTask(result.match.id);
+      return { deleted: true, title: result.match.title, id: result.match.id };
     }
 
     case "log_tracker_entry": {
@@ -2756,8 +2811,9 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_expense": {
       const expenses = await storage.getExpenses();
-      const expense = expenses.find(e => e.description.toLowerCase().includes((input.description || "").toLowerCase()));
-      if (!expense) return { error: "Expense not found: " + (input.description || "unknown") };
+      const dResult = safeMatchEntity(expenses, input.description || "", e => e.description, { isDestructive: true });
+      if (!dResult.match) return { error: dResult.error || "Expense not found", candidates: dResult.candidates };
+      const expense = dResult.match;
       await storage.deleteExpense(expense.id);
       return { deleted: true, description: expense.description, id: expense.id };
     }
@@ -2825,9 +2881,9 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_event": {
       const events = await storage.getEvents();
-      const event = events.find(e => e.title.toLowerCase().includes((input.title || "").toLowerCase()));
-      if (!event) return { error: "Event not found: " + (input.title || "unknown") };
-      return storage.updateEvent(event.id, input.changes);
+      const ueResult = safeMatchEntity(events, input.title || "", e => e.title);
+      if (!ueResult.match) return { error: ueResult.error || "Event not found", candidates: ueResult.candidates };
+      return storage.updateEvent(ueResult.match.id, input.changes);
     }
 
     case "create_habit": {
@@ -3258,49 +3314,49 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "update_habit": {
       const habits = await storage.getHabits();
-      const match = habits.find(h => h.name.toLowerCase().includes(safeLC(input.name)));
-      if (!match) return { error: `No habit found matching "${input.name}"` };
-      const updated = await storage.updateHabit(match.id, input.changes);
+      const uhResult = safeMatchEntity(habits, input.name || "", h => h.name);
+      if (!uhResult.match) return { error: uhResult.error || "Habit not found", candidates: uhResult.candidates };
+      const updated = await storage.updateHabit(uhResult.match.id, input.changes);
       return { updated: true, habit: updated };
     }
 
     case "delete_habit": {
       const habits = await storage.getHabits();
-      const match = habits.find(h => h.name.toLowerCase().includes(safeLC(input.name)));
-      if (!match) return { error: `No habit found matching "${input.name}"` };
-      await storage.deleteHabit(match.id);
-      return { deleted: true, name: match.name, id: match.id };
+      const dhResult = safeMatchEntity(habits, input.name || "", h => h.name, { isDestructive: true });
+      if (!dhResult.match) return { error: dhResult.error || "Habit not found", candidates: dhResult.candidates };
+      await storage.deleteHabit(dhResult.match.id);
+      return { deleted: true, name: dhResult.match.name, id: dhResult.match.id };
     }
 
     case "delete_obligation": {
       const obligations = await storage.getObligations();
-      const match = obligations.find(o => o.name.toLowerCase().includes(safeLC(input.name)));
-      if (!match) return { error: `No obligation found matching "${input.name}"` };
-      await storage.deleteObligation(match.id);
-      return { deleted: true, name: match.name, id: match.id };
+      const doResult = safeMatchEntity(obligations, input.name || "", o => o.name, { isDestructive: true });
+      if (!doResult.match) return { error: doResult.error || "Obligation not found", candidates: doResult.candidates };
+      await storage.deleteObligation(doResult.match.id);
+      return { deleted: true, name: doResult.match.name, id: doResult.match.id };
     }
 
     case "delete_event": {
       const events = await storage.getEvents();
-      const match = events.find(e => e.title.toLowerCase().includes(safeLC(input.title)));
-      if (!match) return { error: `No event found matching "${input.title}"` };
-      await storage.deleteEvent(match.id);
-      return { deleted: true, title: match.title, id: match.id };
+      const deResult = safeMatchEntity(events, input.title || "", e => e.title, { isDestructive: true });
+      if (!deResult.match) return { error: deResult.error || "Event not found", candidates: deResult.candidates };
+      await storage.deleteEvent(deResult.match.id);
+      return { deleted: true, title: deResult.match.title, id: deResult.match.id };
     }
 
     case "delete_tracker": {
       const trackers = await storage.getTrackers();
-      const match = trackers.find(t => t.name.toLowerCase().includes(safeLC(input.name)));
-      if (!match) return { error: `No tracker found matching "${input.name}"` };
-      await storage.deleteTracker(match.id);
-      return { deleted: true, name: match.name, id: match.id };
+      const dtResult = safeMatchEntity(trackers, input.name || "", t => t.name, { isDestructive: true });
+      if (!dtResult.match) return { error: dtResult.error || "Tracker not found", candidates: dtResult.candidates };
+      await storage.deleteTracker(dtResult.match.id);
+      return { deleted: true, name: dtResult.match.name, id: dtResult.match.id };
     }
 
     case "update_tracker": {
       const trackers = await storage.getTrackers();
-      const tracker = trackers.find(t => t.name.toLowerCase().includes(safeLC(input.trackerName)));
-      if (!tracker) return { error: `No tracker found matching "${input.trackerName}"` };
-      const updated = await storage.updateTracker(tracker.id, input.changes);
+      const utResult = safeMatchEntity(trackers, input.trackerName || "", t => t.name);
+      if (!utResult.match) return { error: utResult.error || "Tracker not found", candidates: utResult.candidates };
+      const updated = await storage.updateTracker(utResult.match.id, input.changes);
       return { updated: true, tracker: updated };
     }
 
@@ -3322,8 +3378,9 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_artifact": {
       const artifacts = await storage.getArtifacts();
-      const match = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
-      if (!match) return { error: `No artifact found matching "${input.title}"` };
+      const daResult = safeMatchEntity(artifacts, input.title || "", a => a.title, { isDestructive: true });
+      if (!daResult.match) return { error: daResult.error || "Artifact not found", candidates: daResult.candidates };
+      const match = daResult.match;
       await storage.deleteArtifact(match.id);
       return { deleted: true, title: match.title, id: match.id };
     }
@@ -3357,7 +3414,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "bulk_complete_tasks": {
       const tasks = await storage.getTasks();
-      const now = new Date().toISOString().slice(0, 10);
+      const now = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       let toComplete: typeof tasks;
       if (input.filter === "all") {
         toComplete = tasks.filter(t => t.status !== "done");
@@ -4265,7 +4322,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     let documentPreview: { id: string; name: string; mimeType: string; data: string } | undefined;
     const documentPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
     let iterations = 0;
+    let totalToolCalls = 0;
     const MAX_ITERATIONS = 15; // Each iteration is a full AI round-trip; increased to handle 10+ action messages
+    const MAX_TOOL_CALLS = 30; // Safety limit on total tool executions per message
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -4316,6 +4375,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       // Execute each tool call and collect results
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
       for (const toolUse of toolUses) {
+        // Safety limit: stop executing tools if we've hit the per-message cap
+        if (totalToolCalls >= MAX_TOOL_CALLS) {
+          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "Tool call limit reached for this message. Please send a new message for additional actions." }), is_error: true });
+          continue;
+        }
+        totalToolCalls++;
+
         // Dedup: skip duplicate create calls for the same entity within this response
         const inp = toolUse.input as Record<string, any>;
         const createToolNames = ["create_obligation", "create_expense", "create_event", "create_task", "create_profile"];
@@ -4397,6 +4463,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             type: "tool_result",
             tool_use_id: toolUse.id,
             content: JSON.stringify({ error: err.message }),
+            is_error: true,
           });
         }
       }

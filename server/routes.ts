@@ -202,6 +202,9 @@ export async function registerRoutes(
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Message required" });
       }
+      if (message.length > 5000) {
+        return res.status(400).json({ error: "Message too long (max 5000 characters)" });
+      }
       const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
       res.json(result);
     } catch (err: any) {

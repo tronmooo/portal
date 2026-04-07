@@ -709,11 +709,30 @@ const WELCOME_MSG: ChatMessage = {
   content: "Welcome to Portol. I'm your AI assistant \u2014 tell me what to log, track, create, or find. I can handle multiple things at once.\n\nTry something like: \"I ate a chicken sandwich, ran 2 miles, and spent $12 on lunch\"\n\nYou can also upload photos or documents \u2014 I'll extract data and route it to the right profile.",
   timestamp: new Date().toISOString(),
 };
-let _chatCache: ChatMessage[] = [WELCOME_MSG];
+// Persist chat history to sessionStorage so it survives page reloads
+function loadChatHistory(): ChatMessage[] {
+  try {
+    const stored = sessionStorage.getItem("portol_chat_history");
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore parse errors */ }
+  return [WELCOME_MSG];
+}
+function saveChatHistory(messages: ChatMessage[]) {
+  try {
+    // Keep last 100 messages to avoid storage bloat
+    const toSave = messages.slice(-100);
+    sessionStorage.setItem("portol_chat_history", JSON.stringify(toSave));
+  } catch { /* storage full — ignore */ }
+}
+let _chatCache: ChatMessage[] = loadChatHistory();
 
 /** Clear module-level chat cache — must be called on sign-out to prevent data leakage between users */
 export function clearChatCache() {
   _chatCache = [WELCOME_MSG];
+  try { sessionStorage.removeItem("portol_chat_history"); } catch {}
 }
 
 export default function ChatPage() {
@@ -728,6 +747,7 @@ export default function ChatPage() {
     setMessagesRaw(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       _chatCache = next; // Persist across navigation
+      saveChatHistory(next); // Persist across page reloads
       return next;
     });
   };
