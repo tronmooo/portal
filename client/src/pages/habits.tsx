@@ -28,6 +28,7 @@ function HabitCard({ habit }: { habit: Habit }) {
   const targetPerDay = (habit as any).targetPerDay || 1;
   const completedToday = todayCheckins >= targetPerDay;
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
+  const accentColor = habit.color || "#4F98A3";
 
   const checkinMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
@@ -36,27 +37,19 @@ function HabitCard({ habit }: { habit: Habit }) {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       const newCount = todayCheckins + 1;
       if (newCount >= targetPerDay) {
-        toast({ title: `${habit.name} — Done for today`, description: "Keep it up!" });
+        toast({ title: `✨ ${habit.name} complete!`, description: targetPerDay > 1 ? `All ${targetPerDay} done for today.` : "Keep the streak going!" });
       } else {
-        toast({ title: `${habit.name} — ${newCount}/${targetPerDay}`, description: `${targetPerDay - newCount} more to go` });
+        toast({ title: `${habit.name} — ${newCount} / ${targetPerDay}`, description: `${targetPerDay - newCount} more to go today` });
       }
     },
-    onError: (err: Error) => toast({ title: `Failed to check in ${habit.name}`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error) => toast({ title: `Failed to log ${habit.name}`, description: formatApiError(err), variant: "destructive" }),
   });
 
   const restoreMutation = useMutation({
     mutationFn: () => apiRequest("PATCH", `/api/habits/${habit.id}/restore`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      toast({ title: `"${habit.name}" restored` });
-    },
-    onError: (err: Error) => toast({ title: `Failed to restore "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `"${habit.name}" restored` }); },
   });
 
   const deleteMutation = useMutation({
@@ -65,146 +58,159 @@ function HabitCard({ habit }: { habit: Habit }) {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      toast({
-        title: `"${habit.name}" deleted`,
-        description: "Habit has been removed",
-        action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction>,
-      });
+      toast({ title: `"${habit.name}" deleted`, action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction> });
     },
-    onError: (err: Error) => toast({ title: `Failed to delete "${habit.name}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
-  // Build last 14 days grid (multi-daily aware)
+  // 14-day grid
   const last14: { date: string; done: boolean; count: number }[] = [];
   for (let i = 13; i >= 0; i--) {
     const dd = new Date(Date.now() - i * 86400000);
-    const dateStr = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
-    const count = habit.checkins.filter(c => c.date === dateStr).length;
-    last14.push({ date: dateStr, done: count >= targetPerDay, count });
+    const ds = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
+    const count = habit.checkins.filter(c => c.date === ds).length;
+    last14.push({ date: ds, done: count >= targetPerDay, count });
   }
+  const completedDays = last14.filter(d => d.done).length;
 
   return (
-    <Card className="relative overflow-hidden" data-testid={`card-habit-${habit.id}`}>
-      <div className="absolute top-0 left-0 w-1 h-full" style={{ backgroundColor: habit.color || "#4F98A3" }} />
-      <CardHeader className="pb-2 pl-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Icon className="h-4 w-4" style={{ color: habit.color || "#4F98A3" }} />
-            <CardTitle className="text-sm font-medium">
-              <EditableTitle
-                value={habit.name}
-                onSave={async (newName) => {
-                  await apiRequest("PATCH", `/api/habits/${habit.id}`, { name: newName });
-                  queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-                  toast({ title: `Renamed to "${newName}"` });
-                }}
-              />
-            </CardTitle>
+    <div
+      className={`relative rounded-xl border overflow-hidden transition-all ${
+        completedToday ? "border-[--accent]/30 bg-[--accent]/5" : "border-border bg-card"
+      }`}
+      style={{ "--accent": accentColor } as any}
+      data-testid={`card-habit-${habit.id}`}
+    >
+      {/* Accent top bar */}
+      <div className="h-0.5 w-full" style={{ background: `linear-gradient(90deg, ${accentColor}, ${accentColor}40)` }} />
+
+      <div className="px-4 pt-3 pb-3">
+        {/* Header row */}
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: accentColor + "22" }}>
+              <Icon className="h-4 w-4" style={{ color: accentColor }} />
+            </div>
+            <div className="min-w-0">
+              <div className="font-semibold text-sm leading-tight">
+                <EditableTitle
+                  value={habit.name}
+                  onSave={async (n) => {
+                    await apiRequest("PATCH", `/api/habits/${habit.id}`, { name: n });
+                    queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+                    toast({ title: `Renamed to “${n}”` });
+                  }}
+                />
+              </div>
+              <div className="flex items-center gap-2 mt-0.5">
+                {habit.currentStreak > 0 ? (
+                  <span className="flex items-center gap-1 text-xs font-medium text-orange-500">
+                    <Flame className="h-3 w-3" />{habit.currentStreak}d
+                  </span>
+                ) : null}
+                {habit.longestStreak > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Trophy className="h-3 w-3" />Best {habit.longestStreak}d
+                  </span>
+                )}
+                <span className="text-xs text-muted-foreground capitalize">{habit.frequency}{targetPerDay > 1 ? ` · ${targetPerDay}×` : ""}</span>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant={completedToday ? "secondary" : "default"}
-              disabled={completedToday || checkinMutation.isPending}
-              onClick={() => checkinMutation.mutate()}
-              className="h-7 text-xs"
-              data-testid={`button-checkin-${habit.id}`}
-            >
-              {completedToday
-                ? <><Check className="h-3 w-3 mr-1" /> Done</>
-                : targetPerDay > 1
-                  ? `${todayCheckins}/${targetPerDay}`
-                  : "Check In"}
-            </Button>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                  aria-label={`Delete ${habit.name}`}
-                  data-testid={`button-delete-habit-${habit.id}`}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete "{habit.name}"?</AlertDialogTitle>
-                  <AlertDialogDescription>This habit will be deleted. You can undo this action briefly after deletion.</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => deleteMutation.mutate()}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    disabled={deleteMutation.isPending}
-                  >
-                    {deleteMutation.isPending ? "Deleting..." : "Delete"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="pl-5 pb-3">
-        {/* Streak badges + progress */}
-        <div className="flex items-center gap-3 mb-3">
-          {habit.currentStreak > 0 ? (
-            <div className="flex items-center gap-1">
-              <Flame className="h-3.5 w-3.5 text-orange-500" />
-              <span className="text-xs font-semibold">{habit.currentStreak}d streak</span>
-            </div>
-          ) : todayCheckins > 0 && !completedToday ? (
-            <div className="flex items-center gap-1">
-              <Flame className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground">{todayCheckins}/{targetPerDay} today</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1">
-              <Flame className="h-3.5 w-3.5 text-muted-foreground/50" />
-              <span className="text-xs text-muted-foreground">No streak yet</span>
-            </div>
-          )}
-          {habit.longestStreak > 0 && (
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <Trophy className="h-3 w-3" />
-              <span className="text-xs">Best: {habit.longestStreak}d</span>
-            </div>
-          )}
-          <Badge variant="outline" className="text-xs h-5">{habit.frequency}{targetPerDay > 1 ? ` ${targetPerDay}x` : ""}</Badge>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button className="p-1.5 rounded-lg text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0">
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader><AlertDialogTitle>Delete “{habit.name}”?</AlertDialogTitle><AlertDialogDescription>This habit and all its history will be removed.</AlertDialogDescription></AlertDialogHeader>
+              <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => deleteMutation.mutate()} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{deleteMutation.isPending ? "Deleting…" : "Delete"}</AlertDialogAction></AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
-        {/* 14-day grid */}
-        <div className="flex gap-1">
-          {last14.map((day, i) => {
-            const partial = targetPerDay > 1 && day.count > 0 && !day.done;
+        {/* TAP RINGS — one per required check-in */}
+        <div className="flex items-center gap-3 mb-3">
+          {Array.from({ length: targetPerDay }).map((_, idx) => {
+            const filled = idx < todayCheckins;
             return (
-              <div
-                key={i}
-                className="w-5 h-5 rounded-sm flex items-center justify-center text-2xs"
-                style={{
-                  backgroundColor: day.done ? (habit.color || "#4F98A3") : partial ? (habit.color || "#4F98A3") : "var(--color-muted)",
-                  opacity: day.done ? 1 : partial ? 0.5 : 0.3,
-                }}
-                title={`${day.date}${day.done ? " ✓" : day.count > 0 ? ` ${day.count}/${targetPerDay}` : ""}`}
+              <button
+                key={idx}
+                onClick={() => !filled && !checkinMutation.isPending && checkinMutation.mutate()}
+                disabled={filled || checkinMutation.isPending}
+                data-testid={`button-ring-${habit.id}-${idx}`}
+                className="relative transition-all active:scale-90"
+                title={filled ? "Completed" : `Tap to log (${idx + 1}/${targetPerDay})`}
               >
-                {day.done ? <Check className="h-2.5 w-2.5 text-white" /> : partial ? <span className="text-white font-bold">{day.count}</span> : null}
-              </div>
+                {/* Outer ring */}
+                <div
+                  className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200"
+                  style={{
+                    background: filled
+                      ? accentColor
+                      : "transparent",
+                    border: `2.5px solid ${filled ? accentColor : accentColor + "55"}`,
+                    boxShadow: filled ? `0 0 12px ${accentColor}55` : "none",
+                  }}
+                >
+                  {filled ? (
+                    <Check className="h-5 w-5 text-white" strokeWidth={3} />
+                  ) : checkinMutation.isPending && idx === todayCheckins ? (
+                    <div className="h-4 w-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: accentColor, borderTopColor: "transparent" }} />
+                  ) : (
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: accentColor + "55" }} />
+                  )}
+                </div>
+                {/* Label */}
+                {targetPerDay > 1 && (
+                  <div className="absolute -bottom-4 left-0 right-0 text-center">
+                    <span className="text-xs text-muted-foreground">{idx + 1}</span>
+                  </div>
+                )}
+              </button>
             );
           })}
+          <div className="flex-1 ml-1">
+            {completedToday ? (
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: accentColor }} />
+                <span className="text-xs font-semibold" style={{ color: accentColor }}>Done for today!</span>
+              </div>
+            ) : todayCheckins > 0 ? (
+              <span className="text-xs text-muted-foreground">{targetPerDay - todayCheckins} more to go</span>
+            ) : (
+              <span className="text-xs text-muted-foreground">Tap to check in</span>
+            )}
+          </div>
         </div>
-        <div className="flex justify-between text-xs-tight text-muted-foreground mt-1">
-          <span>14 days ago</span>
-          <span>Today</span>
+
+        {/* 14-day activity strip */}
+        <div className="mt-5">
+          <div className="flex gap-1 items-end h-4">
+            {last14.map((day, i) => {
+              const pct = targetPerDay > 0 ? Math.min(day.count / targetPerDay, 1) : 0;
+              return (
+                <div
+                  key={i}
+                  title={`${day.date}: ${day.done ? "done" : day.count > 0 ? `${day.count}/${targetPerDay}` : "—"}`}
+                  className="flex-1 rounded-sm transition-all"
+                  style={{
+                    height: day.done ? "100%" : pct > 0 ? `${Math.round(pct * 60) + 40}%` : "25%",
+                    backgroundColor: day.done ? accentColor : pct > 0 ? accentColor + "88" : "var(--muted)",
+                    opacity: i === 13 ? 1 : 0.7 + (i / 13) * 0.3,
+                  }}
+                />
+              );
+            })}
+          </div>
+          <div className="flex justify-between mt-1">
+            <span className="text-xs text-muted-foreground/50">14d ago</span>
+            <span className="text-xs text-muted-foreground/70 font-medium">{completedDays}/14 days</span>
+            <span className="text-xs text-muted-foreground/50">today</span>
+          </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
