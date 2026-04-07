@@ -202,14 +202,14 @@ function ExtractionConfirmation({
 
   const handleConfirm = async () => {
     setConfirming(true);
-    const confirmedFields = fields.filter((f) => f.selected && !f.isDate).map((f) => ({ key: f.key, value: f.value }));
+    const confirmedFields = fields.filter((f) => f.selected && !f.isDate && f.key).map((f) => ({ key: f.key, value: f.value }));
     const createCalendarEvents = fields
-      .filter((f) => f.selected && f.isDate && f.suggestedEvent)
+      .filter((f) => f.selected && f.isDate && f.suggestedEvent && f.key && f.value)
       .map((f) => ({
         field: f.key,
         date: String(f.value),
         title: f.suggestedEvent!,
-        category: /expir|renew/i.test(f.key) ? "finance" : /appoint|visit/i.test(f.key) ? "health" : "other",
+        category: /expir|renew/i.test(f.key || "") ? "finance" : /appoint|visit/i.test(f.key || "") ? "health" : "other",
       }));
     const success = await onConfirm({
       extractionId: extraction.extractionId,
@@ -787,7 +787,7 @@ export default function ChatPage() {
     },
     onSuccess: (data) => {
       const assistantMsg: ChatMessage = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: "assistant",
         content: data.reply,
         timestamp: new Date().toISOString(),
@@ -803,7 +803,7 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now().toString(),
+          id: crypto.randomUUID(),
           role: "assistant",
           content: `Something went wrong: ${err.message || "Network error"}. Please try again.`,
           timestamp: new Date().toISOString(),
@@ -825,7 +825,7 @@ export default function ChatPage() {
     },
     onSuccess: (data) => {
       const assistantMsg: ChatMessage = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: "assistant",
         content: data.reply,
         timestamp: new Date().toISOString(),
@@ -842,7 +842,7 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now().toString(),
+          id: crypto.randomUUID(),
           role: "assistant",
           content: `Failed to process the uploaded file: ${err.message || "Network error"}. Please try again.`,
           timestamp: new Date().toISOString(),
@@ -885,7 +885,7 @@ export default function ChatPage() {
         .map((r) => r.documentPreview!);
 
       const assistantMsg: ChatMessage = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: "assistant",
         content,
         timestamp: new Date().toISOString(),
@@ -916,7 +916,7 @@ export default function ChatPage() {
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now().toString(),
+          id: crypto.randomUUID(),
           role: "assistant",
           content: `Failed to process the batch upload: ${err.message || "Network error"}. Please try again.`,
           timestamp: new Date().toISOString(),
@@ -1004,7 +1004,7 @@ export default function ChatPage() {
 
     for (const file of files) {
       if (file.size > 10 * 1024 * 1024) {
-        alert(`File "${file.name}" is too large. Maximum size is 10MB.`);
+        toast({ title: `File "${file.name}" is too large (max 10MB)`, variant: "destructive" });
         continue;
       }
 
@@ -1020,6 +1020,9 @@ export default function ChatPage() {
         };
         setAttachments((prev) => [...prev, newAttachment]);
       };
+      reader.onerror = () => {
+        toast({ title: `Failed to read "${file.name}"`, variant: "destructive" });
+      };
       reader.readAsDataURL(file);
     }
 
@@ -1033,7 +1036,7 @@ export default function ChatPage() {
     const att = attachments[0];
 
     const userMsg: ChatMessage = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       role: "user",
       content: input.trim() || `Uploaded: ${att.name}`,
       timestamp: new Date().toISOString(),
@@ -1067,7 +1070,7 @@ export default function ChatPage() {
 
     const fileNames = attachments.map((a) => a.name).join(", ");
     const userMsg: ChatMessage = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       role: "user",
       content: input.trim() || `Uploaded ${attachments.length} files: ${fileNames}`,
       timestamp: new Date().toISOString(),
@@ -1114,7 +1117,7 @@ export default function ChatPage() {
     if (!msg) return;
 
     const userMsg: ChatMessage = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       role: "user",
       content: msg,
       timestamp: new Date().toISOString(),
@@ -1313,8 +1316,8 @@ export default function ChatPage() {
                                 try {
                                   await apiRequest("DELETE", `/api/${ep}/${entityId}`);
                                   // Mark as undone in local state
-                                  action.data._undone = true;
-                                  setMessages(prev => [...prev]);
+                                  action.data = { ...action.data, _undone: true };
+                                  setMessages(prev => prev.map(m => ({ ...m })));
                                   queryClient.invalidateQueries();
                                   toast({ title: "Action undone" });
                                 } catch {

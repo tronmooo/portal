@@ -286,7 +286,10 @@ function markCreation(userId: string, key: string) {
   if (userMap) userMap.set(key, Date.now());
   // Cleanup old entries
   setTimeout(() => {
-    recentCreations.get(userId)?.delete(key);
+    const userMap = recentCreations.get(userId);
+    userMap?.delete(key);
+    // Clean up empty user maps to prevent unbounded memory growth
+    if (userMap && userMap.size === 0) recentCreations.delete(userId);
   }, 60000);
 }
 
@@ -534,7 +537,7 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   const moodMatch = lower.match(/^(?:mood|feeling|i\s+feel)\s+(amazing|great|good|okay|neutral|bad|awful|terrible)/);
   if (moodMatch) {
     const mood = moodMatch[1] as any;
-    const entry = await storage.createJournalEntry({ mood, content: message, tags: [] });
+    const entry = await storage.createJournalEntry({ mood, content: "", tags: [] });
     actions.push({ type: "journal_entry", category: "journal", data: { mood } });
     results.push(entry);
     return { matched: true, reply: `Logged mood: ${mood}. Add more thoughts whenever you want.`, actions, results };
@@ -2174,7 +2177,7 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
     case "create_profile": {
       if (!normalized.name?.trim()) errors.push("Profile name is required");
       else normalized.name = normalized.name.trim();
-      const validTypes = ["person", "pet", "vehicle", "asset", "subscription", "loan", "investment", "property", "account", "insurance", "medical"];
+      const validTypes = ["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "investment", "property", "account", "insurance", "medical"];
       if (normalized.type && !validTypes.includes(normalized.type)) {
         warnings.push(`Type "${normalized.type}" is not standard — defaulting to "person"`);
         normalized.type = "person";
@@ -3482,7 +3485,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           if (gcalMappings.has(gEventId)) continue;
 
           const startParsed = new Date(gcEvent.start);
-          const eventDate = startParsed.toISOString().slice(0, 10);
+          const eventDate = startParsed.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
           const isDuplicate = existingEvents.some(
             (e: any) => e.title === gcEvent.title && e.date === eventDate
           );
@@ -3657,7 +3660,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           valuationMethod: valuation.method,
           valuationConfidence: valuation.confidence,
           valuationRange: valuation.details,
-          valuationDate: new Date().toISOString().slice(0, 10),
+          valuationDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
           previousValue: oldValue,
         },
       });

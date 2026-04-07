@@ -477,6 +477,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {
+    const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "investment", "property", "account", "insurance", "medical"]);
+    if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
     const now = new Date().toISOString();
     const id = randomUUID();
     // Auto-assign parent to self profile if not specified for child types
@@ -1266,6 +1268,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createExpense(data: InsertExpense): Promise<Expense> {
+    if (typeof data.amount !== 'number' || data.amount <= 0) throw new Error("Expense amount must be a positive number");
     const id = randomUUID();
     const now = new Date().toISOString();
     // Auto-link to self profile if no profiles specified
@@ -1364,7 +1367,7 @@ export class SupabaseStorage implements IStorage {
   async getEvents(): Promise<CalendarEvent[]> {
     // Fetch events AND junction table links in parallel (junction is source of truth)
     const [eventsResult, junctionResult] = await Promise.all([
-      this.supabase.from("events").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
+      this.supabase.from("events").select("*").eq("user_id", this.userId).is("deleted_at", null).order("date", { ascending: false }),
       this.supabase.from("profile_events").select("event_id, profile_id").eq("user_id", this.userId),
     ]);
     if (eventsResult.error) throw eventsResult.error;
@@ -1435,7 +1438,8 @@ export class SupabaseStorage implements IStorage {
 
   async deleteEvent(id: string): Promise<boolean> {
     await this.supabase.from("profile_events").delete().eq("event_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("events").delete().eq("id", id).eq("user_id", this.userId);
+    // Soft delete (consistent with tasks/expenses) so events are recoverable
+    const { error } = await this.supabase.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -2334,7 +2338,7 @@ export class SupabaseStorage implements IStorage {
     const q = query.toLowerCase();
     const memories = await this.getMemories();
     return memories.filter(m =>
-      m.key.toLowerCase().includes(q) ||
+      (m.key || "").toLowerCase().includes(q) ||
       m.value.toLowerCase().includes(q) ||
       m.category.toLowerCase().includes(q)
     );
@@ -2489,6 +2493,7 @@ export class SupabaseStorage implements IStorage {
         const tracker = await this.getTracker(goal.trackerId);
         if (!tracker || tracker.entries.length === 0) return goal.current;
         const latest = tracker.entries[tracker.entries.length - 1];
+        if (!tracker.fields?.length) return goal.current;
         const primary = tracker.fields.find((f: any) => f.isPrimary) || tracker.fields.find((f: any) => f.type === "number");
         if (primary) return parseFloat(latest.values[primary.name] || "0") || goal.current;
         return parseFloat(Object.values(latest.values)[0] as string || "0") || goal.current;
@@ -2975,7 +2980,7 @@ export class SupabaseStorage implements IStorage {
     }
     const memories = await this.getMemories();
     for (const m of memories) {
-      if (m.key.toLowerCase().includes(q) || m.value.toLowerCase().includes(q)) results.push({ ...m, _type: "memory" });
+      if ((m.key || "").toLowerCase().includes(q) || (m.value || "").toLowerCase().includes(q)) results.push({ ...m, _type: "memory" });
     }
 
     // Enhance with entity links — limit to first 10 results to avoid N+1 explosion
