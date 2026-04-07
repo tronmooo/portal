@@ -32,6 +32,7 @@ import {
   Flame,
   BookOpen,
   RotateCcw,
+  Pencil,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
@@ -735,6 +736,156 @@ export function clearChatCache() {
   try { sessionStorage.removeItem("portol_chat_history"); } catch {}
 }
 
+// ─────────────────────────────────────────────
+// Confirmation card with inline Edit + Undo
+// ─────────────────────────────────────────────
+function ConfirmationCard({ name, type, amount, date, profile, warnings, entityId, endpoint, isDeleted, result, onDeleted }: {
+  name: string; type: string; amount: string | null; date: string; profile: string;
+  warnings: string[]; entityId?: string; endpoint: string | null; isDeleted?: boolean;
+  result: any; onDeleted: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(name);
+  const [editAmount, setEditAmount] = useState(result?.amount?.toString() || "");
+  const [editDate, setEditDate] = useState(date?.slice(0, 10) || "");
+  const [saving, setSaving] = useState(false);
+  const [deleted, setDeleted] = useState(!!isDeleted);
+  const { toast } = useToast();
+
+  if (deleted) {
+    return (
+      <div className="flex items-center gap-2 text-xs bg-destructive/5 rounded-lg px-3 py-2 border border-destructive/20 opacity-60">
+        <X className="h-3 w-3 text-destructive" />
+        <span className="line-through text-muted-foreground">{name} {amount && `(${amount})`} — undone</span>
+      </div>
+    );
+  }
+
+  const handleSave = async () => {
+    if (!entityId || !endpoint) return;
+    setSaving(true);
+    try {
+      const patch: any = {};
+      if (endpoint === "expenses") {
+        patch.description = editName;
+        patch.amount = parseFloat(editAmount);
+        if (editDate) patch.date = editDate;
+      } else if (endpoint === "tasks") {
+        patch.title = editName;
+      } else if (endpoint === "obligations") {
+        patch.name = editName;
+        patch.amount = parseFloat(editAmount);
+      } else if (endpoint === "events") {
+        patch.title = editName;
+        if (editDate) patch.date = editDate;
+      }
+      await apiRequest("PATCH", `/api/${endpoint}/${entityId}`, patch);
+      // Update display values
+      result.title = editName; result.name = editName; result.description = editName;
+      result.amount = parseFloat(editAmount) || result.amount;
+      result.date = editDate || result.date;
+      toast({ title: "Updated" });
+      setEditing(false);
+    } catch { toast({ title: "Failed to update", variant: "destructive" }); }
+    setSaving(false);
+  };
+
+  const handleUndo = async () => {
+    if (!entityId || !endpoint) return;
+    try {
+      await apiRequest("DELETE", `/api/${endpoint}/${entityId}`);
+      setDeleted(true);
+      onDeleted();
+      toast({ title: "Removed" });
+      queryClient.invalidateQueries();
+    } catch { toast({ title: "Failed to undo", variant: "destructive" }); }
+  };
+
+  return (
+    <div className="text-xs bg-muted/30 rounded-lg border border-border/30 overflow-hidden" data-testid="confirmation-card">
+      {editing ? (
+        <div className="px-3 py-2 space-y-2">
+          <input
+            autoFocus
+            value={editName}
+            onChange={e => setEditName(e.target.value)}
+            className="w-full bg-background border border-border rounded px-2 py-1 text-xs font-medium text-foreground"
+            placeholder="Name / description"
+          />
+          <div className="flex gap-1.5">
+            {(endpoint === "expenses" || endpoint === "obligations") && (
+              <input
+                value={editAmount}
+                onChange={e => setEditAmount(e.target.value)}
+                type="number"
+                step="0.01"
+                className="w-24 bg-background border border-border rounded px-2 py-1 text-xs tabular-nums"
+                placeholder="Amount"
+              />
+            )}
+            {(endpoint === "expenses" || endpoint === "events") && (
+              <input
+                value={editDate}
+                onChange={e => setEditDate(e.target.value)}
+                type="date"
+                className="flex-1 bg-background border border-border rounded px-2 py-1 text-xs"
+              />
+            )}
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex-1 py-1 rounded text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 font-medium"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              className="px-3 py-1 rounded text-xs border border-border hover:bg-muted/60 text-muted-foreground"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2 px-3 py-2">
+          <div className="flex-1 min-w-0 space-y-0.5">
+            <div className="font-medium text-foreground truncate">{editName}</div>
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+              {type && <span className="capitalize">{type}</span>}
+              {editAmount && parseFloat(editAmount) > 0 && <span className="tabular-nums text-green-500">${parseFloat(editAmount).toFixed(2)}</span>}
+              {editDate && <span>{editDate.slice(0, 10)}</span>}
+              {typeof profile === "string" && profile && <span className="text-primary/80">→ {profile.slice(0, 20)}</span>}
+            </div>
+            {warnings.length > 0 && <div className="text-amber-500">⚠ {warnings.join(", ")}</div>}
+          </div>
+          <div className="flex items-center gap-1 shrink-0 ml-1">
+            {entityId && endpoint && (
+              <button
+                onClick={() => setEditing(true)}
+                className="p-1 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                title="Edit"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
+            {entityId && endpoint && (
+              <button
+                onClick={handleUndo}
+                className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                title="Undo / Remove"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatPage() {
   useEffect(() => { document.title = "Chat — Portol"; }, []);
   useEffect(() => {
@@ -1339,33 +1490,39 @@ export default function ChatPage() {
                   <div className="mt-2 space-y-1.5">
                     {msg.results.slice(0, 10).map((result: any, ri: number) => {
                       if (!result || result.error) return null;
-                      // Determine what type of entity was created
                       const name = result.title || result.name || result.description || "";
                       const type = result.type || result.category || "";
                       const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
                       const date = result.date || result.dueDate || result.nextDueDate || "";
                       const profile = result.forProfile || result.linkedProfiles?.[0] || "";
                       const warnings = result._validationWarnings || [];
+                      const entityId = result.id;
+                      const isDeleted = result._deleted;
                       
-                      if (!name && !amount) return null; // Skip empty results
+                      if (!name && !amount) return null;
+                      
+                      // Determine entity endpoint for edit/undo
+                      const ep = result.status !== undefined ? "tasks"
+                        : result.amount !== undefined ? "expenses"
+                        : result.frequency !== undefined ? "obligations"
+                        : result.date !== undefined ? "events"
+                        : null;
                       
                       return (
-                        <div key={ri} className="flex items-start gap-2 text-xs bg-muted/30 rounded-lg px-3 py-2 border border-border/30" data-testid={`confirmation-card-${ri}`}>
-                          <div className="flex-1 min-w-0 space-y-0.5">
-                            <div className="font-medium text-foreground truncate">{name}</div>
-                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
-                              {type && <span>{type}</span>}
-                              {amount && <span className="tabular-nums">{amount}</span>}
-                              {date && <span>{date.slice(0, 10)}</span>}
-                              {typeof profile === "string" && profile && <span>→ {profile}</span>}
-                            </div>
-                            {warnings.length > 0 && (
-                              <div className="text-amber-500 text-xs">
-                                ⚠ {warnings.join(", ")}
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                        <ConfirmationCard
+                          key={`${ri}-${entityId}`}
+                          name={name}
+                          type={type}
+                          amount={amount}
+                          date={date}
+                          profile={profile}
+                          warnings={warnings}
+                          entityId={entityId}
+                          endpoint={ep}
+                          isDeleted={isDeleted}
+                          result={result}
+                          onDeleted={() => { result._deleted = true; setMessages(prev => prev.map(m => ({ ...m }))); }}
+                        />
                       );
                     })}
                   </div>

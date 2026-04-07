@@ -1223,7 +1223,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Expenses ---
   {
     name: "create_expense",
-    description: "Log a financial expense.",
+    description: "Log a one-time financial expense. Use this when the user says 'spent X on Y', 'paid X for Y', 'bought X', or mentions any one-time payment. This includes rent payments (e.g. 'paid rent $1500'), groceries, gas, dining, utilities, medical bills, etc. If the user just spent money on something — use this, not create_obligation.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1313,7 +1313,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Obligations ---
   {
     name: "create_obligation",
-    description: "Create a recurring bill, subscription, or financial obligation. A subscription profile is auto-created and linked to the specified person/pet.",
+    description: "Create a RECURRING bill, subscription, loan payment, or ongoing financial obligation that repeats on a schedule. ONLY use this when the user explicitly mentions recurring/monthly/weekly/yearly payments, subscriptions, or bills. DO NOT use for one-time expenses. 'Spent $1500 on rent' = expense (use create_expense). 'I pay $1500 rent every month' = obligation. 'Netflix subscription' = obligation. 'Spent $50 on groceries' = expense.",
     input_schema: {
       type: "object" as const,
       properties: {
