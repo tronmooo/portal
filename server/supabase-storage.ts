@@ -977,10 +977,12 @@ export class SupabaseStorage implements IStorage {
   // TRACKERS
   // ============================================================
   async getTrackers(): Promise<Tracker[]> {
-    // Fetch all trackers and ALL entries in 2 parallel queries (not N+1)
-    const [trackersResult, entriesResult] = await Promise.all([
+    // Fetch trackers, entries, AND junction table links in 3 parallel queries
+    // Junction table is the source of truth for tracker→profile ownership
+    const [trackersResult, entriesResult, junctionResult] = await Promise.all([
       this.supabase.from("trackers").select("*").eq("user_id", this.userId),
       this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).order("timestamp", { ascending: true }),
+      this.supabase.from("profile_trackers").select("tracker_id, profile_id").eq("user_id", this.userId),
     ]);
     if (trackersResult.error) throw trackersResult.error;
     // Group entries by tracker_id
@@ -990,9 +992,20 @@ export class SupabaseStorage implements IStorage {
       arr.push(e);
       entriesByTracker.set(e.tracker_id, arr);
     }
-    return (trackersResult.data || []).map(r =>
-      this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map(e => this.rowToTrackerEntry(e)))
-    );
+    // Build tracker→profile map from junction table
+    const profilesByTracker = new Map<string, string[]>();
+    for (const j of junctionResult.data || []) {
+      const arr = profilesByTracker.get(j.tracker_id) || [];
+      arr.push(j.profile_id);
+      profilesByTracker.set(j.tracker_id, arr);
+    }
+    return (trackersResult.data || []).map(r => {
+      // Merge junction table profiles into linked_profiles (junction is source of truth)
+      const junctionProfiles = profilesByTracker.get(r.id) || [];
+      const jsonbProfiles: string[] = r.linked_profiles || [];
+      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+      return this.rowToTracker({ ...r, linked_profiles: mergedProfiles }, (entriesByTracker.get(r.id) || []).map(e => this.rowToTrackerEntry(e)));
+    });
   }
 
   async getTracker(id: string): Promise<Tracker | undefined> {
