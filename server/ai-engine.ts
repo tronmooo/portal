@@ -2389,22 +2389,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "create_task": {
-      // Dedup: skip if a very similar active task already exists
-      const existingTasks = await storage.getTasks();
-      const dupTask = existingTasks.find(t =>
-        t.status !== "done" &&
-        t.title.toLowerCase().trim() === (input.title || "").toLowerCase().trim()
-      );
-      if (dupTask) return dupTask; // Return existing instead of creating duplicate
-
-      // In-memory dedup lock
-      const taskDedupKey = `task:${safeLC(input.title)}`;
-      if (isDuplicateCreation("_global", taskDedupKey)) {
-        logger.info("ai", `Dedup lock: skipped duplicate task "${input.title}"`);
-        return { error: "Duplicate task detected — skipped" };
-      }
-
-      // Resolve target profile BEFORE creating the task
+      // Resolve target profile BEFORE dedup so we can match by profile too
       let taskLinkedProfiles: string[] = [];
       const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
       if (taskForProfile) {
@@ -2412,6 +2397,22 @@ async function executeTool(name: string, input: any): Promise<any> {
         const target = profiles.find(p => p.name.toLowerCase() === safeLC(taskForProfile).trim())
           || profiles.find(p => p.name.toLowerCase().includes(safeLC(taskForProfile).trim()));
         if (target) taskLinkedProfiles.push(target.id);
+      }
+
+      // Dedup: skip if a very similar active task exists FOR THE SAME PROFILE
+      const existingTasks = await storage.getTasks();
+      const dupTask = existingTasks.find(t =>
+        t.status !== "done" &&
+        t.title.toLowerCase().trim() === (input.title || "").toLowerCase().trim() &&
+        (taskLinkedProfiles.length === 0 || t.linkedProfiles.some(p => taskLinkedProfiles.includes(p)))
+      );
+      if (dupTask) return dupTask; // Return existing instead of creating duplicate
+
+      // In-memory dedup lock (includes profile for cross-profile dedup safety)
+      const taskDedupKey = `task:${safeLC(input.title)}:${taskLinkedProfiles.join(",")}`;
+      if (isDuplicateCreation("_global", taskDedupKey)) {
+        logger.info("ai", `Dedup lock: skipped duplicate task "${input.title}"`);
+        return { error: "Duplicate task detected — skipped" };
       }
       const newTask = await storage.createTask({
         title: input.title,
@@ -2597,7 +2598,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         return { error: `Amount $${parsedAmount.toLocaleString()} seems unusually high. Please confirm the amount.` };
       }
       // In-memory dedup lock — catches concurrent requests before DB persistence
-      const expDedupKey = `expense:${safeLC(input.description)}:${parsedAmount}:${input.date || ""}`;
+      const expDedupKey = `expense:${safeLC(input.description)}:${parsedAmount}:${input.date || ""}:${safeLC(input.forProfile || "")}`;
       if (isDuplicateCreation("_global", expDedupKey)) {
         logger.info("ai", `Dedup lock: skipped duplicate expense $${parsedAmount} ${input.description}`);
         return { error: "Duplicate expense detected — skipped" };
@@ -2606,7 +2607,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const allExpenses = await storage.getExpenses();
       const twoMinAgoExp = Date.now() - 120000;
       const dupExpense = allExpenses.find(e => {
-        if (new Date(e.date).getTime() < twoMinAgoExp) return false;
+        if (new Date(e.createdAt).getTime() < twoMinAgoExp) return false;
         return e.amount === parsedAmount &&
           e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20));
       });
@@ -2718,10 +2719,16 @@ async function executeTool(name: string, input: any): Promise<any> {
         tags: [],
       });
       markCreation("_global", evtDedupKey);
-      // Auto-link: scan title and description for profile names + explicit forProfile
-      const evtForProfile = await resolveForProfile(input.forProfile, `${input.title || ""} ${input.description || ""}`);
-      const evtLinked = await directLinkToProfile("event", newEvent.id, evtForProfile);
-      if (!evtLinked) await autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`, input.forProfile);
+      // Only auto-link if we didn't already resolve a profile pre-creation
+      if (eventLinkedProfiles.length > 0) {
+        for (const pid of eventLinkedProfiles) {
+          await storage.linkProfileTo(pid, "event", newEvent.id).catch((e: any) => { console.warn("[AI] Event linking failed:", e?.message); });
+        }
+      } else {
+        const evtForProfile = await resolveForProfile(input.forProfile, `${input.title || ""} ${input.description || ""}`);
+        const evtLinked = await directLinkToProfile("event", newEvent.id, evtForProfile);
+        if (!evtLinked) await autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`, input.forProfile);
+      }
       return newEvent;
     }
 
@@ -3605,9 +3612,11 @@ async function directLinkToProfile(entityType: string, entityId: string, forProf
 async function resolveForProfile(forProfile: string | undefined, text: string): Promise<string | undefined> {
   if (forProfile) return forProfile;
   const profiles = await storage.getProfiles();
-  for (const p of profiles) {
-    if (p.type === 'self') continue;
-    if (p.name.length < 2) continue;
+  // Sort by name length descending — prefer longest match first to avoid "Rex" matching before "Rex Jr."
+  const candidates = profiles
+    .filter(p => p.type !== 'self' && p.name.length >= 2)
+    .sort((a, b) => b.name.length - a.name.length);
+  for (const p of candidates) {
     if (text.toLowerCase().includes(p.name.toLowerCase())) {
       return p.name;
     }

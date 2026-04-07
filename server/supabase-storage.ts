@@ -1161,9 +1161,24 @@ export class SupabaseStorage implements IStorage {
   // TASKS
   // ============================================================
   async getTasks(): Promise<Task[]> {
-    const { data, error } = await this.supabase.from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null).order("created_at", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToTask(r));
+    // Fetch tasks AND junction table links in parallel (junction is source of truth for profile links)
+    const [tasksResult, junctionResult] = await Promise.all([
+      this.supabase.from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null).order("created_at", { ascending: false }),
+      this.supabase.from("profile_tasks").select("task_id, profile_id").eq("user_id", this.userId),
+    ]);
+    if (tasksResult.error) throw tasksResult.error;
+    const profilesByTask = new Map<string, string[]>();
+    for (const j of junctionResult.data || []) {
+      const arr = profilesByTask.get(j.task_id) || [];
+      arr.push(j.profile_id);
+      profilesByTask.set(j.task_id, arr);
+    }
+    return (tasksResult.data || []).map(r => {
+      const junctionProfiles = profilesByTask.get(r.id) || [];
+      const jsonbProfiles: string[] = r.linked_profiles || [];
+      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+      return this.rowToTask({ ...r, linked_profiles: mergedProfiles });
+    });
   }
 
   async getTask(id: string): Promise<Task | undefined> {
@@ -1224,9 +1239,24 @@ export class SupabaseStorage implements IStorage {
   // EXPENSES
   // ============================================================
   async getExpenses(): Promise<Expense[]> {
-    const { data, error } = await this.supabase.from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null).order("date", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToExpense(r));
+    // Fetch expenses AND junction table links in parallel (junction is source of truth)
+    const [expensesResult, junctionResult] = await Promise.all([
+      this.supabase.from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null).order("date", { ascending: false }),
+      this.supabase.from("profile_expenses").select("expense_id, profile_id").eq("user_id", this.userId),
+    ]);
+    if (expensesResult.error) throw expensesResult.error;
+    const profilesByExpense = new Map<string, string[]>();
+    for (const j of junctionResult.data || []) {
+      const arr = profilesByExpense.get(j.expense_id) || [];
+      arr.push(j.profile_id);
+      profilesByExpense.set(j.expense_id, arr);
+    }
+    return (expensesResult.data || []).map(r => {
+      const junctionProfiles = profilesByExpense.get(r.id) || [];
+      const jsonbProfiles: string[] = r.linked_profiles || [];
+      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+      return this.rowToExpense({ ...r, linked_profiles: mergedProfiles });
+    });
   }
 
   async getExpense(id: string): Promise<Expense | undefined> {
@@ -1332,9 +1362,24 @@ export class SupabaseStorage implements IStorage {
   // EVENTS
   // ============================================================
   async getEvents(): Promise<CalendarEvent[]> {
-    const { data, error } = await this.supabase.from("events").select("*").eq("user_id", this.userId).order("date", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToEvent(r));
+    // Fetch events AND junction table links in parallel (junction is source of truth)
+    const [eventsResult, junctionResult] = await Promise.all([
+      this.supabase.from("events").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
+      this.supabase.from("profile_events").select("event_id, profile_id").eq("user_id", this.userId),
+    ]);
+    if (eventsResult.error) throw eventsResult.error;
+    const profilesByEvent = new Map<string, string[]>();
+    for (const j of junctionResult.data || []) {
+      const arr = profilesByEvent.get(j.event_id) || [];
+      arr.push(j.profile_id);
+      profilesByEvent.set(j.event_id, arr);
+    }
+    return (eventsResult.data || []).map(r => {
+      const junctionProfiles = profilesByEvent.get(r.id) || [];
+      const jsonbProfiles: string[] = r.linked_profiles || [];
+      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+      return this.rowToEvent({ ...r, linked_profiles: mergedProfiles });
+    });
   }
 
   async getEvent(id: string): Promise<CalendarEvent | undefined> {
