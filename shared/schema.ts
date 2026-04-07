@@ -260,6 +260,7 @@ export const insertTrackerEntrySchema = z.object({
   notes: z.string().optional(),
   mood: z.enum(["great", "good", "okay", "bad", "terrible"]).optional(),
   tags: z.array(z.string()).optional(),
+  forProfile: z.string().optional(),
 });
 
 export type InsertTrackerEntry = z.infer<typeof insertTrackerEntrySchema>;

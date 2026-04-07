@@ -281,6 +281,24 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     return { matched: false, reply: "", actions: [], results: [] };
   }
 
+  // PROFILE DETECTION: If message starts with a non-self profile name, bail to AI.
+  // The AI path has robust profile resolution (tracker ownership, forProfile routing).
+  // Fast-path has zero profile awareness, so any profile-prefixed message must go to AI.
+  try {
+    const profiles = await storage.getProfiles();
+    const nonSelfProfiles = profiles.filter(p => p.type !== "self" && p.name.length >= 2);
+    // Sort longest name first to avoid "Rex" matching before "Rex Jr."
+    nonSelfProfiles.sort((a, b) => b.name.length - a.name.length);
+    for (const p of nonSelfProfiles) {
+      const nameLC = p.name.toLowerCase();
+      // Check: "Rex ran...", "Rex's weight...", "mom ran...", "Mom's bp..."
+      if (lower.startsWith(nameLC + " ") || lower.startsWith(nameLC + "'") || lower.startsWith(nameLC + "\u2019")) {
+        logger.info("ai", `Fast-path bail: message starts with profile "${p.name}" — routing to AI for profile-aware handling`);
+        return { matched: false, reply: "", actions: [], results: [] };
+      }
+    }
+  } catch { /* if profile fetch fails, continue with fast-path */ }
+
   // ---- Open document command: "open my drivers license", "show max's vaccination record" ----
   // Also handles multiple documents: "open my insurance and my license"
   const openDocPattern = /^(?:open\s*(?:up)?|show|view|pull\s*up|display|get|find)\s+/i;
@@ -2556,7 +2574,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
           return recentDup;
         }
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId } as any);
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId });
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, entryValues);
@@ -2586,7 +2604,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       } as any);
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId } as any);
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId });
       return entry;
     }
 
@@ -4316,8 +4334,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           if (!validation.valid) {
             logger.warn("ai", `Validation failed for ${toolUse.name}: ${validation.errors.join(", ")}`);
             const errorResult = { error: `Validation failed: ${validation.errors.join(". ")}`, validationErrors: validation.errors };
-            toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult) });
-            allActions.push({ type: mapToolToActionType(toolUse.name), category: "ai" as any, data: { ...(toolUse.input as any), _validationError: validation.errors.join(". ") } });
+            toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult), is_error: true });
+            // Don't push to allActions for validation failures — nothing was actually done
             continue;
           }
           if (validation.warnings.length > 0) {
@@ -4335,8 +4353,11 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const actionType = mapToolToActionType(toolUse.name);
           const inp = toolUse.input as Record<string, any>;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
-          allActions.push({ type: actionType, category: "ai", data: { ...inp, _entityId: entityId || undefined } });
-          if (result) allResults.push(result);
+          // Only count as a real action if it succeeded (no error field)
+          if (result && !result.error) {
+            allActions.push({ type: actionType, category: "ai", data: { ...inp, _entityId: entityId || undefined } });
+            allResults.push(result);
+          }
           if (validation.warnings.length > 0 && result) {
             result._validationWarnings = validation.warnings;
           }
@@ -4362,12 +4383,12 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             if (!documentPreview) documentPreview = preview;
           }
 
-          // If result is null/undefined, report failure to AI so it doesn't claim success
-          const isSuccess = result !== null && result !== undefined;
+          // If result is null/undefined OR contains an error field, report failure to AI so it doesn't claim success
+          const isSuccess = result !== null && result !== undefined && !result.error;
           toolResults.push({
             type: "tool_result",
             tool_use_id: toolUse.id,
-            content: JSON.stringify(isSuccess ? summarizeResult(result) : { error: "Action failed — data was not saved. Tell the user it didn't work." }),
+            content: JSON.stringify(isSuccess ? summarizeResult(result) : (result?.error ? { error: result.error } : { error: "Action failed — data was not saved. Tell the user it didn't work." })),
             is_error: !isSuccess,
           });
         } catch (err: any) {

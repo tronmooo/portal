@@ -1135,7 +1135,7 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, tracker_id: data.trackerId,
       entry_values: values, computed, notes: data.notes || null,
       mood: data.mood || null, tags: data.tags || null,
-      for_profile: (data as any).forProfile || null,
+      for_profile: data.forProfile || null,
       timestamp: ts,
     });
     if (error) throw error;
