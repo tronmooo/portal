@@ -2645,12 +2645,29 @@ async function executeTool(name: string, input: any): Promise<any> {
       else if (["running","cycling","swimming","workout","exercise","walk"].some(k => nameLC.includes(k))) autoCategory = "fitness";
       else if (["weight","blood","bp","sleep","heart","cholesterol"].some(k => nameLC.includes(k))) autoCategory = "health";
 
-      // If creating for a non-self profile, append profile name to avoid name conflicts
-      // (DB has unique constraint on user_id + name)
+      // Resolve display name — handle DB unique constraint (user_id, name)
       let trackerDisplayName = input.trackerName || "Custom";
-      if (targetProfileId && targetProfileId !== profiles.find(p => p.type === "self")?.id) {
+      const selfProfileId = profiles.find(p => p.type === "self")?.id;
+      const isForSelf = !targetProfileId || targetProfileId === selfProfileId;
+
+      if (isForSelf) {
+        // Self profile gets the clean name. If another profile already owns it, rename that one first.
+        const conflictTracker = nameMatches.find(t => t.name.toLowerCase() === trackerDisplayName.toLowerCase());
+        if (conflictTracker) {
+          // Find the other profile's name to use as suffix
+          const otherProfileId = (conflictTracker.linkedProfiles || [])[0];
+          const otherProfile = otherProfileId ? profiles.find(p => p.id === otherProfileId) : null;
+          const suffix = otherProfile ? ` - ${otherProfile.name}` : ` - Other`;
+          const renamedName = `${conflictTracker.name}${suffix}`;
+          logger.info("ai", `Renaming "${conflictTracker.name}" to "${renamedName}" so self profile can have clean name`);
+          await storage.updateTracker(conflictTracker.id, { name: renamedName }).catch(() => {});
+        }
+      } else {
+        // Non-self profile: append the profile name to avoid conflicts
         const targetProfile = profiles.find(p => p.id === targetProfileId);
-        if (targetProfile) trackerDisplayName = `${trackerDisplayName} - ${targetProfile.name}`;
+        if (targetProfile && !trackerDisplayName.toLowerCase().endsWith(targetProfile.name.toLowerCase())) {
+          trackerDisplayName = `${trackerDisplayName} - ${targetProfile.name}`;
+        }
       }
 
       const newTracker = await storage.createTracker({
