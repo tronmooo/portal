@@ -814,6 +814,98 @@ export async function registerRoutes(
   }));
 
   // ---- Profile AI Summary ----
+  // ── Find current market value via web search ──────────────────────────────────
+  app.get("/api/profiles/:id/find-value", asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const profile = await storage.getProfile(id);
+    if (!profile) return res.status(404).json({ error: "Profile not found" });
+
+    // Build a rich search query from all known profile fields
+    const f = profile.fields || {};
+    const parts: string[] = [profile.name];
+
+    // Vehicle-specific context
+    if (f.year) parts.push(String(f.year));
+    if (f.make) parts.push(String(f.make));
+    if (f.model) parts.push(String(f.model));
+    if (f.trim) parts.push(String(f.trim));
+    if (f.mileage) parts.push(`${f.mileage} miles`);
+    if (f.color) parts.push(String(f.color));
+    if (f.condition) parts.push(String(f.condition));
+    if (f.vin) parts.push(`VIN ${f.vin}`);
+
+    // Property-specific context
+    if (f.address) parts.push(String(f.address));
+    if (f.city) parts.push(String(f.city));
+    if (f.state) parts.push(String(f.state));
+    if (f.sqft) parts.push(`${f.sqft} sq ft`);
+    if (f.bedrooms) parts.push(`${f.bedrooms}bd`);
+    if (f.bathrooms) parts.push(`${f.bathrooms}ba`);
+
+    // Asset-specific context
+    if (f.brand) parts.push(String(f.brand));
+    if (f.category) parts.push(String(f.category));
+
+    const searchQuery = `${parts.join(" ")} current market value 2026`;
+
+    try {
+      // Use Claude to do a web-search-backed valuation
+      const Anthropic = (await import("@anthropic-ai/sdk")).default;
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
+      // Try web search first (Brave)
+      let webContext = "";
+      try {
+        const braveKey = process.env.BRAVE_API_KEY;
+        if (braveKey) {
+          const braveRes = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(searchQuery)}&count=5`, {
+            headers: { "X-Subscription-Token": braveKey, "Accept": "application/json" }
+          });
+          const braveData = await braveRes.json() as any;
+          const snippets = (braveData.web?.results || []).slice(0, 5).map((r: any) => `${r.title}: ${r.description}`).join("\n");
+          if (snippets) webContext = `\n\nWeb search results for "${searchQuery}":\n${snippets}`;
+        }
+      } catch { /* brave unavailable — proceed without */ }
+
+      const prompt = `You are an expert asset appraiser. Based on the following profile information, estimate the current fair market value.
+
+Profile: ${profile.name} (${profile.type})
+Known details: ${JSON.stringify(f, null, 2)}${webContext}
+
+Provide:
+1. A single estimated current market value (number in USD)
+2. A confidence level (low/medium/high)
+3. A brief 1-sentence explanation of how you arrived at this value
+
+Respond ONLY in JSON format:
+{"value": 25000, "confidence": "medium", "explanation": "Based on...", "range": {"low": 22000, "high": 28000}}`;
+
+      const resp = await client.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: 256,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const text = resp.content[0].type === "text" ? resp.content[0].text : "";
+      // Extract JSON from response
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No JSON in response");
+      const result = JSON.parse(match[0]);
+
+      res.json({
+        estimatedValue: result.value,
+        confidence: result.confidence,
+        explanation: result.explanation,
+        range: result.range,
+        searchQuery,
+        profileName: profile.name,
+      });
+    } catch (err: any) {
+      logger.error("routes", `find-value failed: ${err.message}`);
+      res.status(500).json({ error: "Failed to estimate value. Please try again." });
+    }
+  }));
+
   app.get("/api/profiles/:id/ai-summary", asyncHandler(async (req, res) => {
     try {
       const { id } = req.params;

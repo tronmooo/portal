@@ -97,6 +97,7 @@ import {
   Receipt,
   Zap,
   Target,
+  Search,
 } from "lucide-react";
 import {
   LineChart,
@@ -609,7 +610,10 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value ?? ""));
   const [saving, setSaving] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [foundValue, setFoundValue] = useState<{ estimatedValue: number; confidence: string; explanation: string; range?: { low: number; high: number } } | null>(null);
   const { toast } = useToast();
+  const isValueField = fieldKey === "currentValue";
 
   const save = async () => {
     setSaving(true);
@@ -620,10 +624,28 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       onSaved();
       setEditing(false);
+      setFoundValue(null);
     } catch {
       toast({ title: "Failed to save", variant: "destructive" });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const findValue = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setFinding(true);
+    try {
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/find-value`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setFoundValue(data);
+      setDraft(String(Math.round(data.estimatedValue)));
+      setEditing(true);
+    } catch (err: any) {
+      toast({ title: err.message || "Could not find value", variant: "destructive" });
+    } finally {
+      setFinding(false);
     }
   };
 
@@ -634,30 +656,62 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
         onClick={() => { setDraft(String(value ?? "")); setEditing(true); }}
       >
         <span className="text-xs text-muted-foreground">{label}</span>
-        <span className="text-xs font-medium">
-          {value != null && value !== ""
-            ? String(value)
-            : <span className="text-muted-foreground/40 italic">tap to add</span>}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {isValueField && (
+            <button
+              onClick={findValue}
+              disabled={finding}
+              className="opacity-0 group-hover:opacity-100 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all flex items-center gap-1 shrink-0"
+              title="Find current market value using AI"
+            >
+              {finding ? (
+                <><span className="h-2.5 w-2.5 rounded-full border-2 border-primary/40 border-t-primary animate-spin inline-block" /> Finding…</>
+              ) : (
+                <><Search className="h-2.5 w-2.5" /> Find Value</>
+              )}
+            </button>
+          )}
+          <span className="text-xs font-medium">
+            {value != null && value !== ""
+              ? (isValueField && !isNaN(Number(value)) ? `$${Number(value).toLocaleString()}` : String(value))
+              : <span className="text-muted-foreground/40 italic">tap to add</span>}
+          </span>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2 -mx-2 bg-muted/20 rounded">
-      <span className="text-xs text-muted-foreground shrink-0 w-24">{label}</span>
-      <Input
-        className="h-7 text-xs flex-1"
-        value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === "Enter") save();
-          if (e.key === "Escape") setEditing(false);
-        }}
-        autoFocus
-      />
-      <Button size="sm" className="h-6 text-xs px-2" onClick={save} disabled={saving}>{saving ? "…" : "Save"}</Button>
-      <Button size="sm" variant="ghost" className="h-6 text-xs px-1" onClick={() => setEditing(false)} disabled={saving}>✕</Button>
+    <div className="py-1.5 px-2 -mx-2 bg-muted/20 rounded space-y-1.5">
+      {foundValue && (
+        <div className="text-xs bg-primary/5 border border-primary/20 rounded px-2 py-1.5">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-primary">
+              AI estimate: ${foundValue.estimatedValue.toLocaleString()}
+              {foundValue.range && <span className="text-muted-foreground font-normal ml-1">(${foundValue.range.low.toLocaleString()}–${foundValue.range.high.toLocaleString()})</span>}
+            </span>
+            <span className={`text-xs px-1.5 py-0.5 rounded-full ${foundValue.confidence === "high" ? "bg-green-500/15 text-green-600" : foundValue.confidence === "medium" ? "bg-amber-500/15 text-amber-600" : "bg-muted text-muted-foreground"}`}>
+              {foundValue.confidence}
+            </span>
+          </div>
+          <p className="text-muted-foreground mt-0.5">{foundValue.explanation}</p>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground shrink-0 w-24">{label}</span>
+        <Input
+          className="h-7 text-xs flex-1"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") { setEditing(false); setFoundValue(null); }
+          }}
+          autoFocus
+        />
+        <Button size="sm" className="h-6 text-xs px-2" onClick={save} disabled={saving}>{saving ? "…" : "Save"}</Button>
+        <Button size="sm" variant="ghost" className="h-6 text-xs px-1" onClick={() => { setEditing(false); setFoundValue(null); }} disabled={saving}>✕</Button>
+      </div>
     </div>
   );
 }
