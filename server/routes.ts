@@ -1160,6 +1160,42 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(task || { id: req.params.id, restored: true });
   }));
 
+  // ---- Budgets ----
+  app.get("/api/budgets", asyncHandler(async (req, res) => {
+    const month = (req.query.month as string) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const budgets = await storage.getBudgets(month);
+    res.json({ month, budgets });
+  }));
+
+  app.post("/api/budgets", asyncHandler(async (req, res) => {
+    const { month, category, amount, notes } = req.body;
+    if (!category || amount === undefined) return res.status(400).json({ error: "category and amount required" });
+    const m = month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const budget = await storage.addBudget(m, category, Number(amount), notes);
+    res.json(budget);
+  }));
+
+  app.patch("/api/budgets/:id", asyncHandler(async (req, res) => {
+    const month = (req.query.month as string) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const ok = await storage.updateBudget(month, req.params.id, req.body);
+    if (!ok) return res.status(404).json({ error: "Budget not found" });
+    res.json({ success: true });
+  }));
+
+  app.delete("/api/budgets/:id", asyncHandler(async (req, res) => {
+    const month = (req.query.month as string) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const ok = await storage.deleteBudget(month, req.params.id);
+    if (!ok) return res.status(404).json({ error: "Budget not found" });
+    res.json({ success: true });
+  }));
+
+  app.post("/api/budgets/copy", asyncHandler(async (req, res) => {
+    const { fromMonth, toMonth } = req.body;
+    if (!fromMonth || !toMonth) return res.status(400).json({ error: "fromMonth and toMonth required" });
+    const count = await storage.copyBudgetsToMonth(fromMonth, toMonth);
+    res.json({ copied: count, toMonth });
+  }));
+
   // ---- Expenses ----
   app.get("/api/expenses", asyncHandler(async (req, res) => {
     let items = await storage.getExpenses();

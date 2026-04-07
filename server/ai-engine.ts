@@ -1106,6 +1106,45 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
 
+  // --- CRUD: Budgets ---
+  {
+    name: "set_budget",
+    description: "Set or update a monthly budget for a spending category. Creates or updates the budget amount for a specific category and month.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        category: { type: "string", description: "Budget category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general" },
+        amount: { type: "number", description: "Monthly budget amount in dollars" },
+        month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
+        notes: { type: "string", description: "Optional notes about this budget" },
+      },
+      required: ["category", "amount"],
+    },
+  },
+  {
+    name: "delete_budget",
+    description: "Delete a budget for a specific category and month.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        category: { type: "string", description: "Budget category to delete" },
+        month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
+      },
+      required: ["category"],
+    },
+  },
+  {
+    name: "get_budget_summary",
+    description: "Get the budget vs actual spending summary for a month. Shows all budget categories with budgeted amounts and actual spending.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
+      },
+      required: [],
+    },
+  },
+
   // --- CRUD: Expenses ---
   {
     name: "create_expense",
@@ -2585,6 +2624,40 @@ async function executeTool(name: string, input: any): Promise<any> {
         try { await updateEntityLinkedProfiles("tracker", newTracker.id, ctTargetId); } catch (e: any) { /* ignore */ }
       }
       return newTracker;
+    }
+
+    case "set_budget": {
+      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const budget = await storage.addBudget(month, input.category, input.amount, input.notes);
+      return { ...budget, month, message: `Budget set: $${input.amount} for ${input.category} in ${month}` };
+    }
+
+    case "delete_budget": {
+      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const budgets = await storage.getBudgets(month);
+      const target = budgets.find(b => b.category.toLowerCase() === safeLC(input.category));
+      if (!target) return { error: `No budget found for category "${input.category}" in ${month}` };
+      await storage.deleteBudget(month, target.id);
+      return { deleted: true, category: target.category, month };
+    }
+
+    case "get_budget_summary": {
+      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const budgets = await storage.getBudgets(month);
+      const expenses = await storage.getExpenses();
+      const monthExpenses = expenses.filter(e => e.date?.startsWith(month));
+      const byCategory: Record<string, number> = {};
+      monthExpenses.forEach(e => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
+      const totalBudget = budgets.reduce((s, b) => s + b.amount, 0);
+      const totalSpent = Object.values(byCategory).reduce((s, v) => s + v, 0);
+      const categories = budgets.map(b => ({
+        category: b.category,
+        budgeted: b.amount,
+        actual: byCategory[b.category] || 0,
+        remaining: b.amount - (byCategory[b.category] || 0),
+        percentUsed: b.amount > 0 ? Math.round(((byCategory[b.category] || 0) / b.amount) * 100) : 0,
+      }));
+      return { month, totalBudget, totalSpent, remaining: totalBudget - totalSpent, categories };
     }
 
     case "create_expense": {

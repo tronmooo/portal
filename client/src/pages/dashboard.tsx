@@ -35,6 +35,7 @@ import {
   Download, UploadCloud, MoreVertical,
   EyeOff, GripVertical, Settings, RotateCcw, Target,
   Trash2, Pencil, FileText, CheckCircle2, X,
+  ChevronLeft, ChevronRight, Plus,
 } from "lucide-react";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
@@ -1242,11 +1243,219 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   );
 }
 
+// ─── Budget Manager Component ────────────────────────────────────────────────
+
+const BUDGET_CATEGORIES = [
+  "food", "transport", "health", "pet", "vehicle", "entertainment",
+  "shopping", "utilities", "housing", "insurance", "subscription",
+  "education", "personal", "general",
+];
+
+function BudgetManager() {
+  const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7));
+  const [addOpen, setAddOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [newCat, setNewCat] = useState("");
+  const [newAmt, setNewAmt] = useState("");
+  const [newNotes, setNewNotes] = useState("");
+
+  const { data: budgetRes, refetch } = useQuery<{month: string; budgets: any[]}>({
+    queryKey: ["/api/budgets", month],
+    queryFn: () => apiRequest("GET", `/api/budgets?month=${month}`).then(r => r.json()),
+  });
+
+  const { data: expensesData } = useQuery<any>({
+    queryKey: ["/api/expenses"],
+    queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
+  });
+
+  const budgets = budgetRes?.budgets || [];
+  const allExpenses = Array.isArray(expensesData) ? expensesData : (expensesData?.items || []);
+  const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(month));
+  const byCategory: Record<string, number> = {};
+  monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
+
+  const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);
+  const totalSpent = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
+
+  const addMutation = useMutation({
+    mutationFn: (data: {category: string; amount: number; notes?: string}) =>
+      apiRequest("POST", "/api/budgets", { month, ...data }).then(r => r.json()),
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); setAddOpen(false); setNewCat(""); setNewAmt(""); setNewNotes(""); },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/budgets/${id}?month=${month}`),
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: {id: string; amount: number}) =>
+      apiRequest("PATCH", `/api/budgets/${data.id}?month=${month}`, { amount: data.amount }),
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); setEditId(null); },
+  });
+
+  const copyMutation = useMutation({
+    mutationFn: () => {
+      const [y, m] = month.split("-").map(Number);
+      const prevDate = new Date(y, m - 2, 1);
+      const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+      return apiRequest("POST", "/api/budgets/copy", { fromMonth: prevMonth, toMonth: month }).then(r => r.json());
+    },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); },
+  });
+
+  const prevMonth = () => {
+    const [y, m] = month.split("-").map(Number);
+    const d = new Date(y, m - 2, 1);
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+  const nextMonth = () => {
+    const [y, m] = month.split("-").map(Number);
+    const d = new Date(y, m, 1);
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+  const monthLabel = new Date(month + "-15").toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  const usedCategories = new Set(budgets.map((b: any) => (b.category as string).toLowerCase()));
+  const availableCategories = BUDGET_CATEGORIES.filter(c => !usedCategories.has(c));
+
+  return (
+    <div className="space-y-3">
+      {/* Month navigation */}
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={prevMonth}><ChevronLeft className="h-4 w-4" /></Button>
+        <span className="text-sm font-medium">{monthLabel}</span>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={nextMonth}><ChevronRight className="h-4 w-4" /></Button>
+      </div>
+
+      {/* Summary bar */}
+      <div className="rounded-lg bg-muted/30 p-3 space-y-1.5">
+        <div className="flex justify-between text-xs">
+          <span className="text-muted-foreground">Total Budget</span>
+          <span className="font-medium">${totalBudget.toLocaleString()}</span>
+        </div>
+        <div className="flex justify-between text-xs">
+          <span className="text-muted-foreground">Total Spent</span>
+          <span className="font-medium text-red-400">${totalSpent.toLocaleString()}</span>
+        </div>
+        <div className="flex justify-between text-xs">
+          <span className="text-muted-foreground">Remaining</span>
+          <span className={`font-bold ${(totalBudget - totalSpent) >= 0 ? "text-green-500" : "text-red-500"}`}>
+            ${(totalBudget - totalSpent).toLocaleString()}
+          </span>
+        </div>
+        {totalBudget > 0 && (
+          <div className="w-full bg-muted rounded-full h-2 mt-1">
+            <div
+              className={`h-2 rounded-full transition-all ${(totalSpent / totalBudget) > 1 ? "bg-red-500" : (totalSpent / totalBudget) > 0.8 ? "bg-amber-500" : "bg-green-500"}`}
+              style={{ width: `${Math.min(100, (totalSpent / totalBudget) * 100)}%` }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Category breakdown */}
+      {budgets.length > 0 && (
+        <div className="space-y-1.5">
+          {budgets.map((b: any) => {
+            const actual = byCategory[b.category] || 0;
+            const pct = b.amount > 0 ? (actual / b.amount) * 100 : 0;
+            const over = actual > b.amount;
+            return (
+              <div key={b.id} className="rounded-lg border border-border/40 p-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium capitalize">{b.category}</span>
+                  <div className="flex items-center gap-1">
+                    {editId === b.id ? (
+                      <form onSubmit={(e) => { e.preventDefault(); const val = parseFloat((e.target as any).amt.value); if (val > 0) updateMutation.mutate({ id: b.id, amount: val }); }} className="flex items-center gap-1">
+                        <Input name="amt" type="number" defaultValue={b.amount} className="h-6 w-20 text-xs" step="0.01" autoFocus />
+                        <Button type="submit" variant="ghost" size="icon" className="h-5 w-5"><Check className="h-3 w-3" /></Button>
+                      </form>
+                    ) : (
+                      <>
+                        <span className="text-xs tabular-nums">${actual.toLocaleString()} / ${b.amount.toLocaleString()}</span>
+                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setEditId(b.id)} data-testid={`edit-budget-${b.category}`}>
+                          <Pencil className="h-2.5 w-2.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-5 w-5 text-destructive" onClick={() => deleteMutation.mutate(b.id)} data-testid={`delete-budget-${b.category}`}>
+                          <X className="h-2.5 w-2.5" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="w-full bg-muted rounded-full h-1.5">
+                  <div
+                    className={`h-1.5 rounded-full transition-all ${over ? "bg-red-500" : pct > 80 ? "bg-amber-500" : "bg-green-500"}`}
+                    style={{ width: `${Math.min(100, pct)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{Math.round(pct)}% used</span>
+                  <span className={over ? "text-red-400 font-medium" : ""}>{over ? `$${(actual - b.amount).toLocaleString()} over` : `$${(b.amount - actual).toLocaleString()} left`}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Unbudgeted spending */}
+      {(() => {
+        const unbudgeted = Object.entries(byCategory).filter(([cat]) => !usedCategories.has(cat));
+        if (unbudgeted.length === 0) return null;
+        const totalUnbudgeted = unbudgeted.reduce((s, [, v]) => s + v, 0);
+        return (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 space-y-1">
+            <p className="text-xs font-medium text-amber-500">Unbudgeted Spending: ${totalUnbudgeted.toLocaleString()}</p>
+            {unbudgeted.map(([cat, amt]) => (
+              <div key={cat} className="flex justify-between text-xs text-muted-foreground">
+                <span className="capitalize">{cat}</span>
+                <span>${amt.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Add budget */}
+      {addOpen ? (
+        <div className="rounded-lg border border-border p-2 space-y-2">
+          <select value={newCat} onChange={(e) => setNewCat(e.target.value)} className="w-full h-8 text-xs bg-background border border-border rounded px-2">
+            <option value="">Select category...</option>
+            {availableCategories.map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
+          </select>
+          <Input placeholder="Amount" type="number" value={newAmt} onChange={(e) => setNewAmt(e.target.value)} className="h-8 text-xs" step="0.01" />
+          <Input placeholder="Notes (optional)" value={newNotes} onChange={(e) => setNewNotes(e.target.value)} className="h-8 text-xs" />
+          <div className="flex gap-2">
+            <Button size="sm" className="h-7 text-xs flex-1" disabled={!newCat || !newAmt} onClick={() => addMutation.mutate({ category: newCat, amount: parseFloat(newAmt), notes: newNotes || undefined })}>
+              <Plus className="h-3 w-3 mr-1" /> Add Budget
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setAddOpen(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="h-7 text-xs flex-1" onClick={() => setAddOpen(true)}>
+            <Plus className="h-3 w-3 mr-1" /> Add Category Budget
+          </Button>
+          {budgets.length === 0 && (
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => copyMutation.mutate()}>
+              Copy Previous Month
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Section: Finance Widget ─────────────────────────────────────────────────
 
 function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
-  const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | null>(null);
+  const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | "budget" | null>(null);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const incomeUrl = filterMode === "selected" && filterIds.length > 0
     ? `/api/incomes?profileIds=${filterIds.join(",")}`
@@ -1262,6 +1471,37 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   const { data: allObligations } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
+  });
+
+  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+  const { data: budgetData } = useQuery<{month: string; totalBudget: number; totalSpent: number; remaining: number; categories: any[]}>({
+    queryKey: ["/api/budgets/summary", currentMonth],
+    queryFn: async () => {
+      const [budgetRes, expensesRes] = await Promise.all([
+        apiRequest("GET", `/api/budgets?month=${currentMonth}`).then(r => r.json()),
+        apiRequest("GET", "/api/expenses").then(r => r.json()),
+      ]);
+      const budgets = budgetRes.budgets || [];
+      const allExpenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.items || []);
+      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth));
+      const byCategory: Record<string, number> = {};
+      monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
+      const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);
+      const totalSpent = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
+      return {
+        month: currentMonth,
+        totalBudget,
+        totalSpent,
+        remaining: totalBudget - totalSpent,
+        categories: budgets.map((b: any) => ({
+          ...b,
+          actual: byCategory[b.category] || 0,
+          remaining: b.amount - (byCategory[b.category] || 0),
+          percentUsed: b.amount > 0 ? Math.round(((byCategory[b.category] || 0) / b.amount) * 100) : 0,
+        })),
+      };
+    },
+    staleTime: 30000,
   });
 
   const monthlySpend = stats?.monthlySpend || 0;
@@ -1319,6 +1559,20 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
+          </button>
+          <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+            <div className="flex items-center justify-center gap-2">
+              <Target className="h-3.5 w-3.5 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">Monthly Budget</p>
+            </div>
+            <p className={`text-sm font-bold tabular-nums ${budgetData && budgetData.remaining >= 0 ? "text-green-500" : budgetData ? "text-red-500" : ""}`}>
+              {budgetData && budgetData.totalBudget > 0 ? `$${budgetData.totalBudget.toLocaleString()} budgeted` : "Not set"}
+            </p>
+            <p className="text-xs-tight text-muted-foreground">
+              {budgetData && budgetData.totalBudget > 0
+                ? `$${budgetData.totalSpent.toLocaleString()} spent \u00B7 ${Math.round((budgetData.totalSpent / budgetData.totalBudget) * 100)}% used`
+                : "Tap to set up budget"}
+            </p>
           </button>
         </div>
         {recentExpenses.length > 0 && (
@@ -1418,6 +1672,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         }))}
         emptyMessage="No assets or liabilities tracked yet."
       />
+
+      {/* Budget Dialog */}
+      <Dialog open={drill === "budget"} onOpenChange={(open) => { if (!open) setDrill(null); }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Target className="h-4 w-4" />
+              Monthly Budget
+            </DialogTitle>
+          </DialogHeader>
+          <BudgetManager />
+        </DialogContent>
+      </Dialog>
     </CollapsibleSection>
   );
 }

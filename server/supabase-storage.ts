@@ -3039,6 +3039,82 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
+  // BUDGETS (stored in preferences table as JSON)
+  // ============================================================
+
+  async getBudgets(month: string): Promise<Array<{id: string; category: string; amount: number; notes?: string}>> {
+    const { data } = await this.supabase.from("preferences")
+      .select("value")
+      .eq("user_id", this.userId)
+      .eq("key", `budget:${month}`)
+      .single();
+    if (!data?.value) return [];
+    try { return JSON.parse(data.value); } catch { return []; }
+  }
+
+  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string}>): Promise<void> {
+    const { data: existing } = await this.supabase.from("preferences")
+      .select("id")
+      .eq("user_id", this.userId)
+      .eq("key", `budget:${month}`)
+      .single();
+    if (existing) {
+      await this.supabase.from("preferences")
+        .update({ value: JSON.stringify(budgets) })
+        .eq("id", existing.id);
+    } else {
+      await this.supabase.from("preferences").insert({
+        user_id: this.userId,
+        key: `budget:${month}`,
+        value: JSON.stringify(budgets),
+      });
+    }
+  }
+
+  async addBudget(month: string, category: string, amount: number, notes?: string): Promise<{id: string; category: string; amount: number; notes?: string}> {
+    const budgets = await this.getBudgets(month);
+    const existing = budgets.find(b => b.category.toLowerCase() === category.toLowerCase());
+    if (existing) {
+      existing.amount = amount;
+      if (notes) existing.notes = notes;
+      await this.setBudgets(month, budgets);
+      return existing;
+    }
+    const entry = { id: crypto.randomUUID(), category, amount, notes };
+    budgets.push(entry);
+    await this.setBudgets(month, budgets);
+    return entry;
+  }
+
+  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string}): Promise<boolean> {
+    const budgets = await this.getBudgets(month);
+    const b = budgets.find(x => x.id === budgetId);
+    if (!b) return false;
+    if (updates.amount !== undefined) b.amount = updates.amount;
+    if (updates.category) b.category = updates.category;
+    if (updates.notes !== undefined) b.notes = updates.notes;
+    await this.setBudgets(month, budgets);
+    return true;
+  }
+
+  async deleteBudget(month: string, budgetId: string): Promise<boolean> {
+    const budgets = await this.getBudgets(month);
+    const idx = budgets.findIndex(b => b.id === budgetId);
+    if (idx === -1) return false;
+    budgets.splice(idx, 1);
+    await this.setBudgets(month, budgets);
+    return true;
+  }
+
+  async copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number> {
+    const source = await this.getBudgets(fromMonth);
+    if (source.length === 0) return 0;
+    const newBudgets = source.map(b => ({ ...b, id: crypto.randomUUID() }));
+    await this.setBudgets(toMonth, newBudgets);
+    return newBudgets.length;
+  }
+
+  // ============================================================
   // SEED DATA
   // ============================================================
   async seedIfEmpty(): Promise<void> {

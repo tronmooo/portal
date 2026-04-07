@@ -168,6 +168,14 @@ export interface IStorage {
   restoreHabit(id: string): Promise<boolean>;
   deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean>;
   migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }>;
+
+  // Budgets
+  getBudgets(month: string): Promise<Array<{id: string; category: string; amount: number; notes?: string}>>;
+  setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string}>): Promise<void>;
+  addBudget(month: string, category: string, amount: number, notes?: string): Promise<{id: string; category: string; amount: number; notes?: string}>;
+  updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string}): Promise<boolean>;
+  deleteBudget(month: string, budgetId: string): Promise<boolean>;
+  copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number>;
 }
 
 // ---- Human-readable tracker value formatting ----
@@ -1688,6 +1696,39 @@ export class MemStorage implements IStorage {
   async restoreHabit(_id: string): Promise<boolean> { return false; }
   async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
+
+  // Budget stubs
+  private budgetStore = new Map<string, Array<{id: string; category: string; amount: number; notes?: string}>>();
+  async getBudgets(month: string) { return this.budgetStore.get(month) || []; }
+  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string}>) { this.budgetStore.set(month, budgets); }
+  async addBudget(month: string, category: string, amount: number, notes?: string) {
+    const budget = { id: crypto.randomUUID(), category, amount, notes };
+    const list = this.budgetStore.get(month) || [];
+    list.push(budget);
+    this.budgetStore.set(month, list);
+    return budget;
+  }
+  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string}) {
+    const list = this.budgetStore.get(month) || [];
+    const idx = list.findIndex(b => b.id === budgetId);
+    if (idx === -1) return false;
+    Object.assign(list[idx], updates);
+    return true;
+  }
+  async deleteBudget(month: string, budgetId: string) {
+    const list = this.budgetStore.get(month) || [];
+    const idx = list.findIndex(b => b.id === budgetId);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    this.budgetStore.set(month, list);
+    return true;
+  }
+  async copyBudgetsToMonth(fromMonth: string, toMonth: string) {
+    const source = this.budgetStore.get(fromMonth) || [];
+    const copied = source.map(b => ({ ...b, id: crypto.randomUUID() }));
+    this.budgetStore.set(toMonth, copied);
+    return copied.length;
+  }
 }
 
 // Storage factory — uses Supabase if env vars are set, otherwise falls back to SQLite
