@@ -1031,6 +1031,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             })}
           </div>
       </div>}
+      {viewMode === "month" && !timelineLoading && Object.values(itemsByDate).every(arr => arr.length === 0) && (
+        <div className="rounded-lg border border-dashed border-border/50 p-6 text-center mt-4">
+          <CalendarIcon className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground mb-1">No events this month</p>
+          <p className="text-xs text-muted-foreground/70">Tell the AI: "Doctor appointment Friday at 2pm" or "Rex vet checkup next week"</p>
+        </div>
+      )}
 
       {/* Week View */}
       {viewMode === "week" && (() => {

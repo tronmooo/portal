@@ -723,9 +723,10 @@ function HealthSection({ data }: { data: any[] }) {
 
   if (!data || data.length === 0) return (
     <CollapsibleSection icon={HeartPulse} label="Health" testId="section-health">
-      <div className="text-center py-4">
+      <div className="rounded-lg border border-dashed border-border/50 p-4 text-center">
         <Heart className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground">No health trackers yet</p>
+        <p className="text-xs text-muted-foreground mb-1">No health data yet</p>
+        <p className="text-xs text-muted-foreground/70">Tell the AI: "Log my blood pressure" or "I weigh 180 lbs"</p>
       </div>
     </CollapsibleSection>
   );
@@ -1020,10 +1021,11 @@ function GoalsSection({ profileId }: { profileId?: string }) {
     <>
       <CollapsibleSection icon={Target} label="Goals" count={activeGoals.length} testId="section-goals">
         {activeGoals.length === 0 && completedGoals.length === 0 ? (
-          <div className="text-center py-4">
+          <div className="rounded-lg border border-dashed border-border/50 p-4 text-center">
             <Target className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-            <p className="text-xs text-muted-foreground">No goals yet</p>
-            <Button size="sm" variant="outline" className="mt-2 h-7 text-xs" onClick={openCreate} data-testid="btn-create-first-goal">
+            <p className="text-xs text-muted-foreground mb-1">No goals yet</p>
+            <p className="text-xs text-muted-foreground/70 mb-2">Tell the AI: "Set a goal to run 3x per week" or "Save $5000 by December"</p>
+            <Button size="sm" variant="outline" className="mt-1 h-7 text-xs" onClick={openCreate} data-testid="btn-create-first-goal">
               <Target className="h-3 w-3 mr-1" /> Set a Goal
             </Button>
           </div>
@@ -1529,7 +1531,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   if (!data && !stats) {
     return (
       <CollapsibleSection icon={DollarSign} label="Finance" testId="section-finance">
-        <p className="text-xs text-muted-foreground py-2">No finance data yet</p>
+        <div className="rounded-lg border border-dashed border-border/50 p-4 text-center">
+          <p className="text-xs text-muted-foreground mb-1">No finance data yet</p>
+          <p className="text-xs text-muted-foreground/70">Tell the AI: "Spent $50 on groceries" or "Set budget $500 for food"</p>
+        </div>
       </CollapsibleSection>
     );
   }

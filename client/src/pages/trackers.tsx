@@ -2825,7 +2825,13 @@ export default function TrackersPage() {
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const [uploadProfileId, setUploadProfileId] = useState<string>("");
   // Unified section filter: which sections to show
-  const [sectionFilter, setSectionFilter] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers">("all");
+  const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers">(() => {
+    try { return (sessionStorage.getItem("portol_linked_filter") as any) || "all"; } catch { return "all"; }
+  });
+  const setSectionFilter = (val: "all" | "profiles" | "subscriptions" | "documents" | "trackers") => {
+    setSectionFilterRaw(val);
+    try { sessionStorage.setItem("portol_linked_filter", val); } catch {}
+  };
   // Document type filter
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   // Tracker category filter
@@ -3293,7 +3299,7 @@ export default function TrackersPage() {
               };
               const colorClass = DOC_TYPE_COLORS[doc.type] || "bg-slate-500/10 text-slate-500";
               return (
-                <div key={doc.id} className="rounded-lg border bg-card overflow-hidden" data-testid={`global-doc-${doc.id}`}>
+                <div key={doc.id} className="rounded-lg border bg-card overflow-hidden hover:border-primary/30 hover:shadow-sm active:scale-[0.98] transition-all cursor-pointer" data-testid={`global-doc-${doc.id}`}>
                   <div className="flex items-center gap-3 p-3">
                     <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${colorClass}`}>
                       {doc.mimeType?.startsWith("image/") ? <Eye className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
