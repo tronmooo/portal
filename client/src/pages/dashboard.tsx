@@ -37,7 +37,7 @@ import {
   Trash2, Pencil, FileText, CheckCircle2, X,
   ChevronLeft, ChevronRight, Plus,
 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -97,6 +97,29 @@ const ACTIVITY_ICONS: Record<string, any> = {
   task_completed: Check,
   expense: DollarSign,
 };
+
+// ─── Animated Count-Up Hook ───────────────────────────────────────────────────
+
+function useCountUp(target: number, duration: number = 600): number {
+  const [current, setCurrent] = useState(0);
+  const prevTarget = useRef(0);
+  useEffect(() => {
+    if (target === prevTarget.current) return;
+    const start = prevTarget.current;
+    prevTarget.current = target;
+    const startTime = performance.now();
+    const animate = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setCurrent(Math.round(start + (target - start) * eased));
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  }, [target, duration]);
+  return current;
+}
 
 // ─── Shared UI Components ────────────────────────────────────────────────────
 
@@ -226,6 +249,7 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
 // ─── Enhanced KPI Cards ──────────────────────────────────────────────────────
 
 function KPITaskCard({ count, onClick }: { count: number; onClick: () => void }) {
+  const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
@@ -238,7 +262,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{count}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
       {/* Fill bar */}
@@ -253,6 +277,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
 }
 
 function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; trend: "up"|"down"|"flat"; enhanced: any; onClick: () => void }) {
+  const animatedAmount = useCountUp(Math.round(amount));
   const finSnap = enhanced?.financeSnapshot;
   const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
   const maxBar = Math.max(...bars, 1);
@@ -270,7 +295,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         </span>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>{amount % 1 === 0 ? `$${amount}` : `$${amount.toFixed(0)}`}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
       {/* Mini bar chart */}
@@ -286,6 +311,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
 function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct: number; totalHabits: number; onClick: () => void }) {
   const r = 14; const circ = 2 * Math.PI * r;
   const pct = Math.min(100, completionPct);
+  const animatedPct = useCountUp(pct);
   const dash = (pct / 100) * circ;
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
@@ -294,7 +320,7 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
       <div className="flex items-start justify-between gap-2 relative z-10">
         <div>
-          <div className="text-lg font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{pct}%</div>
+          <div className="text-lg font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">Habits Today</p>
           <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
         </div>
@@ -311,6 +337,7 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
 }
 
 function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: string | null; onClick: () => void }) {
+  const animatedStreak = useCountUp(streak);
   const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
   const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
   return (
@@ -324,7 +351,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{streak}d</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
       {/* 7-day dots */}
@@ -1325,7 +1352,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   className={`flex items-center gap-2 py-1.5 px-1.5 rounded-lg group transition-colors ${
                     isOverdue ? 'bg-red-500/5 border border-red-500/20' :
                     isAtRisk ? 'bg-amber-500/5 border border-amber-500/20' :
-                    isCompleted ? 'bg-green-500/5 border border-green-500/20' :
+                    isCompleted ? 'bg-green-500/5 border border-green-500/20 goal-celebrate' :
                     'border border-transparent'
                   }`}
                   data-testid={`goal-card-${g.id}`}>
@@ -1340,7 +1367,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   {/* Goal info — tap to open actions */}
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActionGoal(g)}>
                     <div className="flex items-center justify-between">
-                      <span className="text-xs-loose font-medium truncate">{g.title}</span>
+                      <span className="text-xs-loose font-medium truncate">{g.title}{isCompleted && <span className="text-base ml-1" title="Goal complete!">🎉</span>}</span>
                       <div className="flex items-center gap-1 ml-2 shrink-0">
                         {isOverdue && <span className="text-[9px] font-bold text-red-500">OVERDUE</span>}
                         {isAtRisk && <span className="text-[9px] font-bold text-amber-500">AT RISK</span>}
@@ -1868,6 +1895,29 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
+            {/* Net Worth trend sparkline — uses estimated monthly snapshots */}
+            {netWorth > 0 && (() => {
+              const baseNW = netWorth;
+              const mSpend = data?.totalMonthlySpend || monthlySpend || 0;
+              const nwData = Array.from({length: 6}, (_, i) => ({
+                month: new Date(Date.now() - (5-i) * 30 * 86400000).toLocaleDateString('en-US', {month:'short'}),
+                value: Math.max(0, baseNW - mSpend * (5 - i) * 0.8)
+              }));
+              const isUp = nwData[5].value >= nwData[0].value;
+              return (
+                <div className="mt-2 px-1" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">6-Month Trend</span>
+                    <span className={`text-[10px] font-bold ${isUp ? 'text-green-500' : 'text-red-400'}`}>{isUp ? '↑' : '↓'} Trending</span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={40}>
+                    <LineChart data={nwData} margin={{top:2,right:2,left:2,bottom:2}}>
+                      <Line type="monotone" dataKey="value" stroke={isUp ? '#10b981' : '#ef4444'} strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              );
+            })()}
           </button>
           <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <div className="flex items-center justify-center gap-2">

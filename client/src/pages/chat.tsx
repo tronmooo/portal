@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,8 @@ import {
   ChevronDown,
   Table as TableIcon,
   FileBarChart,
+  Mic,
+  Search,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
@@ -1108,6 +1110,41 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
   );
 }
 
+function useSpeechInput(onResult: (text: string) => void) {
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  const start = useCallback(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const rec = new SpeechRecognition();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.lang = 'en-US';
+    rec.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      onResult(transcript);
+      setListening(false);
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+    recognitionRef.current = rec;
+    rec.start();
+    setListening(true);
+  }, [onResult]);
+
+  const stop = useCallback(() => {
+    recognitionRef.current?.stop();
+    setListening(false);
+  }, []);
+
+  const supported = typeof window !== 'undefined' && (
+    !!(window as any).SpeechRecognition || !!(window as any).webkitSpeechRecognition
+  );
+
+  return { listening, start, stop, supported };
+}
+
 export default function ChatPage() {
   useEffect(() => { document.title = "Chat — Portol"; }, []);
   useEffect(() => {
@@ -1125,6 +1162,18 @@ export default function ChatPage() {
     });
   };
   const [input, setInput] = useState("");
+  const speech = useSpeechInput((text) => setInput(prev => prev ? prev + ' ' + text : text));
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const QUICK_LOG_ITEMS = [
+    { label: 'Weight', icon: '⚖️', template: 'Log my weight: ' },
+    { label: 'BP', icon: '❤️', template: 'Blood pressure: ' },
+    { label: 'Sleep', icon: '😴', template: 'Log sleep: ' },
+    { label: 'Mood', icon: '😊', template: 'Mood today: ' },
+    { label: 'Run', icon: '🏃', template: 'I ran ' },
+    { label: 'Expense', icon: '💰', template: 'Spent $' },
+  ];
 
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
@@ -1577,22 +1626,40 @@ export default function ChatPage() {
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         <div className="max-w-2xl mx-auto space-y-4">
-          {/* Reset chat button at top of messages */}
+          {/* Reset chat + search buttons at top of messages */}
           {messages.length > 1 && (
-            <div className="flex justify-center">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs gap-1.5 border-dashed"
-                onClick={() => { setMessages([WELCOME_MSG]); }}
-                title="Start new conversation"
-                data-testid="button-reset-chat"
-              >
+            <div className="flex items-center justify-between mb-1">
+              <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 border-dashed"
+                onClick={() => { setMessagesRaw([WELCOME_MSG]); }}
+                data-testid="button-reset-chat">
                 <RotateCcw className="h-3 w-3" /> New Chat
+              </Button>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+                onClick={() => setSearchOpen(v => !v)}
+                data-testid="button-chat-search">
+                <Search className="h-3.5 w-3.5" />
               </Button>
             </div>
           )}
-          {messages.map((msg) => (
+          {/* Search bar */}
+          {searchOpen && (
+            <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl bg-muted/50 border border-border/50 mb-2">
+              <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <input
+                autoFocus
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search messages..."
+                className="flex-1 bg-transparent text-sm outline-none text-foreground placeholder:text-muted-foreground"
+                data-testid="input-chat-search"
+              />
+              {searchQuery && <button onClick={() => setSearchQuery('')} className="text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>}
+              <button onClick={() => { setSearchOpen(false); setSearchQuery(''); }} className="text-muted-foreground hover:text-foreground text-xs">Done</button>
+            </div>
+          )}
+          {messages
+            .filter(msg => !searchQuery || msg.content.toLowerCase().includes(searchQuery.toLowerCase()))
+            .map((msg) => (
             <div
               key={msg.id}
               className={`message-in flex ${
@@ -1887,6 +1954,19 @@ export default function ChatPage() {
               </Button>
             </div>
           )}
+          {/* Quick-log shortcuts */}
+          <div className="max-w-2xl mx-auto flex gap-1.5 overflow-x-auto scrollbar-hide pb-1 mb-1">
+            {QUICK_LOG_ITEMS.map(item => (
+              <button
+                key={item.label}
+                onClick={() => { setInput(item.template); inputRef.current?.focus(); }}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full border border-border/50 bg-card/60 text-xs font-medium text-foreground/70 hover:bg-muted/60 whitespace-nowrap shrink-0 active:scale-95 transition-all"
+                data-testid={`quick-log-${item.label.toLowerCase()}`}
+              >
+                <span>{item.icon}</span> {item.label}
+              </button>
+            ))}
+          </div>
           <div className="max-w-2xl mx-auto flex items-end gap-2">
             <Button
               variant="ghost"
@@ -1919,6 +1999,20 @@ export default function ChatPage() {
               rows={1}
               data-testid="input-chat"
             />
+            {speech.supported && (
+              <Button
+                onClick={() => speech.listening ? speech.stop() : speech.start()}
+                size="icon"
+                variant="ghost"
+                className={`rounded-xl h-[44px] w-[44px] shrink-0 transition-all ${speech.listening ? 'text-red-500 bg-red-500/10 hover:bg-red-500/15' : ''}`}
+                title={speech.listening ? "Stop listening" : "Voice input"}
+                data-testid="button-voice-input"
+              >
+                {speech.listening
+                  ? <span className="w-4 h-4 rounded-sm bg-red-500 animate-pulse" />
+                  : <Mic className="h-4 w-4" />}
+              </Button>
+            )}
             <Button
               onClick={handleSend}
               disabled={!input.trim() || isPending}

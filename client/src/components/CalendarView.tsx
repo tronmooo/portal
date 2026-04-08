@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus,
+  Calendar as CalendarIcon, CalendarDays, ChevronLeft, ChevronRight, Plus,
   Clock, MapPin, Repeat, Trash2, Pencil, X,
   ListTodo, Flame, CreditCard, Users, FileText,
   CheckSquare, ChevronDown, RefreshCw,
@@ -719,7 +719,7 @@ interface CalendarViewProps {
 export default function CalendarView({ externalFilterIds, externalFilterMode }: CalendarViewProps = {}) {
   const today = new Date();
   const todayStr = toLocalDateStr(today);
-  const [viewMode, setViewMode] = useState<"month" | "week" | "day">("month");
+  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewDate, setViewDate] = useState(today); // for week/day navigation
@@ -886,7 +886,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           </Button>
           {/* View mode toggle */}
           <div className="flex items-center bg-muted/50 rounded-md p-0.5">
-            {(["month", "week", "day"] as const).map(mode => (
+            {(["month", "week", "day", "agenda"] as const).map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)}
                 className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${viewMode === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
                 {mode.charAt(0).toUpperCase() + mode.slice(1)}
@@ -1217,6 +1217,63 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                 </button>
               ))}
             </div>
+          </div>
+        );
+      })()}
+
+      {/* Agenda View — scrollable chronological list */}
+      {viewMode === "agenda" && (() => {
+        const now = new Date();
+        const allItems = Object.values(itemsByDate).flat();
+        const agendaEvents = [...allItems]
+          .filter(ev => new Date(ev.date || '') >= new Date(toLocalDateStr(now)))
+          .sort((a, b) => new Date(a.date || '').getTime() - new Date(b.date || '').getTime() || (a.time || '').localeCompare(b.time || ''))
+          .slice(0, 50);
+        
+        const grouped: Record<string, typeof agendaEvents> = {};
+        for (const ev of agendaEvents) {
+          const dateStr = new Date(ev.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+          if (!grouped[dateStr]) grouped[dateStr] = [];
+          grouped[dateStr].push(ev);
+        }
+        
+        if (Object.keys(grouped).length === 0) {
+          return (
+            <div className="text-center py-12">
+              <CalendarDays className="h-12 w-12 text-muted-foreground/20 mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground">No upcoming events</p>
+            </div>
+          );
+        }
+        
+        return (
+          <div className="space-y-4 pb-8">
+            {Object.entries(grouped).map(([dateStr, events]) => (
+              <div key={dateStr}>
+                <div className="sticky top-0 bg-background/95 backdrop-blur-sm py-1.5 px-1 z-10">
+                  <span className="text-xs font-bold uppercase tracking-wider text-primary/70">{dateStr}</span>
+                </div>
+                <div className="space-y-1">
+                  {events.map((ev: any, i: number) => {
+                    const typeColor = ev.type === 'task' ? '#8b5cf6' : ev.type === 'obligation' ? '#f59e0b' : ev.type === 'habit' ? '#10b981' : '#3b82f6';
+                    return (
+                      <div key={`${ev.id}-${i}`}
+                        className="flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40 cursor-pointer hover:bg-muted/40 active:scale-[0.98] transition-all"
+                        onClick={() => { setSelectedDate(ev.date); setDetailItem(ev); }}>
+                        <div className="w-1 self-stretch rounded-full shrink-0 mt-0.5" style={{ background: ev.color || typeColor }} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate text-foreground">{ev.title}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            {ev.time && <span className="text-xs text-muted-foreground tabular-nums">{ev.time}</span>}
+                            {ev.type && <span className="text-xs text-muted-foreground capitalize">{ev.type}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         );
       })()}

@@ -31,6 +31,45 @@ import { useTheme } from "@/components/theme-provider";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
+function PWAInstallCard() {
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: Event) => { e.preventDefault(); setDeferredPrompt(e); };
+    window.addEventListener('beforeinstallprompt', handler);
+    window.addEventListener('appinstalled', () => setInstalled(true));
+    // Check if already installed
+    if (window.matchMedia('(display-mode: standalone)').matches) setInstalled(true);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  if (installed || !deferredPrompt) return null;
+
+  return (
+    <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 flex items-center gap-3 mb-4">
+      <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
+        <img src="/portol-logo.png" alt="Portol" className="w-6 h-6 object-contain" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-foreground">Install Portol</p>
+        <p className="text-xs text-muted-foreground">Add to your home screen for the full app experience</p>
+      </div>
+      <button
+        onClick={async () => {
+          deferredPrompt.prompt();
+          const result = await deferredPrompt.userChoice;
+          if (result.outcome === 'accepted') setInstalled(true);
+          setDeferredPrompt(null);
+        }}
+        className="shrink-0 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90"
+      >
+        Install
+      </button>
+    </div>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, href, accent }: { icon: any; label: string; value: number | string; href: string; accent: string }) {
   const [, navigate] = useLocation();
   return (
@@ -178,6 +217,7 @@ export default function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto pb-24">
       <div className="max-w-2xl mx-auto p-4 md:p-6 space-y-4">
+        <PWAInstallCard />
         {/* Header */}
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -487,6 +527,69 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ─── Data Export ─── */}
+        <div className="rounded-xl border border-border/40 bg-card overflow-hidden">
+          <div className="px-4 py-3 border-b border-border/30">
+            <h3 className="text-sm font-semibold">Export Your Data</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Download all your Portol data</p>
+          </div>
+          <div className="px-4 py-3 space-y-2">
+            <button
+              onClick={async () => {
+                try {
+                  const [profiles, tasks, expenses, events, habits, goals] = await Promise.all([
+                    fetch('/api/profiles').then(r => r.json()),
+                    fetch('/api/tasks').then(r => r.json()),
+                    fetch('/api/expenses').then(r => r.json()),
+                    fetch('/api/events').then(r => r.json()),
+                    fetch('/api/habits').then(r => r.json()),
+                    fetch('/api/goals').then(r => r.json()),
+                  ]);
+                  const data = { exportedAt: new Date().toISOString(), profiles, tasks, expenses, events, habits, goals };
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a'); a.href = url; a.download = `portol-export-${new Date().toISOString().slice(0,10)}.json`;
+                  a.click(); URL.revokeObjectURL(url);
+                } catch (e) { console.error(e); }
+              }}
+              className="w-full flex items-center gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 text-left transition-colors"
+              data-testid="button-export-json"
+            >
+              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Download className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Export as JSON</p>
+                <p className="text-xs text-muted-foreground">All data in machine-readable format</p>
+              </div>
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const expenses = await fetch('/api/expenses').then(r => r.json());
+                  const rows = [['Date','Description','Amount','Category']];
+                  for (const e of expenses) rows.push([e.date||'', e.description||'', e.amount||'', e.category||'']);
+                  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+                  const blob = new Blob([csv], { type: 'text/csv' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a'); a.href = url; a.download = `portol-expenses-${new Date().toISOString().slice(0,10)}.csv`;
+                  a.click(); URL.revokeObjectURL(url);
+                } catch (e) { console.error(e); }
+              }}
+              className="w-full flex items-center gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 text-left transition-colors"
+              data-testid="button-export-csv"
+            >
+              <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                <Download className="h-4 w-4 text-amber-500" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Export Expenses as CSV</p>
+                <p className="text-xs text-muted-foreground">For spreadsheets and accounting tools</p>
+              </div>
+            </button>
+          </div>
+        </div>
 
         {/* ─── Privacy & Security ─── */}
         <Card data-testid="card-privacy">

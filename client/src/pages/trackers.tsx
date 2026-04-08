@@ -1011,6 +1011,8 @@ function TrackerCard({
   const [addEntryOpen, setAddEntryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [detailExpanded, setDetailExpanded] = useState(false);
+  const [quickAddId, setQuickAddId] = useState<string | null>(null);
+  const [quickAddValue, setQuickAddValue] = useState('');
 
   const lastEntry = tracker.entries[tracker.entries.length - 1];
   const prevEntry = tracker.entries.length > 1 ? tracker.entries[tracker.entries.length - 2] : null;
@@ -1202,6 +1204,68 @@ function TrackerCard({
                 minute: "2-digit",
               })}
             </p>
+
+            {/* 7-day entry dots */}
+            {(() => {
+              const days = Array.from({length: 7}, (_, i) => {
+                const d = new Date();
+                d.setDate(d.getDate() - (6 - i));
+                const ds = d.toLocaleDateString('en-CA');
+                const hasEntry = (tracker.entries || []).some(e =>
+                  (e.timestamp || '').slice(0, 10) === ds
+                );
+                return hasEntry;
+              });
+              const streak = [...days].reverse().findIndex(d => !d);
+              const currentStreak = streak === -1 ? 7 : streak;
+              return (
+                <div className="flex gap-0.5 mt-1.5">
+                  {days.map((has, i) => (
+                    <div key={i} className="flex-1 h-1 rounded-full"
+                      style={{ background: has ? 'hsl(173 60% 44%)' : 'hsl(var(--muted))' }} />
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* Quick-add entry */}
+            {quickAddId === tracker.id ? (
+              <div className="flex items-center gap-1 mt-1.5" onClick={e => e.stopPropagation()}>
+                <input
+                  autoFocus
+                  type="number"
+                  value={quickAddValue}
+                  onChange={e => setQuickAddValue(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && quickAddValue) {
+                      const primaryFieldName = tracker.fields?.find((f: any) => f.isPrimary)?.name || tracker.fields?.[0]?.name || 'value';
+                      try {
+                        await apiRequest('POST', `/api/trackers/${tracker.id}/entries`, {
+                          values: { [primaryFieldName]: parseFloat(quickAddValue) },
+                          timestamp: new Date().toISOString(),
+                        });
+                        queryClient.invalidateQueries({ queryKey: ['/api/trackers'] });
+                      } catch {}
+                      setQuickAddId(null);
+                      setQuickAddValue('');
+                    }
+                    if (e.key === 'Escape') { setQuickAddId(null); setQuickAddValue(''); }
+                  }}
+                  placeholder={`Enter ${tracker.fields?.[0]?.name || 'value'}...`}
+                  className="flex-1 h-7 text-sm bg-background border border-border rounded-lg px-2 outline-none focus:border-primary/50"
+                />
+                <button onClick={() => { setQuickAddId(null); setQuickAddValue(''); }}
+                  className="text-muted-foreground hover:text-foreground text-xs px-2">Cancel</button>
+              </div>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); setQuickAddId(tracker.id); }}
+                className="mt-1.5 w-full h-6 rounded-lg border border-dashed border-border/50 text-xs text-muted-foreground/60 hover:border-primary/40 hover:text-primary/60 transition-colors flex items-center justify-center gap-1"
+                data-testid={`quick-add-${tracker.id}`}
+              >
+                <Plus className="h-3 w-3" /> Quick log
+              </button>
+            )}
 
             {/* Expand/collapse entries */}
             <Button

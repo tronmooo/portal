@@ -130,6 +130,23 @@ import EditableTitle from "@/components/EditableTitle";
 // HELPERS
 // ============================================================
 
+function getProfileBanner(type: string): string {
+  const banners: Record<string, string> = {
+    self:         'linear-gradient(135deg, hsl(188 55% 30%), hsl(262 65% 35%))',
+    person:       'linear-gradient(135deg, hsl(215 70% 30%), hsl(262 55% 35%))',
+    pet:          'linear-gradient(135deg, hsl(43 85% 35%), hsl(25 80% 35%))',
+    vehicle:      'linear-gradient(135deg, hsl(220 20% 20%), hsl(220 15% 28%))',
+    asset:        'linear-gradient(135deg, hsl(43 75% 30%), hsl(155 55% 25%))',
+    investment:   'linear-gradient(135deg, hsl(155 60% 25%), hsl(188 65% 25%))',
+    subscription: 'linear-gradient(135deg, hsl(310 45% 25%), hsl(262 55% 28%))',
+    medical:      'linear-gradient(135deg, hsl(0 70% 30%), hsl(25 75% 30%))',
+    account:      'linear-gradient(135deg, hsl(188 65% 25%), hsl(155 55% 25%))',
+    property:     'linear-gradient(135deg, hsl(262 55% 28%), hsl(215 65% 30%))',
+    loan:         'linear-gradient(135deg, hsl(0 72% 28%), hsl(25 75% 28%))',
+  };
+  return banners[type] || 'linear-gradient(135deg, hsl(40 5% 20%), hsl(40 5% 28%))';
+}
+
 function profileIcon(type: string) {
   const icons: Record<string, any> = {
     person: User,
@@ -4117,7 +4134,8 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "info", label: "Overview", testId: "tab-info" },
   { value: "finances", label: "Finance", testId: "tab-finances" },
   { value: "trackers", label: "Documents", testId: "tab-trackers" },
-  { value: "timeline", label: "Activity", testId: "tab-timeline" },
+  { value: "activity", label: "Activity", testId: "tab-activity" },
+  { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
 ];
 
@@ -5004,6 +5022,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "trackers": return (profile.relatedDocuments || []).length > 0; // Documents tab — show if docs exist
         case "finances": return (profile.relatedExpenses || []).length > 0;
         case "tasks": return (profile.relatedTasks || []).length > 0;
+        case "activity": return ((profile.relatedExpenses || []).length + (profile.relatedTasks || []).length + (profile.relatedEvents || []).length) > 0;
         case "documents": return (profile.relatedDocuments || []).length > 0;
         case "loan-detail": return !!(profile.fields?.interestRate || profile.fields?.loanBalance ||
           profile.fields?.monthlyPayment || (profile.relatedObligations || []).length > 0);
@@ -5027,7 +5046,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "payments"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "payments"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -5693,7 +5712,7 @@ export default function ProfileDetailPage() {
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="page-profile-detail">
       {/* Hero Header */}
-      <div className={`bg-gradient-to-b ${profileGradient(profile.type)} px-4 md:px-6 pt-4 pb-6`}>
+      <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: getProfileBanner(profile?.type || '') }}>
         <div className="flex items-center justify-between mb-3">
           <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-back">
             <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
@@ -5949,6 +5968,52 @@ export default function ProfileDetailPage() {
               {tabValues.has("payments") && (
                 <TabsContent value="payments" className="mt-4 px-1 sm:px-0">
                   <PaymentsTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("activity") && (
+                <TabsContent value="activity" className="mt-4 px-1 sm:px-0">
+                  {(() => {
+                    const feed: Array<{date: string; type: string; title: string; subtitle?: string; color: string}> = [];
+                    
+                    for (const e of (profile.relatedExpenses || [])) {
+                      feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
+                    }
+                    for (const t of (profile.relatedTasks || [])) {
+                      feed.push({ date: (t as any).createdAt || t.dueDate || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
+                    }
+                    for (const ev of (profile.relatedEvents || [])) {
+                      feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: '#3b82f6' });
+                    }
+                    
+                    feed.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                    
+                    if (feed.length === 0) {
+                      return (
+                        <div className="text-center py-8">
+                          <Activity className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
+                          <p className="text-xs text-muted-foreground">No activity yet</p>
+                        </div>
+                      );
+                    }
+                    
+                    return (
+                      <div className="space-y-1.5 pb-4">
+                        {feed.slice(0, 50).map((item, i) => (
+                          <div key={i} className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50">
+                            <div className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: item.color }} />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium truncate">{item.title}</p>
+                              {item.subtitle && <p className="text-xs text-muted-foreground">{item.subtitle}</p>}
+                            </div>
+                            <span className="text-xs text-muted-foreground shrink-0">
+                              {item.date ? new Date(item.date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </TabsContent>
               )}
 

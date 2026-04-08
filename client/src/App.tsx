@@ -30,7 +30,7 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef, useCallback, useState } from "react";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // Keep lightweight pages as direct imports
@@ -191,6 +191,120 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function PullToRefresh() {
+  const pullRef = useRef<HTMLDivElement>(null);
+  const startY = useRef<number | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const threshold = 80;
+
+  useEffect(() => {
+    const main = document.getElementById('main-content');
+    if (!main) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (main.scrollTop === 0) startY.current = e.touches[0].clientY;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (startY.current === null) return;
+      const dy = e.touches[0].clientY - startY.current;
+      if (dy > 0 && dy < threshold * 1.5) {
+        setPulling(true);
+        if (pullRef.current) {
+          pullRef.current.style.transform = `translateY(${Math.min(dy * 0.5, 40)}px)`;
+          pullRef.current.style.opacity = String(Math.min(dy / threshold, 1));
+        }
+      }
+    };
+
+    const onTouchEnd = async (e: TouchEvent) => {
+      if (startY.current === null) return;
+      const dy = e.changedTouches[0].clientY - startY.current;
+      startY.current = null;
+      if (pullRef.current) {
+        pullRef.current.style.transform = '';
+        pullRef.current.style.opacity = '0';
+      }
+      setPulling(false);
+      if (dy >= threshold) {
+        setRefreshing(true);
+        // Invalidate all React Query cache
+        const qc = (window as any).__portol_queryClient;
+        if (qc) await qc.invalidateQueries();
+        setTimeout(() => setRefreshing(false), 1200);
+      }
+    };
+
+    main.addEventListener('touchstart', onTouchStart, { passive: true });
+    main.addEventListener('touchmove', onTouchMove, { passive: true });
+    main.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      main.removeEventListener('touchstart', onTouchStart);
+      main.removeEventListener('touchmove', onTouchMove);
+      main.removeEventListener('touchend', onTouchEnd);
+    };
+  }, []);
+
+  if (!pulling && !refreshing) return null;
+
+  return (
+    <div className="fixed top-0 left-0 right-0 z-[100] flex justify-center pointer-events-none" style={{ paddingTop: '4px' }}>
+      <div
+        ref={pullRef}
+        className="flex items-center gap-2 px-4 py-2 rounded-full bg-card border border-border shadow-lg text-xs font-medium text-muted-foreground"
+        style={{ opacity: 0, transition: 'none' }}
+      >
+        {refreshing ? (
+          <><span className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" /> Refreshing...</>
+        ) : (
+          <><span className="text-base">↓</span> Pull to refresh</>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SwipeNav() {
+  const [location, navigate] = useLocation();
+  const startX = useRef<number | null>(null);
+  const startY = useRef<number | null>(null);
+
+  const TAB_ORDER = ['/', '/dashboard', '/linked', '/calendar', '/profiles'];
+
+  const handleTouchStart = useCallback((e: TouchEvent) => {
+    startX.current = e.touches[0].clientX;
+    startY.current = e.touches[0].clientY;
+  }, []);
+
+  const handleTouchEnd = useCallback((e: TouchEvent) => {
+    if (startX.current === null || startY.current === null) return;
+    const dx = e.changedTouches[0].clientX - startX.current;
+    const dy = e.changedTouches[0].clientY - startY.current;
+    // Only horizontal swipes (more horizontal than vertical, and > 60px)
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const currentTab = TAB_ORDER.find(t => t === location || (t !== '/' && location.startsWith(t))) || '/';
+    const idx = TAB_ORDER.indexOf(currentTab);
+    if (dx < 0 && idx < TAB_ORDER.length - 1) navigate(TAB_ORDER[idx + 1]); // swipe left = next tab
+    if (dx > 0 && idx > 0) navigate(TAB_ORDER[idx - 1]); // swipe right = prev tab
+    startX.current = null;
+    startY.current = null;
+  }, [location, navigate]);
+
+  useEffect(() => {
+    const main = document.getElementById('main-content');
+    if (!main) return;
+    main.addEventListener('touchstart', handleTouchStart, { passive: true });
+    main.addEventListener('touchend', handleTouchEnd, { passive: true });
+    return () => {
+      main.removeEventListener('touchstart', handleTouchStart);
+      main.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [handleTouchStart, handleTouchEnd]);
+
+  return null;
+}
+
 function ScrollToTop() {
   const [location] = useLocation();
   useEffect(() => {
@@ -285,6 +399,8 @@ function App() {
           <Router hook={useHashLocation}>
             <ScrollToTop />
             <KeepAlive />
+            <SwipeNav />
+            <PullToRefresh />
             <AuthGate>
             <CommandSearchProvider>
               <KeyboardShortcuts />

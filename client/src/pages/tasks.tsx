@@ -40,7 +40,7 @@ import { ToastAction } from "@/components/ui/toast";
 import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task } from "@shared/schema";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -340,6 +340,54 @@ function TaskItem({
   );
 }
 
+// ── Swipeable Item Wrapper ──────────────────────────────────────────────────
+
+function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ Done', rightLabel = 'Snooze', leftColor = '#10b981', rightColor = '#f59e0b' }: {
+  children: React.ReactNode;
+  onSwipeLeft?: () => void;
+  onSwipeRight?: () => void;
+  leftLabel?: string;
+  rightLabel?: string;
+  leftColor?: string;
+  rightColor?: string;
+}) {
+  const [offsetX, setOffsetX] = useState(0);
+  const startX = useRef<number | null>(null);
+  const threshold = 72;
+
+  return (
+    <div className="relative overflow-hidden rounded-lg">
+      {/* Background actions */}
+      <div className="absolute inset-0 flex items-center">
+        <div className="flex-1 h-full flex items-center px-4" style={{ background: leftColor + '30' }}>
+          <span className="text-xs font-bold" style={{ color: leftColor }}>{leftLabel}</span>
+        </div>
+        <div className="flex-1 h-full flex items-center justify-end px-4" style={{ background: rightColor + '30' }}>
+          <span className="text-xs font-bold" style={{ color: rightColor }}>{rightLabel}</span>
+        </div>
+      </div>
+      {/* Swipeable content */}
+      <div
+        style={{ transform: `translateX(${offsetX}px)`, transition: offsetX === 0 ? 'transform 0.2s ease' : 'none', background: 'hsl(var(--card))', position: 'relative' }}
+        onTouchStart={e => { startX.current = e.touches[0].clientX; }}
+        onTouchMove={e => {
+          if (startX.current === null) return;
+          const dx = e.touches[0].clientX - startX.current;
+          setOffsetX(Math.max(-threshold * 1.5, Math.min(threshold * 1.5, dx)));
+        }}
+        onTouchEnd={() => {
+          if (offsetX < -threshold) onSwipeLeft?.();
+          else if (offsetX > threshold) onSwipeRight?.();
+          setOffsetX(0);
+          startX.current = null;
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 // ── Tasks Page ───────────────────────────────────────────────────────────────
 
 export default function TasksPage() {
@@ -446,7 +494,26 @@ export default function TasksPage() {
                 Active ({activeTasks.length})
               </h2>
               {activeTasks.map(task => (
-                <TaskItem key={task.id} task={task} onEdit={setEditTask} />
+                <SwipeableItem
+                  key={task.id}
+                  onSwipeLeft={async () => {
+                    try {
+                      await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "done" });
+                      invalidateTaskQueries();
+                    } catch {}
+                  }}
+                  onSwipeRight={async () => {
+                    try {
+                      const tomorrow = new Date();
+                      tomorrow.setDate(tomorrow.getDate() + 1);
+                      const dateStr = tomorrow.toISOString().slice(0, 10);
+                      await apiRequest("PATCH", `/api/tasks/${task.id}`, { dueDate: dateStr });
+                      invalidateTaskQueries();
+                    } catch {}
+                  }}
+                >
+                  <TaskItem task={task} onEdit={setEditTask} />
+                </SwipeableItem>
               ))}
             </div>
           )}
@@ -456,7 +523,19 @@ export default function TasksPage() {
                 Completed ({completedTasks.length})
               </h2>
               {completedTasks.map(task => (
-                <TaskItem key={task.id} task={task} onEdit={setEditTask} />
+                <SwipeableItem
+                  key={task.id}
+                  leftLabel="↩ Reopen"
+                  leftColor="#3b82f6"
+                  onSwipeLeft={async () => {
+                    try {
+                      await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "todo" });
+                      invalidateTaskQueries();
+                    } catch {}
+                  }}
+                >
+                  <TaskItem task={task} onEdit={setEditTask} />
+                </SwipeableItem>
               ))}
             </div>
           )}

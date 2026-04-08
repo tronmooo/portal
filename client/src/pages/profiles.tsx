@@ -999,6 +999,23 @@ const AVATAR_COLORS: Record<string, string> = {
   loan: "bg-red-500/20 text-red-500",
 };
 
+function getProfileBanner(type: string): string {
+  const banners: Record<string, string> = {
+    self:         'linear-gradient(135deg, hsl(188 55% 30%), hsl(262 65% 35%))',
+    person:       'linear-gradient(135deg, hsl(215 70% 30%), hsl(262 55% 35%))',
+    pet:          'linear-gradient(135deg, hsl(43 85% 35%), hsl(25 80% 35%))',
+    vehicle:      'linear-gradient(135deg, hsl(220 20% 20%), hsl(220 15% 28%))',
+    asset:        'linear-gradient(135deg, hsl(43 75% 30%), hsl(155 55% 25%))',
+    investment:   'linear-gradient(135deg, hsl(155 60% 25%), hsl(188 65% 25%))',
+    subscription: 'linear-gradient(135deg, hsl(310 45% 25%), hsl(262 55% 28%))',
+    medical:      'linear-gradient(135deg, hsl(0 70% 30%), hsl(25 75% 30%))',
+    account:      'linear-gradient(135deg, hsl(188 65% 25%), hsl(155 55% 25%))',
+    property:     'linear-gradient(135deg, hsl(262 55% 28%), hsl(215 65% 30%))',
+    loan:         'linear-gradient(135deg, hsl(0 72% 28%), hsl(25 75% 28%))',
+  };
+  return banners[type] || 'linear-gradient(135deg, hsl(40 5% 20%), hsl(40 5% 28%))';
+}
+
 function ProfileCard({
   profile,
   onDelete,
@@ -1048,8 +1065,12 @@ function ProfileCard({
         className="card-lift cursor-pointer group overflow-hidden relative"
         style={{ borderLeft: `3px solid hsl(${PROFILE_ACCENT[profile.type] || '188 65% 48%'})` }}
       >
-        {/* Subtle top gradient tint */}
-        <div className="absolute top-0 left-0 right-0 h-12 pointer-events-none" style={{ background: `linear-gradient(180deg, hsl(${PROFILE_ACCENT[profile.type] || '188 65% 48%'} / 0.07) 0%, transparent 100%)` }} />
+        {/* Profile banner */}
+        <div className="h-12 w-full rounded-t-xl" style={{ background: getProfileBanner(profile.type) }}>
+          <div className="h-full w-full flex items-end justify-end px-2 py-1">
+            <span className="text-[9px] text-white/60 font-medium uppercase tracking-wider">{profile.type}</span>
+          </div>
+        </div>
         <CardContent className="p-4 relative">
           <div className="flex items-start gap-3">
             <Avatar className="h-10 w-10 shrink-0">
