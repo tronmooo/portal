@@ -201,6 +201,23 @@ function ScrollToTop() {
   return null;
 }
 
+// Keep the Vercel serverless function warm so there's never a cold-start delay.
+// Ping every 90 seconds — Vercel keeps functions alive for ~5 min after last request.
+function KeepAlive() {
+  const { user } = useAuth();
+  const { getAuthHeader } = useAuth();
+  useEffect(() => {
+    if (!user) return;
+    const ping = () => {
+      fetch("/api/warmup", { headers: getAuthHeader() }).catch(() => {});
+    };
+    ping(); // Immediate ping to pre-warm cache on mount
+    const id = setInterval(ping, 90_000); // Then every 90 seconds
+    return () => clearInterval(id);
+  }, [user]);
+  return null;
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
@@ -268,6 +285,7 @@ function App() {
           <ErrorBoundary>
           <Router hook={useHashLocation}>
             <ScrollToTop />
+            <KeepAlive />
             <AuthGate>
             <CommandSearchProvider>
               <KeyboardShortcuts />

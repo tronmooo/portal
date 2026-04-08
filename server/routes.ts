@@ -169,6 +169,22 @@ export async function registerRoutes(
     res.json({ version: BUILD_VERSION });
   });
 
+  // Keep-alive / pre-warm endpoint — called by client every 90s to prevent cold starts
+  // Also fired immediately after login to pre-populate cache in the background
+  app.get("/api/warmup", asyncHandler(async (req, res) => {
+    res.json({ ok: true, ts: Date.now() });
+    // Pre-populate expensive caches in background (after response sent)
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    if (uid !== "anon") {
+      const ckStats = `stats:${uid}:all`;
+      const ckEnh = `enhanced:${uid}:all`;
+      const ckProf = `profiles:${uid}`;
+      if (!getCached(ckStats)) storage.getStats().then(s => setCache(ckStats, s, 5*60*1000)).catch(()=>{});
+      if (!getCached(ckEnh)) storage.getDashboardEnhanced().then(d => setCache(ckEnh, d, 5*60*1000)).catch(()=>{});
+      if (!getCached(ckProf)) storage.getProfiles().then(p => setCache(ckProf, p, 5*60*1000)).catch(()=>{});
+    }
+  }));
+
   // Rate limit all write operations (POST/PATCH/DELETE) — 60 writes per minute per user
   app.use("/api", (req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
@@ -591,13 +607,15 @@ export async function registerRoutes(
 
   // ---- Dashboard ----
   app.get("/api/stats", asyncHandler(async (req, res) => {
-    // Support multi-select: ?profileIds=id1,id2 OR legacy ?profileId=id
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = (req as AuthenticatedRequest).userId || "anon";
-    // No cache — dashboard stats must always reflect current DB state
+    const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
     const stats = await storage.getStats(undefined, filterIds);
+    setCache(cacheKey, stats, 5 * 60 * 1000); // 5-minute cache
     res.json(stats);
   }));
 
@@ -606,8 +624,11 @@ export async function registerRoutes(
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = (req as AuthenticatedRequest).userId || "anon";
-    // No cache — dashboard must always reflect current DB state
+    const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
     const data = await storage.getDashboardEnhanced(undefined, filterIds);
+    setCache(cacheKey, data, 5 * 60 * 1000); // 5-minute cache
     res.json(data);
   }));
 
@@ -697,7 +718,15 @@ export async function registerRoutes(
   }));
 
   // ---- Profiles ----
-  app.get("/api/profiles", asyncHandler(async (req, res) => { const items = await storage.getProfiles(); res.json(paginate(items, req, res)); }));
+  app.get("/api/profiles", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `profiles:${uid}`;
+    const hit = getCached(ck);
+    if (hit) return res.json(paginate(hit, req, res));
+    const items = await storage.getProfiles();
+    setCache(ck, items, 5 * 60 * 1000);
+    res.json(paginate(items, req, res));
+  }));
   app.get("/api/profiles/:id", asyncHandler(async (req, res) => {
     const profile = await storage.getProfile(req.params.id);
     if (!profile) return res.status(404).json({ error: "Not found" });
@@ -1765,8 +1794,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Notifications (computed on each request) ----
-  app.get("/api/notifications", asyncHandler(async (_req, res) => {
+  app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
+      const userId = (req as AuthenticatedRequest).userId || "anon";
+      const notifCacheKey = `notifications:${userId}`;
+      const notifCached = getCached(notifCacheKey);
+      if (notifCached) return res.json(notifCached);
+
       interface Notification {
         id: string;
         type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone";
@@ -2038,6 +2072,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const severityOrder: Record<string, number> = { critical: 0, warning: 1, info: 2 };
       notifications.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
+      setCache(notifCacheKey, notifications, 5 * 60 * 1000); // 5-minute cache
       res.json(notifications);
     } catch (err: any) {
       log.error("[Notifications]", err?.message || "unknown error");

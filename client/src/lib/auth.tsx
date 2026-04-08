@@ -142,6 +142,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(callbackData.user);
             setSession(memoryTokens);
             setLoading(false);
+            // Pre-warm cache in background after OAuth login
+            fetch(`${API_BASE}/api/warmup`, { headers: { Authorization: `Bearer ${accessToken}` } }).catch(() => {});
             return;
           }
         } catch {
@@ -196,6 +198,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const data = await res.json();
           setUser(data.user);
           setSession(tokens);
+          // Pre-warm server cache immediately after restoring session
+          fetch(`${API_BASE}/api/warmup`, { headers: { Authorization: `Bearer ${tokens.access_token}` } }).catch(() => {});
         } else {
           persistTokens(null);
         }
