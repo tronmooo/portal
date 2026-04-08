@@ -164,7 +164,7 @@ export function NotificationBell() {
           <Bell className="h-4 w-4" />
           {urgentCount > 0 && !open && (
             <span
-              className="absolute -top-0.5 -right-0.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-xs font-bold leading-none"
+              className="absolute -top-0.5 -right-0.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-xs font-bold leading-none animate-pulse"
               data-testid="badge-notification-count"
             >
               {urgentCount > 99 ? "99+" : urgentCount}

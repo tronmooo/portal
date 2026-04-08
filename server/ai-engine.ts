@@ -3,6 +3,16 @@ import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
 
+// Rich visual output types (inline — shared/schema was reverted)
+type ChartType = "line" | "bar" | "area" | "pie" | "scatter" | "composed" | "radar";
+interface ChartSeries { dataKey: string; name: string; color?: string; type?: "line"|"bar"|"area"; stackId?: string; }
+interface ChartSpec { type: ChartType; title: string; subtitle?: string; data: Array<Record<string, any>>; series: ChartSeries[]; xAxisKey: string; xAxisLabel?: string; yAxisLabel?: string; showLegend?: boolean; showGrid?: boolean; height?: number; nameKey?: string; valueKey?: string; }
+interface TableColumn { key: string; label: string; align?: "left"|"center"|"right"; format?: "currency"|"date"|"number"|"percent"|"text"; }
+interface TableSpec { title: string; subtitle?: string; columns: TableColumn[]; rows: Array<Record<string, any>>; summary?: Record<string, any>; }
+interface ReportMetric { label: string; value: string | number; change?: string; changeType?: "positive"|"negative"|"neutral"; }
+interface ReportSection { heading: string; content?: string; chart?: ChartSpec; table?: TableSpec; metrics?: ReportMetric[]; }
+interface ReportSpec { title: string; subtitle?: string; sections: ReportSection[]; generatedAt: string; }
+
 // Lazy-init: dotenv.config() runs after ESM imports resolve,
 // so we defer client creation until first use.
 let _client: Anthropic | null = null;
@@ -1790,6 +1800,59 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["profileName"],
     },
   },
+  {
+    name: "generate_chart",
+    description: "Generate a REAL VISUAL CHART rendered directly in the chat. USE THIS whenever the user says 'show', 'chart', 'graph', 'visualize', 'plot', 'trend', 'pie chart', 'compare', or asks to SEE data visually. DO NOT describe what a chart would look like \u2014 call this tool and it will render an actual interactive chart inline.\n\nChart types: 'line'=trends over time, 'bar'=categories, 'area'=cumulative, 'pie'=breakdown, 'scatter'=correlation, 'composed'=multi-metric, 'radar'=scores\n\nExamples:\n- 'Show my spending as a pie chart' \u2192 chartType:'pie', dataSource:'expenses'\n- 'Show my weight trend' \u2192 chartType:'line', dataSource:'trackers', trackerName:'weight'\n- 'Compare spending this month vs last' \u2192 chartType:'bar', dataSource:'expenses', dateRange:'3months'",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        chartType: { type: "string", enum: ["line","bar","area","pie","scatter","composed","radar"], description: "Type of chart" },
+        title: { type: "string", description: "Chart title" },
+        subtitle: { type: "string", description: "Optional subtitle" },
+        dataSource: { type: "string", enum: ["trackers","expenses","tasks","habits","journal","obligations","goals","custom"], description: "Data source" },
+        trackerName: { type: "string", description: "For trackers: tracker name(s), comma-separated for multiple" },
+        valueField: { type: "string", description: "Field to plot on Y axis" },
+        dateRange: { type: "string", enum: ["week","month","3months","6months","year","all"], description: "Time period" },
+        forProfile: { type: "string", description: "Filter to specific profile name" },
+        groupBy: { type: "string", description: "How to group: 'category', 'day', 'week', 'month'" },
+        showLegend: { type: "boolean", description: "Show legend" },
+      },
+      required: ["chartType","title","dataSource"],
+    },
+  },
+  {
+    name: "generate_table",
+    description: "Generate a formatted interactive data table in the chat. Use for 'show all', 'list', 'table of', or structured data requests.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string" },
+        subtitle: { type: "string" },
+        dataSource: { type: "string", enum: ["trackers","expenses","tasks","habits","journal","obligations","goals","events","profiles"] },
+        columns: { type: "array", items: { type: "object", properties: { key: { type: "string" }, label: { type: "string" }, format: { type: "string" }, align: { type: "string" } } } },
+        filters: { type: "object", description: "{ minAmount, maxAmount, category, status, forProfile, dateRange }" },
+        sortBy: { type: "string" },
+        sortDir: { type: "string", enum: ["asc","desc"] },
+        limit: { type: "number" },
+        includeSummary: { type: "boolean" },
+      },
+      required: ["title","dataSource","columns"],
+    },
+  },
+  {
+    name: "generate_report",
+    description: "Generate a comprehensive multi-section report with charts, tables, and metrics. Use for 'report', 'summary', 'scorecard', 'digest', 'overview'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        reportType: { type: "string", enum: ["financial","health","life_scorecard","profile","goal_progress","weekly_digest"] },
+        title: { type: "string" },
+        dateRange: { type: "string", enum: ["week","month","3months","6months","year","all"] },
+        forProfile: { type: "string" },
+      },
+      required: ["reportType"],
+    },
+  },
 ];
 
 // ============================================================
@@ -2015,6 +2078,18 @@ Whenever you encounter dates in ANY context (document extraction, user messages,
 - Appointment dates → create an event
 - Renewal dates → create a recurring event
 For document extractions, dates are automatically detected and presented to the user for calendar routing.
+
+CRITICAL — VISUAL OUTPUT RULES:
+When the user asks to SEE, VISUALIZE, CHART, GRAPH, PLOT, or SHOW data visually, you MUST call generate_chart. Do NOT describe what a chart would look like. Do NOT say "navigate to the finance dashboard to see a chart." CALL THE TOOL and it will render an actual chart inline in the chat.
+
+MANDATORY chart triggers: "show me", "chart", "graph", "visualize", "pie chart", "plot", "trend", "compare X vs Y"
+- "Show my spending as a pie chart" → CALL generate_chart(chartType:"pie", dataSource:"expenses")
+- "Show my weight trend" → CALL generate_chart(chartType:"line", dataSource:"trackers", trackerName:"weight")
+- "Financial report" → CALL generate_report(reportType:"financial")
+- "Life scorecard" → CALL generate_report(reportType:"life_scorecard")
+- "Table of my expenses" → CALL generate_table(dataSource:"expenses")
+
+If chart data is empty, say so specifically: "You haven't logged any [type] yet."
 
 CHAT-FIRST PHILOSOPHY:
 You are the universal interface to ALL data in Portol. Every piece of data — documents, events, finances, health, profiles — is accessible through you. When users ask questions about their data, search proactively. When they mention documents, retrieve them. When they mention dates, route them to the calendar. You are the single point of intelligence for the user's entire life data.
@@ -2254,6 +2329,7 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
 function safeLC(val: any): string {
   return (typeof val === "string" ? val : "").toLowerCase();
 }
+
 
 async function executeTool(name: string, input: any): Promise<any> {
   switch (name) {
@@ -2676,9 +2752,13 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Auto-create tracker if not found — infer category from name
       const nameLC = (input.trackerName || "").toLowerCase();
       let autoCategory = "custom";
-      if (["nutrition","food","diet","meal","calories"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
-      else if (["running","cycling","swimming","workout","exercise","walk","basketball","tennis","soccer","football","volleyball","baseball","hockey","golf","yoga","pilates","lifting","weights","gym","crossfit","hiit","rowing","skating","skiing","surfing","martial","boxing","wrestling","climbing","hiking","dancing","sport","game","match","practice","drill"].some(k => nameLC.includes(k))) autoCategory = "fitness";
-      else if (["weight","blood","bp","sleep","heart","cholesterol"].some(k => nameLC.includes(k))) autoCategory = "health";
+      // Smart category inference — order matters (most specific first)
+      if (["nutrition","food","diet","meal","calories","protein","carbs","fat","macros","intake","eating"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
+      else if (["running","cycling","swimming","workout","exercise","walk","basketball","tennis","soccer","football","volleyball","baseball","hockey","golf","yoga","pilates","lifting","weights","gym","crossfit","hiit","rowing","skating","skiing","surfing","martial","boxing","wrestling","climbing","hiking","dancing","sport","game","match","practice","drill","steps","miles","cardio","strength","training","reps","sets","pace","distance","sprint","push-up","pullup","squat","deadlift","bench"].some(k => nameLC.includes(k))) autoCategory = "fitness";
+      else if (["weight","blood","bp","sleep","heart","cholesterol","glucose","sugar","oxygen","spo2","pulse","temperature","fever","pain","hydration","water","vitamin","medication","med","dose","symptom","mood","stress","anxiety","mental","creatinine","a1c","bmi"].some(k => nameLC.includes(k))) autoCategory = "health";
+      else if (["spending","expense","budget","saving","invest","portfolio","net worth","income","salary","revenue","profit","debt","loan","mortgage","credit","crypto","stock","dividend","rent","bill","subscription","dollar","cash"].some(k => nameLC.includes(k))) autoCategory = "finance";
+      else if (["habit","routine","streak","daily","checkin","check-in","morning","evening","meditation","gratitude","journaling","reading","journaling","screen time","phone usage","bedtime"].some(k => nameLC.includes(k))) autoCategory = "habit";
+      else if (["productivity","focus","work","study","learn","task","project","meeting","call","email","pomodoro","deep work","code","write","create"].some(k => nameLC.includes(k))) autoCategory = "productivity";
 
       // Resolve display name — handle DB unique constraint (user_id, name)
       let trackerDisplayName = input.trackerName || "Custom";
@@ -3728,9 +3808,211 @@ async function executeTool(name: string, input: any): Promise<any> {
       };
     }
 
+    case "generate_chart": {
+      try { const chart = await buildChartSpec(input); return { chart, generated: true }; }
+      catch (e: any) { return { error: "Chart generation failed: " + e.message }; }
+    }
+    case "generate_table": {
+      try { const table = await buildTableSpec(input); return { table, generated: true }; }
+      catch (e: any) { return { error: "Table generation failed: " + e.message }; }
+    }
+    case "generate_report": {
+      try { const report = await buildReportSpec(input); return { report, generated: true }; }
+      catch (e: any) { return { error: "Report generation failed: " + e.message }; }
+    }
+
     default:
       return null;
   }
+}
+
+// ─── Chart/Table/Report Builders ────────────────────────────────────────────────────────────────────────
+
+const CHART_COLORS = ["hsl(188 55% 50%)","#6366f1","#f59e0b","#10b981","#ef4444","#8b5cf6","#06b6d4","#84cc16","#f97316","#ec4899"];
+
+function dateRangeStart(dateRange?: string): Date {
+  const now = new Date();
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  switch (dateRange) {
+    case "week": return new Date(now.getTime() - 7*86400000);
+    case "month": return new Date(todayStr.slice(0,7) + '-01T12:00:00');
+    case "3months": return new Date(now.getTime() - 90*86400000);
+    case "6months": return new Date(now.getTime() - 180*86400000);
+    case "year": return new Date(todayStr.slice(0,4) + '-01-01T12:00:00');
+    default: return new Date(0);
+  }
+}
+
+async function resolveProfileId(name?: string): Promise<string | undefined> {
+  if (!name) return undefined;
+  const profiles = await storage.getProfiles();
+  const lc = name.toLowerCase();
+  return profiles.find(p => p.name.toLowerCase() === lc || (p.type === 'self' && lc === 'me'))?.id;
+}
+
+async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
+  const { chartType, title, subtitle, dataSource, trackerName, dateRange, forProfile, groupBy, showLegend } = input;
+  const since = dateRangeStart(dateRange);
+  const profileId = await resolveProfileId(forProfile);
+
+  if (dataSource === "expenses") {
+    const expenses = await storage.getExpenses();
+    const filtered = expenses.filter(e => {
+      if (new Date(e.date || e.createdAt) < since) return false;
+      if (profileId && !e.linkedProfiles?.includes(profileId)) return false;
+      return true;
+    });
+    if (filtered.length === 0) throw new Error("No expense data found for the selected period.");
+
+    if (chartType === "pie" || groupBy === "category") {
+      const grouped: Record<string, number> = {};
+      for (const e of filtered) { const cat = e.category || "general"; grouped[cat] = (grouped[cat]||0) + e.amount; }
+      const data = Object.entries(grouped).sort((a,b) => b[1]-a[1]).map(([category, amount], i) => ({ category, amount: Math.round(amount*100)/100, fill: CHART_COLORS[i%CHART_COLORS.length] }));
+      return { type:"pie", title, subtitle: subtitle || `${filtered.length} expenses \u00b7 $${filtered.reduce((s,e)=>s+e.amount,0).toFixed(2)} total`, data, series:[{dataKey:"amount",name:"Amount"}], xAxisKey:"category", nameKey:"category", valueKey:"amount", showLegend: showLegend !== false, height:300 };
+    }
+    // Bar by month
+    const grouped: Record<string, number> = {};
+    for (const e of filtered) { const d = new Date(e.date || e.createdAt); const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; grouped[k] = (grouped[k]||0)+e.amount; }
+    const data = Object.entries(grouped).sort((a,b)=>a[0].localeCompare(b[0])).map(([month,amount])=>({month,amount:Math.round(amount*100)/100}));
+    return { type:"bar", title, subtitle, data, series:[{dataKey:"amount",name:"Spending",color:CHART_COLORS[0]}], xAxisKey:"month", yAxisLabel:"Amount ($)", showLegend:false, showGrid:true, height:260 };
+  }
+
+  if (dataSource === "trackers" && trackerName) {
+    const allTrackers = await storage.getTrackers();
+    const names = trackerName.split(",").map((n:string)=>n.trim().toLowerCase());
+    const trackers = allTrackers.filter(t => names.some((n:string) => t.name.toLowerCase().includes(n)));
+    if (trackers.length === 0) throw new Error(`Tracker "${trackerName}" not found.`);
+
+    const tracker = trackers[0];
+    const entries = tracker.entries.filter(e => new Date(e.timestamp) >= since).sort((a,b)=>new Date(a.timestamp).getTime()-new Date(b.timestamp).getTime());
+    if (entries.length === 0) throw new Error(`No entries found for "${tracker.name}" in this period.`);
+
+    if (/blood.?pressure|bp/i.test(tracker.name) || entries[0]?.values?.systolic !== undefined) {
+      const data = entries.map(e => ({ date: new Date(e.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric"}), Systolic: e.values.systolic, Diastolic: e.values.diastolic }));
+      return { type:"line", title, subtitle, data, series:[{dataKey:"Systolic",name:"Systolic",color:CHART_COLORS[0]},{dataKey:"Diastolic",name:"Diastolic",color:CHART_COLORS[1]}], xAxisKey:"date", showLegend:true, showGrid:true, height:260 };
+    }
+    const primaryField = tracker.fields.find(f=>f.isPrimary)?.name || Object.keys(entries[0].values)[0] || "value";
+    const data = entries.map(e => ({ date: new Date(e.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric"}), [primaryField]: typeof e.values[primaryField]==="number"?e.values[primaryField]:0 }));
+    return { type: chartType||"line", title, subtitle, data, series:[{dataKey:primaryField,name:tracker.name,color:CHART_COLORS[0]}], xAxisKey:"date", yAxisLabel:`${tracker.unit||primaryField}`, showLegend:false, showGrid:true, height:260 };
+  }
+
+  if (dataSource === "habits") {
+    const habits = await storage.getHabits();
+    const now = new Date();
+    const data = Array.from({length:7},(_,i) => {
+      const d = new Date(now.getTime()-(6-i)*86400000);
+      const ds = d.toLocaleDateString('en-CA');
+      return { day: d.toLocaleDateString("en-US",{weekday:"short"}), completed: habits.filter(h=>h.checkins?.some(c=>c.date===ds)).length, total: habits.length };
+    });
+    return { type:"bar", title, subtitle: subtitle||`${habits.length} habits tracked`, data, series:[{dataKey:"completed",name:"Completed",color:CHART_COLORS[2]}], xAxisKey:"day", showLegend:false, showGrid:true, height:220 };
+  }
+
+  if (dataSource === "goals") {
+    const goals = await storage.getGoals();
+    if (goals.length === 0) throw new Error("No goals found.");
+    const data = goals.map(g => ({ goal: g.title.slice(0,20), progress: Math.min(100,Math.round((g.current/g.target)*100)) }));
+    return { type:"radar", title, subtitle, data, series:[{dataKey:"progress",name:"Progress %",color:CHART_COLORS[0]}], xAxisKey:"goal", showLegend:false, height:280 };
+  }
+
+  throw new Error(`Cannot build chart: dataSource="${dataSource}", chartType="${chartType}"`);
+}
+
+async function buildTableSpec(input: Record<string, any>): Promise<TableSpec> {
+  const { title, subtitle, dataSource, columns: inputColumns, filters={}, sortBy, sortDir="desc", limit=50, includeSummary } = input;
+  const since = dateRangeStart(filters.dateRange);
+  const profileId = await resolveProfileId(filters.forProfile);
+  let rows: Array<Record<string,any>> = [];
+  let columns = inputColumns || [];
+
+  if (dataSource === "expenses") {
+    const all = await storage.getExpenses();
+    rows = all.filter(e => {
+      if (new Date(e.date||e.createdAt) < since) return false;
+      if (filters.category && e.category !== filters.category) return false;
+      if (filters.minAmount && e.amount < filters.minAmount) return false;
+      if (filters.maxAmount && e.amount > filters.maxAmount) return false;
+      if (profileId && !e.linkedProfiles?.includes(profileId)) return false;
+      return true;
+    }).map(e => ({ date:e.date, description:e.description, category:e.category, amount:e.amount, vendor:e.vendor||"", id:e.id }));
+    if (!inputColumns?.length) columns = [
+      {key:"date",label:"Date",format:"date"},
+      {key:"description",label:"Description",align:"left"},
+      {key:"category",label:"Category"},
+      {key:"amount",label:"Amount",format:"currency",align:"right"},
+    ];
+  } else if (dataSource === "tasks") {
+    const all = await storage.getTasks();
+    rows = all.filter(t => (!filters.status||t.status===filters.status)).map(t=>({title:t.title,status:t.status,priority:t.priority,dueDate:t.dueDate||"",id:t.id}));
+    if (!inputColumns?.length) columns = [{key:"title",label:"Task",align:"left"},{key:"priority",label:"Priority"},{key:"status",label:"Status"},{key:"dueDate",label:"Due",format:"date"}];
+  } else if (dataSource === "habits") {
+    const all = await storage.getHabits();
+    rows = all.map(h=>({name:h.name,frequency:h.frequency,streak:h.currentStreak,best:h.longestStreak,id:h.id}));
+    if (!inputColumns?.length) columns = [{key:"name",label:"Habit",align:"left"},{key:"frequency",label:"Frequency"},{key:"streak",label:"Streak",align:"center"},{key:"best",label:"Best",align:"center"}];
+  }
+
+  if (rows.length === 0) throw new Error(`No ${dataSource} data found.`);
+  if (sortBy) rows.sort((a,b) => { const av=a[sortBy],bv=b[sortBy]; if(typeof av==="number"&&typeof bv==="number") return sortDir==="asc"?av-bv:bv-av; return sortDir==="asc"?String(av).localeCompare(String(bv)):String(bv).localeCompare(String(av)); });
+  rows = rows.slice(0, limit);
+  const summary = (includeSummary && dataSource==="expenses") ? { description:`Total (${rows.length} items)`, amount:rows.reduce((s,r)=>s+(r.amount||0),0) } : undefined;
+  return { title, subtitle, columns, rows, summary };
+}
+
+async function buildReportSpec(input: Record<string, any>): Promise<ReportSpec> {
+  const { reportType, title: customTitle, dateRange="month", forProfile } = input;
+  const now = new Date();
+  const since = dateRangeStart(dateRange);
+  const profileId = await resolveProfileId(forProfile);
+  const sections: ReportSection[] = [];
+
+  if (reportType === "financial") {
+    const expenses = await storage.getExpenses();
+    const filtered = expenses.filter(e => new Date(e.date||e.createdAt) >= since && (!profileId || e.linkedProfiles?.includes(profileId)));
+    const total = filtered.reduce((s,e)=>s+e.amount,0);
+    const byCategory: Record<string,number> = {};
+    for (const e of filtered) byCategory[e.category||"general"] = (byCategory[e.category||"general"]||0)+e.amount;
+    const topCategory = Object.entries(byCategory).sort((a,b)=>b[1]-a[1])[0]?.[0] || "\u2014";
+    sections.push({ heading:"Summary", metrics:[
+      {label:"Total Spent",value:`$${total.toFixed(2)}`,changeType:"neutral"},
+      {label:"Transactions",value:filtered.length},
+      {label:"Top Category",value:topCategory},
+      {label:"Avg/Day",value:`$${(total/Math.max(1,(now.getTime()-since.getTime())/86400000)).toFixed(2)}`},
+    ]});
+    if (filtered.length > 0) {
+      try { const chart = await buildChartSpec({chartType:"pie",title:"Spending by Category",dataSource:"expenses",dateRange,forProfile}); sections.push({heading:"Breakdown",chart}); } catch {}
+    }
+    try { const table = await buildTableSpec({title:"Recent Expenses",dataSource:"expenses",columns:[],filters:{dateRange},sortBy:"amount",sortDir:"desc",limit:15,includeSummary:true}); sections.push({heading:"Expenses",table}); } catch {}
+    return {title:customTitle||`Financial Report \u2014 ${dateRange}`,sections,generatedAt:now.toISOString()};
+  }
+
+  if (reportType === "life_scorecard") {
+    const [tasks,habits,expenses,trackers,goals] = await Promise.all([storage.getTasks(),storage.getHabits(),storage.getExpenses(),storage.getTrackers(),storage.getGoals()]);
+    const taskScore = Math.min(100,Math.round((tasks.filter(t=>t.status==="done").length/Math.max(1,tasks.length))*100));
+    const habitScore = Math.min(100,Math.round(habits.reduce((s,h)=>s+Math.min(100,h.currentStreak*10),0)/Math.max(1,habits.length)));
+    const recentExpenses = expenses.filter(e=>new Date(e.date||e.createdAt)>=since);
+    const budgetScore = Math.max(0,100-Math.min(100,Math.round(recentExpenses.length*2)));
+    const fitnessTrackers = trackers.filter(t=>/run|walk|swim|bike|exercise|fitness|gym|sport/i.test(t.name));
+    const fitnessScore = Math.min(100,fitnessTrackers.reduce((s,t)=>s+Math.min(100,t.entries.filter(e=>new Date(e.timestamp)>=since).length*15),0));
+    const goalScore = goals.length>0 ? Math.round(goals.reduce((s,g)=>s+Math.min(100,(g.current/g.target)*100),0)/goals.length) : 50;
+    const radarData = [{area:"Tasks",score:taskScore},{area:"Habits",score:habitScore},{area:"Budget",score:budgetScore},{area:"Fitness",score:fitnessScore},{area:"Goals",score:goalScore}];
+    sections.push({heading:"Life Balance",chart:{type:"radar",title:"Life Scorecard",data:radarData,series:[{dataKey:"score",name:"Score",color:CHART_COLORS[0]}],xAxisKey:"area",showLegend:false,height:300}});
+    sections.push({heading:"Scores",metrics:radarData.map(d=>({label:d.area,value:d.score,changeType:d.score>=70?"positive":d.score>=40?"neutral":"negative" as "positive"|"negative"|"neutral"}))});
+    return {title:customTitle||"Life Scorecard",sections,generatedAt:now.toISOString()};
+  }
+
+  if (reportType === "weekly_digest") {
+    const weekSince = dateRangeStart("week");
+    const [tasks,habits,expenses] = await Promise.all([storage.getTasks(),storage.getHabits(),storage.getExpenses()]);
+    const weeklyExpenses = expenses.filter(e=>new Date(e.date||e.createdAt)>=weekSince);
+    sections.push({heading:"This Week",metrics:[
+      {label:"Tasks Done",value:tasks.filter(t=>t.status==="done").length},
+      {label:"Spent",value:`$${weeklyExpenses.reduce((s,e)=>s+e.amount,0).toFixed(2)}`},
+      {label:"Habits",value:habits.reduce((s,h)=>s+(h.checkins?.filter(c=>new Date(c.date)>=weekSince).length||0),0)+" check-ins"},
+    ]});
+    if (weeklyExpenses.length > 0) { try { const chart = await buildChartSpec({chartType:"pie",title:"Week Spending",dataSource:"expenses",dateRange:"week"}); sections.push({heading:"Spending",chart}); } catch {} }
+    return {title:customTitle||"Weekly Digest",sections,generatedAt:now.toISOString()};
+  }
+
+  throw new Error(`Unknown report type: ${reportType}`);
 }
 
 // ============================================================
@@ -4162,6 +4444,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   results: any[];
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   documentPreviews?: Array<{ id: string; name: string; mimeType: string; data: string }>;
+  charts?: ChartSpec[];
+  tables?: TableSpec[];
+  report?: ReportSpec;
 }> {
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -4373,6 +4658,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     messages.push({ role: "user", content: userMessage });
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
+    const richCharts: ChartSpec[] = [];
+    const richTables: TableSpec[] = [];
+    let richReport: ReportSpec | undefined;
     let textReply = "";
     let documentPreview: { id: string; name: string; mimeType: string; data: string } | undefined;
     const documentPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
@@ -4497,6 +4785,11 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             documentPreviews.push(preview);
           }
 
+          // Collect visual output
+          if (toolUse.name === "generate_chart" && result?.chart && !result.error) richCharts.push(result.chart as ChartSpec);
+          if (toolUse.name === "generate_table" && result?.table && !result.error) richTables.push(result.table as TableSpec);
+          if (toolUse.name === "generate_report" && result?.report && !result.error) richReport = result.report as ReportSpec;
+
           // Handle retrieve_document — attach document preview
           if (toolUse.name === "retrieve_document" && result?.documentPreview) {
             const preview = { id: result.documentPreview.id, name: result.documentPreview.name, mimeType: result.documentPreview.mimeType, data: result.documentPreview.data };
@@ -4545,12 +4838,75 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       }
     }
 
+    // CHART SAFETY NET: If the user explicitly asked for a chart/visualization but the AI
+    // described it instead of calling generate_chart, force-generate the chart now.
+    if (richCharts.length === 0 && !richReport) {
+      const msgLower = userMessage.toLowerCase();
+      const wantsPie = /pie chart|spending.*chart|chart.*spending|breakdown.*chart|spending breakdown/.test(msgLower);
+      const wantsLine = /trend|over time|history|line chart|weight.*chart|chart.*weight/.test(msgLower);
+      const wantsBar = /bar chart|compare|comparison|vs\.?\s/.test(msgLower);
+      const wantsChart = wantsPie || wantsLine || wantsBar || /\b(chart|graph|visualize|visualization|plot)\b/.test(msgLower);
+      const wantsReport = /\b(report|scorecard|digest|overview|summary)\b/.test(msgLower);
+      const wantsTable = /\b(table|list all|show all|all my)\b/.test(msgLower);
+
+      if (wantsChart) {
+        try {
+          let chartInput: Record<string, any>;
+          if (wantsPie || /spend|expense|money|budget|cost|financ/.test(msgLower)) {
+            chartInput = { chartType: "pie", title: "Spending Breakdown", dataSource: "expenses" };
+          } else if (/weight|mass|body/.test(msgLower)) {
+            chartInput = { chartType: "line", title: "Weight Trend", dataSource: "trackers", trackerName: "weight" };
+          } else if (/habit/.test(msgLower)) {
+            chartInput = { chartType: "bar", title: "Habit Streaks", dataSource: "habits" };
+          } else if (/goal/.test(msgLower)) {
+            chartInput = { chartType: "radar", title: "Goal Progress", dataSource: "goals" };
+          } else {
+            // Generic expense chart fallback
+            chartInput = { chartType: wantsPie ? "pie" : wantsLine ? "line" : "bar", title: "Data Overview", dataSource: "expenses" };
+          }
+          const chart = await buildChartSpec(chartInput);
+          richCharts.push(chart);
+          logger.info("ai", `[chart-fallback] Auto-generated ${chart.type} chart for "${userMessage.slice(0,40)}"`);
+        } catch (e: any) {
+          logger.warn("ai", `[chart-fallback] Could not generate chart: ${e.message}`);
+        }
+      } else if (wantsReport) {
+        try {
+          let reportType = "financial";
+          if (/life|score|balance/.test(msgLower)) reportType = "life_scorecard";
+          else if (/health|medical|fitness/.test(msgLower)) reportType = "health";
+          else if (/week/.test(msgLower)) reportType = "weekly_digest";
+          else if (/goal/.test(msgLower)) reportType = "goal_progress";
+          richReport = await buildReportSpec({ reportType });
+          logger.info("ai", `[report-fallback] Auto-generated ${reportType} report`);
+        } catch (e: any) {
+          logger.warn("ai", `[report-fallback] Could not generate report: ${e.message}`);
+        }
+      } else if (wantsTable) {
+        try {
+          let ds = "expenses";
+          if (/task/.test(msgLower)) ds = "tasks";
+          else if (/habit/.test(msgLower)) ds = "habits";
+          else if (/goal/.test(msgLower)) ds = "goals";
+          else if (/bill|obligat/.test(msgLower)) ds = "obligations";
+          const table = await buildTableSpec({ title: `Your ${ds}`, dataSource: ds, columns: [] });
+          richTables.push(table);
+          logger.info("ai", `[table-fallback] Auto-generated ${ds} table`);
+        } catch (e: any) {
+          logger.warn("ai", `[table-fallback] Could not generate table: ${e.message}`);
+        }
+      }
+    }
+
     return {
       reply: textReply || "I'm not sure how to help with that. Try asking me to track something, create a task, log an expense, or manage your data.",
       actions: allActions,
       results: allResults,
       documentPreview,
       documentPreviews: documentPreviews.length > 0 ? documentPreviews : undefined,
+      charts: richCharts.length > 0 ? richCharts : undefined,
+      tables: richTables.length > 0 ? richTables : undefined,
+      report: richReport,
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);
@@ -4592,6 +4948,9 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     update_goal: "create_goal",
     delete_goal: "create_goal",
     retrieve_document: "retrieve",
+    generate_chart: "retrieve",
+    generate_table: "retrieve",
+    generate_report: "retrieve",
   };
   return mapping[toolName] || "retrieve";
 }

@@ -51,7 +51,7 @@
   --chart-3: 103 56% 31%;
   --chart-4: 43 74% 49%;
   --chart-5: 320 57% 40%;
-  --font-sans: 'General Sans', 'Inter', sans-serif;
+  --font-sans: 'Inter', 'General Sans', system-ui, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: 'JetBrains Mono', monospace;
   --radius: .625rem;
@@ -132,6 +132,19 @@
   --muted-border: hsl(var(--muted));
   --accent-border: hsl(var(--accent));
   --destructive-border: hsl(var(--destructive));
+}
+
+/* Premium typography */
+body {
+  font-feature-settings: "cv11", "ss01";
+  letter-spacing: -0.01em;
+}
+h1, h2, h3, .text-xl, .text-2xl {
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+.metric-value {
+  letter-spacing: -0.04em;
 }
 
 @layer base {
@@ -259,4 +272,171 @@
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* ============================================================
+   PORTOL PREMIUM DESIGN SYSTEM — Visual Identity Layer
+   ============================================================ */
+
+/* Semantic section accent colors (HSL values without hsl() wrapper for Tailwind compatibility) */
+:root {
+  --accent-health:   173 60% 44%;
+  --accent-finance:   43 85% 52%;
+  --accent-tasks:    262 65% 62%;
+  --accent-habits:   155 60% 44%;
+  --accent-calendar: 215 70% 58%;
+  --accent-docs:      25 80% 54%;
+  --accent-journal:  310 50% 58%;
+  --accent-goals:    188 70% 48%;
+  --accent-bills:     43 75% 50%;
+  --accent-alerts:     0 72% 52%;
+}
+.dark {
+  --accent-health:   173 55% 50%;
+  --accent-finance:   43 80% 58%;
+  --accent-tasks:    262 60% 68%;
+  --accent-habits:   155 55% 50%;
+  --accent-calendar: 215 65% 62%;
+  --accent-docs:      25 75% 58%;
+  --accent-journal:  310 45% 62%;
+  --accent-goals:    188 65% 52%;
+  --accent-bills:     43 70% 55%;
+  --accent-alerts:     0 68% 56%;
+}
+
+/* Card with subtle lift on hover — used on all interactive cards */
+.card-lift {
+  transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.18s ease;
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px hsl(0 0% 0% / 0.18), 0 2px 8px hsl(0 0% 0% / 0.1);
+}
+.card-lift:active {
+  transform: translateY(0px) scale(0.98);
+}
+
+/* Metric number — tight, tabular, premium feel */
+.metric-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+
+/* Section icon badge — colored circle behind icon */
+.icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+/* Glow border on focus/active state */
+.glow-border {
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.4), 0 0 12px hsl(var(--primary) / 0.2);
+}
+
+/* Frosted glass card */
+.glass-card {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: hsl(var(--card) / 0.75);
+  border: 1px solid hsl(var(--border) / 0.5);
+}
+
+/* Section gradient header backgrounds */
+.section-grad-health   { background: linear-gradient(135deg, hsl(var(--accent-health)   / 0.10) 0%, transparent 55%); }
+.section-grad-finance  { background: linear-gradient(135deg, hsl(var(--accent-finance)  / 0.10) 0%, transparent 55%); }
+.section-grad-tasks    { background: linear-gradient(135deg, hsl(var(--accent-tasks)    / 0.10) 0%, transparent 55%); }
+.section-grad-habits   { background: linear-gradient(135deg, hsl(var(--accent-habits)   / 0.10) 0%, transparent 55%); }
+.section-grad-calendar { background: linear-gradient(135deg, hsl(var(--accent-calendar) / 0.10) 0%, transparent 55%); }
+.section-grad-docs     { background: linear-gradient(135deg, hsl(var(--accent-docs)     / 0.10) 0%, transparent 55%); }
+.section-grad-journal  { background: linear-gradient(135deg, hsl(var(--accent-journal)  / 0.10) 0%, transparent 55%); }
+.section-grad-goals    { background: linear-gradient(135deg, hsl(var(--accent-goals)    / 0.10) 0%, transparent 55%); }
+
+/* Animated dot status indicator */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-dot-pulse {
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* Stronger skeleton shimmer */
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--muted-foreground) / 0.06) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-anim 1.6s ease-in-out infinite;
+}
+@keyframes shimmer-anim {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Nav active glow pill */
+.nav-active-glow {
+  box-shadow: 0 0 12px currentColor, 0 2px 6px hsl(0 0% 0% / 0.2);
+}
+
+/* Animated gradient blob for chat */
+@keyframes blob-pulse {
+  0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.15; }
+  33% { transform: scale(1.1) rotate(10deg); opacity: 0.22; }
+  66% { transform: scale(0.95) rotate(-5deg); opacity: 0.18; }
+}
+
+/* Glowing chat input */
+.chat-input-glow:focus-within {
+  box-shadow: 0 0 0 1px hsl(188 55% 50% / 0.5), 0 0 20px hsl(188 55% 50% / 0.15), 0 0 40px hsl(262 65% 62% / 0.1);
+  transition: box-shadow 0.3s ease;
+}
+
+/* Glassmorphism card enhancement */
+.glass-card {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: hsl(var(--card) / 0.8) !important;
+}
+
+/* Consistent rounded corners — standardize to 2xl */
+.rounded-card { border-radius: 1rem; }
+
+/* Glowing input on focus */
+textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type="password"]:focus {
+  outline: none;
+}
+.input-glow:focus-within {
+  box-shadow: 0 0 0 1.5px hsl(var(--primary) / 0.4), 0 0 16px hsl(var(--primary) / 0.15);
+}
+
+/* Category color pills for profile cards */
+.category-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  border: 1px solid hsl(var(--border) / 0.4);
+  background: hsl(var(--muted) / 0.5);
+  color: hsl(var(--foreground) / 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
 }

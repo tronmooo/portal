@@ -977,6 +977,18 @@ const formatFieldValue = (key: string, value: any): string => {
   return String(value);
 };
 
+// Profile type accent colors (HSL)
+const PROFILE_ACCENT: Record<string, string> = {
+  self:         "188 65% 48%",
+  person:       "215 70% 58%",
+  pet:          "43  80% 54%",
+  vehicle:      "262 60% 62%",
+  asset:        "155 60% 44%",
+  loan:         "0   68% 52%",
+  subscription: "310 45% 58%",
+  property:     "155 55% 44%",
+};
+
 const AVATAR_COLORS: Record<string, string> = {
   self: "bg-primary/20 text-primary",
   person: "bg-blue-500/20 text-blue-500",
@@ -1005,7 +1017,17 @@ function ProfileCard({
     .slice(0, 2)
     .toUpperCase();
 
-  const avatarColorClass = AVATAR_COLORS[profile.type] || "bg-muted text-muted-foreground";
+  // Gradient per profile type
+  const PROFILE_GRADIENTS: Record<string, string> = {
+    self:         'linear-gradient(135deg, hsl(188 55% 50%), hsl(262 65% 62%))',
+    person:       'linear-gradient(135deg, hsl(215 70% 58%), hsl(188 55% 50%))',
+    pet:          'linear-gradient(135deg, hsl(43 85% 52%), hsl(25 80% 54%))',
+    vehicle:      'linear-gradient(135deg, hsl(262 60% 62%), hsl(310 45% 58%))',
+    asset:        'linear-gradient(135deg, hsl(155 60% 44%), hsl(188 55% 50%))',
+    loan:         'linear-gradient(135deg, hsl(0 68% 52%), hsl(25 80% 54%))',
+    subscription: 'linear-gradient(135deg, hsl(310 45% 58%), hsl(262 60% 62%))',
+  };
+  const avatarGradient = PROFILE_GRADIENTS[profile.type] || 'linear-gradient(135deg, hsl(240 20% 50%), hsl(240 20% 60%))';
   const linkedCount =
     (profile.linkedTrackers?.length || 0) +
     (profile.linkedExpenses?.length || 0) +
@@ -1023,12 +1045,18 @@ function ProfileCard({
     <Link href={`/profiles/${profile.id}`}>
       <Card
         data-testid={`card-profile-${profile.id}`}
-        className="hover:bg-accent/50 transition-colors cursor-pointer group"
+        className="card-lift cursor-pointer group overflow-hidden relative"
+        style={{ borderLeft: `3px solid hsl(${PROFILE_ACCENT[profile.type] || '188 65% 48%'})` }}
       >
-        <CardContent className="p-4">
+        {/* Subtle top gradient tint */}
+        <div className="absolute top-0 left-0 right-0 h-12 pointer-events-none" style={{ background: `linear-gradient(180deg, hsl(${PROFILE_ACCENT[profile.type] || '188 65% 48%'} / 0.07) 0%, transparent 100%)` }} />
+        <CardContent className="p-4 relative">
           <div className="flex items-start gap-3">
-            <Avatar className={`h-10 w-10 ${avatarColorClass}`}>
-              <AvatarFallback className={`${avatarColorClass} text-xs font-bold`}>
+            <Avatar className="h-10 w-10 shrink-0">
+              <AvatarFallback
+                className="text-xs font-bold text-white"
+                style={{ background: avatarGradient }}
+              >
                 {initials}
               </AvatarFallback>
             </Avatar>
@@ -1046,12 +1074,15 @@ function ProfileCard({
                 </Badge>
               </div>
               {fields.length > 0 && (
-                <div className="mt-1.5 space-y-0.5">
-                  {fields.slice(0, 3).map(([key, val]) => (
-                    <div key={key} className="flex items-center gap-2 text-xs">
-                      <span className="text-muted-foreground capitalize">{key}:</span>
-                      <span className="truncate">{formatFieldValue(key, val)}</span>
-                    </div>
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {fields.slice(0, 4).map(([key, val]) => (
+                    <span
+                      key={key}
+                      className="inline-flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full bg-muted/60 text-foreground/70 border border-border/30"
+                    >
+                      <span className="text-muted-foreground">{key}:</span>
+                      <span className="font-medium truncate max-w-[80px]">{formatFieldValue(key, val)}</span>
+                    </span>
                   ))}
                 </div>
               )}

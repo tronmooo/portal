@@ -33,11 +33,222 @@ import {
   BookOpen,
   RotateCcw,
   Pencil,
+  Moon,
+  Heart,
+  BarChart2,
+  CheckCircle,
+  PiggyBank,
+  Brain,
+  ChevronUp,
+  ChevronDown,
+  Table as TableIcon,
+  FileBarChart,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
 import DocumentViewer, { ShareButton } from "@/components/DocumentViewer";
+import {
+  PieChart, Pie, Cell,
+  BarChart, Bar,
+  LineChart, Line,
+  AreaChart, Area,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from "recharts";
+
+// Chart types (inline — schema was reverted)
+type ChartType2 = "line"|"bar"|"area"|"pie"|"scatter"|"composed"|"radar";
+interface ChartSeries2 { dataKey:string; name:string; color?:string; type?:"line"|"bar"|"area"; stackId?:string; }
+interface ChartSpec2 { type:ChartType2; title:string; subtitle?:string; data:Array<Record<string,any>>; series:ChartSeries2[]; xAxisKey:string; xAxisLabel?:string; yAxisLabel?:string; showLegend?:boolean; showGrid?:boolean; height?:number; nameKey?:string; valueKey?:string; }
+interface TableColumn2 { key:string; label:string; align?:"left"|"center"|"right"; format?:"currency"|"date"|"number"|"percent"|"text"; }
+interface TableSpec2 { title:string; subtitle?:string; columns:TableColumn2[]; rows:Array<Record<string,any>>; summary?:Record<string,any>; }
+interface ReportMetric2 { label:string; value:string|number; change?:string; changeType?:"positive"|"negative"|"neutral"; }
+interface ReportSection2 { heading:string; content?:string; chart?:ChartSpec2; table?:TableSpec2; metrics?:ReportMetric2[]; }
+interface ReportSpec2 { title:string; subtitle?:string; sections:ReportSection2[]; generatedAt:string; }
+
+// ─── Rich Visual Components ────────────────────────────────────────────────────────────────────────
+const CHART_PALETTE = ["hsl(188 55% 50%)","#6366f1","#f59e0b","#10b981","#ef4444","#8b5cf6","#06b6d4","#84cc16"];
+
+function fmtVal(v:any, fmt?:string): string {
+  if (v===null||v===undefined||v==="") return "\u2014";
+  switch(fmt) {
+    case "currency": return typeof v==="number"?`$${v.toFixed(2)}`:`$${v}`;
+    case "percent": return `${v}%`;
+    case "date": try { return new Date(v).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); } catch { return String(v); }
+    case "number": return typeof v==="number"?v.toLocaleString():String(v);
+    default: return String(v);
+  }
+}
+
+function ChatChart({ spec }: { spec: ChartSpec2 }) {
+  const [open, setOpen] = useState(true);
+  const h = spec.height || 260;
+  const tts = { backgroundColor:"hsl(var(--card))", border:"1px solid hsl(var(--border))", borderRadius:8, color:"hsl(var(--foreground))", fontSize:12 };
+  
+  function renderChart() {
+    if (spec.type==="pie") {
+      return (
+        <PieChart>
+          <Pie data={spec.data} dataKey={spec.valueKey||"amount"} nameKey={spec.nameKey||"category"} cx="50%" cy="50%" outerRadius="75%" label={({name,percent}:{name:string;percent:number})=>percent>0.04?`${name} ${(percent*100).toFixed(0)}%`:""} labelLine={false}>
+            {spec.data.map((e,i)=><Cell key={i} fill={e.fill||CHART_PALETTE[i%CHART_PALETTE.length]}/>)}
+          </Pie>
+          <Tooltip contentStyle={tts} formatter={(v:any)=>[typeof v==="number"?`$${Number(v).toFixed(2)}`:v,""]}/>
+          {spec.showLegend!==false&&<Legend/>}
+        </PieChart>
+      );
+    }
+    if (spec.type==="radar") {
+      return (
+        <RadarChart data={spec.data} cx="50%" cy="50%" outerRadius="70%">
+          <PolarGrid stroke="hsl(var(--border))"/>
+          <PolarAngleAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+          {spec.series.map((s,i)=><Radar key={i} name={s.name} dataKey={s.dataKey} stroke={s.color||CHART_PALETTE[i]} fill={s.color||CHART_PALETTE[i]} fillOpacity={0.25}/>)}
+          <Tooltip contentStyle={tts}/>
+        </RadarChart>
+      );
+    }
+    if (spec.type==="bar") {
+      return (
+        <BarChart data={spec.data} barCategoryGap="30%">
+          {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false}/>}
+          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+          <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+          <Tooltip contentStyle={tts}/>
+          {spec.series.map((s,i)=><Bar key={i} dataKey={s.dataKey} name={s.name} fill={s.color||CHART_PALETTE[i]} radius={[3,3,0,0] as any}/>)}
+          {spec.showLegend&&<Legend/>}
+        </BarChart>
+      );
+    }
+    if (spec.type==="area") {
+      return (
+        <AreaChart data={spec.data}>
+          {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))"/>}
+          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+          <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+          <Tooltip contentStyle={tts}/>
+          {spec.series.map((s,i)=><Area key={i} type="monotone" dataKey={s.dataKey} name={s.name} stroke={s.color||CHART_PALETTE[i]} fill={s.color||CHART_PALETTE[i]} fillOpacity={0.15} strokeWidth={2}/>)}
+          {spec.showLegend&&<Legend/>}
+        </AreaChart>
+      );
+    }
+    // Default: line
+    return (
+      <LineChart data={spec.data}>
+        {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))"/>}
+        <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+        <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+        <Tooltip contentStyle={tts}/>
+        {spec.series.map((s,i)=><Line key={i} type="monotone" dataKey={s.dataKey} name={s.name} stroke={s.color||CHART_PALETTE[i]} strokeWidth={2.5} dot={{r:3}} activeDot={{r:5}}/>)}
+        {spec.showLegend&&<Legend/>}
+      </LineChart>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/30" onClick={()=>setOpen(o=>!o)}>
+        <div className="flex items-center gap-2">
+          <BarChart2 className="h-3.5 w-3.5 text-primary"/>
+          <span className="text-xs font-semibold">{spec.title}</span>
+          {spec.subtitle&&<span className="text-xs text-muted-foreground hidden sm:inline">\u2014 {spec.subtitle}</span>}
+        </div>
+        {open?<ChevronUp className="h-3.5 w-3.5 text-muted-foreground"/>:<ChevronDown className="h-3.5 w-3.5 text-muted-foreground"/>}
+      </div>
+      {open&&(
+        <div className="px-2 pb-3">
+          <ResponsiveContainer width="100%" height={h}>{renderChart()}</ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatTable({ spec }: { spec: TableSpec2 }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/30" onClick={()=>setOpen(o=>!o)}>
+        <div className="flex items-center gap-2">
+          <TableIcon className="h-3.5 w-3.5 text-primary"/>
+          <span className="text-xs font-semibold">{spec.title}</span>
+          <span className="text-xs text-muted-foreground">({spec.rows.length} rows)</span>
+        </div>
+        {open?<ChevronUp className="h-3.5 w-3.5 text-muted-foreground"/>:<ChevronDown className="h-3.5 w-3.5 text-muted-foreground"/>}
+      </div>
+      {open&&(
+        <div className="overflow-x-auto max-h-72">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-muted/70">
+              <tr>{spec.columns.map(c=><th key={c.key} className={`px-3 py-2 font-semibold text-muted-foreground border-b border-border whitespace-nowrap ${c.align==="right"?"text-right":c.align==="center"?"text-center":"text-left"}`}>{c.label}</th>)}</tr>
+            </thead>
+            <tbody>
+              {spec.rows.map((row,ri)=>(
+                <tr key={ri} className="border-b border-border/30 hover:bg-muted/10">
+                  {spec.columns.map(c=><td key={c.key} className={`px-3 py-1.5 ${c.align==="right"?"text-right":c.align==="center"?"text-center":"text-left"} ${c.format==="currency"?"font-mono":""}`}>{fmtVal(row[c.key],c.format)}</td>)}
+                </tr>
+              ))}
+              {spec.summary&&(
+                <tr className="border-t-2 border-border bg-muted/20 font-semibold">
+                  {spec.columns.map(c=><td key={c.key} className={`px-3 py-2 ${c.align==="right"?"text-right":c.align==="center"?"text-center":"text-left"}`}>{spec.summary![c.key]!==undefined?fmtVal(spec.summary![c.key],c.format):""}</td>)}
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatReport({ spec }: { spec: ReportSpec2 }) {
+  const [open, setOpen] = useState(true);
+  const [expanded, setExpanded] = useState<Record<number,boolean>>({});
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2.5 cursor-pointer hover:bg-muted/30 bg-muted/10" onClick={()=>setOpen(o=>!o)}>
+        <div className="flex items-center gap-2">
+          <FileBarChart className="h-3.5 w-3.5 text-primary"/>
+          <span className="text-xs font-bold">{spec.title}</span>
+        </div>
+        {open?<ChevronUp className="h-3.5 w-3.5 text-muted-foreground"/>:<ChevronDown className="h-3.5 w-3.5 text-muted-foreground"/>}
+      </div>
+      {open&&(
+        <div className="divide-y divide-border/40">
+          {spec.sections.map((sec,si)=>(
+            <div key={si}>
+              <div className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/10" onClick={()=>setExpanded(p=>({...p,[si]:!p[si]}))}>
+                <span className="text-xs font-semibold">{sec.heading}</span>
+                {expanded[si]===false?<ChevronDown className="h-3 w-3 text-muted-foreground"/>:<ChevronUp className="h-3 w-3 text-muted-foreground"/>}
+              </div>
+              {expanded[si]!==false&&(
+                <div className="px-3 pb-3 space-y-2">
+                  {sec.metrics&&sec.metrics.length>0&&(
+                    <div className="grid grid-cols-2 gap-2">
+                      {sec.metrics.map((m,mi)=>(
+                        <div key={mi} className={`rounded-lg px-3 py-2 border ${m.changeType==="positive"?"border-green-500/20 bg-green-500/5":m.changeType==="negative"?"border-red-500/20 bg-red-500/5":"border-border bg-muted/30"}`}>
+                          <div className="text-xs text-muted-foreground">{m.label}</div>
+                          <div className={`text-sm font-bold ${m.changeType==="positive"?"text-green-500":m.changeType==="negative"?"text-red-400":""}`}>{m.value}</div>
+                          {m.change&&<div className="text-xs text-muted-foreground mt-0.5">{m.change}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sec.content&&<p className="text-xs text-foreground/80 leading-relaxed">{sec.content}</p>}
+                  {sec.chart&&<ChatChart spec={sec.chart}/>}
+                  {sec.table&&<ChatTable spec={sec.table}/>}
+                </div>
+              )}
+            </div>
+          ))}
+          <div className="px-3 py-1.5">
+            <span className="text-xs text-muted-foreground/50">Generated {new Date(spec.generatedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const SUGGESTIONS = [
   "I ate a chicken sandwich and ran 2 miles",
@@ -72,6 +283,7 @@ function ProfileTypeBadge({ type }: { type: string }) {
     </span>
   );
 }
+
 
 function actionIcon(type: string) {
   switch (type) {
@@ -947,7 +1159,7 @@ export default function ChatPage() {
       return res.json();
     },
     onSuccess: (data) => {
-      const assistantMsg: ChatMessage = {
+      const assistantMsg: any = {
         id: crypto.randomUUID(),
         role: "assistant",
         content: data.reply,
@@ -956,8 +1168,11 @@ export default function ChatPage() {
         results: data.results,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
+        charts: data.charts,
+        tables: data.tables,
+        report: data.report,
       };
-      setMessages((prev) => [...prev, assistantMsg]);
+      setMessages((prev: any) => [...prev, assistantMsg]);
       invalidateAll();
     },
     onError: (err: Error) => {
@@ -1435,6 +1650,23 @@ export default function ChatPage() {
                   documentPreviews={msg.documentPreviews}
                 />
 
+                {/* Inline charts */}
+                {(msg as any).charts?.length > 0 && (
+                  <div className="space-y-1">
+                    {(msg as any).charts.map((chart: ChartSpec2, ci: number) => <ChatChart key={ci} spec={chart} />)}
+                  </div>
+                )}
+
+                {/* Inline tables */}
+                {(msg as any).tables?.length > 0 && (
+                  <div className="space-y-1">
+                    {(msg as any).tables.map((table: TableSpec2, ti: number) => <ChatTable key={ti} spec={table} />)}
+                  </div>
+                )}
+
+                {/* Inline report */}
+                {(msg as any).report && <ChatReport spec={(msg as any).report as ReportSpec2} />}
+
                 {/* Extraction confirmation UI */}
                 {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
                   <ExtractionConfirmation
@@ -1570,6 +1802,11 @@ export default function ChatPage() {
       {messages.length <= 2 && !hasAttachments && (
         <div className="px-4 pb-2">
           <div className="max-w-2xl mx-auto">
+            {/* Document processing hint */}
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border/40 bg-card/40 mb-3 text-xs text-muted-foreground">
+              <Paperclip className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span>Tap <span className="font-semibold text-foreground">{"\ud83d\udcce"}</span> to upload documents \u2014 I can extract data from IDs, insurance cards, receipts, and more</span>
+            </div>
             <p className="text-sm font-medium text-muted-foreground mb-2">Try saying:</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {SUGGESTIONS.map((s) => (
@@ -1677,7 +1914,7 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask anything or log data..."
+              placeholder="Ask anything, log data, or upload a document..."
               className="min-h-[48px] max-h-[120px] resize-none rounded-xl bg-card text-sm"
               rows={1}
               data-testid="input-chat"

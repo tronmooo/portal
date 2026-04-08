@@ -101,23 +101,28 @@ const ACTIVITY_ICONS: Record<string, any> = {
 
 function CollapsibleSection({
   icon: Icon, label, count, sub, children, defaultOpen = true,
-  testId, headerRight,
+  testId, headerRight, accent,
 }: {
   icon: any; label: string; count?: number; sub?: string;
   children: React.ReactNode; defaultOpen?: boolean; testId?: string;
-  headerRight?: React.ReactNode;
+  headerRight?: React.ReactNode; accent?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const iconColor = accent ? `hsl(${accent})` : undefined;
+  const iconBg = accent ? `hsl(${accent} / 0.14)` : undefined;
   return (
-    <div data-testid={testId} className="rounded-lg border border-border/40 bg-card">
+    <div data-testid={testId} className="rounded-xl border border-border/40 bg-card overflow-hidden">
       <button
-        className="w-full flex items-center gap-2 px-3 py-2.5 text-left"
+        className="w-full flex items-center gap-2.5 px-3 py-3 text-left"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}
+        style={accent ? { background: `linear-gradient(135deg, hsl(${accent} / 0.06) 0%, transparent 50%)` } : {}}
       >
-        <Icon className="h-3.5 w-3.5 text-primary shrink-0" />
-        <h2 className="text-xs font-semibold">{label}</h2>
+        <div className="icon-badge" style={iconBg ? { background: iconBg } : { background: 'hsl(var(--muted))' }}>
+          <Icon className="h-3.5 w-3.5" style={iconColor ? { color: iconColor } : { color: 'hsl(var(--primary))' }} />
+        </div>
+        <h2 className="text-xs font-semibold tracking-wide uppercase" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
         {count !== undefined && (
           <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
         )}
@@ -133,22 +138,56 @@ function CollapsibleSection({
 }
 
 function MiniStat({
-  icon: Icon, label, value, sub, color, onClick, trend,
-}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat" }) {
+  icon: Icon, label, value, sub, color, onClick, trend, accent, sparkData, change,
+}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat"; accent?: string; sparkData?: number[]; change?: string | number }) {
+  const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
-      className={`flex flex-col items-center justify-center p-2 rounded-lg border border-border/30 min-h-[52px] ${onClick ? "cursor-pointer hover:bg-muted/50 active:scale-[0.98] transition-all" : ""}`}
+      className={`relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[72px] overflow-hidden card-lift ${
+        onClick ? "cursor-pointer active:scale-[0.97] transition-all" : ""
+      }`}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
+      style={accent ? { background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, transparent 60%)` } : {}}
     >
-      <div className="flex items-center gap-1">
-        <span className="text-sm font-bold tabular-nums leading-none" style={color ? { color } : {}}>{value}</span>
-        {trend === "up" && <ArrowUp className="h-2.5 w-2.5 text-green-500" />}
-        {trend === "down" && <ArrowDown className="h-2.5 w-2.5 text-red-500" />}
+      {/* Top accent strip */}
+      {accent && <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />}
+
+      {/* Sparkline background (if data provided) */}
+      {sparkData && sparkData.length > 2 && (
+        <div className="absolute bottom-0 right-0 left-0 h-8 opacity-20">
+          <svg width="100%" height="100%" viewBox={`0 0 ${sparkData.length * 10} 32`} preserveAspectRatio="none">
+            <polyline
+              points={sparkData.map((v, i) => {
+                const min = Math.min(...sparkData);
+                const max = Math.max(...sparkData);
+                const range = max - min || 1;
+                return `${i * 10},${32 - ((v - min) / range * 28 + 2)}`;
+              }).join(' ')}
+              fill="none"
+              stroke={accentColor || 'hsl(var(--primary))'}
+              strokeWidth="2"
+            />
+          </svg>
+        </div>
+      )}
+
+      <div className="flex items-start justify-between relative z-10">
+        <div className="icon-badge" style={accent ? { background: `hsl(${accent} / 0.15)` } : {}}>
+          <Icon className="h-3.5 w-3.5" style={{ color: accentColor || "hsl(var(--primary))" }} />
+        </div>
+        {change !== undefined && (
+          <span className={`text-xs font-medium ${trend === 'up' ? 'text-green-500' : trend === 'down' ? 'text-red-400' : 'text-muted-foreground'}`}>
+            {trend === 'up' ? '↑' : trend === 'down' ? '↓' : ''}{change}
+          </span>
+        )}
       </div>
-      <p className="text-xs text-muted-foreground leading-tight mt-1 text-center truncate w-full">{label}</p>
+      <div className="mt-1 relative z-10">
+        <span className="text-sm metric-value" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
+      </div>
+      <p className="text-xs text-muted-foreground leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
     </div>
   );
 }
@@ -200,23 +239,23 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
     <>
       <div className="rounded-lg border border-border/40 bg-card px-2 py-2" data-testid="section-kpis">
         <div className="grid grid-cols-3 lg:grid-cols-6 gap-1.5">
-          <MiniStat icon={ListTodo} label="Open Tasks" value={stats.activeTasks}
+          <MiniStat accent="262 65% 62%" icon={ListTodo} label="Open Tasks" value={stats.activeTasks}
             onClick={() => setPopup("tasks")} />
-          <MiniStat icon={DollarSign} label="Monthly Spend" value={formatMoney(stats.monthlySpend)}
+          <MiniStat accent="43 85% 52%" icon={DollarSign} label="Monthly Spend" value={formatMoney(stats.monthlySpend)}
             trend={spendTrend} onClick={() => setPopup("spending")} />
-          <MiniStat icon={Flame} label="Habits Today" value={`${stats.habitCompletionRate}%`}
+          <MiniStat accent="155 60% 44%" icon={Flame} label="Habits Today" value={`${stats.habitCompletionRate}%`}
             sub={`${stats.totalHabits} tracked`}
             onClick={() => navigate("/dashboard/habits")} />
-          <MiniStat icon={BookHeart} label="Journal Streak"
+          <MiniStat accent="310 50% 58%" icon={BookHeart} label="Journal Streak"
             value={`${stats.journalStreak}d`}
             sub={moodConf ? moodConf.label : journalStreakLabel(stats.journalStreak)}
             color={moodConf?.color}
             onClick={() => navigate("/dashboard/journal")} />
-          <MiniStat icon={CreditCard} label="Upcoming Bills"
+          <MiniStat accent="43 75% 50%" icon={CreditCard} label="Upcoming Bills"
             value={stats.upcomingObligations}
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
-          <MiniStat icon={FileWarning} label="Expiring Docs"
+          <MiniStat accent="25 80% 54%" icon={FileWarning} label="Expiring Docs"
             value={enhanced?.expiringDocuments?.length || 0}
             sub={enhanced?.expiringDocuments?.[0] ? `next: ${fmtDateWithYear(enhanced.expiringDocuments[0].expirationDate)}` : "all clear"}
             color={enhanced?.expiringDocuments?.some((d: any) => d.status === 'expired') ? '#A13544' : enhanced?.expiringDocuments?.length > 0 ? '#BB653B' : undefined}
@@ -613,7 +652,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
   }
 
   if (totalCount === 0) return (
-    <CollapsibleSection icon={AlertTriangle} label="Action Required" testId="section-needs-attention">
+    <CollapsibleSection accent="0 72% 52%" icon={AlertTriangle} label="Action Required" testId="section-needs-attention">
       <div className="text-center py-6">
         <Check className="h-7 w-7 text-green-500/60 mx-auto mb-2" />
         <p className="text-xs text-muted-foreground">All clear — nothing needs attention right now</p>
@@ -623,7 +662,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
 
   return (
     <>
-      <CollapsibleSection icon={AlertTriangle} label="Action Required" count={totalCount} testId="section-needs-attention">
+      <CollapsibleSection accent="0 72% 52%" icon={AlertTriangle} label="Action Required" count={totalCount} testId="section-needs-attention">
         <div className="divide-y divide-border/30">
           {visibleItems.map((item) => (
             <AttentionItem key={`${item.sourceType}-${item.id}`} {...item} />
@@ -674,7 +713,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
   const hiddenCount = Math.max(0, events.length - VISIBLE);
 
   return (
-    <CollapsibleSection icon={Calendar} label="Today's Schedule" testId="section-today"
+    <CollapsibleSection accent="215 70% 58%" icon={Calendar} label="Today's Schedule" testId="section-today"
       sub={new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}>
       {events.length === 0 ? (
         <div className="text-center py-4">
@@ -722,7 +761,7 @@ function HealthSection({ data }: { data: any[] }) {
   const filteredData = (data || []).filter((item: any) => !/test/i.test(item.name)).slice(0, 4);
 
   if (!data || data.length === 0) return (
-    <CollapsibleSection icon={HeartPulse} label="Health" testId="section-health">
+    <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" testId="section-health">
       <div className="rounded-lg border border-dashed border-border/50 p-4 text-center">
         <Heart className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
         <p className="text-xs text-muted-foreground mb-1">No health data yet</p>
@@ -733,7 +772,7 @@ function HealthSection({ data }: { data: any[] }) {
 
   return (
     <>
-      <CollapsibleSection icon={HeartPulse} label="Health" count={filteredData.length} testId="section-health">
+      <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" count={filteredData.length} testId="section-health">
         <div className="grid grid-cols-2 gap-2">
           {filteredData.map((item: any) => (
             <div key={item.trackerId}
@@ -819,7 +858,7 @@ function ObligationsSection({ data }: { data: any[] }) {
   const monthlyTotal = (data || []).reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
 
   if (!data || data.length === 0) return (
-    <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions" testId="section-obligations">
+    <CollapsibleSection accent="43 75% 50%" icon={CreditCard} label="Bills & Subscriptions" testId="section-obligations">
       <div className="text-center py-4">
         <CreditCard className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
         <p className="text-xs text-muted-foreground">No upcoming bills</p>
@@ -861,7 +900,7 @@ function ObligationsSection({ data }: { data: any[] }) {
 
   return (
     <>
-      <CollapsibleSection icon={CreditCard} label="Bills & Subscriptions"
+      <CollapsibleSection accent="43 75% 50%" icon={CreditCard} label="Bills & Subscriptions"
         sub={`Monthly Total: ${formatMoney(monthlyTotal)}`}
         count={data.length} testId="section-obligations">
         <div className="space-y-1">
@@ -1014,12 +1053,12 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   const activeGoals = goals.filter(g => g.status === "active");
   const completedGoals = goals.filter(g => g.status === "completed");
 
-  if (isLoading) return <CollapsibleSection icon={Target} label="Goals" testId="section-goals"><div className="h-16 bg-muted animate-pulse rounded-lg" /></CollapsibleSection>;
-  if (goalsError) return <CollapsibleSection icon={Target} label="Goals" testId="section-goals"><p className="text-destructive text-sm p-4">Failed to load goals. Please refresh.</p></CollapsibleSection>;
+  if (isLoading) return <CollapsibleSection accent="188 70% 48%" icon={Target} label="Goals" testId="section-goals"><div className="h-16 bg-muted animate-pulse rounded-lg" /></CollapsibleSection>;
+  if (goalsError) return <CollapsibleSection accent="188 70% 48%" icon={Target} label="Goals" testId="section-goals"><p className="text-destructive text-sm p-4">Failed to load goals. Please refresh.</p></CollapsibleSection>;
 
   return (
     <>
-      <CollapsibleSection icon={Target} label="Goals" count={activeGoals.length} testId="section-goals">
+      <CollapsibleSection accent="188 70% 48%" icon={Target} label="Goals" count={activeGoals.length} testId="section-goals">
         {activeGoals.length === 0 && completedGoals.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border/50 p-4 text-center">
             <Target className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
@@ -1530,7 +1569,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
 
   if (!data && !stats) {
     return (
-      <CollapsibleSection icon={DollarSign} label="Finance" testId="section-finance">
+      <CollapsibleSection accent="43 85% 52%" icon={DollarSign} label="Finance" testId="section-finance">
         <div className="rounded-lg border border-dashed border-border/50 p-4 text-center">
           <p className="text-xs text-muted-foreground mb-1">No finance data yet</p>
           <p className="text-xs text-muted-foreground/70">Tell the AI: "Spent $50 on groceries" or "Set budget $500 for food"</p>
@@ -1540,7 +1579,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   }
 
   return (
-    <CollapsibleSection icon={DollarSign} label="Finance" count={recentExpenses.length || undefined} testId="section-finance">
+    <CollapsibleSection accent="43 85% 52%" icon={DollarSign} label="Finance" count={recentExpenses.length || undefined} testId="section-finance">
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
           <button onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
@@ -1718,7 +1757,7 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
   };
 
   return summary ? (
-    <CollapsibleSection icon={Sparkles} label="AI Summary" testId="section-ai-summary">
+    <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
       <div className="space-y-2">
         <p className="text-xs leading-relaxed">{summary}</p>
         <div className="flex items-center justify-between">
@@ -1730,7 +1769,7 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
       </div>
     </CollapsibleSection>
   ) : (
-    <CollapsibleSection icon={Sparkles} label="AI Summary" testId="section-ai-summary">
+    <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
       <div className="flex flex-col items-center gap-2 py-3">
         <p className="text-xs text-muted-foreground">Get a personalized AI-powered daily briefing</p>
         <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" onClick={generateSummary} disabled={loading}>

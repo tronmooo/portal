@@ -90,6 +90,10 @@ import {
   Upload,
   Eye,
   AlertCircle,
+  HeartPulse,
+  Box,
+  Pencil,
+  Check,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Link } from "wouter";
@@ -124,6 +128,94 @@ import { useToast } from "@/hooks/use-toast";
 // ── Chart Color Scheme ─────────────────────────────────────────────────────────
 
 import { CHART_COLORS } from "@/lib/chart-colors";
+
+// ── Category Visual Identity ─────────────────────────────────────────────────
+// Each tracker category gets a distinct accent color (HSL) and a matching icon.
+
+export const TRACKER_CATEGORY_ACCENT: Record<string, string> = {
+  health:       "173 60% 44%",
+  fitness:      "155 60% 44%",
+  nutrition:    "94  60% 42%",
+  sleep:        "262 60% 62%",
+  mental:       "310 50% 58%",
+  finance:      "43  85% 52%",
+  productivity: "215 70% 58%",
+  education:    "188 65% 48%",
+  social:       "25  80% 54%",
+  environment:  "155 45% 40%",
+  habit:        "155 58% 46%",
+  routine:      "155 58% 46%",
+  custom:       "240 20% 60%",
+  general:      "240 20% 60%",
+  work:         "215 65% 55%",
+  budget:       "43  80% 50%",
+  savings:      "43  75% 48%",
+};
+
+// Icon names for each category (lucide-react)
+export const TRACKER_CATEGORY_LABEL: Record<string, string> = {
+  health:      "Health",
+  fitness:     "Fitness",
+  nutrition:   "Nutrition",
+  sleep:       "Sleep",
+  mental:      "Mental",
+  finance:     "Finance",
+  productivity:"Productivity",
+  education:   "Education",
+  social:      "Social",
+  environment: "Environment",
+  custom:      "Custom",
+  general:     "General",
+};
+
+export function getCategoryAccent(category: string): string {
+  return TRACKER_CATEGORY_ACCENT[category?.toLowerCase()] || TRACKER_CATEGORY_ACCENT.general;
+}
+
+// ── Canonical Category Groups ──────────────────────────────────────────────────
+// Map raw DB categories → canonical display groups
+const CANONICAL_GROUP_MAP: Record<string, string> = {
+  // Health & Fitness
+  health:       "Health & Fitness",
+  fitness:      "Health & Fitness",
+  sleep:        "Health & Fitness",
+  nutrition:    "Health & Fitness",
+  mental:       "Health & Fitness",
+  // Finance
+  finance:      "Finance",
+  budget:       "Finance",
+  savings:      "Finance",
+  investment:   "Finance",
+  // Habits & Routines
+  habit:        "Habits & Routines",
+  routine:      "Habits & Routines",
+  daily:        "Habits & Routines",
+  // Productivity
+  productivity: "Productivity",
+  work:         "Productivity",
+  education:    "Productivity",
+  // Other
+  custom:       "Other",
+  general:      "Other",
+};
+
+// Canonical group definitions with icons and accents
+const CANONICAL_GROUPS: Record<string, {
+  icon: any;
+  accent: string;
+  description: string;
+  order: number;
+}> = {
+  "Health & Fitness":   { icon: HeartPulse, accent: "173 60% 44%", description: "Vitals, workouts, sleep, nutrition", order: 1 },
+  "Finance":            { icon: TrendingUp, accent: "43 85% 52%",  description: "Spending, saving, investing", order: 2 },
+  "Habits & Routines":  { icon: Flame,      accent: "155 60% 44%", description: "Daily habits and routines", order: 3 },
+  "Productivity":       { icon: Target,     accent: "262 65% 62%", description: "Work, learning, focus", order: 4 },
+  "Other":              { icon: Box,        accent: "240 20% 60%", description: "Custom and uncategorized", order: 5 },
+};
+
+function getCanonicalGroup(category: string): string {
+  return CANONICAL_GROUP_MAP[category?.toLowerCase()] || "Other";
+}
 
 // ── Time Range Filter ──────────────────────────────────────────────────────────
 
@@ -946,9 +1038,15 @@ function TrackerCard({
     : specialization === "running" ? <Zap className="h-3 w-3" />
     : null;
 
+  const catAccent = getCategoryAccent(tracker.category);
+
   return (
-    <Card data-testid={`card-tracker-${tracker.id}`}>
-      <CardHeader className="pb-2">
+    <Card
+      data-testid={`card-tracker-${tracker.id}`}
+      className="card-lift overflow-hidden"
+      style={{ borderTop: `2px solid hsl(${catAccent})` }}
+    >
+      <CardHeader className="pb-2" style={{ background: `linear-gradient(180deg, hsl(${catAccent} / 0.07) 0%, transparent 70%)` }}>
         <div className="flex items-start justify-between">
           <div>
             <CardTitle
@@ -1168,6 +1266,28 @@ function EntryRow({
   tracker: Tracker;
   primaryField: string;
 }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [editVals, setEditVals] = useState<Record<string, any>>({});
+
+  const editMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, { values: editVals }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      setEditing(false);
+      toast({ title: "Entry updated" });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
+  const startEdit = () => {
+    setEditVals({ ...entry.values });
+    setEditing(true);
+  };
+
   const primaryVal = entry.values[primaryField];
   const otherFields = tracker.fields.filter((f) => f.name !== primaryField);
   // BP detection for display
@@ -1175,6 +1295,42 @@ function EntryRow({
   const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"] ?? entry.values["dbp"];
   const isEntryBP = typeof bpS === "number" && typeof bpD === "number";
   const entryNotes = (entry.values["_notes"] as string | undefined) || entry.notes;
+
+  if (editing) {
+    return (
+      <div
+        className="flex flex-col gap-1.5 rounded-md border border-primary/30 px-2.5 py-1.5 text-xs bg-primary/5"
+        data-testid={`entry-row-edit-${entry.id}`}
+      >
+        <div className="flex flex-wrap gap-1.5">
+          {tracker.fields.filter(f => f.name !== "_notes").map(f => (
+            <div key={f.name} className="flex items-center gap-1">
+              <label className="text-muted-foreground text-xs">{f.name}:</label>
+              {f.type === "boolean" ? (
+                <Checkbox
+                  checked={!!editVals[f.name]}
+                  onCheckedChange={(v) => setEditVals(prev => ({ ...prev, [f.name]: !!v }))}
+                />
+              ) : (
+                <Input
+                  className="h-6 w-20 text-xs px-1"
+                  type={f.type === "number" ? "number" : "text"}
+                  value={editVals[f.name] ?? ""}
+                  onChange={e => setEditVals(prev => ({ ...prev, [f.name]: f.type === "number" ? (e.target.value === "" ? "" : parseFloat(e.target.value)) : e.target.value }))}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 justify-end">
+          <Button size="sm" variant="ghost" className="h-5 px-2 text-xs" onClick={() => setEditing(false)}>Cancel</Button>
+          <Button size="sm" className="h-5 px-2 text-xs" onClick={() => editMutation.mutate()} disabled={editMutation.isPending}>
+            <Check className="h-3 w-3 mr-1" />Save
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1214,7 +1370,12 @@ function EntryRow({
           })}
         </span>
       </div>
-      <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+      <div className="flex items-center gap-0.5">
+        <button onClick={startEdit} className="p-0.5 rounded hover:bg-muted transition-colors" title="Edit entry">
+          <Pencil className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+        </button>
+        <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+      </div>
     </div>
   );
 }
@@ -1250,6 +1411,11 @@ function CreateTrackerDialog({
   const mutation = useMutation({
     mutationFn: async () => {
       if (!name.trim()) { toast({ title: "Name required", description: "Enter a tracker name", variant: "destructive" }); throw new Error("Name required"); }
+      const INVALID_NAMES = ["tracker", "log", "new tracker", "custom tracker", "my tracker", "track"];
+      if (INVALID_NAMES.includes(name.trim().toLowerCase())) {
+        toast({ title: "Be more specific", description: "Give this tracker a descriptive name like 'Blood Pressure' or 'Morning Run'", variant: "destructive" });
+        throw new Error("Generic name");
+      }
       let builtFields = fields
         .filter((f) => f.name.trim())
         .map((f, i) => ({
@@ -1667,6 +1833,28 @@ function TrackerSummary({ trackers, profiles }: { trackers: Tracker[]; profiles?
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-health-score">
         <span className={`text-sm font-bold tabular-nums ${healthScoreColor}`}>{healthScore !== null ? healthScore : "—"}</span>
         <span className="text-xs-tight text-muted-foreground">{healthScore !== null ? (healthScore >= 80 ? "Excellent" : healthScore >= 60 ? "Good" : "Low") : "Health"}</span>
+      </div>
+      {/* Canonical group breakdown */}
+      <div className="col-span-4 flex flex-wrap gap-1.5 pt-1">
+        {Object.entries(
+          trackers.reduce((acc: Record<string, number>, t) => {
+            const g = getCanonicalGroup(t.category);
+            acc[g] = (acc[g] || 0) + 1;
+            return acc;
+          }, {})
+        ).sort(([a], [b]) => (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99))
+        .map(([group, count]) => {
+          const def = CANONICAL_GROUPS[group];
+          const Ico = def?.icon || Box;
+          const accent = def?.accent || "240 20% 60%";
+          return (
+            <span key={group} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full"
+                  style={{ background: `hsl(${accent} / 0.12)`, color: `hsl(${accent})` }}>
+              <Ico className="h-2.5 w-2.5" />
+              {group} ({count})
+            </span>
+          );
+        })}
       </div>
     </div>
   );
@@ -2941,8 +3129,9 @@ export default function TrackersPage() {
     return true;
   });
 
-  // Unique tracker categories for filter chips
-  const allTrackerCats = [...new Set((trackers || []).map(t => t.category).filter(Boolean))].sort();
+  // Unique canonical groups for filter chips
+  const allTrackerCats = [...new Set((trackers || []).map(t => getCanonicalGroup(t.category)))]
+    .sort((a, b) => (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99));
 
   if (isLoading) {
     return (
@@ -2983,8 +3172,8 @@ export default function TrackersPage() {
       const matchesProfile = linkedIds.some(id => filterIds.includes(id));
       if (!matchesProfile) return false;
     }
-    // Category filter
-    if (trackerCatFilter !== "all" && t.category !== trackerCatFilter) return false;
+    // Category filter (uses canonical groups)
+    if (trackerCatFilter !== "all" && getCanonicalGroup(t.category) !== trackerCatFilter) return false;
     return true;
   }).sort((a, b) => {
     // Alphabetical by clean name (strips " - ProfileName" suffix)
@@ -2993,17 +3182,23 @@ export default function TrackersPage() {
     return cleanA.localeCompare(cleanB);
   });
 
-  // Group by category
-  const grouped = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
-    (acc[t.category] = acc[t.category] || []).push(t);
+  // Group trackers by canonical group (not raw category)
+  const canonicalGrouped = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
+    const group = getCanonicalGroup(t.category);
+    (acc[group] = acc[group] || []).push(t);
     return acc;
   }, {});
-  const catOrder = ["health", "fitness", "nutrition", "sleep", "habit", "finance", "custom"];
-  const sortedCats = Object.keys(grouped).sort((a, b) => {
-    const ai = catOrder.indexOf(a);
-    const bi = catOrder.indexOf(b);
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+
+  // Sort groups by canonical order
+  const sortedCanonicalGroups = Object.keys(canonicalGrouped).sort((a, b) => {
+    const ao = CANONICAL_GROUPS[a]?.order ?? 99;
+    const bo = CANONICAL_GROUPS[b]?.order ?? 99;
+    return ao - bo;
   });
+
+  // Keep backward compat: grouped = canonicalGrouped, sortedCats = sortedCanonicalGroups
+  const grouped = canonicalGrouped;
+  const sortedCats = sortedCanonicalGroups;
 
   // Count trackers per profile for badges
   const countForProfile = (profileId: string) =>
@@ -3092,6 +3287,35 @@ export default function TrackersPage() {
 
       </div>
 
+      {/* Canonical group filter chips */}
+      {(sectionFilter === "all" || sectionFilter === "trackers") && allTrackerCats.length > 1 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips">
+          <button
+            onClick={() => setTrackerCatFilter("all")}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${trackerCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+          >
+            All Groups
+          </button>
+          {allTrackerCats.map(group => {
+            const gDef = CANONICAL_GROUPS[group];
+            const GIco = gDef?.icon || Box;
+            const gAccent = gDef?.accent || "240 20% 60%";
+            const isActive = trackerCatFilter === group;
+            return (
+              <button
+                key={group}
+                onClick={() => setTrackerCatFilter(isActive ? "all" : group)}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "ring-1 ring-offset-1" : "hover:bg-muted border border-border/50"}`}
+                style={isActive ? { background: `hsl(${gAccent} / 0.18)`, color: `hsl(${gAccent})`, borderColor: `hsl(${gAccent} / 0.4)` } : { color: `hsl(${gAccent})` }}
+              >
+                <GIco className="h-2.5 w-2.5" />
+                {group}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Summary cards */}
       {(sectionFilter === "all" || sectionFilter === "trackers") && filteredTrackers.length > 0 && (
         <TrackerSummary trackers={filteredTrackers} profiles={profiles || undefined} />
@@ -3124,9 +3348,18 @@ export default function TrackersPage() {
 
         return (
           <div className="space-y-1.5">
-            <button onClick={() => toggleSection("profiles")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-profiles">
-              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Assets & Vehicles ({childProfiles.length})</h2>
-              {collapsedSections.has("profiles") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+            <button onClick={() => toggleSection("profiles")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(262 60% 62% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-profiles">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(262 60% 62% / 0.15)' }}>
+                <Car className="h-4 w-4" style={{ color: 'hsl(262 60% 62%)' }} />
+              </div>
+              <div className="flex-1 text-left">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold" style={{ color: 'hsl(262 60% 62%)' }}>Assets & Vehicles</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(262 60% 62% / 0.15)', color: 'hsl(262 60% 62%)' }}>{childProfiles.length}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">Vehicles, property, investments and more</p>
+              </div>
+              {collapsedSections.has("profiles") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("profiles") && (
               <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
@@ -3188,9 +3421,18 @@ export default function TrackersPage() {
         if (subs.length === 0) return null;
         return (
           <div className="space-y-2">
-            <button onClick={() => toggleSection("subscriptions")} className="flex items-center gap-1.5 w-full" data-testid="section-toggle-subscriptions">
-              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subscriptions ({subs.length})</h2>
-              {collapsedSections.has("subscriptions") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+            <button onClick={() => toggleSection("subscriptions")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-subscriptions">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(43 85% 52% / 0.15)' }}>
+                <CreditCard className="h-4 w-4" style={{ color: 'hsl(43 85% 52%)' }} />
+              </div>
+              <div className="flex-1 text-left">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold" style={{ color: 'hsl(43 85% 52%)' }}>Subscriptions & Bills</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(43 85% 52% / 0.15)', color: 'hsl(43 85% 52%)' }}>{subs.length}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">Recurring payments and services</p>
+              </div>
+              {collapsedSections.has("subscriptions") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("subscriptions") && (
               <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
@@ -3218,10 +3460,19 @@ export default function TrackersPage() {
       {/* Documents Section */}
       {(sectionFilter === "all" || sectionFilter === "documents") && <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <button onClick={() => toggleSection("documents")} className="flex items-center gap-1.5" data-testid="section-toggle-documents">
-            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Documents ({filteredDocuments.length})</h2>
-            {collapsedSections.has("documents") ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
-          </button>
+          <button onClick={() => toggleSection("documents")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(25 80% 54% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-documents">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(25 80% 54% / 0.15)' }}>
+                <FileText className="h-4 w-4" style={{ color: 'hsl(25 80% 54%)' }} />
+              </div>
+              <div className="flex-1 text-left">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold" style={{ color: 'hsl(25 80% 54%)' }}>Documents</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(25 80% 54% / 0.15)', color: 'hsl(25 80% 54%)' }}>{filteredDocuments.length}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">IDs, insurance, contracts, and more</p>
+              </div>
+              {collapsedSections.has("documents") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
+            </button>
           <div className="flex items-center gap-2">
             {/* Profile selector for upload — link doc to a specific profile */}
             <Select value={uploadProfileId} onValueChange={setUploadProfileId}>
@@ -3396,8 +3647,24 @@ export default function TrackersPage() {
         </div>
       ) : viewMode === "table" ? (
         <div className="rounded-lg border border-border/40 overflow-hidden" data-testid="tracker-table">
-          {/* Dynamic KPI rows — each tracker gets context-aware metrics */}
-          {filteredTrackers.map((tracker) => {
+          {/* Dynamic KPI rows — grouped by canonical group */}
+          {sortedCats.map(groupName => {
+            const gDef = CANONICAL_GROUPS[groupName];
+            const GIcon = gDef?.icon || Box;
+            const gAccent = gDef?.accent || "240 20% 60%";
+            return (
+              <div key={groupName}>
+                {/* Group header row */}
+                <div className="flex items-center gap-2 px-2 py-1.5 sticky top-0 z-10 backdrop-blur-sm"
+                     style={{ background: `hsl(${gAccent} / 0.08)` }}>
+                  <GIcon className="h-3 w-3" style={{ color: `hsl(${gAccent})` }} />
+                  <span className="text-xs font-bold uppercase tracking-wider" style={{ color: `hsl(${gAccent})` }}>
+                    {groupName}
+                  </span>
+                  <span className="text-xs text-muted-foreground">({grouped[groupName].length})</span>
+                </div>
+                {/* Trackers in this group */}
+                {grouped[groupName].map((tracker) => {
             const entries = tracker.entries;
             const spec = detectSpecialization(tracker);
             const pf = tracker.fields.find(f => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
@@ -3571,18 +3838,25 @@ export default function TrackersPage() {
             return (
               <div
                 key={tracker.id}
-                className="border-b border-border/30 hover:bg-muted/30 cursor-pointer transition-colors px-2.5 py-1.5 flex items-center gap-2"
+                className="border-b border-border/20 hover:bg-muted/20 cursor-pointer transition-all px-2.5 py-2 flex items-center gap-2 relative overflow-hidden"
                 data-testid={`tracker-row-${tracker.id}`}
                 onClick={() => setSelectedTrackerId(tracker.id)}
               >
-                {/* Left: Name + category */}
-                <div className="min-w-0 w-[120px] md:w-[160px] shrink-0">
+                {/* Category accent left bar */}
+                <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l" style={{ background: `hsl(${getCategoryAccent(tracker.category)})` }} />
+                {/* Left: Name + category badge */}
+                <div className="min-w-0 w-[120px] md:w-[160px] shrink-0 pl-1">
                   <p className="text-xs-loose font-medium truncate leading-tight">
                     {cleanTrackerName(tracker.name, profiles || undefined, tracker.linkedProfiles)}
                   </p>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 mt-0.5">
                     {linkedProfile && <span className="text-2xs px-1 rounded bg-primary/10 text-primary">{linkedProfile.name}</span>}
-                    <span className="text-2xs text-muted-foreground capitalize">{tracker.category}</span>
+                    <span
+                      className="text-2xs px-1.5 py-0.5 rounded-full font-medium capitalize"
+                      style={{ background: `hsl(${getCategoryAccent(tracker.category)} / 0.15)`, color: `hsl(${getCategoryAccent(tracker.category)})` }}
+                    >
+                      {tracker.category}
+                    </span>
                   </div>
                 </div>
                 {/* Middle: KPI chips (scrollable) */}
@@ -3599,25 +3873,69 @@ export default function TrackersPage() {
               </div>
             );
           })}
+              </div>
+            );
+          })}
         </div>
       ) : (
-        sortedCats.map((cat) => (
-          <div key={cat}>
-            <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 capitalize">
-              {cat} ({grouped[cat].length})
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {grouped[cat].map((tracker) => (
-                <TrackerCard
-                  key={tracker.id}
-                  tracker={tracker}
-                  onDelete={(id) => setDeleteTargetId(id)}
-                  onOpenDetail={(id) => setSelectedTrackerId(id)}
-                />
-              ))}
+        sortedCats.map((cat) => {
+          const groupDef = CANONICAL_GROUPS[cat];
+          const GroupIcon = groupDef?.icon || Box;
+          const groupAccent = groupDef?.accent || getCategoryAccent(cat);
+          const isGroupCollapsed = collapsedSections.has(`group-${cat}`);
+
+          return (
+            <div key={cat} className="space-y-3">
+              {/* Group header — collapsible */}
+              <button
+                className="w-full flex items-center gap-3 px-1 py-1 rounded-xl transition-all group"
+                onClick={() => toggleSection(`group-${cat}`)}
+                style={{ background: isGroupCollapsed ? 'transparent' : `linear-gradient(135deg, hsl(${groupAccent} / 0.06) 0%, transparent 60%)` }}
+              >
+                {/* Icon badge */}
+                <div
+                  className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 transition-all"
+                  style={{ background: `hsl(${groupAccent} / 0.15)` }}
+                >
+                  <GroupIcon className="h-4 w-4" style={{ color: `hsl(${groupAccent})` }} />
+                </div>
+                {/* Label + count */}
+                <div className="flex-1 text-left">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold" style={{ color: `hsl(${groupAccent})` }}>{cat}</span>
+                    <span
+                      className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background: `hsl(${groupAccent} / 0.15)`, color: `hsl(${groupAccent})` }}
+                    >
+                      {grouped[cat].length}
+                    </span>
+                  </div>
+                  {groupDef?.description && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{groupDef.description}</p>
+                  )}
+                </div>
+                {/* Collapse chevron */}
+                <div className="shrink-0 text-muted-foreground/60 group-hover:text-foreground transition-colors">
+                  {isGroupCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+                </div>
+              </button>
+
+              {/* Trackers in this group — hidden when collapsed */}
+              {!isGroupCollapsed && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pl-1">
+                  {grouped[cat].map((tracker) => (
+                    <TrackerCard
+                      key={tracker.id}
+                      tracker={tracker}
+                      onDelete={(id) => setDeleteTargetId(id)}
+                      onOpenDetail={(id) => setSelectedTrackerId(id)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ))
+          );
+        })
       ))}
 
       {/* Create tracker dialog */}

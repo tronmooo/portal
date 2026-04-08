@@ -237,8 +237,13 @@ export default function AuthPage() {
 
         {/* Logo / Brand */}
         <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 mb-1">
-            <Shield className="w-7 h-7 text-primary" />
+          <div className="flex justify-center mb-1">
+            <img
+              src="/portol-logo.png"
+              alt="Portol"
+              className="w-20 h-20 object-contain"
+              style={{ filter: 'drop-shadow(0 0 20px rgba(0,200,220,0.4))' }}
+            />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Portol</h1>
           <p className="text-sm text-muted-foreground">Your AI-powered life command center</p>

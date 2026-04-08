@@ -101,6 +101,41 @@ export interface ChatMessage {
     documentPreview?: { id: string; name: string; mimeType: string; data: string };
   };
   results?: Array<Record<string, any>>;
+  // Rich visual output — inline charts, tables, reports
+  charts?: Array<{
+    type: string;
+    title: string;
+    subtitle?: string;
+    data: Array<Record<string, any>>;
+    series: Array<{ dataKey: string; name: string; color?: string; type?: string; stackId?: string }>;
+    xAxisKey: string;
+    xAxisLabel?: string;
+    yAxisLabel?: string;
+    showLegend?: boolean;
+    showGrid?: boolean;
+    height?: number;
+    nameKey?: string;
+    valueKey?: string;
+  }>;
+  tables?: Array<{
+    title: string;
+    subtitle?: string;
+    columns: Array<{ key: string; label: string; align?: string; format?: string }>;
+    rows: Array<Record<string, any>>;
+    summary?: Record<string, any>;
+  }>;
+  report?: {
+    title: string;
+    subtitle?: string;
+    generatedAt: string;
+    sections: Array<{
+      heading: string;
+      content?: string;
+      metrics?: Array<{ label: string; value: string | number; change?: string; changeType?: string }>;
+      chart?: any;
+      table?: any;
+    }>;
+  };
 }
 
 // ============================================================

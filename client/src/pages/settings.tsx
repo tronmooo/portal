@@ -23,12 +23,32 @@ import {
   Palette, Info, CheckCircle2, Loader2, ArrowLeft, Bell, BellOff, Bot, Zap,
   Globe, Calendar, Lock, Trash2, HardDrive, RefreshCw, ExternalLink,
   Smartphone, Monitor, ChevronRight, Heart, Key, Eye, EyeOff, Clock,
+  Users, Activity, ListTodo, FileText,
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/components/theme-provider";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+
+function StatCard({ icon: Icon, label, value, href, accent }: { icon: any; label: string; value: number | string; href: string; accent: string }) {
+  const [, navigate] = useLocation();
+  return (
+    <button
+      onClick={() => navigate(href)}
+      className="flex items-center gap-3 p-3 rounded-xl border border-border/40 hover:bg-muted/30 hover:border-primary/30 active:scale-[0.98] transition-all text-left card-lift w-full"
+      style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.07) 0%, transparent 60%)` }}
+    >
+      <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accent} / 0.15)` }}>
+        <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />
+      </div>
+      <div>
+        <p className="text-lg font-bold metric-value" style={{ color: `hsl(${accent})` }}>{value}</p>
+        <p className="text-xs text-muted-foreground">{label}</p>
+      </div>
+    </button>
+  );
+}
 
 export default function SettingsPage() {
   useEffect(() => { document.title = "Settings — Portol"; }, []);
@@ -204,19 +224,11 @@ export default function SettingsPage() {
             {/* Data Summary */}
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2">Your Data</p>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-lg bg-muted/50 p-2.5 text-center">
-                  <p className="text-lg font-bold tabular-nums">{profiles.length}</p>
-                  <p className="text-xs text-muted-foreground">Profiles</p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-2.5 text-center">
-                  <p className="text-lg font-bold tabular-nums">{stats?.activeTasks || 0}</p>
-                  <p className="text-xs text-muted-foreground">Active Tasks</p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-2.5 text-center">
-                  <p className="text-lg font-bold tabular-nums">{stats?.totalTrackers || 0}</p>
-                  <p className="text-xs text-muted-foreground">Trackers</p>
-                </div>
+              <div className="grid grid-cols-2 gap-2">
+                <StatCard icon={Users} label="Profiles" value={profiles.length} href="/profiles" accent="188 55% 50%" />
+                <StatCard icon={ListTodo} label="Active Tasks" value={stats?.activeTasks || 0} href="/dashboard" accent="262 65% 62%" />
+                <StatCard icon={Activity} label="Trackers" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" />
+                <StatCard icon={FileText} label="Documents" value={0} href="/linked" accent="25 80% 54%" />
               </div>
             </div>
 

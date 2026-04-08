@@ -102,8 +102,8 @@ function ProfileButton() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" title="Account" data-testid="button-profile-avatar">
-          <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary">
+        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full p-0.5" title="Account" data-testid="button-profile-avatar" style={{ background: 'linear-gradient(135deg, hsl(188 55% 50%), hsl(262 65% 62%))' }}>
+          <div className="h-full w-full rounded-full bg-background flex items-center justify-center text-xs font-bold text-primary">
             {initial}
           </div>
         </Button>
@@ -246,12 +246,13 @@ function App() {
                     <AppSidebar />
                   </div>
                   <div className="flex flex-col flex-1 min-w-0">
-                    <header className="flex items-center justify-between px-3 py-2 border-b border-border bg-background/80 backdrop-blur-sm shrink-0">
+                    <header className="flex items-center justify-between px-3 py-2.5 border-b border-border/50 shrink-0" style={{ background: 'linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--background) / 0.88) 100%)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
                       <div className="hidden md:block">
                         <SidebarTrigger data-testid="button-sidebar-toggle" />
                       </div>
-                      <div className="md:hidden">
-                        <span className="text-sm font-semibold tracking-tight text-foreground">Portol</span>
+                      <div className="md:hidden flex items-center gap-2">
+                        <img src="/portol-logo.png" alt="Portol" className="w-7 h-7 object-contain" style={{ filter: 'drop-shadow(0 0 4px rgba(0,200,220,0.4))' }} />
+                        <span className="text-sm font-bold tracking-tight text-foreground">Portol</span>
                       </div>
                       {/* Search trigger — centre-right in header */}
                       <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
