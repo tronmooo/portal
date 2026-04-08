@@ -1143,11 +1143,11 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to an existing tracker. Use for health data (weight, blood pressure, sleep), fitness (running, cycling), nutrition, or any custom tracker.",
+    description: "Log values to a tracker. CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker. If no matching tracker exists, one will be auto-created with the correct name.",
     input_schema: {
       type: "object" as const,
       properties: {
-        trackerName: { type: "string", description: "Name of the tracker (partial match)" },
+        trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport." },
         values: { type: "object", description: "Key-value pairs to log. Include ALL relevant fields. For nutrition: { calories, protein, carbs, fat, sugar, fiber, item }. For running: { distance, duration, pace, caloriesBurned }. For BP: { systolic, diastolic }. For weight: { weight }. For sleep: { hours, quality }." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
@@ -1895,8 +1895,18 @@ ASSET & SUBSCRIPTION CRUD via chat:
 
 SECONDARY DATA EXTRACTION — critical. When logging tracker entries, compute all possible secondary data:
 
-For EXERCISE entries (running, cycling, swimming, etc.):
-- Always estimate calories burned (running: ~100cal/mi, cycling: ~50cal/mi, swimming: ~10cal/min, walking: ~80cal/mi, weights: ~7cal/min)
+CRITICAL TRACKER NAMING RULE: ALWAYS use the SPECIFIC activity as the tracker name.
+- Basketball → tracker "Basketball" (NEVER "Running" or "Fitness")
+- Tennis → tracker "Tennis"
+- Soccer → tracker "Soccer"
+- Swimming → tracker "Swimming"
+- Yoga → tracker "Yoga"
+- Running → tracker "Running"
+- Weight lifting → tracker "Lifting"
+NEVER log basketball/tennis/soccer/swimming into a Running tracker. Each sport gets its own tracker.
+
+For EXERCISE entries (running, cycling, swimming, basketball, tennis, soccer, etc.):
+- Always estimate calories burned (running: ~100cal/mi, cycling: ~50cal/mi, swimming: ~10cal/min, walking: ~80cal/mi, weights: ~7cal/min, basketball: ~7cal/min, tennis: ~8cal/min, soccer: ~8cal/min, yoga: ~3cal/min, HIIT: ~12cal/min)
 - Calculate pace if distance + duration given
 - Estimate heart rate zone from intensity
 - Include these estimates in your reply
@@ -2642,7 +2652,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       const nameLC = (input.trackerName || "").toLowerCase();
       let autoCategory = "custom";
       if (["nutrition","food","diet","meal","calories"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
-      else if (["running","cycling","swimming","workout","exercise","walk"].some(k => nameLC.includes(k))) autoCategory = "fitness";
+      else if (["running","cycling","swimming","workout","exercise","walk","basketball","tennis","soccer","football","volleyball","baseball","hockey","golf","yoga","pilates","lifting","weights","gym","crossfit","hiit","rowing","skating","skiing","surfing","martial","boxing","wrestling","climbing","hiking","dancing","sport","game","match","practice","drill"].some(k => nameLC.includes(k))) autoCategory = "fitness";
       else if (["weight","blood","bp","sleep","heart","cholesterol"].some(k => nameLC.includes(k))) autoCategory = "health";
 
       // Resolve display name — handle DB unique constraint (user_id, name)
