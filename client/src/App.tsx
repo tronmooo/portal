@@ -39,23 +39,54 @@ import NotFound from "@/pages/not-found";
 import ChatPage from "@/pages/chat";
 
 // Lazy load heavy pages
-const DashboardPage = lazy(() => import("@/pages/dashboard"));
-const TrackersPage = lazy(() => import("@/pages/trackers"));
-const ProfilesPage = lazy(() => import("@/pages/profiles"));
-const ProfileDetailPage = lazy(() => import("@/pages/profile-detail"));
-const DocumentDetailPage = lazy(() => import("@/pages/document-detail"));
-const AuthPage = lazy(() => import("@/pages/auth"));
-const ResetPasswordPage = lazy(() => import("@/pages/reset-password"));
-const SettingsPage = lazy(() => import("@/pages/settings"));
-const CalendarPage = lazy(() => import("@/pages/calendar-page"));
-const ArtifactsPage = lazy(() => import("@/pages/artifacts"));
-const FinancePage = lazy(() => import("@/pages/finance"));
-const HabitsPage = lazy(() => import("@/pages/habits"));
-const JournalPage = lazy(() => import("@/pages/journal"));
-const ObligationsPage = lazy(() => import("@/pages/obligations"));
-const TasksPage = lazy(() => import("@/pages/tasks"));
-const PrivacyPage = lazy(() => import("@/pages/privacy"));
-const TermsPage = lazy(() => import("@/pages/terms"));
+const _dashImport = () => import("@/pages/dashboard");
+const _trackImport = () => import("@/pages/trackers");
+const _profImport  = () => import("@/pages/profiles");
+const _profDImport = () => import("@/pages/profile-detail");
+const _docDImport  = () => import("@/pages/document-detail");
+const _authImport  = () => import("@/pages/auth");
+const _resetImport = () => import("@/pages/reset-password");
+const _settImport  = () => import("@/pages/settings");
+const _calImport   = () => import("@/pages/calendar-page");
+const _artImport   = () => import("@/pages/artifacts");
+const _finImport   = () => import("@/pages/finance");
+const _habImport   = () => import("@/pages/habits");
+const _jourImport  = () => import("@/pages/journal");
+const _oblImport   = () => import("@/pages/obligations");
+const _taskImport  = () => import("@/pages/tasks");
+const _privImport  = () => import("@/pages/privacy");
+const _termsImport = () => import("@/pages/terms");
+
+const DashboardPage    = lazy(_dashImport);
+const TrackersPage     = lazy(_trackImport);
+const ProfilesPage     = lazy(_profImport);
+const ProfileDetailPage = lazy(_profDImport);
+const DocumentDetailPage = lazy(_docDImport);
+const AuthPage         = lazy(_authImport);
+const ResetPasswordPage = lazy(_resetImport);
+const SettingsPage     = lazy(_settImport);
+const CalendarPage     = lazy(_calImport);
+const ArtifactsPage    = lazy(_artImport);
+const FinancePage      = lazy(_finImport);
+const HabitsPage       = lazy(_habImport);
+const JournalPage      = lazy(_jourImport);
+const ObligationsPage  = lazy(_oblImport);
+const TasksPage        = lazy(_taskImport);
+const PrivacyPage      = lazy(_privImport);
+const TermsPage        = lazy(_termsImport);
+
+// Preload ALL main tab pages immediately so switching tabs is instant — no spinner on first visit.
+// This fires the bundle fetches in parallel as soon as the app JS loads.
+_dashImport();
+_trackImport();
+_profImport();
+_settImport();
+_calImport();
+_finImport();
+_habImport();
+_jourImport();
+_oblImport();
+_taskImport();
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
@@ -164,7 +195,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 function ScrollToTop() {
   const [location] = useLocation();
   useEffect(() => {
-    window.scrollTo(0, 0);
+    // Use requestAnimationFrame to avoid blocking the navigation render
+    requestAnimationFrame(() => { window.scrollTo({ top: 0, behavior: "instant" }); });
   }, [location]);
   return null;
 }
