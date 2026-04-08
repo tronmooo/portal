@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
+import { getUserToday, getUserCurrentMonth, toLocalDateStr, toLocalDateTimeStr, toLocalShortDateStr, toLocalTimeStr, DEFAULT_TIMEZONE } from "@shared/timezone";
 
 // Lazy-init: dotenv.config() runs after ESM imports resolve,
 // so we defer client creation until first use.
@@ -239,7 +240,7 @@ function safeMatchEntity<T extends { id: string }>(
 }
 
 // ============================================================
-// ACTION LOG — in-memory history of the last 20 CRUD operations
+// ACTION LOG — in-memory history of CRUD operations with debug data
 // ============================================================
 
 interface ActionLogEntry {
@@ -248,20 +249,31 @@ interface ActionLogEntry {
   type: string;
   entityName: string;
   entityId?: string;
+  // Enhanced debug fields
+  rawInput?: string;
+  parsedIntent?: string;
+  profileId?: string;
+  trackerId?: string;
+  calendarDate?: string;
+  timezone?: string;
+  recurrence?: string;
+  result?: 'success' | 'error';
+  errorMessage?: string;
 }
 
 // Per-user action log — prevents cross-user activity leakage (C-3 security fix)
 const actionLogMap = new Map<string, ActionLogEntry[]>();
+const AI_ACTION_LOG_MAX = 50; // Keep more entries for debug visibility
 
-function logAction(action: string, type: string, entityName: string, entityId?: string, userId?: string) {
+function logAction(action: string, type: string, entityName: string, entityId?: string, userId?: string, debugData?: Partial<ActionLogEntry>) {
   const key = userId || '_global';
   if (!actionLogMap.has(key)) actionLogMap.set(key, []);
   const log = actionLogMap.get(key)!;
-  log.push({ timestamp: new Date().toISOString(), action, type, entityName, entityId });
-  if (log.length > 20) log.shift();
+  log.push({ timestamp: new Date().toISOString(), action, type, entityName, entityId, ...debugData });
+  if (log.length > AI_ACTION_LOG_MAX) log.shift();
 }
 
-export function getActionLog(count = 10, userId?: string): ActionLogEntry[] {
+export function getActionLog(count = 20, userId?: string): ActionLogEntry[] {
   const key = userId || '_global';
   return (actionLogMap.get(key) || []).slice(-count);
 }
@@ -566,7 +578,8 @@ export async function processFileUpload(
   mimeType: string,
   base64Data: string,
   userMessage?: string,
-  profileId?: string
+  profileId?: string,
+  timezone?: string
 ): Promise<{
   reply: string;
   actions: ParsedAction[];
@@ -577,6 +590,7 @@ export async function processFileUpload(
 }> {
   const actions: ParsedAction[] = [];
   const results: any[] = [];
+  const tz = timezone || DEFAULT_TIMEZONE;
 
   // Use Claude vision to analyze the image/document
   const extractionPrompt = `You extract data from uploaded documents for a personal document management app called Portol.
@@ -834,12 +848,12 @@ Return ONLY the JSON array, nothing else.`;
           : ["bank", "loan", "statement"].some(t => docType.includes(t)) ? "general"
           : "general";
         const desc = parsed.label || parsed.summary || fileName;
-        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || getUserToday(tz);
         const expense = await storage.createExpense({
           amount: numAmount,
           category,
           description: desc,
-          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : getUserToday(tz),
           tags: ["from-document"],
         });
         // Link to the asset/profile AND propagate up to the self (Me) profile
@@ -1796,7 +1810,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
 // SYSTEM PROMPT (simplified — no JSON format instructions)
 // ============================================================
 
-function buildSystemPrompt(context: string): string {
+function buildSystemPrompt(context: string, userTimezone: string = DEFAULT_TIMEZONE): string {
   return `You are Portol AI — the brain of a centralized personal life operating system. You help users manage their entire life: profiles (people, pets, vehicles, accounts), health tracking, tasks, expenses, calendar events, habits, obligations, journal entries, memories, and documents.
 
 EXISTING DATA (reference these when the user mentions them):
@@ -2029,10 +2043,10 @@ After completing actions, confirm EACH one with WHERE to find it:
 - Profile update → "Updated [Profile] → visible in Profiles page"
 This helps the user trust and verify the data.
 
-Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' })} (Pacific Time).
-Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Los_Angeles' })}.
+Current date/time: ${toLocalDateTimeStr(new Date(), userTimezone)} (${userTimezone}).
+Today's date is ${toLocalShortDateStr(new Date(), userTimezone)}.
 CRITICAL DATE RULES:
-- "tomorrow" = the day AFTER today in Pacific Time. Calculate carefully.
+- "tomorrow" = the day AFTER today in the user's timezone (${userTimezone}). Calculate carefully.
 - "by Friday" or "this Friday" = if today IS Friday, that means TODAY. If today is before Friday, it means the upcoming Friday of this week. NEVER push to next week.
 - "next Friday" = the Friday of NEXT week (7+ days away).
 - "this Saturday", "this Monday", etc. = the nearest upcoming occurrence. If today IS that day, it means TODAY.
@@ -2117,7 +2131,7 @@ interface ValidationResult {
   errors: string[];
 }
 
-function validateToolInput(toolName: string, input: Record<string, any>): ValidationResult {
+function validateToolInput(toolName: string, input: Record<string, any>, tz: string = DEFAULT_TIMEZONE): ValidationResult {
   const warnings: string[] = [];
   const errors: string[] = [];
   const normalized = { ...input };
@@ -2134,9 +2148,9 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       // Date must be valid YYYY-MM-DD
       if (normalized.date && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date)) {
         warnings.push(`Date "${normalized.date}" is not YYYY-MM-DD format — using today`);
-        normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        normalized.date = getUserToday(tz);
       }
-      if (!normalized.date) normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      if (!normalized.date) normalized.date = getUserToday(tz);
       // Category must be from allowed list
       const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards"];
       if (normalized.category && !validCategories.includes(normalized.category)) {
@@ -2255,7 +2269,7 @@ function safeLC(val: any): string {
   return (typeof val === "string" ? val : "").toLowerCase();
 }
 
-async function executeTool(name: string, input: any): Promise<any> {
+async function executeTool(name: string, input: any, tz: string = DEFAULT_TIMEZONE): Promise<any> {
   switch (name) {
     case "search": {
       const results = await storage.search(input.query);
@@ -2449,7 +2463,7 @@ async function executeTool(name: string, input: any): Promise<any> {
             amount: Number(purchasePrice),
             category: expCategory,
             description: `${input.name} purchase`,
-            date: input.fields?.purchaseDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+            date: input.fields?.purchaseDate || getUserToday(tz),
             vendor: input.fields?.brand || "",
             tags: ["purchase"],
           });
@@ -2482,7 +2496,7 @@ async function executeTool(name: string, input: any): Promise<any> {
               valuationMethod: valuation.method,
               valuationConfidence: valuation.confidence,
               valuationRange: valuation.details,
-              valuationDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+              valuationDate: getUserToday(tz),
             },
           });
           logger.info("ai", `Auto-valued "${input.name}" at $${valuation.estimatedValue} (${valuation.confidence})`);
@@ -2755,13 +2769,13 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "set_budget": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth(tz);
       const budget = await storage.addBudget(month, input.category, input.amount, input.notes);
       return { ...budget, month, message: `Budget set: $${input.amount} for ${input.category} in ${month}` };
     }
 
     case "delete_budget": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth(tz);
       const budgets = await storage.getBudgets(month);
       const target = budgets.find(b => b.category.toLowerCase() === safeLC(input.category));
       if (!target) return { error: `No budget found for category "${input.category}" in ${month}` };
@@ -2770,7 +2784,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "get_budget_summary": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth(tz);
       const budgets = await storage.getBudgets(month);
       const expenses = await storage.getExpenses();
       const monthExpenses = expenses.filter(e => e.date?.startsWith(month));
@@ -2847,7 +2861,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         amount: parsedAmount,
         category: inferredCategory,
         description: input.description || "Expense",
-        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        date: input.date || getUserToday(tz),
         vendor: input.vendor,
         tags: input.tags || [],
         linkedProfiles: expenseLinkedProfiles.length > 0 ? expenseLinkedProfiles : undefined,
@@ -3102,7 +3116,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "journal_entry": {
       // Check if a journal entry already exists for today
-      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayDate = getUserToday(tz);
       const allJournalEntries = await storage.getJournalEntries();
       const existingToday = allJournalEntries.find(j => j.date === todayDate);
 
@@ -3469,7 +3483,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "bulk_complete_tasks": {
       const tasks = await storage.getTasks();
-      const now = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const now = getUserToday(tz);
       let toComplete: typeof tasks;
       if (input.filter === "all") {
         toComplete = tasks.filter(t => t.status !== "done");
@@ -3537,15 +3551,15 @@ async function executeTool(name: string, input: any): Promise<any> {
           if (gcalMappings.has(gEventId)) continue;
 
           const startParsed = new Date(gcEvent.start);
-          const eventDate = startParsed.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+          const eventDate = toLocalDateStr(startParsed, tz);
           const isDuplicate = existingEvents.some(
             (e: any) => e.title === gcEvent.title && e.date === eventDate
           );
           if (isDuplicate) continue;
 
-          const startTime = gcEvent.is_all_day ? undefined : startParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
+          const startTime = gcEvent.is_all_day ? undefined : toLocalTimeStr(startParsed, tz);
           const endParsed = gcEvent.end ? new Date(gcEvent.end) : null;
-          const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : endParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
+          const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : toLocalTimeStr(endParsed, tz);
 
           let category: "personal" | "work" | "health" | "social" | "travel" | "finance" | "family" | "education" | "other" = "personal";
           const combined = ((gcEvent.title || "") + " " + (gcEvent.description || "")).toLowerCase();
@@ -3712,7 +3726,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           valuationMethod: valuation.method,
           valuationConfidence: valuation.confidence,
           valuationRange: valuation.details,
-          valuationDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          valuationDate: getUserToday(tz),
           previousValue: oldValue,
         },
       });
@@ -4156,13 +4170,16 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
-export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string): Promise<{
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, timezone?: string): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   documentPreviews?: Array<{ id: string; name: string; mimeType: string; data: string }>;
 }> {
+  // ─── Timezone: use the user's real timezone for all date operations ───
+  const tz = timezone || DEFAULT_TIMEZONE;
+
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
   const lower = userMessage.toLowerCase().trim();
@@ -4357,7 +4374,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
   ].join("\n");
 
-  const systemPrompt = buildSystemPrompt(context);
+  const systemPrompt = buildSystemPrompt(context, tz);
 
   try {
     // Build the tool_use conversation loop — prepend up to 5 history pairs for multi-step context
@@ -4451,7 +4468,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         }
         try {
           // Validate input before executing
-          const validation = validateToolInput(toolUse.name, toolUse.input as Record<string, any>);
+          const validation = validateToolInput(toolUse.name, toolUse.input as Record<string, any>, tz);
           if (!validation.valid) {
             logger.warn("ai", `Validation failed for ${toolUse.name}: ${validation.errors.join(", ")}`);
             const errorResult = { error: `Validation failed: ${validation.errors.join(". ")}`, validationErrors: validation.errors };
@@ -4462,7 +4479,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           if (validation.warnings.length > 0) {
             logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
           }
-          const result = await executeTool(toolUse.name, validation.normalized);
+          const result = await executeTool(toolUse.name, validation.normalized, tz);
           
           // Invalidate context cache after any write operation
           const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
@@ -4483,11 +4500,21 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             result._validationWarnings = validation.warnings;
           }
 
-          // Log the action to in-memory history
+          // Log the action to in-memory history with enhanced debug data
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
           const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
-          if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
-            logAction(toolUse.name, actionType, String(entityName), entityId, userId);
+          if (!readOnlyTools.includes(toolUse.name)) {
+            logAction(toolUse.name, actionType, String(entityName), entityId, userId, {
+              rawInput: userMessage.slice(0, 200),
+              parsedIntent: toolUse.name,
+              profileId: inp.forProfile || inp.profileId || undefined,
+              trackerId: inp.trackerId || result?.id,
+              calendarDate: inp.date || undefined,
+              timezone: tz,
+              recurrence: inp.recurrence || undefined,
+              result: result && !result.error ? 'success' : 'error',
+              errorMessage: result?.error || undefined,
+            });
           }
 
           // Handle document previews

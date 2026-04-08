@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setDashboardProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -1254,7 +1254,7 @@ const BUDGET_CATEGORIES = [
 ];
 
 function BudgetManager() {
-  const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7));
+  const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7));
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [newCat, setNewCat] = useState("");
@@ -1475,7 +1475,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
 
-  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const { data: budgetData } = useQuery<{month: string; totalBudget: number; totalSpent: number; remaining: number; categories: any[]}>({
     queryKey: ["/api/budgets/summary", currentMonth],
     queryFn: async () => {

@@ -2,6 +2,9 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
+/** Detect browser timezone once and reuse across all requests */
+export const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles';
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -21,9 +24,11 @@ export async function apiRequest(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const headers: Record<string, string> = { "X-Timezone": BROWSER_TIMEZONE };
+    if (data) headers["Content-Type"] = "application/json";
     const res = await fetch(`${API_BASE}${url}`, {
       method,
-      headers: data ? { "Content-Type": "application/json" } : {},
+      headers,
       body: data ? JSON.stringify(data) : undefined,
       signal: controller.signal,
     });
@@ -45,7 +50,9 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     // Build URL from queryKey — first element is the path, rest are ignored (used for cache segmentation)
     const url = String(queryKey[0]);
-    const res = await window.fetch(`${API_BASE}${url}`);
+    const res = await window.fetch(`${API_BASE}${url}`, {
+      headers: { "X-Timezone": BROWSER_TIMEZONE },
+    });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

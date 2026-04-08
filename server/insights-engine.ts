@@ -3,6 +3,7 @@ import type {
   Insight, Profile, Tracker, Task, Expense, Habit, Obligation,
   JournalEntry, Document, Goal, CalendarEvent,
 } from "@shared/schema";
+import { getUserToday, addDays as tzAddDays, DEFAULT_TIMEZONE } from "@shared/timezone";
 
 // ============================================================
 // INSIGHTS ENGINE — Pure data-driven analysis
@@ -21,10 +22,10 @@ interface InsightsInput {
   events: CalendarEvent[];
 }
 
-export function generateSmartInsights(data: InsightsInput): Insight[] {
+export function generateSmartInsights(data: InsightsInput, timezone: string = DEFAULT_TIMEZONE): Insight[] {
   const insights: Insight[] = [];
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = getUserToday(timezone);
 
   // --- Spending Alerts ---
   analyzeSpending(data.expenses, now, insights);
@@ -189,7 +190,7 @@ function analyzeTasks(tasks: Task[], now: Date, insights: Insight[]) {
   }
 
   // Tasks due today
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = getUserToday();
   const dueToday = tasks.filter(t => t.status !== "done" && t.dueDate?.slice(0, 10) === todayStr);
   if (dueToday.length > 0) {
     insights.push({
@@ -402,12 +403,9 @@ function analyzeHealth(trackers: Tracker[], todayStr: string, now: Date, insight
   if (fitnessTrackers.length > 0) {
     const allEntries = fitnessTrackers.flatMap(t => t.entries).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     let streak = 0;
-    const today = new Date(now);
-    today.setHours(0, 0, 0, 0);
+    const todayFitness = getUserToday();
     for (let i = 0; i < 30; i++) {
-      const checkDate = new Date(today);
-      checkDate.setDate(checkDate.getDate() - i);
-      const dayStr = checkDate.toISOString().slice(0, 10);
+      const dayStr = tzAddDays(todayFitness, -i);
       if (allEntries.some(e => e.timestamp.slice(0, 10) === dayStr)) streak++;
       else if (i > 0) break;
     }
@@ -517,8 +515,8 @@ function analyzeObligations(obligations: Obligation[], now: Date, insights: Insi
 // ─── Events ──────────────────────────────────────────────────────────────────
 
 function analyzeEvents(events: CalendarEvent[], now: Date, insights: Insight[]) {
-  const todayStr = now.toISOString().slice(0, 10);
-  const todayEvents = events.filter(e => e.date.slice(0, 10) === todayStr);
+  const todayStrEvents = getUserToday();
+  const todayEvents = events.filter(e => e.date.slice(0, 10) === todayStrEvents);
   if (todayEvents.length > 0) {
     insights.push({
       id: randomUUID(),

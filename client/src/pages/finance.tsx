@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2 } from "lucide-react";
 import { Link } from "wouter";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import {
@@ -63,7 +63,7 @@ export default function FinancePage() {
         amount: parseFloat(newExpense.amount),
         category: newExpense.category,
         vendor: newExpense.vendor || undefined,
-        date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        date: new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
         tags: [],
       });
     },

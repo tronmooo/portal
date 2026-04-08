@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -35,7 +36,7 @@ function getExtension(mimeType: string): string {
 }
 
 // ---- Streak calculator (timezone-aware) ----
-function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1): { current: number; longest: number } {
+function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1, timezone: string = DEFAULT_TIMEZONE): { current: number; longest: number } {
   if (checkins.length === 0) return { current: 0, longest: 0 };
   // Count check-ins per date
   const countByDate = new Map<string, number>();
@@ -49,18 +50,13 @@ function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1)
     .sort()
     .reverse();
   if (completeDates.length === 0) return { current: 0, longest: 0 };
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-  function addDays(dateStr: string, days: number): string {
-    const d = new Date(dateStr + 'T12:00:00');
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
-  }
-  const yesterdayStr = addDays(todayStr, -1);
+  const todayStr = getUserToday(timezone);
+  const yesterdayStr = tzAddDays(todayStr, -1);
   let current = 0;
   if (completeDates[0] === todayStr || completeDates[0] === yesterdayStr) {
     let expectedDate = completeDates[0];
     for (let i = 0; i < completeDates.length; i++) {
-      if (completeDates[i] === expectedDate) { current++; expectedDate = addDays(expectedDate, -1); }
+      if (completeDates[i] === expectedDate) { current++; expectedDate = tzAddDays(expectedDate, -1); }
       else if (completeDates[i] < expectedDate) { break; }
     }
   }
@@ -68,7 +64,7 @@ function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1)
   let tempStreak = 1;
   let longest = 1;
   for (let i = 1; i < allDates.length; i++) {
-    if (allDates[i] === addDays(allDates[i - 1], 1)) { tempStreak++; longest = Math.max(longest, tempStreak); } else { tempStreak = 1; }
+    if (allDates[i] === tzAddDays(allDates[i - 1], 1)) { tempStreak++; longest = Math.max(longest, tempStreak); } else { tempStreak = 1; }
   }
   return { current: Math.max(current, 0), longest: Math.max(longest, current) };
 }
@@ -96,10 +92,9 @@ function generateInsights(
   if (fitnessTrackers.length > 0) {
     const allFE = fitnessTrackers.flatMap(t => t.entries).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     let streak = 0;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayFitness = getUserToday();
     for (let i = 0; i < 30; i++) {
-      const checkDate = new Date(today); checkDate.setDate(checkDate.getDate() - i);
-      const dayStr = checkDate.toISOString().slice(0, 10);
+      const dayStr = tzAddDays(todayFitness, -i);
       const hasEntry = allFE.some(e => e.timestamp.slice(0, 10) === dayStr);
       if (hasEntry) streak++; else if (i > 0) break;
     }
@@ -152,9 +147,9 @@ function generateInsights(
     else if (avg >= 6) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Great mood this week", description: "You've been feeling positive. Keep doing what's working!", severity: "positive", data: { avgMood: avg }, createdAt: now.toISOString() }); }
   }
 
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStrCal = getUserToday();
   let totalCalsBurned = 0;
-  for (const t of trackers) { for (const e of t.entries) { if (e.timestamp.slice(0, 10) === todayStr && e.computed?.caloriesBurned) totalCalsBurned += e.computed.caloriesBurned; } }
+  for (const t of trackers) { for (const e of t.entries) { if (e.timestamp.slice(0, 10) === todayStrCal && e.computed?.caloriesBurned) totalCalsBurned += e.computed.caloriesBurned; } }
   if (totalCalsBurned > 0) { insights.push({ id: randomUUID(), type: "health_correlation", title: `${totalCalsBurned} calories burned today`, description: `Based on your logged activities. ${totalCalsBurned > 500 ? "Great active day!" : "Every bit counts."}`, severity: "positive", data: { caloriesBurned: totalCalsBurned }, createdAt: now.toISOString() }); }
 
   if (trackers.length > 0) {
@@ -1468,7 +1463,7 @@ export class SupabaseStorage implements IStorage {
         items.push({ id: `event-${ev.id}-${baseDate}`, type: "event", title: ev.title, date: baseDate, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
       }
       if (ev.recurrence !== "none") {
-        const base = new Date(ev.date);
+        const base = parseLocalDate(ev.date);
         for (let i = 1; i <= 45; i++) {
           const next = new Date(base);
           switch (ev.recurrence) {
@@ -1478,7 +1473,7 @@ export class SupabaseStorage implements IStorage {
             case "monthly": next.setMonth(next.getMonth() + i); break;
             case "yearly": next.setFullYear(next.getFullYear() + i); break;
           }
-          const nextStr = next.toISOString().slice(0, 10);
+          const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
           if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
           if (nextStr >= startDate) {
@@ -1505,7 +1500,7 @@ export class SupabaseStorage implements IStorage {
       }
       // Generate future occurrences based on frequency
       if (ob.frequency !== "once") {
-        const base = new Date(ob.nextDueDate);
+        const base = parseLocalDate(ob.nextDueDate);
         for (let i = 1; i <= 24; i++) {
           const next = new Date(base);
           switch (ob.frequency) {
@@ -1515,7 +1510,7 @@ export class SupabaseStorage implements IStorage {
             case "quarterly": next.setMonth(next.getMonth() + i * 3); break;
             case "yearly": next.setFullYear(next.getFullYear() + i); break;
           }
-          const nextStr = next.toISOString().slice(0, 10);
+          const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
           if (nextStr >= startDate) {
             items.push({ id: `obligation-${ob.id}-${nextStr}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: nextStr, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
@@ -1530,7 +1525,7 @@ export class SupabaseStorage implements IStorage {
       const start = new Date(startDate + "T12:00:00");
       const end = new Date(endDate + "T12:00:00");
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const dateStr = d.toISOString().slice(0, 10);
+        const dateStr = d.toLocaleDateString('en-CA');
         const dayOfWeek = d.getDay();
         const showOnDay = habit.frequency === "daily" ||
           (habit.frequency === "weekly" && (habit.targetDays?.includes(dayOfWeek) ?? dayOfWeek === 1)) ||
@@ -2027,7 +2022,7 @@ export class SupabaseStorage implements IStorage {
   async checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined> {
     const habit = await this.getHabit(habitId);
     if (!habit) return undefined;
-    const checkinDate = date || new Date().toISOString().slice(0, 10);
+    const checkinDate = date || getUserToday();
     // Allow multiple check-ins per day up to targetPerDay
     const todayCheckins = habit.checkins.filter(c => c.date === checkinDate);
     const maxPerDay = habit.targetPerDay || 1;
@@ -2165,14 +2160,14 @@ export class SupabaseStorage implements IStorage {
     const ob = await this.getObligation(obligationId);
     if (!ob) return undefined;
     const id = randomUUID();
-    const today = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    const today = date || getUserToday();
     const { error } = await this.supabase.from("obligation_payments").insert({
       id, user_id: this.userId, obligation_id: obligationId, amount, date: today,
       method: method || null, confirmation_number: confirmationNumber || null,
     });
     if (error) throw error;
     // Advance next due date
-    const nextDue = new Date(ob.nextDueDate);
+    const nextDue = parseLocalDate(ob.nextDueDate);
     switch (ob.frequency) {
       case "weekly": nextDue.setDate(nextDue.getDate() + 7); break;
       case "biweekly": nextDue.setDate(nextDue.getDate() + 14); break;
@@ -2180,7 +2175,7 @@ export class SupabaseStorage implements IStorage {
       case "quarterly": nextDue.setMonth(nextDue.getMonth() + 3); break;
       case "yearly": nextDue.setFullYear(nextDue.getFullYear() + 1); break;
     }
-    await this.supabase.from("obligations").update({ next_due_date: nextDue.toISOString().slice(0, 10) }).eq("id", obligationId).eq("user_id", this.userId);
+    await this.supabase.from("obligations").update({ next_due_date: nextDue.toLocaleDateString('en-CA') }).eq("id", obligationId).eq("user_id", this.userId);
     this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);
     return { id, amount, date: today, method, confirmationNumber };
   }
@@ -2674,25 +2669,23 @@ export class SupabaseStorage implements IStorage {
     for (const t of trackers) weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length;
 
     const streaks: { name: string; days: number }[] = [];
+    const todayStrStreaks = getUserToday();
     for (const t of trackers) {
       if (t.entries.length < 2) continue;
       let streak = 0;
-      const today = new Date(); today.setHours(0, 0, 0, 0);
       for (let i = 0; i < 30; i++) {
-        const checkDate = new Date(today); checkDate.setDate(checkDate.getDate() - i);
-        const dayStr = checkDate.toISOString().slice(0, 10);
+        const dayStr = tzAddDays(todayStrStreaks, -i);
         if (t.entries.some(e => e.timestamp.slice(0, 10) === dayStr)) streak++; else if (i > 0) break;
       }
       if (streak >= 2) streaks.push({ name: t.name, days: streak });
     }
 
-    const todayStr2 = now.toISOString().slice(0, 10);
+    const todayStr2 = getUserToday();
     const allActiveHabits = habits.filter(h => h.frequency === "daily" || h.frequency === "weekly");
     // For daily habits, check if completed today. For weekly habits, check if completed this week.
-    const weekStart = new Date(now);
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
-    weekStart.setHours(0, 0, 0, 0);
-    const weekStartStr = weekStart.toISOString().slice(0, 10);
+    const weekStartDate = parseLocalDate(todayStr2);
+    weekStartDate.setDate(weekStartDate.getDate() - weekStartDate.getDay()); // Sunday
+    const weekStartStr = weekStartDate.toLocaleDateString('en-CA');
     const todayCompleted = allActiveHabits.filter(h => {
       if (h.frequency === "daily") {
         const tpd = h.targetPerDay || 1;
@@ -2717,9 +2710,9 @@ export class SupabaseStorage implements IStorage {
     }, 0);
 
     let journalStreak = 0;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayStrJournal = getUserToday();
     for (let i = 0; i < 30; i++) {
-      const dayStr = new Date(today.getTime() - i * 86400000).toISOString().slice(0, 10);
+      const dayStr = tzAddDays(todayStrJournal, -i);
       if (journalEntries.some(j => j.date === dayStr)) journalStreak++; else if (i > 0) break;
     }
 
@@ -2776,7 +2769,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
     const now = new Date();
-    const today = now.toISOString().slice(0, 10);
+    const today = getUserToday();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
     // Multi-select filter support
@@ -2842,7 +2835,7 @@ export class SupabaseStorage implements IStorage {
       const trend = values.length >= 2 ? (values[values.length - 1] - values[0]) : 0;
       // For hydration trackers, calculate today's total
       const isHydration = t.name.toLowerCase().includes('hydration') || t.name.toLowerCase().includes('water');
-      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayStr = getUserToday();
       let dailyTotal: number | undefined;
       if (isHydration) {
         dailyTotal = t.entries
