@@ -143,8 +143,32 @@ h1, h2, h3, .text-xl, .text-2xl {
   letter-spacing: -0.03em;
   font-weight: 700;
 }
+/* Stat numbers — tight, punchy, bold */
 .metric-value {
   letter-spacing: -0.04em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* Section headers — uppercase spaced tracking */
+.section-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+/* Muted labels — recede visually */
+.label-muted {
+  font-weight: 400;
+  opacity: 0.6;
+}
+/* Large KPI stat */
+.stat-hero {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 @layer base {
@@ -422,6 +446,56 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
 }
 .input-glow:focus-within {
   box-shadow: 0 0 0 1.5px hsl(var(--primary) / 0.4), 0 0 16px hsl(var(--primary) / 0.15);
+}
+
+/* ============================================================
+   SEMANTIC URGENCY SIGNALS — background + border fills
+   Apply these classes to cards/rows to signal status at a glance
+   ============================================================ */
+
+/* Critical / Expired / Overdue */
+.urgency-critical {
+  background: rgba(239, 68, 68, 0.06) !important;
+  border-color: rgba(239, 68, 68, 0.25) !important;
+}
+.urgency-critical:hover {
+  background: rgba(239, 68, 68, 0.10) !important;
+}
+/* Warning / Due Soon */
+.urgency-warning {
+  background: rgba(245, 158, 11, 0.06) !important;
+  border-color: rgba(245, 158, 11, 0.25) !important;
+}
+.urgency-warning:hover {
+  background: rgba(245, 158, 11, 0.10) !important;
+}
+/* Healthy / Completed / Good */
+.urgency-good {
+  background: rgba(16, 185, 129, 0.06) !important;
+  border-color: rgba(16, 185, 129, 0.25) !important;
+}
+.urgency-good:hover {
+  background: rgba(16, 185, 129, 0.10) !important;
+}
+/* Neutral / Informational */
+.urgency-info {
+  background: rgba(59, 130, 246, 0.06) !important;
+  border-color: rgba(59, 130, 246, 0.20) !important;
+}
+
+/* Urgency left border accent — 3px semantic left bar */
+.urgency-bar-critical { border-left: 3px solid #ef4444 !important; }
+.urgency-bar-warning  { border-left: 3px solid #f59e0b !important; }
+.urgency-bar-good     { border-left: 3px solid #10b981 !important; }
+.urgency-bar-info     { border-left: 3px solid #3b82f6 !important; }
+
+/* Pulse animation for critical items */
+@keyframes urgency-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.urgency-pulse {
+  animation: urgency-pulse 2s ease-in-out infinite;
 }
 
 /* Category color pills for profile cards */

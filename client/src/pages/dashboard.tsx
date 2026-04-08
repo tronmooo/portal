@@ -37,6 +37,7 @@ import {
   Trash2, Pencil, FileText, CheckCircle2, X,
   ChevronLeft, ChevronRight, Plus,
 } from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -185,9 +186,9 @@ function MiniStat({
         )}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-sm metric-value" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
-      <p className="text-xs text-muted-foreground leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
     </div>
   );
 }
@@ -222,6 +223,158 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
   );
 }
 
+// ─── Enhanced KPI Cards ──────────────────────────────────────────────────────
+
+function KPITaskCard({ count, onClick }: { count: number; onClick: () => void }) {
+  const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
+  return (
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+      style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
+      data-testid="stat-card-open-tasks">
+      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(262 65% 62%), transparent)' }} />
+      <div className="flex items-start justify-between relative z-10">
+        <div className="icon-badge" style={{ background: 'hsl(262 65% 62% / 0.15)' }}>
+          <ListTodo className="h-3.5 w-3.5" style={{ color: 'hsl(262 65% 62%)' }} />
+        </div>
+      </div>
+      <div className="mt-1 relative z-10">
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{count}</span>
+      </div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
+      {/* Fill bar */}
+      <div className="mt-1.5 relative z-10">
+        <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
+          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${fillPct}%`, background: 'hsl(262 65% 62%)' }} />
+        </div>
+        <p className="text-[9px] text-muted-foreground/60 mt-0.5">{count} active</p>
+      </div>
+    </div>
+  );
+}
+
+function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; trend: "up"|"down"|"flat"; enhanced: any; onClick: () => void }) {
+  const finSnap = enhanced?.financeSnapshot;
+  const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
+  const maxBar = Math.max(...bars, 1);
+  return (
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+      style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
+      data-testid="stat-card-monthly-spend">
+      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
+      <div className="flex items-start justify-between relative z-10">
+        <div className="icon-badge" style={{ background: 'hsl(43 85% 52% / 0.15)' }}>
+          <DollarSign className="h-3.5 w-3.5" style={{ color: 'hsl(43 85% 52%)' }} />
+        </div>
+        <span className={`text-[10px] font-semibold ${trend === 'up' ? 'text-red-400' : trend === 'down' ? 'text-green-500' : 'text-muted-foreground'}`}>
+          {trend === 'up' ? '↑' : trend === 'down' ? '↓' : '—'}
+        </span>
+      </div>
+      <div className="mt-1 relative z-10">
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>{amount % 1 === 0 ? `$${amount}` : `$${amount.toFixed(0)}`}</span>
+      </div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
+      {/* Mini bar chart */}
+      <div className="mt-1.5 flex items-end gap-0.5 h-5 relative z-10">
+        {bars.map((v: number, i: number) => (
+          <div key={i} className="flex-1 rounded-sm" style={{ height: `${Math.max(10, (v/maxBar)*100)}%`, background: i === bars.length-1 ? 'hsl(43 85% 52%)' : 'hsl(43 85% 52% / 0.35)' }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct: number; totalHabits: number; onClick: () => void }) {
+  const r = 14; const circ = 2 * Math.PI * r;
+  const pct = Math.min(100, completionPct);
+  const dash = (pct / 100) * circ;
+  return (
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+      style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
+      data-testid="stat-card-habits-today">
+      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
+      <div className="flex items-start justify-between gap-2 relative z-10">
+        <div>
+          <div className="text-lg font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{pct}%</div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">Habits Today</p>
+          <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
+        </div>
+        {/* Donut ring */}
+        <svg width="36" height="36" className="shrink-0 -rotate-90 mt-0.5">
+          <circle cx="18" cy="18" r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth="3" />
+          <circle cx="18" cy="18" r={r} fill="none" stroke="hsl(155 60% 44%)" strokeWidth="3"
+            strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+            style={{ transition: 'stroke-dasharray 0.8s cubic-bezier(0.34,1.56,0.64,1)' }} />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: string | null; onClick: () => void }) {
+  const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
+  const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
+  return (
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+      style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
+      data-testid="stat-card-journal-streak">
+      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(310 50% 58%), transparent)' }} />
+      <div className="flex items-start justify-between relative z-10">
+        <div className="icon-badge" style={{ background: 'hsl(310 50% 58% / 0.15)' }}>
+          <BookHeart className="h-3.5 w-3.5" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }} />
+        </div>
+      </div>
+      <div className="mt-1 relative z-10">
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{streak}d</span>
+      </div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
+      {/* 7-day dots */}
+      <div className="flex gap-0.5 mt-1.5 relative z-10">
+        {dots.map((filled, i) => (
+          <div key={i} className="flex-1 h-1.5 rounded-full" style={{ background: filled ? `hsl(310 50% 58%)` : 'hsl(var(--muted))' }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
+  const expiredCount = (docs || []).filter(d => d.status === 'expired').length;
+  const mostOverdue = (docs || []).filter(d => d.daysUntil < 0).sort((a,b) => a.daysUntil - b.daysUntil)[0];
+  const isUrgent = expiredCount > 0;
+  const accent = isUrgent ? '0 72% 52%' : '25 80% 54%';
+  return (
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+      style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
+      data-testid="stat-card-expiring-docs">
+      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />
+      {isUrgent && <div className="absolute top-0 left-0 right-0 bottom-0 border border-red-500/20 rounded-xl pointer-events-none" />}
+      <div className="flex items-start justify-between relative z-10">
+        <div className="icon-badge" style={{ background: `hsl(${accent} / 0.15)` }}>
+          <FileWarning className="h-3.5 w-3.5" style={{ color: `hsl(${accent})` }} />
+        </div>
+        {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">EXPIRED</span>}
+      </div>
+      <div className="mt-1 relative z-10">
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
+      </div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
+      {mostOverdue && (
+        <p className="text-[9px] text-red-500 mt-0.5 relative z-10 truncate">
+          {Math.abs(mostOverdue.daysUntil)}d overdue
+        </p>
+      )}
+      {/* Urgency bar */}
+      {isUrgent && (
+        <div className="mt-1.5 relative z-10">
+          <div className="h-1 rounded-full overflow-hidden" style={{ background: 'hsl(0 72% 52% / 0.2)' }}>
+            <div className="h-full rounded-full" style={{ width: `${Math.min(100, (expiredCount / Math.max(docs.length, 1)) * 100)}%`, background: 'hsl(0 72% 52%)' }} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Section: KPI Stats ──────────────────────────────────────────────────────
 
 function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string }) {
@@ -239,27 +392,15 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
     <>
       <div className="rounded-lg border border-border/40 bg-card px-2 py-2" data-testid="section-kpis">
         <div className="grid grid-cols-3 lg:grid-cols-6 gap-1.5">
-          <MiniStat accent="262 65% 62%" icon={ListTodo} label="Open Tasks" value={stats.activeTasks}
-            onClick={() => setPopup("tasks")} />
-          <MiniStat accent="43 85% 52%" icon={DollarSign} label="Monthly Spend" value={formatMoney(stats.monthlySpend)}
-            trend={spendTrend} onClick={() => setPopup("spending")} />
-          <MiniStat accent="155 60% 44%" icon={Flame} label="Habits Today" value={`${stats.habitCompletionRate}%`}
-            sub={`${stats.totalHabits} tracked`}
-            onClick={() => navigate("/dashboard/habits")} />
-          <MiniStat accent="310 50% 58%" icon={BookHeart} label="Journal Streak"
-            value={`${stats.journalStreak}d`}
-            sub={moodConf ? moodConf.label : journalStreakLabel(stats.journalStreak)}
-            color={moodConf?.color}
-            onClick={() => navigate("/dashboard/journal")} />
+          <KPITaskCard count={stats.activeTasks} onClick={() => setPopup("tasks")} />
+          <KPISpendCard amount={stats.monthlySpend} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
+          <KPIHabitsCard completionPct={stats.habitCompletionRate} totalHabits={stats.totalHabits} onClick={() => navigate("/dashboard/habits")} />
+          <KPIJournalCard streak={stats.journalStreak} mood={stats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
           <MiniStat accent="43 75% 50%" icon={CreditCard} label="Upcoming Bills"
             value={stats.upcomingObligations}
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
-          <MiniStat accent="25 80% 54%" icon={FileWarning} label="Expiring Docs"
-            value={enhanced?.expiringDocuments?.length || 0}
-            sub={enhanced?.expiringDocuments?.[0] ? `next: ${fmtDateWithYear(enhanced.expiringDocuments[0].expirationDate)}` : "all clear"}
-            color={enhanced?.expiringDocuments?.some((d: any) => d.status === 'expired') ? '#A13544' : enhanced?.expiringDocuments?.length > 0 ? '#BB653B' : undefined}
-            onClick={() => setPopup("docs")} />
+          <KPIDocsCard docs={enhanced?.expiringDocuments || []} onClick={() => setPopup("docs")} />
         </div>
       </div>
 
@@ -626,7 +767,9 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     id: string; title: string; detail: string; sourceType: "task" | "bill"; accentColor: string;
   }) {
     return (
-      <div className="flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5" style={{ borderLeftColor: accentColor }}>
+      <div className={`flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5 rounded-r-lg transition-colors ${
+        accentColor === '#ef4444' ? 'bg-red-500/5 hover:bg-red-500/8' : 'bg-amber-500/5 hover:bg-amber-500/8'
+      }`} style={{ borderLeftColor: accentColor }}>
         <span className="text-xs font-medium truncate flex-1 leading-tight">{title}</span>
         <span className="text-xs-tight text-muted-foreground shrink-0 tabular-nums">{detail}</span>
         <div className="flex items-center shrink-0 ml-0.5">
@@ -671,9 +814,10 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
         {hiddenCount > 0 && (
           <button
             onClick={() => setSheetOpen(true)}
-            className="mt-1.5 w-full text-center text-xs text-primary hover:underline py-1"
+            className="mt-1.5 w-full text-center text-xs text-white hover:opacity-90 py-1.5 rounded-lg font-semibold animate-pulse"
+            style={{ background: 'linear-gradient(90deg, hsl(0 72% 52% / 0.8), hsl(43 85% 52% / 0.8))' }}
           >
-            +{hiddenCount} more item{hiddenCount !== 1 ? "s" : ""} need attention
+            +{hiddenCount} more items need attention
           </button>
         )}
       </CollapsibleSection>
@@ -722,6 +866,35 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
         </div>
       ) : (
         <div className="divide-y divide-border/30">
+          {/* Timeline strip */}
+          {events.length > 0 && (() => {
+            const START = 8; const END = 22;
+            const toPos = (timeStr: string) => {
+              const parts = timeStr.split(":").map(Number);
+              const h = parts[0] || 0; const m = parts[1] || 0;
+              return Math.max(0, Math.min(100, ((h + m/60 - START) / (END - START)) * 100));
+            };
+            return (
+              <div className="relative mb-2 px-1">
+                <div className="relative h-5 bg-muted/30 rounded-full overflow-hidden">
+                  {events.filter(ev => ev.time).map((ev: any, i: number) => (
+                    <div key={ev.id}
+                      className="absolute top-1 h-3 rounded-full text-[8px] font-bold flex items-center justify-center overflow-hidden"
+                      style={{ left: `${toPos(ev.time)}%`, minWidth: '8px', maxWidth: '60px', transform: 'translateX(-50%)',
+                        background: ev.category === 'health' ? 'hsl(173 60% 44%)' : ev.category === 'finance' ? 'hsl(43 85% 52%)' : 'hsl(215 70% 58%)',
+                        color: 'white', padding: '0 3px' }}>
+                      {ev.title.slice(0,8)}
+                    </div>
+                  ))}
+                  {/* Now indicator */}
+                  {(() => { const now = new Date(); const nowPos = ((now.getHours() + now.getMinutes()/60 - START) / (END-START)) * 100; return nowPos >= 0 && nowPos <= 100 ? <div className="absolute top-0 bottom-0 w-px bg-red-400/70" style={{ left: `${nowPos}%` }} /> : null; })()}
+                </div>
+                <div className="flex justify-between text-[8px] text-muted-foreground/50 mt-0.5 px-0.5">
+                  <span>8am</span><span>12pm</span><span>4pm</span><span>10pm</span>
+                </div>
+              </div>
+            );
+          })()}
           {visibleEvents.map((ev: any) => (
             <div key={ev.id}
               onClick={() => navigate("/calendar")}
@@ -774,21 +947,49 @@ function HealthSection({ data }: { data: any[] }) {
     <>
       <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" count={filteredData.length} testId="section-health">
         <div className="grid grid-cols-2 gap-2">
-          {filteredData.map((item: any) => (
-            <div key={item.trackerId}
-              onClick={() => setSelectedTracker(item)}
-              className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors">
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-muted-foreground truncate" title={item.name}>{item.name}</p>
-                <div className="flex items-center gap-1">
-                  <span className="text-sm font-bold tabular-nums">{item.dailyTotal != null ? item.dailyTotal : item.latestValue}</span>
-                  {item.unit && <span className="text-xs text-muted-foreground">{item.unit}{item.dailyTotal != null ? " today" : ""}</span>}
-                  <TrendIcon trend={item.trend} />
+          {filteredData.map((item: any) => {
+            // Determine status color band
+            let statusColor = 'hsl(173 60% 44%)'; // default teal = normal
+            const name = item.name?.toLowerCase() || '';
+            const val = item.latestValue;
+            if (name.includes('blood') || name.includes('bp')) {
+              if (val > 140 || val < 90) statusColor = '#ef4444';
+              else if (val > 130) statusColor = '#f59e0b';
+              else statusColor = '#10b981';
+            } else if (name.includes('weight')) {
+              statusColor = 'hsl(173 60% 44%)';
+            }
+            // Mini sparkline from recent entries (7 points)
+            const spark: number[] = item.recentValues || [];
+            const sparkMax = Math.max(...spark, 1);
+            const sparkMin = Math.min(...spark, 0);
+            const sparkRange = sparkMax - sparkMin || 1;
+
+            return (
+              <div key={item.trackerId}
+                onClick={() => setSelectedTracker(item)}
+                className="flex items-start gap-0 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors overflow-hidden relative">
+                {/* Status color band on left */}
+                <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: statusColor }} />
+                <div className="flex-1 min-w-0 pl-2">
+                  <p className="text-[10px] text-muted-foreground truncate font-medium" title={item.name}>{item.name}</p>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-sm font-bold tabular-nums">{item.dailyTotal != null ? item.dailyTotal : item.latestValue}</span>
+                    {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
+                    <TrendIcon trend={item.trend} />
+                  </div>
+                  {/* Mini sparkline */}
+                  {spark.length > 1 && (
+                    <svg width="100%" height="12" viewBox={`0 0 ${spark.length * 8} 12`} preserveAspectRatio="none" className="mt-0.5 opacity-60">
+                      <polyline
+                        points={spark.map((v,i) => `${i*8},${12 - ((v-sparkMin)/sparkRange)*10}`).join(' ')}
+                        fill="none" stroke={statusColor} strokeWidth="1.5" />
+                    </svg>
+                  )}
                 </div>
               </div>
-              <span className="text-xs-tight text-muted-foreground">avg: {item.average}</span>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <ViewPageLink href="/trackers" label="View All Trackers" />
       </CollapsibleSection>
@@ -904,6 +1105,28 @@ function ObligationsSection({ data }: { data: any[] }) {
         sub={`Monthly Total: ${formatMoney(monthlyTotal)}`}
         count={data.length} testId="section-obligations">
         <div className="space-y-1">
+          {/* Proportion overview bar */}
+          {(() => {
+            const ov = overdueBills.reduce((s:number,b:any)=>s+(b.amount||0),0);
+            const wk = thisWeekBills.reduce((s:number,b:any)=>s+(b.amount||0),0);
+            const mn = thisMonthBills.reduce((s:number,b:any)=>s+(b.amount||0),0);
+            const total = ov+wk+mn;
+            if (total === 0) return null;
+            return (
+              <div className="mb-2">
+                <div className="flex h-2 rounded-full overflow-hidden gap-px bg-muted/30">
+                  {ov > 0 && <div style={{width:`${(ov/total)*100}%`,background:'#ef4444'}} className="rounded-l-full transition-all" />}
+                  {wk > 0 && <div style={{width:`${(wk/total)*100}%`,background:'#f59e0b'}} className="transition-all" />}
+                  {mn > 0 && <div style={{width:`${(mn/total)*100}%`,background:'hsl(var(--muted-foreground) / 0.35)'}} className="rounded-r-full transition-all" />}
+                </div>
+                <div className="flex gap-3 mt-1">
+                  {ov > 0 && <span className="text-[9px] text-red-500 font-semibold">● Overdue ${ov.toFixed(0)}</span>}
+                  {wk > 0 && <span className="text-[9px] text-amber-500 font-medium">● Week ${wk.toFixed(0)}</span>}
+                  {mn > 0 && <span className="text-[9px] text-muted-foreground">● Month ${mn.toFixed(0)}</span>}
+                </div>
+              </div>
+            );
+          })()}
           <BillGroup title="Overdue" bills={overdueBills} color="#ef4444" />
           <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" />
           <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" />
@@ -977,7 +1200,27 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
           {isComplete ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 inline" /> : `${pct}%`}
         </span>
       </div>
-      <Progress value={pct} className="h-1.5" />
+      {(() => {
+        const isAtRisk = daysLeft !== null && daysLeft <= 30 && pct < 50 && goal.status === 'active';
+        const isCompleted = isComplete;
+        return (
+          <div className="relative h-2 rounded-full overflow-hidden" style={{ background: 'hsl(var(--muted))' }}>
+            <div className="h-full rounded-full transition-all duration-700"
+              style={{
+                width: `${pct}%`,
+                background: isCompleted
+                  ? 'linear-gradient(90deg, #10b981, #34d399)'
+                  : isAtRisk
+                  ? 'linear-gradient(90deg, #f59e0b, #ef4444)'
+                  : `linear-gradient(90deg, hsl(188 70% 48%), hsl(155 60% 44%))`,
+              }} />
+            {isAtRisk && pct > 0 && (
+              <div className="absolute inset-0 rounded-full animate-pulse opacity-30"
+                style={{ background: 'linear-gradient(90deg, #f59e0b, #ef4444)', width: `${pct}%` }} />
+            )}
+          </div>
+        );
+      })()}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{goal.current} / {goal.target} {goal.unit}{(!goal.current && !isComplete) ? " · 0%" : ""}</span>
         {daysLeft != null && daysLeft > 0 && <span>{daysLeft}d left</span>}
@@ -1071,10 +1314,21 @@ function GoalsSection({ profileId }: { profileId?: string }) {
         ) : (
           <div className="space-y-1">
             {activeGoals.map(g => {
-              const pct = g.target > 0 ? Math.min(100, Math.round(((g.startValue || 0) / g.target) * 100)) : 0;
-              const daysLeft = g.deadline ? Math.max(0, Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000)) : null;
+              const goalCurrent = g.current || g.startValue || 0;
+              const pct = g.target > 0 ? Math.min(100, Math.round((goalCurrent / g.target) * 100)) : 0;
+              const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
+              const isAtRisk = daysLeft !== null && daysLeft <= 30 && pct < 50 && daysLeft > 0;
+              const isOverdue = daysLeft !== null && daysLeft < 0;
+              const isCompleted = pct >= 100;
               return (
-                <div key={g.id} className="flex items-center gap-2 py-1.5 group" data-testid={`goal-card-${g.id}`}>
+                <div key={g.id}
+                  className={`flex items-center gap-2 py-1.5 px-1.5 rounded-lg group transition-colors ${
+                    isOverdue ? 'bg-red-500/5 border border-red-500/20' :
+                    isAtRisk ? 'bg-amber-500/5 border border-amber-500/20' :
+                    isCompleted ? 'bg-green-500/5 border border-green-500/20' :
+                    'border border-transparent'
+                  }`}
+                  data-testid={`goal-card-${g.id}`}>
                   {/* Tap to mark complete */}
                   <button
                     className="h-5 w-5 rounded-full border-2 border-primary/40 flex items-center justify-center shrink-0 hover:bg-green-500/20 hover:border-green-500 active:scale-90 transition-all"
@@ -1087,13 +1341,24 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActionGoal(g)}>
                     <div className="flex items-center justify-between">
                       <span className="text-xs-loose font-medium truncate">{g.title}</span>
-                      <span className="text-xs text-muted-foreground tabular-nums ml-2 shrink-0">{pct}%</span>
+                      <div className="flex items-center gap-1 ml-2 shrink-0">
+                        {isOverdue && <span className="text-[9px] font-bold text-red-500">OVERDUE</span>}
+                        {isAtRisk && <span className="text-[9px] font-bold text-amber-500">AT RISK</span>}
+                        <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        <div className="h-full rounded-full transition-all duration-700"
+                          style={{
+                            width: `${pct}%`,
+                            background: isCompleted ? 'linear-gradient(90deg,#10b981,#34d399)' :
+                              isAtRisk || isOverdue ? 'linear-gradient(90deg,#f59e0b,#ef4444)' :
+                              'linear-gradient(90deg,hsl(188 70% 48%),hsl(155 60% 44%))'
+                          }} />
                       </div>
-                      {daysLeft !== null && <span className="text-xs-tight text-muted-foreground shrink-0">{daysLeft}d left</span>}
+                      {daysLeft !== null && daysLeft >= 0 && <span className={`text-xs-tight shrink-0 ${isAtRisk ? 'text-amber-500 font-medium' : 'text-muted-foreground'}`}>{daysLeft}d left</span>}
+                      {isOverdue && <span className="text-xs-tight text-red-500 font-medium shrink-0">{Math.abs(daysLeft!)}d late</span>}
                     </div>
                   </div>
                 </div>
@@ -1619,6 +1884,50 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             </p>
           </button>
         </div>
+        {/* Spending donut chart */}
+        {Object.keys(byCategory).length > 0 && (() => {
+          const catData = Object.entries(byCategory)
+            .sort(([,a],[,b]) => b-a).slice(0,8)
+            .map(([name,value]) => ({name, value}));
+          const COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ef4444","#3b82f6","#f97316","#ec4899"];
+          return (
+            <div className="mb-3">
+              <ResponsiveContainer width="100%" height={160}>
+                <PieChart>
+                  <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} paddingAngle={2}>
+                    {catData.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
+                    formatter={(v:any) => [`$${Number(v).toFixed(2)}`]}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        })()}
+        {/* Budget overflow bar */}
+        {budgetData && budgetData.totalBudget > 0 && (() => {
+          const usedPct = Math.round((budgetData.totalSpent / budgetData.totalBudget) * 100);
+          return (
+            <div className="my-2">
+              <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                <span>Budget Used</span>
+                <span className={usedPct > 100 ? 'text-red-500 font-bold' : 'text-amber-500'}>{usedPct}%</span>
+              </div>
+              <div className="relative h-2 rounded-full overflow-visible" style={{background:'hsl(var(--muted))'}}>
+                <div className="h-full rounded-full" style={{
+                  width: `${Math.min(100, usedPct)}%`,
+                  background: usedPct > 100 ? '#ef4444' : usedPct > 75 ? '#f59e0b' : '#10b981'
+                }} />
+                {usedPct > 100 && (
+                  <div className="absolute right-0 top-0 h-full rounded-r-full animate-pulse"
+                    style={{width:'8px', background:'#ef4444', transform:'translateX(100%)'}} />
+                )}
+              </div>
+            </div>
+          );
+        })()}
         {recentExpenses.length > 0 && (
           <div className="space-y-0.5">
             <p className="text-xs font-medium text-muted-foreground uppercase">Recent Expenses</p>

@@ -922,17 +922,17 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       {/* Type filter pills */}
       <div className="flex gap-1 flex-wrap">
         {[
-          { key: "all", label: "All" },
-          { key: "event", label: "Events" },
-          { key: "task", label: "Tasks" },
-          { key: "obligation", label: "Bills" },
-          { key: "habit", label: "Habits" },
+          { key: "all", label: "All", activeClass: "bg-primary/20 text-primary border-primary/40" },
+          { key: "event", label: "Events", activeClass: "bg-blue-500/20 text-blue-400 border-blue-500/40" },
+          { key: "task", label: "Tasks", activeClass: "bg-purple-500/20 text-purple-400 border-purple-500/40" },
+          { key: "obligation", label: "Bills", activeClass: "bg-amber-500/20 text-amber-400 border-amber-500/40" },
+          { key: "habit", label: "Habits", activeClass: "bg-green-500/20 text-green-400 border-green-500/40" },
         ].map(f => (
           <button
             key={f.key}
             className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-all ${
               filterType === f.key
-                ? "bg-primary text-primary-foreground border-transparent"
+                ? f.activeClass
                 : "border-border/50 text-muted-foreground hover:bg-muted"
             }`}
             onClick={() => setFilterType(f.key)}
@@ -1024,6 +1024,27 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                           />
                         ))}
                       </div>
+
+                      {/* Category type dots at bottom */}
+                      {(() => {
+                        const categoryDotColors: Record<string, string> = {
+                          event: '#3b82f6',
+                          task: '#8b5cf6',
+                          obligation: '#f59e0b',
+                          habit: '#10b981',
+                        };
+                        const typesSeen = new Set<string>();
+                        return (
+                          <div className="hidden sm:flex gap-0.5 justify-center mt-auto pt-0.5">
+                            {dayItems.map((ev: any, i: number) => {
+                              const type = ev.category === 'finance' ? 'obligation' : ev.type === 'task' ? 'task' : ev.type === 'habit' ? 'habit' : ev.type === 'obligation' ? 'obligation' : 'event';
+                              if (typesSeen.has(type)) return null;
+                              typesSeen.add(type);
+                              return <div key={i} className="w-1 h-1 rounded-full" style={{ background: categoryDotColors[type] || '#6b7280' }} />;
+                            })}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </button>
@@ -1039,7 +1060,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         </div>
       )}
 
-      {/* Week View */}
+      {/* Week View — Time-Blocked Layout */}
       {viewMode === "week" && (() => {
         const weekStart = new Date(viewDate);
         weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
@@ -1047,31 +1068,106 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           const d = new Date(weekStart); d.setDate(d.getDate() + i);
           return { date: toLocalDateStr(d), day: d, label: WEEKDAYS[i], num: d.getDate() };
         });
+        const HOURS = Array.from({ length: 15 }, (_, i) => i + 7); // 7am to 9pm
+        const hourHeight = 40; // px per hour
+
+        // Collect all-day items across the week
+        const allDayByDate: Record<string, CalendarTimelineItem[]> = {};
+        weekDays.forEach(wd => {
+          allDayByDate[wd.date] = (itemsByDate[wd.date] || []).filter(i => !i.time || i.allDay);
+        });
+        const hasAnyAllDay = Object.values(allDayByDate).some(arr => arr.length > 0);
+
         return (
           <div className="rounded-lg border border-border/40 overflow-hidden">
-            <div className="grid grid-cols-7 divide-x divide-border">
+            {/* Day headers */}
+            <div className="grid border-b border-border" style={{ gridTemplateColumns: '40px repeat(7, 1fr)' }}>
+              <div className="border-r border-border/40" />
               {weekDays.map(wd => {
-                const dayItems = itemsByDate[wd.date] || [];
-                const isToday = wd.date === todayStr;
+                const isTodayCol = wd.date === todayStr;
                 return (
-                  <div key={wd.date} className={`p-1.5 min-h-[120px] ${isToday ? "bg-primary/5" : ""}`}>
-                    <div className={`text-center mb-1 ${isToday ? "font-bold text-primary" : "text-muted-foreground"}`}>
-                      <div className="text-xs-tight uppercase">{wd.label}</div>
-                      <div className="text-sm">{wd.num}</div>
-                    </div>
-                    <div className="space-y-0.5">
-                      {dayItems.map(item => (
-                        <button key={item.id} onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
-                          className="w-full text-left px-1 py-0.5 rounded text-xs truncate hover:bg-muted/50 transition-colors"
-                          style={{ borderLeft: `2px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
-                          {item.time ? <span className="text-muted-foreground mr-1">{item.time.slice(0,5)}</span> : null}
-                          {item.title}
-                        </button>
-                      ))}
-                    </div>
+                  <div key={wd.date} className={`text-center py-1.5 border-r border-border/40 ${isTodayCol ? 'bg-primary/5' : ''}`}>
+                    <div className={`text-[10px] uppercase tracking-wider ${isTodayCol ? 'text-primary font-bold' : 'text-muted-foreground'}`}>{wd.label}</div>
+                    <div className={`text-sm font-medium ${isTodayCol ? 'text-primary' : ''}`}>{wd.num}</div>
                   </div>
                 );
               })}
+            </div>
+
+            {/* All-day row */}
+            {hasAnyAllDay && (
+              <div className="grid border-b border-border bg-muted/20" style={{ gridTemplateColumns: '40px repeat(7, 1fr)' }}>
+                <div className="text-[9px] text-muted-foreground/50 text-right pr-1.5 py-1 border-r border-border/40">all day</div>
+                {weekDays.map(wd => (
+                  <div key={wd.date} className="px-0.5 py-0.5 border-r border-border/40 space-y-0.5">
+                    {allDayByDate[wd.date]?.map(item => (
+                      <button key={item.id} onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
+                        className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate hover:opacity-80 transition-opacity text-white font-medium"
+                        style={{ backgroundColor: TYPE_COLORS[item.type] || '#888' }}>
+                        {item.title}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Time grid */}
+            <div className="overflow-y-auto" style={{ maxHeight: '500px' }}>
+              <div className="grid relative" style={{ gridTemplateColumns: '40px repeat(7, 1fr)' }}>
+                {/* Hour rows */}
+                {HOURS.map(h => (
+                  <div key={h} className="contents">
+                    <div className="text-[9px] text-muted-foreground/50 text-right pr-1.5 border-r border-border/40 -mt-1.5" style={{ height: `${hourHeight}px` }}>
+                      {h === 0 ? '12am' : h === 12 ? '12pm' : h > 12 ? `${h - 12}pm` : `${h}am`}
+                    </div>
+                    {weekDays.map(wd => {
+                      const isTodayCol = wd.date === todayStr;
+                      return (
+                        <div key={wd.date} className={`border-t border-r border-border/20 relative ${isTodayCol ? 'bg-primary/[0.02]' : ''}`} style={{ height: `${hourHeight}px` }} />
+                      );
+                    })}
+                  </div>
+                ))}
+
+                {/* Event blocks overlaid on the grid */}
+                {weekDays.map((wd, colIdx) => {
+                  const timedItems = (itemsByDate[wd.date] || []).filter(i => i.time && !i.allDay);
+                  return timedItems.map(item => {
+                    const [hStr, mStr] = (item.time || '00:00').split(':');
+                    const startHour = parseInt(hStr, 10) + parseInt(mStr, 10) / 60;
+                    let endHour = startHour + 1; // default 1 hour
+                    if (item.endTime) {
+                      const [eH, eM] = item.endTime.split(':');
+                      endHour = parseInt(eH, 10) + parseInt(eM, 10) / 60;
+                    }
+                    const top = (startHour - 7) * hourHeight;
+                    const height = Math.max((endHour - startHour) * hourHeight, 18);
+                    // Column position: skip the time-label column (40px), then position in the right day column
+                    const leftPct = ((colIdx) / 7) * 100;
+                    const widthPct = 100 / 7;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
+                        className="absolute rounded px-1 py-0.5 text-[10px] leading-tight truncate text-left hover:opacity-90 transition-opacity overflow-hidden cursor-pointer border border-white/10"
+                        style={{
+                          top: `${top}px`,
+                          height: `${height}px`,
+                          left: `calc(40px + ${leftPct}% + 1px)`,
+                          width: `calc(${widthPct}% - 3px)`,
+                          backgroundColor: `${TYPE_COLORS[item.type] || '#888'}dd`,
+                          color: '#fff',
+                          zIndex: 5,
+                        }}
+                      >
+                        <span className="font-medium">{item.title}</span>
+                        {height >= 30 && <div className="text-[9px] opacity-80">{item.time?.slice(0, 5)}{item.endTime ? ` – ${item.endTime.slice(0, 5)}` : ''}</div>}
+                      </button>
+                    );
+                  });
+                })}
+              </div>
             </div>
           </div>
         );
@@ -1154,6 +1250,38 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           />
         </div>
       </div>
+
+      {/* Mini Today Agenda */}
+      {(() => {
+        const todaysItems = (itemsByDate[todayStr] || []).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+        if (todaysItems.length === 0 || selectedDate === todayStr) return null;
+        return (
+          <div className="mt-3 rounded-xl border border-border/40 bg-card p-3" data-testid="mini-today-agenda">
+            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Today</div>
+            <div className="space-y-1">
+              {todaysItems.slice(0, 5).map((item: any) => (
+                <button
+                  key={item.id}
+                  className="flex items-center gap-2 text-xs w-full text-left rounded-md px-1.5 py-1 hover:bg-muted/50 transition-colors"
+                  onClick={() => { setSelectedDate(todayStr); setDetailItem(item); }}
+                >
+                  <span className="text-[10px] text-muted-foreground tabular-nums w-12 shrink-0">
+                    {item.time ? item.time.slice(0, 5) : 'All day'}
+                  </span>
+                  <div
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{ background: item.type === 'task' ? '#8b5cf6' : item.type === 'obligation' ? '#f59e0b' : item.type === 'habit' ? '#10b981' : '#3b82f6' }}
+                  />
+                  <span className="truncate text-foreground/80">{item.title}</span>
+                </button>
+              ))}
+              {todaysItems.length > 5 && (
+                <p className="text-[10px] text-muted-foreground pl-1.5">+{todaysItems.length - 5} more</p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Add Event Dialog */}
       {addOpen && (
