@@ -31,7 +31,6 @@ import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { lazy, Suspense, useEffect } from "react";
-import { motion } from "framer-motion";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // Keep lightweight pages as direct imports
@@ -316,9 +315,9 @@ function App() {
                       </div>
                     </header>
                     <main id="main-content" className="flex-1 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0">
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.15 }} className="h-full">
+                      <div className="h-full">
                         <AppRouter />
-                      </motion.div>
+                      </div>
                     </main>
                   </div>
                 </div>

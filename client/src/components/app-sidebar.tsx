@@ -1,4 +1,4 @@
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import {
   Sidebar,
   SidebarContent,
@@ -22,7 +22,7 @@ const NAV_ITEMS = [
 ];
 
 export function AppSidebar() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const { user } = useAuth();
   const email = user?.email || "";
   const initials = email.slice(0, 2).toUpperCase();
@@ -54,32 +54,30 @@ export function AppSidebar() {
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild data-testid={`nav-${item.label.toLowerCase()}`}>
-                      <Link href={item.href} aria-current={isActive ? "page" : undefined}>
+                      <a
+                        href={`#${item.href}`}
+                        onClick={(e) => { e.preventDefault(); navigate(item.href); }}
+                        aria-current={isActive ? "page" : undefined}
+                        style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                        className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg relative"
+                      >
                         <div
-                          className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg transition-all duration-150 relative"
-                          style={isActive ? {
-                            background: `hsl(${item.accent} / 0.12)`,
-                            color: `hsl(${item.accent})`,
-                          } : {}}
-                        >
-                          {/* Active left border */}
-                          {isActive && (
-                            <div
-                              className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full"
-                              style={{ background: `hsl(${item.accent})`, boxShadow: `0 0 8px hsl(${item.accent})` }}
-                            />
-                          )}
-                          <div
-                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                            style={isActive ? { background: `hsl(${item.accent} / 0.2)` } : { background: 'transparent' }}
-                          >
-                            <Icon className="h-4 w-4" style={isActive ? { color: `hsl(${item.accent})` } : {}} />
-                          </div>
-                          <span className={`text-sm ${isActive ? 'font-semibold' : 'font-medium text-muted-foreground'}`}>
-                            {item.label}
-                          </span>
+                          className="absolute inset-0 rounded-lg"
+                          style={isActive ? { background: `hsl(${item.accent} / 0.12)` } : {}}
+                        />
+                        {isActive && (
+                          <div className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full z-10"
+                            style={{ background: `hsl(${item.accent})`, boxShadow: `0 0 8px hsl(${item.accent})` }} />
+                        )}
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 relative z-10"
+                          style={isActive ? { background: `hsl(${item.accent} / 0.2)` } : {}}>
+                          <Icon className="h-4 w-4" style={{ color: isActive ? `hsl(${item.accent})` : undefined }} />
                         </div>
-                      </Link>
+                        <span className={`text-sm relative z-10 ${isActive ? 'font-semibold' : 'font-medium text-muted-foreground'}`}
+                          style={isActive ? { color: `hsl(${item.accent})` } : {}}>
+                          {item.label}
+                        </span>
+                      </a>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );
@@ -94,14 +92,14 @@ export function AppSidebar() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild data-testid="nav-settings">
-                  <Link href="/settings">
-                    <div className="flex items-center gap-2.5 px-2 py-2 rounded-lg transition-all hover:bg-muted/60 w-full">
-                      <div className="w-7 h-7 rounded-lg bg-muted/50 flex items-center justify-center">
-                        <Settings className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                      <span className="text-sm font-medium text-muted-foreground">Settings</span>
+                  <a href="#/settings" onClick={(e) => { e.preventDefault(); navigate('/settings'); }}
+                    style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                    className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-muted/60 w-full">
+                    <div className="w-7 h-7 rounded-lg bg-muted/50 flex items-center justify-center">
+                      <Settings className="h-4 w-4 text-muted-foreground" />
                     </div>
-                  </Link>
+                    <span className="text-sm font-medium text-muted-foreground">Settings</span>
+                  </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>

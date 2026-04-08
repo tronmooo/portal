@@ -89,16 +89,17 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false, // Don't refetch when switching tabs
-      refetchOnMount: true, // Refetch on mount if stale
-      staleTime: 0, // Data is always stale — refetch on every mount, but show cached instantly
-      gcTime: 10 * 60 * 1000, // Keep cached data for 10 minutes (shows instantly while refetching)
+      refetchOnWindowFocus: false, // Don't refetch when switching browser tabs
+      refetchOnMount: true,        // Refetch if data is stale on mount
+      // 5-minute stale time: data fetched < 5 min ago is served from cache INSTANTLY.
+      // Matches our server-side 5-min cache TTL perfectly.
+      // Critical for tab switching — without this, every tab switch fires every API call.
+      staleTime: 5 * 60 * 1000,
+      gcTime: 30 * 60 * 1000, // Keep unused data for 30 minutes
       retry: (failureCount, error) => {
-        // Don't retry auth errors or client errors
         if (error instanceof Error) {
           const msg = error.message;
           if (msg.includes("401") || msg.includes("403") || msg.includes("404")) return false;
-          // Retry 5xx server errors up to 2 times
           if (msg.includes("500") || msg.includes("502") || msg.includes("503")) return failureCount < 2;
         }
         return failureCount < 1;
