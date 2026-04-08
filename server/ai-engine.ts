@@ -1148,7 +1148,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport." },
-        values: { type: "object", description: "Key-value pairs to log. Include ALL relevant fields. For nutrition: { calories, protein, carbs, fat, sugar, fiber, item }. For running: { distance, duration, pace, caloriesBurned }. For BP: { systolic, diastolic }. For weight: { weight }. For sleep: { hours, quality }." },
+        values: { type: "object", description: "Key-value pairs to log. ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: { hours, quality }. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
       },
@@ -1895,21 +1895,46 @@ ASSET & SUBSCRIPTION CRUD via chat:
 
 SECONDARY DATA EXTRACTION — critical. When logging tracker entries, compute all possible secondary data:
 
-CRITICAL TRACKER NAMING RULE: ALWAYS use the SPECIFIC activity as the tracker name.
-- Basketball → tracker "Basketball" (NEVER "Running" or "Fitness")
-- Tennis → tracker "Tennis"
-- Soccer → tracker "Soccer"
-- Swimming → tracker "Swimming"
-- Yoga → tracker "Yoga"
-- Running → tracker "Running"
-- Weight lifting → tracker "Lifting"
-NEVER log basketball/tennis/soccer/swimming into a Running tracker. Each sport gets its own tracker.
+ACTIVITY TRACKING ARCHITECTURE — follow exactly:
 
-For EXERCISE entries (running, cycling, swimming, basketball, tennis, soccer, etc.):
-- Always estimate calories burned (running: ~100cal/mi, cycling: ~50cal/mi, swimming: ~10cal/min, walking: ~80cal/mi, weights: ~7cal/min, basketball: ~7cal/min, tennis: ~8cal/min, soccer: ~8cal/min, yoga: ~3cal/min, HIIT: ~12cal/min)
-- Calculate pace if distance + duration given
-- Estimate heart rate zone from intensity
-- Include these estimates in your reply
+1. CLASSIFY FIRST, DERIVE SECOND.
+   - Identify the literal activity (basketball, running, tennis, yoga, etc.)
+   - Store to THAT tracker (Basketball → Basketball tracker, Running → Running tracker)
+   - NEVER merge activities: basketball is not "running", tennis is not "cardio", swimming is not "exercise"
+   - Derived metrics (calories, cardio load, intensity) are CALCULATED FROM the activity and attached as fields to that specific entry
+
+2. TRACKER NAME = LITERAL ACTIVITY.
+   - Basketball → trackerName: "Basketball"
+   - Running → trackerName: "Running"
+   - Tennis → trackerName: "Tennis"
+   - Soccer → trackerName: "Soccer"
+   - Swimming → trackerName: "Swimming"
+   - Yoga → trackerName: "Yoga"
+   - Weight Lifting → trackerName: "Lifting"
+   - Walking → trackerName: "Walking" (separate from Running)
+   - Cycling → trackerName: "Cycling"
+   NEVER use "Running" for basketball, tennis, soccer, or any non-running activity.
+
+3. EVERY FITNESS ENTRY MUST INCLUDE activityType in values:
+   Basketball example values: { activityType: "basketball", duration: 30, caloriesBurned: 210, intensity: "moderate" }
+   Running example values: { activityType: "running", distance: 5, duration: 50, pace: "10:00", caloriesBurned: 500 }
+   Tennis example values: { activityType: "tennis", duration: 60, caloriesBurned: 480, intensity: "high" }
+   Yoga example values: { activityType: "yoga", duration: 45, caloriesBurned: 135, style: "vinyasa" }
+   The activityType field preserves identity so summaries ("cardio this week") can aggregate across Basketball + Running + Tennis WITHOUT merging their trackers.
+
+4. CALORIE ESTIMATION by activity:
+   - Running: ~100 cal/mile or ~10 cal/min
+   - Walking: ~80 cal/mile or ~5 cal/min
+   - Cycling: ~50 cal/mile or ~8 cal/min
+   - Swimming: ~10 cal/min
+   - Basketball: ~7 cal/min (moderate), ~9 cal/min (intense game)
+   - Tennis: ~8 cal/min
+   - Soccer: ~8 cal/min
+   - Weight lifting: ~5-7 cal/min
+   - Yoga: ~3 cal/min
+   - HIIT: ~12 cal/min
+   - Hiking: ~6 cal/min
+   Always include caloriesBurned as a derived field.
 
 For FOOD/NUTRITION entries:
 - Always estimate calories if not given
