@@ -62,13 +62,14 @@ function HabitCard({ habit }: { habit: Habit }) {
     },
   });
 
-  // 14-day grid
-  const last14: { date: string; done: boolean; count: number }[] = [];
+  // 14-day grid with day-of-week labels
+  const DAY_LABELS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+  const last14: { date: string; done: boolean; count: number; dayLabel: string; isToday: boolean; isSunday: boolean }[] = [];
   for (let i = 13; i >= 0; i--) {
     const dd = new Date(Date.now() - i * 86400000);
     const ds = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
     const count = habit.checkins.filter(c => c.date === ds).length;
-    last14.push({ date: ds, done: count >= targetPerDay, count });
+    last14.push({ date: ds, done: count >= targetPerDay, count, dayLabel: DAY_LABELS[dd.getDay()], isToday: i === 0, isSunday: dd.getDay() === 0 });
   }
   const completedDays = last14.filter(d => d.done).length;
 
@@ -182,29 +183,68 @@ function HabitCard({ habit }: { habit: Habit }) {
           </div>
         </div>
 
-        {/* 14-day activity strip */}
-        <div className="mt-5">
-          <div className="flex gap-1 items-end h-4">
+        {/* 14-day day-of-week grid */}
+        <div className="mt-4">
+          {/* Bar chart */}
+          <div className="flex gap-[3px] items-end h-7 mb-1">
             {last14.map((day, i) => {
               const pct = targetPerDay > 0 ? Math.min(day.count / targetPerDay, 1) : 0;
               return (
                 <div
                   key={i}
-                  title={`${day.date}: ${day.done ? "done" : day.count > 0 ? `${day.count}/${targetPerDay}` : "—"}`}
-                  className="flex-1 rounded-sm transition-all"
-                  style={{
-                    height: day.done ? "100%" : pct > 0 ? `${Math.round(pct * 60) + 40}%` : "25%",
-                    backgroundColor: day.done ? accentColor : pct > 0 ? accentColor + "88" : "var(--muted)",
-                    opacity: i === 13 ? 1 : 0.7 + (i / 13) * 0.3,
-                  }}
-                />
+                  className="flex-1 flex flex-col items-center justify-end"
+                >
+                  <div
+                    title={`${day.date}: ${day.done ? "done" : day.count > 0 ? `${day.count}/${targetPerDay}` : "—"}`}
+                    className="w-full rounded-t-sm transition-all"
+                    style={{
+                      height: day.done ? "100%" : pct > 0 ? `${Math.round(pct * 60) + 40}%` : "20%",
+                      backgroundColor: day.done
+                        ? accentColor
+                        : pct > 0
+                        ? accentColor + "77"
+                        : day.isToday ? "hsl(var(--muted-foreground) / 0.2)" : "hsl(var(--muted-foreground) / 0.1)",
+                    }}
+                  />
+                </div>
               );
             })}
           </div>
-          <div className="flex justify-between mt-1">
-            <span className="text-xs text-muted-foreground/50">14d ago</span>
-            <span className="text-xs text-muted-foreground/70 font-medium">{completedDays}/14 days</span>
-            <span className="text-xs text-muted-foreground/50">today</span>
+          {/* Day labels row — Mon Tue Wed Thu Fri Sat Sun */}
+          <div className="flex gap-[3px]">
+            {last14.map((day, i) => (
+              <div
+                key={i}
+                className="flex-1 text-center"
+              >
+                <span
+                  className={`block text-[9px] font-medium leading-tight ${
+                    day.isToday
+                      ? "font-bold"
+                      : ""
+                  } ${day.isSunday ? "" : ""}`}
+                  style={{
+                    color: day.done
+                      ? accentColor
+                      : day.isToday
+                      ? "hsl(var(--foreground))"
+                      : "hsl(var(--muted-foreground) / 0.8)",
+                  }}
+                >
+                  {day.dayLabel}
+                </span>
+              </div>
+            ))}
+          </div>
+          {/* Summary row */}
+          <div className="flex items-center justify-between mt-1.5">
+            <span className="text-[10px] text-muted-foreground/60">2 weeks</span>
+            <span
+              className="text-[10px] font-semibold"
+              style={{ color: completedDays >= 10 ? accentColor : completedDays >= 5 ? "hsl(var(--muted-foreground))" : "hsl(var(--muted-foreground) / 0.6)" }}
+            >
+              {completedDays}/14 days
+            </span>
           </div>
         </div>
       </div>

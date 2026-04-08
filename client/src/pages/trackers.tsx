@@ -2986,6 +2986,11 @@ export default function TrackersPage() {
     // Category filter
     if (trackerCatFilter !== "all" && t.category !== trackerCatFilter) return false;
     return true;
+  }).sort((a, b) => {
+    // Alphabetical by clean name (strips " - ProfileName" suffix)
+    const cleanA = cleanTrackerName(a.name).toLowerCase();
+    const cleanB = cleanTrackerName(b.name).toLowerCase();
+    return cleanA.localeCompare(cleanB);
   });
 
   // Group by category
