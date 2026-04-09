@@ -971,19 +971,26 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               return (
                 <button
                   key={idx}
-                  className={`relative min-h-[44px] md:min-h-[100px] p-0.5 md:p-1 border-b border-r border-border/40 transition-all text-left flex flex-col ${
-                    day.isCurrentMonth ? "" : "opacity-40"
-                  } ${isSelected && !isToday ? "bg-primary/5 ring-1 ring-inset ring-primary/30" : !isSelected && !isToday ? "hover:bg-muted/30" : ""} ${
-                    isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/30" : ""
+                  className={`relative min-h-[64px] md:min-h-[90px] p-1 md:p-1.5 border-b border-r border-border/40 transition-all text-left flex flex-col ${
+                    day.isCurrentMonth ? "" : "opacity-35"
+                  } ${isSelected && !isToday ? "bg-primary/8 ring-1 ring-inset ring-primary/40" : !isSelected && !isToday ? "hover:bg-muted/30 active:bg-muted/50" : ""} ${
+                    isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/40" : ""
                   }`}
-                  onClick={() => setSelectedDate(day.date)}
+                  onClick={() => {
+                    setSelectedDate(day.date);
+                    // Auto-scroll to the day agenda below the calendar
+                    setTimeout(() => {
+                      document.querySelector('[data-testid="section-day-agenda"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 100);
+                  }}
                   onDoubleClick={() => { setQuickAddDate(day.date); setAddOpen(true); }}
                   data-testid={`day-cell-${day.date}`}
                 >
+                  {/* Day number */}
                   <span
-                    className={`text-xs md:text-xs leading-none ${
+                    className={`text-xs leading-none ${
                       isToday
-                        ? "font-bold text-primary bg-primary/20 rounded-full w-4 h-4 md:w-5 md:h-5 flex items-center justify-center text-xs-tight md:text-xs"
+                        ? "font-bold text-primary bg-primary/20 rounded-full w-5 h-5 flex items-center justify-center text-xs-tight"
                         : "font-medium"
                     }`}
                   >
@@ -993,36 +1000,38 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                   {/* Event indicators */}
                   {hasItems && (
                     <div className="flex-1 flex flex-col gap-0.5 mt-1 overflow-hidden">
-                      {/* Show up to 2 items as mini labels on desktop */}
+                      {/* Desktop: show titles */}
                       <div className="hidden sm:flex flex-col gap-0.5">
                         {dayItems.slice(0, 2).map(item => (
                           <div
                             key={item.id}
                             className={`text-xs-tight leading-tight truncate px-1 py-0.5 rounded ${item.completed ? 'line-through opacity-50' : ''}`}
-                            style={{
-                              backgroundColor: `${item.color}18`,
-                              color: item.color,
-                            }}
+                            style={{ backgroundColor: `${item.color}18`, color: item.color }}
                           >
-                            {item.completed ? '✓ ' : ''}{item.time ? `${item.time.slice(0, 5)} ` : ''}{item.title}
+                            {item.time ? `${item.time.slice(0, 5)} ` : ''}{item.title}
                           </div>
                         ))}
                         {dayItems.length > 2 && (
-                          <span className="text-xs font-medium text-primary hover:underline cursor-pointer px-1 py-0.5">
-                            +{dayItems.length - 2} more
-                          </span>
+                          <span className="text-xs-tight font-semibold text-primary px-1">+{dayItems.length - 2}</span>
                         )}
                       </div>
 
-                      {/* Mobile: just dots */}
-                      <div className="sm:hidden flex gap-0.5 mt-auto">
-                        {dotColors.map((color, i) => (
-                          <div
-                            key={i}
-                            className="w-1.5 h-1.5 rounded-full"
-                            style={{ backgroundColor: color }}
-                          />
-                        ))}
+                      {/* Mobile: event count badge + type dots */}
+                      <div className="sm:hidden flex flex-col gap-0.5 mt-auto">
+                        {/* Count badge */}
+                        <div className="flex items-center justify-between px-0.5">
+                          <span className="text-[9px] font-bold tabular-nums rounded-full px-1 py-0.5"
+                            style={{ background: `${dotColors[0] || '#3b82f6'}20`, color: dotColors[0] || '#3b82f6' }}>
+                            {dayItems.length}
+                          </span>
+                        </div>
+                        {/* Type dots */}
+                        <div className="flex gap-0.5">
+                          {dotColors.slice(0, 3).map((color, i) => (
+                            <div key={i} className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                          ))}
+                          {dotColors.length > 3 && <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />}
+                        </div>
                       </div>
 
                       {/* Category type dots at bottom */}

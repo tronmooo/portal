@@ -3183,6 +3183,7 @@ export default function TrackersPage() {
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
+  const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const [uploadProfileId, setUploadProfileId] = useState<string>("");
@@ -3727,7 +3728,7 @@ export default function TrackersPage() {
             <p className="text-xs text-muted-foreground mt-1">Upload files or ask Portol to save documents</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="space-y-2">
             {filteredDocuments.map(doc => {
               const DOC_TYPE_COLORS: Record<string, string> = {
                 medical: "bg-red-500/10 text-red-500",
@@ -3739,31 +3740,38 @@ export default function TrackersPage() {
                 receipt: "bg-emerald-500/10 text-emerald-500",
               };
               const colorClass = DOC_TYPE_COLORS[doc.type] || "bg-slate-500/10 text-slate-500";
+              const isExpanded = expandedDocId === doc.id;
+              const hasPreview = !!(doc.fileData || doc.thumbnailData);
               return (
-                <div key={doc.id} className="rounded-lg border bg-card overflow-hidden hover:border-primary/30 hover:shadow-sm active:scale-[0.98] transition-all cursor-pointer" data-testid={`global-doc-${doc.id}`}>
-                  <div className="flex items-center gap-3 p-3">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${colorClass}`}>
-                      {doc.mimeType?.startsWith("image/") ? <Eye className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
-                    </div>
+                <div key={doc.id} className="rounded-xl border bg-card overflow-hidden transition-all" data-testid={`global-doc-${doc.id}`}>
+                  {/* Row */}
+                  <div className="flex items-center gap-2.5 px-3 py-2.5">
+                    {/* Expand/collapse toggle — replaces the duplicate eye icon */}
+                    <button
+                      onClick={() => setExpandedDocId(isExpanded ? null : doc.id)}
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${colorClass} ${isExpanded ? 'ring-1 ring-current' : ''}`}
+                      title={isExpanded ? 'Collapse preview' : 'Preview document'}
+                      data-testid={`button-toggle-doc-${doc.id}`}
+                    >
+                      <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                    </button>
+                    {/* Doc info */}
                     <button className="flex-1 min-w-0 text-left" onClick={() => setViewingDoc(doc)}>
-                      <p className="text-sm font-medium truncate text-primary hover:underline">{doc.name}</p>
-                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <Badge variant="secondary" className="text-xs capitalize">{doc.type?.replace(/_/g, " ")}</Badge>
+                      <p className="text-sm font-medium truncate text-primary">{doc.name}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <Badge variant="secondary" className="text-xs capitalize h-4 px-1">{doc.type?.replace(/_/g, " ")}</Badge>
                         <span className="text-xs text-muted-foreground">
                           {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                         </span>
                         {doc.linkedProfiles?.length > 0 && (() => {
                           const linkedNames = doc.linkedProfiles.map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
-                          return linkedNames.length > 0 ? (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">
-                              {linkedNames.join(", ")}
-                            </span>
-                          ) : null;
+                          return linkedNames.length > 0 ? <span className="text-xs text-muted-foreground">{linkedNames.join(", ")}</span> : null;
                         })()}
                       </div>
                     </button>
-                    <div className="flex gap-1 shrink-0">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setViewingDoc(doc)} data-testid={`button-view-doc-global-${doc.id}`}>
+                    {/* Single eye (full view) + delete */}
+                    <div className="flex gap-0.5 shrink-0">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setViewingDoc(doc)} title="Open full view" data-testid={`button-view-doc-global-${doc.id}`}>
                         <Eye className="h-3.5 w-3.5" />
                       </Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => docDeleteMutation.mutate(doc.id)} data-testid={`button-delete-doc-global-${doc.id}`}>
@@ -3771,6 +3779,39 @@ export default function TrackersPage() {
                       </Button>
                     </div>
                   </div>
+                  {/* Inline preview — expands below the row */}
+                  {isExpanded && (
+                    <div className="border-t border-border/50 bg-muted/20 p-2">
+                      {doc.fileData && doc.mimeType?.startsWith("image/") ? (
+                        <img
+                          src={`data:${doc.mimeType};base64,${doc.fileData}`}
+                          alt={doc.name}
+                          className="w-full rounded-lg object-contain max-h-80"
+                        />
+                      ) : doc.fileData && doc.mimeType === "application/pdf" ? (
+                        <div className="rounded-lg overflow-hidden bg-black">
+                          <embed
+                            src={`data:application/pdf;base64,${doc.fileData}#view=FitH&toolbar=0`}
+                            type="application/pdf"
+                            className="w-full"
+                            style={{ height: '380px' }}
+                          />
+                        </div>
+                      ) : doc.thumbnailData ? (
+                        <img
+                          src={`data:image/jpeg;base64,${doc.thumbnailData}`}
+                          alt={doc.name}
+                          className="w-full rounded-lg object-contain max-h-48"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center py-6 text-muted-foreground/60">
+                          <FileText className="h-8 w-8 mb-2" />
+                          <p className="text-xs">Preview not available</p>
+                          <Button size="sm" variant="outline" className="mt-2 text-xs" onClick={() => setViewingDoc(doc)}>Open document</Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

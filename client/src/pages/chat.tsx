@@ -1617,21 +1617,7 @@ export default function ChatPage() {
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         <div className="max-w-2xl mx-auto space-y-4">
-          {/* Reset chat + search buttons at top of messages */}
-          {messages.length > 1 && (
-            <div className="flex items-center justify-between mb-1">
-              <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 border-dashed"
-                onClick={() => { setMessagesRaw([WELCOME_MSG]); }}
-                data-testid="button-reset-chat">
-                <RotateCcw className="h-3 w-3" /> New Chat
-              </Button>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
-                onClick={() => setSearchOpen(v => !v)}
-                data-testid="button-chat-search">
-                <Search className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          )}
+
           {/* Search bar */}
           {searchOpen && (
             <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl bg-muted/50 border border-border/50 mb-2">
@@ -1956,6 +1942,17 @@ export default function ChatPage() {
                   >
                     <Camera className="h-4 w-4" />
                   </button>
+                  {/* Search button */}
+                  <button
+                    onClick={() => setSearchOpen(v => !v)}
+                    title="Search messages"
+                    data-testid="button-chat-search"
+                    className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
+                      searchOpen ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                    }`}
+                  >
+                    <Search className="h-4 w-4" />
+                  </button>
                   {speech.supported && (
                     <button
                       onClick={() => speech.listening ? speech.stop() : speech.start()}
@@ -1973,15 +1970,26 @@ export default function ChatPage() {
                     </button>
                   )}
                 </div>
-                <Button
-                  onClick={handleSend}
-                  disabled={!input.trim() || isPending}
-                  size="sm"
-                  className="h-8 px-4 rounded-xl text-xs font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
-                  data-testid="button-send"
-                >
-                  {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> Send</>}
-                </Button>
+                <div className="flex items-center gap-1.5">
+                  {messages.length > 1 && (
+                    <button
+                      onClick={() => setMessagesRaw([WELCOME_MSG])}
+                      className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex items-center gap-1"
+                      data-testid="button-reset-chat"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                    </button>
+                  )}
+                  <Button
+                    onClick={handleSend}
+                    disabled={!input.trim() || isPending}
+                    size="sm"
+                    className="h-8 px-4 rounded-xl text-xs font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
+                    data-testid="button-send"
+                  >
+                    {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> Send</>}
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
