@@ -3779,39 +3779,45 @@ export default function TrackersPage() {
                       </Button>
                     </div>
                   </div>
-                  {/* Inline preview — expands below the row */}
-                  {isExpanded && (
-                    <div className="border-t border-border/50 bg-muted/20 p-2">
-                      {doc.fileData && doc.mimeType?.startsWith("image/") ? (
-                        <img
-                          src={`data:${doc.mimeType};base64,${doc.fileData}`}
-                          alt={doc.name}
-                          className="w-full rounded-lg object-contain max-h-80"
-                        />
-                      ) : doc.fileData && doc.mimeType === "application/pdf" ? (
-                        <div className="rounded-lg overflow-hidden bg-black">
-                          <embed
-                            src={`data:application/pdf;base64,${doc.fileData}#view=FitH&toolbar=0`}
-                            type="application/pdf"
-                            className="w-full"
-                            style={{ height: '380px' }}
+                  {/* Inline preview — expands below the row, loads via /file endpoint */}
+                  {isExpanded && (() => {
+                    // Use the /api/documents/:id/file URL directly — no base64 needed
+                    const fileUrl = `/api/documents/${doc.id}/file`;
+                    const isImg = doc.mimeType?.startsWith('image/');
+                    const isPdf = doc.mimeType === 'application/pdf';
+                    return (
+                      <div className="border-t border-border/50 bg-muted/20 p-2">
+                        {isImg ? (
+                          <img
+                            src={fileUrl}
+                            alt={doc.name}
+                            className="w-full rounded-lg object-contain max-h-80"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display='none'; }}
                           />
-                        </div>
-                      ) : doc.thumbnailData ? (
-                        <img
-                          src={`data:image/jpeg;base64,${doc.thumbnailData}`}
-                          alt={doc.name}
-                          className="w-full rounded-lg object-contain max-h-48"
-                        />
-                      ) : (
-                        <div className="flex flex-col items-center py-6 text-muted-foreground/60">
-                          <FileText className="h-8 w-8 mb-2" />
-                          <p className="text-xs">Preview not available</p>
-                          <Button size="sm" variant="outline" className="mt-2 text-xs" onClick={() => setViewingDoc(doc)}>Open document</Button>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                        ) : isPdf ? (
+                          <div className="rounded-lg overflow-hidden">
+                            <iframe
+                              src={`${fileUrl}#view=FitH&toolbar=0`}
+                              title={doc.name}
+                              className="w-full rounded-lg border-0"
+                              style={{ height: '420px' }}
+                            />
+                          </div>
+                        ) : (
+                          // Other file types — show thumbnail if available, else open button
+                          <div className="flex flex-col items-center py-5 gap-3">
+                            <div className="w-16 h-16 rounded-xl bg-muted/60 flex items-center justify-center">
+                              <FileText className="h-8 w-8 text-muted-foreground/40" />
+                            </div>
+                            <p className="text-xs text-muted-foreground">{doc.name}</p>
+                            <Button size="sm" variant="outline" className="text-xs gap-1.5" onClick={() => setViewingDoc(doc)}>
+                              <Eye className="h-3.5 w-3.5" /> Open Full View
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
