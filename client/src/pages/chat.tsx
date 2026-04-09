@@ -1746,20 +1746,29 @@ export default function ChatPage() {
                         add_tracker_entry: "tracker-entries",
                       };
                       const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
-                      // Build a meaningful title from tracker name + values
-                      const trackerEntry = action.type === 'log_entry' && action.data?.trackerName;
-                      const entryValues = trackerEntry && action.data?.values
+                      // Build a meaningful title — always uppercase tracker/type label
+                      const isTrackerEntry = action.type === 'log_entry' || action.type === 'log_tracker_entry';
+                      const trackerName = (action.data?.trackerName || '').toUpperCase();
+                      const whoFor = action.data?.forProfile
+                        ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
+                        : 'You';
+                      // Format values: "250 cal, 31g carbs, 4g protein"
+                      const entryValues = isTrackerEntry && action.data?.values
                         ? Object.entries(action.data.values as Record<string,any>)
-                            .filter(([k]) => k !== '_notes')
+                            .filter(([k]) => k !== '_notes' && k !== 'item')
                             .map(([k, v]) => `${v} ${k}`)
-                            .slice(0, 3).join(', ')
+                            .slice(0, 4).join(' · ')
                         : '';
-                      const entityTitle = trackerEntry
-                        ? `${action.data.trackerName}${entryValues ? ': ' + entryValues : ''}`
-                        : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || action.title || '');
-                      const entityDetails = action.data?.amount
-                        ? `$${Number(action.data.amount).toFixed(2)}`
-                        : action.data?.value ? String(action.data.value) : '';
+                      const entryItem = isTrackerEntry && action.data?.values?.item
+                        ? String(action.data.values.item) : '';
+                      const entityTitle = isTrackerEntry
+                        ? (entryItem || trackerName || 'Entry')
+                        : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || action.title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
+                      const entityDetails = isTrackerEntry
+                        ? entryValues
+                        : action.data?.amount
+                          ? `$${Number(action.data.amount).toFixed(2)}`
+                          : '';
                       return (
                         <div
                           key={i}
@@ -1780,38 +1789,58 @@ export default function ChatPage() {
                           </div>
                           {/* Content */}
                           <div className="flex-1 min-w-0">
-                            <p className={`text-xs font-semibold ${
-                              isUndone ? "line-through text-muted-foreground" : "text-foreground"
-                            }`}>
-                              {entityTitle || actionLabel(action.type)}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground">
-                              {actionLabel(action.type)}{entityDetails ? ` · ${entityDetails}` : ""}
-                              {isUndone && " · Undone"}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className={`text-xs font-semibold ${
+                                isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
+                              }`}>
+                                {entityTitle || actionLabel(action.type).toUpperCase()}
+                              </p>
+                              {/* WHO badge — always show */}
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                                whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
+                              }`}>
+                                {whoFor.toUpperCase()}
+                              </span>
+                              {isTrackerEntry && trackerName && (
+                                <span className="text-[9px] text-muted-foreground/60 font-medium">
+                                  via {trackerName}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {entityDetails || actionLabel(action.type)}
+                              {isUndone && ' · DELETED'}
                             </p>
                           </div>
                           {/* Undo button */}
                           {canUndo && (
                             <button
-                              className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-medium border border-destructive/30 text-destructive hover:bg-destructive/10 active:scale-95 transition-all"
-                              title="Undo this action"
+                              className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
+                              title="Delete this entry"
                               data-testid={`button-undo-${action.type}-${i}`}
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 const ep = undoEndpoints[action.type];
-                                if (!ep) return;
+                                if (!ep || !entityId) return;
                                 try {
                                   await apiRequest("DELETE", `/api/${ep}/${entityId}`);
                                   action.data = { ...action.data, _undone: true };
-                                  setMessages(prev => prev.map(m => ({ ...m })));
+                                  // Force re-render by creating new array
+                                  setMessages(prev => prev.map(m => ({
+                                    ...m,
+                                    actions: m.actions ? [...m.actions] : m.actions
+                                  })));
                                   queryClient.invalidateQueries();
-                                  toast({ title: "Undone", description: entityTitle || actionLabel(action.type) });
+                                  toast({
+                                    title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
+                                    description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
+                                  });
                                 } catch {
-                                  toast({ title: "Could not undo", variant: "destructive" });
+                                  toast({ title: "Delete failed — try again", variant: "destructive" });
                                 }
                               }}
                             >
-                              Undo
+                              × Delete
                             </button>
                           )}
                         </div>
