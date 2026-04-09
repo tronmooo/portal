@@ -219,15 +219,12 @@ export default function SettingsPage() {
       <div className="max-w-2xl mx-auto p-4 md:p-6 space-y-4">
         <PWAInstallCard />
         {/* Header */}
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
-                <ArrowLeft className="w-4 h-4" />
-              </button>
-            </Link>
-            <h1 className="text-xl font-semibold tracking-tight" data-testid="text-settings-title">Settings</h1>
-          </div>
+        <div className="flex items-center gap-2 mb-1">
+          <Link href="/dashboard">
+            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          </Link>
         </div>
 
         {/* ─── Account ─── */}

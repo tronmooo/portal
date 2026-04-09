@@ -194,7 +194,9 @@ export default function JournalPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-lg font-semibold">Journal{filterMode === "selected" ? ` — ${filterLabel}` : ""}</h1>
+{filterMode === "selected" && filterLabel && (
+            <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-full">{filterLabel}</span>
+          )}
           </div>
           <p className="text-xs text-muted-foreground">{entries.length} entries</p>
         </div>

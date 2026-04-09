@@ -125,7 +125,7 @@ export default function FinancePage() {
               <ArrowLeft className="w-4 h-4" />
             </button>
           </Link>
-          <h1 className="text-xl font-semibold" data-testid="text-finance-title">Finance</h1>
+
           <MultiProfileFilter
             onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
             compact

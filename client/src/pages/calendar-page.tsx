@@ -18,7 +18,6 @@ export default function CalendarPage() {
             <ArrowLeft className="w-3.5 h-3.5" />
           </button>
         </Link>
-        <h1 className="text-sm font-semibold">Calendar</h1>
         <MultiProfileFilter
           onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
           compact

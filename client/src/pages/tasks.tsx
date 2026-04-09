@@ -443,7 +443,7 @@ export default function TasksPage() {
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
-            <h1 className="text-xl font-semibold" data-testid="text-tasks-title">Tasks</h1>
+
             <MultiProfileFilter
               onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
               compact
