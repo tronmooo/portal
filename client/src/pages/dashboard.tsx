@@ -2525,15 +2525,14 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-base font-semibold">Dashboard</h1>
+            <p className="text-sm font-medium text-muted-foreground">
+              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+            </p>
             <MultiProfileFilter
               onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
               compact
             />
           </div>
-          <p className="text-sm text-muted-foreground">
-            {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-          </p>
         </div>
         <div className="flex items-center gap-1.5">
           {/* Desktop: individual buttons */}

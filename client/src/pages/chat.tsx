@@ -921,7 +921,7 @@ function SlowResponseHint() {
 const WELCOME_MSG: ChatMessage = {
   id: "welcome",
   role: "assistant",
-  content: "Welcome to Portol. I'm your AI assistant \u2014 tell me what to log, track, create, or find. I can handle multiple things at once.\n\nTry something like: \"I ate a chicken sandwich, ran 2 miles, and spent $12 on lunch\"\n\nYou can also upload photos or documents \u2014 I'll extract data and route it to the right profile.",
+  content: "",
   timestamp: new Date().toISOString(),
 };
 // Persist chat history to sessionStorage so it survives page reloads
@@ -1165,15 +1165,6 @@ export default function ChatPage() {
   const speech = useSpeechInput((text) => setInput(prev => prev ? prev + ' ' + text : text));
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
-
-  const QUICK_LOG_ITEMS = [
-    { label: 'Weight', icon: '⚖️', template: 'Log my weight: ' },
-    { label: 'BP', icon: '❤️', template: 'Blood pressure: ' },
-    { label: 'Sleep', icon: '😴', template: 'Log sleep: ' },
-    { label: 'Mood', icon: '😊', template: 'Mood today: ' },
-    { label: 'Run', icon: '🏃', template: 'I ran ' },
-    { label: 'Expense', icon: '💰', template: 'Spent $' },
-  ];
 
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
@@ -1866,27 +1857,19 @@ export default function ChatPage() {
       </div>
 
       {/* Suggestions (show only when few messages) */}
-      {messages.length <= 2 && !hasAttachments && (
-        <div className="px-4 pb-2">
-          <div className="max-w-2xl mx-auto">
-            {/* Document processing hint */}
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border/40 bg-card/40 mb-3 text-xs text-muted-foreground">
-              <Paperclip className="h-3.5 w-3.5 text-primary shrink-0" />
-              <span>Tap <span className="font-semibold text-foreground">{"\ud83d\udcce"}</span> to upload documents \u2014 I can extract data from IDs, insurance cards, receipts, and more</span>
-            </div>
-            <p className="text-sm font-medium text-muted-foreground mb-2">Try saying:</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => handleSuggestion(s)}
-                  className="text-xs px-3 py-1.5 rounded-full border border-border/60 hover:bg-muted/60 transition-colors text-left"
-                  data-testid={`button-suggestion-${s.slice(0, 20)}`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
+      {messages.length <= 1 && !hasAttachments && (
+        <div className="px-3 pb-2">
+          <div className="max-w-2xl mx-auto flex flex-wrap gap-1.5">
+            {SUGGESTIONS.slice(0, 6).map((s) => (
+              <button
+                key={s}
+                onClick={() => handleSuggestion(s)}
+                className="text-xs px-3 py-1.5 rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 active:scale-95 transition-all text-muted-foreground hover:text-foreground"
+                data-testid={`button-suggestion-${s.slice(0, 20)}`}
+              >
+                {s}
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -1939,89 +1922,68 @@ export default function ChatPage() {
 
       {/* Text input area (only shown when no attachment pending) */}
       {!hasAttachments && (
-        <div className="border-t border-border px-4 py-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/80 backdrop-blur-sm">
-          {/* Mobile-visible New Chat button above input when there are messages */}
-          {messages.length > 1 && (
-            <div className="max-w-2xl mx-auto flex justify-center mb-1.5 md:hidden">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs-loose gap-1 border-dashed w-full"
-                onClick={() => { setMessages([WELCOME_MSG]); }}
-                data-testid="button-reset-chat-mobile"
-              >
-                <RotateCcw className="h-3 w-3" /> New Chat
-              </Button>
+        <div className="px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40">
+          <div className="max-w-2xl mx-auto">
+            {/* Large prominent input box */}
+            <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-primary/40 focus-within:shadow-md transition-all duration-200">
+              <Textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask me anything..."
+                className="min-h-[96px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
+                rows={3}
+                data-testid="input-chat"
+              />
+              {/* Action row inside the box */}
+              <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 pb-3">
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isPending}
+                    title="Attach file or image"
+                    data-testid="button-attach"
+                    className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </button>
+                  <button
+                    className="h-8 w-8 rounded-lg md:hidden flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                    onClick={() => document.getElementById('camera-capture')?.click()}
+                    disabled={isPending}
+                    data-testid="button-camera"
+                  >
+                    <Camera className="h-4 w-4" />
+                  </button>
+                  {speech.supported && (
+                    <button
+                      onClick={() => speech.listening ? speech.stop() : speech.start()}
+                      title={speech.listening ? 'Stop' : 'Voice input'}
+                      data-testid="button-voice-input"
+                      className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
+                        speech.listening
+                          ? 'text-red-500 bg-red-500/10'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                      }`}
+                    >
+                      {speech.listening
+                        ? <span className="w-3.5 h-3.5 rounded-sm bg-red-500 animate-pulse" />
+                        : <Mic className="h-4 w-4" />}
+                    </button>
+                  )}
+                </div>
+                <Button
+                  onClick={handleSend}
+                  disabled={!input.trim() || isPending}
+                  size="sm"
+                  className="h-8 px-4 rounded-xl text-xs font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
+                  data-testid="button-send"
+                >
+                  {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> Send</>}
+                </Button>
+              </div>
             </div>
-          )}
-          {/* Quick-log shortcuts */}
-          <div className="max-w-2xl mx-auto flex gap-1.5 overflow-x-auto scrollbar-hide pb-1 mb-1">
-            {QUICK_LOG_ITEMS.map(item => (
-              <button
-                key={item.label}
-                onClick={() => { setInput(item.template); inputRef.current?.focus(); }}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full border border-border/50 bg-card/60 text-xs font-medium text-foreground/70 hover:bg-muted/60 whitespace-nowrap shrink-0 active:scale-95 transition-all"
-                data-testid={`quick-log-${item.label.toLowerCase()}`}
-              >
-                <span>{item.icon}</span> {item.label}
-              </button>
-            ))}
-          </div>
-          <div className="max-w-2xl mx-auto flex items-end gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-[44px] w-[44px] shrink-0 rounded-xl"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isPending}
-              title="Upload image, PDF, or document"
-              data-testid="button-attach"
-            >
-              <Paperclip className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-[44px] w-[44px] shrink-0 rounded-xl md:hidden"
-              onClick={() => document.getElementById('camera-capture')?.click()}
-              disabled={isPending}
-              data-testid="button-camera"
-            >
-              <Camera className="h-4 w-4" />
-            </Button>
-            <Textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask anything, log data, or upload a document..."
-              className="min-h-[48px] max-h-[120px] resize-none rounded-xl bg-card text-sm"
-              rows={1}
-              data-testid="input-chat"
-            />
-            {speech.supported && (
-              <Button
-                onClick={() => speech.listening ? speech.stop() : speech.start()}
-                size="icon"
-                variant="ghost"
-                className={`rounded-xl h-[44px] w-[44px] shrink-0 transition-all ${speech.listening ? 'text-red-500 bg-red-500/10 hover:bg-red-500/15' : ''}`}
-                title={speech.listening ? "Stop listening" : "Voice input"}
-                data-testid="button-voice-input"
-              >
-                {speech.listening
-                  ? <span className="w-4 h-4 rounded-sm bg-red-500 animate-pulse" />
-                  : <Mic className="h-4 w-4" />}
-              </Button>
-            )}
-            <Button
-              onClick={handleSend}
-              disabled={!input.trim() || isPending}
-              size="icon"
-              className="rounded-xl h-[44px] w-[44px] shrink-0 hover:scale-105 active:scale-95 transition-transform"
-              data-testid="button-send"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
           </div>
         </div>
       )}
