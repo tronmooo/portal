@@ -14,8 +14,9 @@ export default function CalendarPage() {
     <div className="h-full overflow-y-auto pb-24 px-2 py-2 md:px-4 md:py-3" data-testid="calendar-page">
       <div className="flex items-center gap-2 mb-2">
         <Link href="/dashboard">
-          <button className="inline-flex items-center justify-center rounded-md w-7 h-7 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
+          <button className="inline-flex items-center gap-1 rounded-md px-2 h-7 hover:bg-muted transition-colors text-xs text-muted-foreground" aria-label="Back to Dashboard" data-testid="button-back">
             <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Dashboard</span>
           </button>
         </Link>
         <MultiProfileFilter

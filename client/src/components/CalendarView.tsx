@@ -1008,21 +1008,28 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                       {/* Show up to 2 items as mini labels on desktop */}
                       <div className="hidden sm:flex flex-col gap-0.5">
                         {dayItems.slice(0, 2).map(item => (
-                          <div
+                          <button
                             key={item.id}
-                            className={`text-xs-tight leading-tight truncate px-1 py-0.5 rounded ${item.completed ? 'line-through opacity-50' : ''}`}
+                            className={`w-full text-left text-xs-tight leading-tight truncate px-1 py-0.5 rounded hover:brightness-110 active:brightness-125 transition-all ${item.completed ? 'line-through opacity-50' : ''}`}
                             style={{
                               backgroundColor: `${item.color}18`,
                               color: item.color,
                             }}
+                            title={item.title}
+                            onClick={(e) => { e.stopPropagation(); setDetailItem(item); }}
+                            data-testid={`event-chip-${item.id}`}
                           >
-                            {item.completed ? '✓ ' : ''}{item.time ? `${fmt12(item.time)} ` : ''}{item.title}
-                          </div>
+                            {item.completed ? '✓ ' : ''}{item.time ? `${fmt12(item.time)} ` : ''}{item.title.length > 20 ? item.title.slice(0, 20) + '…' : item.title}
+                          </button>
                         ))}
                         {dayItems.length > 2 && (
-                          <span className="text-xs font-medium text-primary hover:underline cursor-pointer px-1 py-0.5">
+                          <button
+                            className="w-full text-left text-xs font-medium text-primary hover:underline px-1 py-0.5"
+                            onClick={(e) => { e.stopPropagation(); setSelectedDate(day.date); }}
+                            data-testid={`btn-more-${day.date}`}
+                          >
                             +{dayItems.length - 2} more
-                          </span>
+                          </button>
                         )}
                       </div>
 
@@ -1290,67 +1297,23 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         );
       })()}
 
-      {/* Selected Day Agenda */}
-      <div className="rounded-lg border border-border/40" data-testid="section-day-agenda">
-        <div className="px-4 pt-3 pb-1 flex items-center justify-between">
-          <div>
-            <h3 className="text-xs font-semibold">{fmtDateFull(selectedDate)}</h3>
-            <p className="text-xs text-muted-foreground">
-              {filteredAgenda.length} item{filteredAgenda.length !== 1 ? "s" : ""}
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs gap-1"
-            onClick={() => {
-              setAddOpen(true);
-            }}
-            data-testid="btn-add-event-agenda"
-          >
-            <Plus className="h-3 w-3" />Add
-          </Button>
-        </div>
-        <div className="px-3 pb-2">
-          <DayAgenda
-            date={selectedDate}
-            items={filteredAgenda}
-            onItemClick={setDetailItem}
-          />
-        </div>
-      </div>
-
-      {/* Mini Today Agenda */}
-      {(() => {
-        const todaysItems = (itemsByDate[todayStr] || []).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
-        if (todaysItems.length === 0 || selectedDate === todayStr) return null;
-        return (
-          <div className="mt-3 rounded-xl border border-border/40 bg-card p-3" data-testid="mini-today-agenda">
-            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Today</div>
-            <div className="space-y-1">
-              {todaysItems.slice(0, 5).map((item: any) => (
-                <button
-                  key={item.id}
-                  className="flex items-center gap-2 text-xs w-full text-left rounded-md px-1.5 py-1 hover:bg-muted/50 transition-colors"
-                  onClick={() => { setSelectedDate(todayStr); setDetailItem(item); }}
-                >
-                  <span className="text-[10px] text-muted-foreground tabular-nums w-12 shrink-0">
-                    {item.time ? fmt12(item.time) : 'All day'}
-                  </span>
-                  <div
-                    className="w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{ background: item.type === 'task' ? '#8b5cf6' : item.type === 'obligation' ? '#f59e0b' : item.type === 'habit' ? '#10b981' : '#3b82f6' }}
-                  />
-                  <span className="truncate text-foreground/80">{item.title}</span>
-                </button>
-              ))}
-              {todaysItems.length > 5 && (
-                <p className="text-[10px] text-muted-foreground pl-1.5">+{todaysItems.length - 5} more</p>
-              )}
+      {/* Day detail — only shows when user explicitly clicks a day (selected != today never auto-opens) */}
+      {filteredAgenda.length > 0 && (
+        <div className="rounded-lg border border-border/40 bg-card/50" data-testid="section-day-agenda">
+          <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold">{fmtDateFull(selectedDate)}</span>
+              <span className="text-[11px] text-muted-foreground">{filteredAgenda.length} item{filteredAgenda.length !== 1 ? 's' : ''}</span>
             </div>
+            <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 px-2" onClick={() => setAddOpen(true)}>
+              <Plus className="h-2.5 w-2.5" /> Add
+            </Button>
           </div>
-        );
-      })()}
+          <div className="px-2 pb-2">
+            <DayAgenda date={selectedDate} items={filteredAgenda} onItemClick={setDetailItem} />
+          </div>
+        </div>
+      )}
 
       {/* Add Event Dialog */}
       {addOpen && (

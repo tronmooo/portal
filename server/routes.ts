@@ -64,15 +64,27 @@ setInterval(() => {
   }
 }, 300000);
 
-// Simple response cache for expensive endpoints (10s TTL)
+// ── Server-side response cache ────────────────────────────────────────────────
 const responseCache = new Map<string, { data: any; expiresAt: number }>();
 function getCached(key: string): any | null {
   const entry = responseCache.get(key);
   if (entry && Date.now() < entry.expiresAt) return entry.data;
+  responseCache.delete(key);
   return null;
 }
 function setCache(key: string, data: any, ttlMs: number = 10000): void {
   responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
+// ── In-flight deduplication: if two requests for the same key arrive simultaneously,
+//    the second one piggybacks on the first DB query instead of firing its own.
+//    This prevents N identical Supabase queries when N tabs/components all load at once.
+const inFlight = new Map<string, Promise<any>>();
+function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  if (inFlight.has(key)) return inFlight.get(key) as Promise<T>;
+  const p = fn().finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
 }
 function bustCache(prefix: string): void {
   for (const key of responseCache.keys()) {
@@ -614,8 +626,9 @@ export async function registerRoutes(
     const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
-    const stats = await storage.getStats(undefined, filterIds);
-    setCache(cacheKey, stats, 2 * 60 * 1000); // 2-minute cache
+    // dedupe: concurrent identical requests share one DB query
+    const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds));
+    setCache(cacheKey, stats, 5 * 60 * 1000); // 5-minute cache (stats are not real-time critical)
     res.json(stats);
   }));
 
@@ -627,8 +640,9 @@ export async function registerRoutes(
     const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
-    const data = await storage.getDashboardEnhanced(undefined, filterIds);
-    setCache(cacheKey, data, 2 * 60 * 1000); // 2-minute cache
+    // dedupe: concurrent identical requests share one DB query
+    const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
+    setCache(cacheKey, data, 5 * 60 * 1000); // 5-minute cache
     res.json(data);
   }));
 
@@ -723,7 +737,7 @@ export async function registerRoutes(
     const ck = `profiles:${uid}`;
     const hit = getCached(ck);
     if (hit) return res.json(paginate(hit, req, res));
-    const items = await storage.getProfiles();
+    const items = await dedupe(ck, () => storage.getProfiles());
     setCache(ck, items, 5 * 60 * 1000);
     res.json(paginate(items, req, res));
   }));
@@ -930,7 +944,7 @@ Respond ONLY in JSON format:
         profileName: profile.name,
       });
     } catch (err: any) {
-      logger.error("routes", `find-value failed: ${err.message}`);
+      console.error("[routes] find-value failed:", err.message);
       res.status(500).json({ error: "Failed to estimate value. Please try again." });
     }
   }));
@@ -1105,11 +1119,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Trackers ----
   app.get("/api/trackers", asyncHandler(async (req, res) => {
-    let items = await storage.getTrackers();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `trackers:${uid}`;
+    const hit = getCached(ck);
+    let items = hit || await dedupe(ck, () => storage.getTrackers());
+    if (!hit) setCache(ck, items, 5 * 60 * 1000);
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
       const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter(t => (t.linkedProfiles || []).some(pid => ids.includes(pid)));
+      items = items.filter((t: any) => (t.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
     }
     res.json(paginate(items, req, res));
   }));
@@ -1206,11 +1224,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(404).json({ error: "Tracker not found" });
+    const uid_te1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`trackers:`); bustCache(`stats:${uid_te1}`); bustCache(`enhanced:`);
     res.status(201).json(entry);
   }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
     if (!deleted) return res.status(404).json({ error: "Entry not found" });
+    const uid_te2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`trackers:`); bustCache(`stats:${uid_te2}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   // Convenience endpoint: delete tracker entry by entry ID only (for chat undo)
@@ -1270,7 +1292,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.body.description) req.body.description = sanitize(req.body.description);
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(await storage.createTask(parsed.data));
+    const newTask = await storage.createTask(parsed.data);
+    const uid_t1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`);
+    res.status(201).json(newTask);
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
     if (req.body.title !== undefined) {
@@ -1282,16 +1307,22 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.body.description) req.body.description = sanitize(req.body.description);
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_t2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteTask(req.params.id);
+    const uid_t3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreTask(req.params.id);
     if (!ok) return res.status(404).json({ error: "Task not found" });
+    const uid_t4 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`);
     const task = await storage.getTask(req.params.id);
     res.json(task || { id: req.params.id, restored: true });
   }));
@@ -1334,29 +1365,33 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Expenses ----
   app.get("/api/expenses", asyncHandler(async (req, res) => {
-    let items = await storage.getExpenses();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `expenses:${uid}`;
+    const hit = getCached(ck);
+    let items = hit || await dedupe(ck, () => storage.getExpenses());
+    if (!hit) setCache(ck, items, 3 * 60 * 1000);
     // Server-side filtering
     if (req.query.category && typeof req.query.category === "string") {
-      items = items.filter(e => e.category === req.query.category);
+      items = items.filter((e: any) => e.category === req.query.category);
     }
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
       const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter(e => (e.linkedProfiles || []).some(pid => ids.includes(pid)));
+      items = items.filter((e: any) => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
     } else if (req.query.profileId && typeof req.query.profileId === "string") {
       const fp = req.query.profileId as string;
       const allProfiles = await storage.getProfiles();
-      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
-      items = items.filter(e => {
+      const isSelf = allProfiles.find((p: any) => p.id === fp)?.type === "self";
+      items = items.filter((e: any) => {
         const lp = e.linkedProfiles || [];
         return lp.includes(fp) || (isSelf && lp.length === 0);
       });
     }
     if (req.query.from && typeof req.query.from === "string") {
-      items = items.filter(e => e.date >= (req.query.from as string));
+      items = items.filter((e: any) => e.date >= (req.query.from as string));
     }
     if (req.query.to && typeof req.query.to === "string") {
-      items = items.filter(e => e.date <= (req.query.to as string));
+      items = items.filter((e: any) => e.date <= (req.query.to as string));
     }
     res.json(paginate(items, req, res));
   }));
@@ -1386,7 +1421,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(await storage.createExpense(parsed.data));
+    const newExpense = await storage.createExpense(parsed.data);
+    const uid_e1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`); bustCache(`enhanced:`);
+    res.status(201).json(newExpense);
   }));
   app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
     if (req.body.amount !== undefined && (typeof req.body.amount !== "number" || req.body.amount <= 0)) {
@@ -1396,21 +1434,29 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_e2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`expenses:${uid_e2}`); bustCache(`stats:${uid_e2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteExpense(req.params.id);
+    const uid_e3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
 
   // ---- Events ----
   app.get("/api/events", asyncHandler(async (req, res) => {
-    let items = await storage.getEvents();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `events:${uid}`;
+    const hit = getCached(ck);
+    let items = hit || await dedupe(ck, () => storage.getEvents());
+    if (!hit) setCache(ck, items, 3 * 60 * 1000);
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
       const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter(e => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
+      items = items.filter((e: any) => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
     }
     res.json(paginate(items, req, res));
   }));
@@ -1422,7 +1468,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.post("/api/events", asyncHandler(async (req, res) => {
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(await storage.createEvent(parsed.data));
+    const newEvent = await storage.createEvent(parsed.data);
+    const uid_ev1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`);
+    res.status(201).json(newEvent);
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
     if (req.body.title !== undefined) {
@@ -1431,12 +1480,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const updated = await storage.updateEvent(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_ev2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`);
     res.json(updated);
   }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getEvent(req.params.id);
     if (!existing) return res.status(404).json({ error: "Event not found" });
     await storage.deleteEvent(req.params.id);
+    const uid_ev3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`);
     res.json({ success: true });
   }));
 
@@ -1511,18 +1564,91 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.send(buffer);
   }));
 
+  // ---- Document Email with Attachment (Resend) ----
+  app.post("/api/documents/:id/send-email", asyncHandler(async (req, res) => {
+    const { to, subject, message } = req.body as { to: string; subject?: string; message?: string };
+    if (!to || !to.includes('@')) return res.status(400).json({ error: "Valid email required" });
+
+    // Fetch document with its file data (getDocument downloads from storage if needed)
+    const doc = await storage.getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+
+    const RESEND_KEY = "re_ZrZvoDut_AQq9fXrvDnkSxuJViQjjChwQ";
+
+    // Build file extension for attachment filename
+    const mimeExtMap: Record<string, string> = {
+      'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/jpg': '.jpg',
+      'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+      'text/plain': '.txt', 'text/csv': '.csv',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+      'application/msword': '.doc', 'application/vnd.ms-excel': '.xls',
+    };
+    const ext = mimeExtMap[doc.mimeType || ''] || '';
+    const filename = doc.name.endsWith(ext) ? doc.name : `${doc.name}${ext}`;
+
+    // Attachment: use base64 fileData if available (limit 10MB to stay within Resend limit)
+    const attachments: { filename: string; content: string; content_type?: string }[] = [];
+    if (doc.fileData && doc.fileData.length > 10 && doc.fileData.length < 10_000_000) {
+      attachments.push({
+        filename,
+        content: doc.fileData,          // already base64
+        content_type: doc.mimeType || 'application/octet-stream',
+      });
+    }
+
+    const hasAttachment = attachments.length > 0;
+    const emailBody: any = {
+      from: "Portol <onboarding@resend.dev>",
+      to: [to],
+      subject: subject || `${doc.name} — shared from Portol`,
+      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
+        <div style="margin-bottom:20px">
+          <img src="https://portol.me/portol-logo-sm.png" alt="Portol" height="28" />
+        </div>
+        <h2 style="color:#1a1a1a;margin:0 0 8px">${doc.name}</h2>
+        <p style="color:#666;font-size:13px;margin:0 0 16px">Type: ${doc.type || doc.mimeType || 'document'}</p>
+        ${message ? `<p style="color:#444;font-size:14px;background:#f5f5f5;padding:12px;border-radius:6px">${message}</p>` : ''}
+        ${hasAttachment
+          ? `<p style="color:#444;font-size:13px;">The document is attached to this email.</p>`
+          : `<p style="color:#888;font-size:12px;">File could not be attached (too large or unavailable).</p>`
+        }
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0" />
+        <p style="color:#999;font-size:11px">Sent via Portol &bull; <a href="https://portol.me" style="color:#6d28d9">portol.me</a></p>
+      </div>`,
+    };
+
+    if (attachments.length > 0) emailBody.attachments = attachments;
+
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(emailBody),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      console.error('[send-email] Resend error:', result);
+      return res.status(500).json({ error: result.message || result.name || "Email failed to send", detail: result });
+    }
+    res.json({ success: true, emailId: result.id, attached: hasAttachment, filename: hasAttachment ? filename : undefined });
+  }));
+
   // ---- Habits ----
   app.get("/api/habits", asyncHandler(async (req, res) => {
-    let items = await storage.getHabits();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `habits:${uid}`;
+    const hit = getCached(ck);
+    let items = hit || await dedupe(ck, () => storage.getHabits());
+    if (!hit) setCache(ck, items, 3 * 60 * 1000);
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     if (profileIdsParam) {
       const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter(item => (item.linkedProfiles || []).some(pid => ids.includes(pid)));
+      items = items.filter((item: any) => (item.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
     } else if (fp) {
-      const allProfiles = await storage.getProfiles();
-      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
-      items = items.filter(item => {
+      const allProfiles = await (getCached(`profiles:${uid}`) || storage.getProfiles());
+      const isSelf = allProfiles.find((p: any) => p.id === fp)?.type === "self";
+      items = items.filter((item: any) => {
         const lp = item.linkedProfiles || [];
         return lp.includes(fp) || (isSelf && lp.length === 0);
       });
@@ -1540,7 +1666,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const parsed = insertHabitSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(await storage.createHabit(parsed.data));
+    const newHabit = await storage.createHabit(parsed.data);
+    const uid_h3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`);
+    res.status(201).json(newHabit);
   }));
   app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
     const { date, value, notes } = req.body;
@@ -1548,17 +1677,23 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!checkin) return res.status(404).json({ error: "Habit not found" });
     // Return the full updated habit (with recalculated streak) instead of just the checkin
     const updatedHabit = await storage.getHabit(req.params.id);
+    const uid_h1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`);
     res.status(201).json(updatedHabit || checkin);
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
     const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
     if (!ok) return res.status(404).json({ error: "Checkin not found" });
+    const uid_h2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
+      const uid_h4 = (req as AuthenticatedRequest).userId || "anon";
+      bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`);
       res.json(result);
     } catch (e: any) { console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" }); }
   }));
@@ -1566,11 +1701,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const existing = await storage.getHabit(req.params.id);
     if (!existing) return res.status(404).json({ error: "Habit not found" });
     await storage.deleteHabit(req.params.id);
+    const uid_h5 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`habits:${uid_h5}`); bustCache(`stats:${uid_h5}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreHabit(req.params.id);
     if (!ok) return res.status(404).json({ error: "Habit not found" });
+    const uid_h6 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`habits:${uid_h6}`); bustCache(`stats:${uid_h6}`);
     const habit = await storage.getHabit(req.params.id);
     res.json(habit || { id: req.params.id, restored: true });
   }));
@@ -1630,7 +1769,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (!ob) return res.status(404).json({ error: "Obligation not found" });
       amount = ob.amount;
     }
-    const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber, date);
+    const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
     res.status(201).json(payment);
   }));
@@ -1703,7 +1842,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     req.body.content = sanitize(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(await storage.createJournalEntry(parsed.data));
+    const newEntry = await storage.createJournalEntry(parsed.data);
+    const uid_j1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_j1}`);
+    res.status(201).json(newEntry);
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
     if (req.body.content !== undefined) {
@@ -1716,12 +1858,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_j2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_j2}`);
     res.json(updated);
   }));
   app.delete("/api/journal/:id", asyncHandler(async (req, res) => {
     const entries = await storage.getJournalEntries();
     if (!entries.find(e => e.id === req.params.id)) return res.status(404).json({ error: "Journal entry not found" });
     await storage.deleteJournalEntry(req.params.id);
+    const uid_j3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_j3}`);
     res.json({ success: true });
   }));
 

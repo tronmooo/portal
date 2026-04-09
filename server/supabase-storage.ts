@@ -174,6 +174,7 @@ function generateInsights(
 export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
   private userId: string;
+  _timezone: string = 'UTC'; // user's timezone for date calculations
 
   constructor(supabaseUrl: string, supabaseServiceKey: string, userId: string) {
     this.supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -979,12 +980,13 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // TRACKERS
   // ============================================================
-  async getTrackers(): Promise<Tracker[]> {
+  async getTrackers(daysBack = 120): Promise<Tracker[]> {
     // Fetch trackers, entries, AND junction table links in 3 parallel queries
-    // Junction table is the source of truth for tracker→profile ownership
+    // Limit entries to recent data (default 120 days) to avoid slow full-history scans
+    const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString();
     const [trackersResult, entriesResult, junctionResult] = await Promise.all([
       this.supabase.from("trackers").select("*").eq("user_id", this.userId),
-      this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).order("timestamp", { ascending: true }),
+      this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).gte("timestamp", cutoff).order("timestamp", { ascending: true }),
       this.supabase.from("profile_trackers").select("tracker_id, profile_id").eq("user_id", this.userId),
     ]);
     if (trackersResult.error) throw trackersResult.error;
@@ -2705,7 +2707,8 @@ export class SupabaseStorage implements IStorage {
     const habitCompletionRate = allActiveHabits.length > 0 ? Math.round((todayCompleted / allActiveHabits.length) * 100) : 0;
 
     const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
-    const upcomingObs = obligations.filter(o => { const due = new Date(o.nextDueDate); return due >= now && due <= sevenDaysOut; });
+    // Include overdue bills (past due) + bills due in next 7 days
+    const upcomingObs = obligations.filter(o => { const due = new Date(o.nextDueDate); return due <= sevenDaysOut; });
     const monthlyObTotal = obligations.reduce((s, o) => {
       switch (o.frequency) {
         case 'weekly': return s + o.amount * 4.33;
@@ -2746,7 +2749,23 @@ export class SupabaseStorage implements IStorage {
       recentActivity: [
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
           type: 'tracker_entry',
-          description: `Logged ${t.name}: ${Object.values(e.values).filter(v => typeof v === 'number').map(v => v).join(', ')}`,
+          description: (() => {
+            const nums = Object.entries(e.values).filter(([,v]) => typeof v === 'number') as [string, number][];
+            const strs = Object.entries(e.values).filter(([,v]) => typeof v === 'string' && v) as [string, string][];
+            if (nums.length === 0 && strs.length === 0) return `Logged ${t.name}`;
+            // For nutrition-like trackers with labeled fields
+            if (nums.length >= 3 && ['calories','protein','carbs','fat','fiber'].some(f => t.name.toLowerCase().includes(f) || nums.some(([k]) => k.toLowerCase().includes(f)))) {
+              const cal = nums.find(([k]) => k.toLowerCase().includes('cal'))?.[1] || nums[nums.length-1]?.[1];
+              const protein = nums.find(([k]) => k.toLowerCase().includes('pro'))?.[1];
+              const carbs = nums.find(([k]) => k.toLowerCase().includes('carb'))?.[1];
+              const fat = nums.find(([k]) => k.toLowerCase().includes('fat'))?.[1];
+              const parts = [cal != null ? `${cal} cal` : null, protein != null ? `${protein}g protein` : null, carbs != null ? `${carbs}g carbs` : null, fat != null ? `${fat}g fat` : null].filter(Boolean);
+              return `${t.name}: ${parts.join(', ')}`;
+            }
+            if (nums.length === 1) return `${t.name}: ${nums[0][1]} ${nums[0][0]}`;
+            const summary = nums.slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ');
+            return `${t.name}: ${summary}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
+          })(),
           timestamp: e.timestamp,
         }))),
         ...tasks.filter(t => t.status === 'done').slice(-3).map(t => ({

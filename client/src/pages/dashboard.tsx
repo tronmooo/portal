@@ -406,7 +406,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
 
 function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
-  const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | null>(null);
+  const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | "habits" | null>(null);
 
   if (!stats) return null;
 
@@ -421,9 +421,9 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
         <div className="grid grid-cols-3 lg:grid-cols-6 gap-1.5">
           <KPITaskCard count={stats.activeTasks} onClick={() => setPopup("tasks")} />
           <KPISpendCard amount={stats.monthlySpend} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
-          <KPIHabitsCard completionPct={stats.habitCompletionRate} totalHabits={stats.totalHabits} onClick={() => navigate("/dashboard/habits")} />
+          <KPIHabitsCard completionPct={stats.habitCompletionRate} totalHabits={stats.totalHabits} onClick={() => setPopup("habits")} />
           <KPIJournalCard streak={stats.journalStreak} mood={stats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
-          <MiniStat accent="43 75% 50%" icon={CreditCard} label="Upcoming Bills"
+          <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
             value={stats.upcomingObligations}
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
@@ -438,28 +438,53 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
             <DialogTitle className="text-sm">Spending Breakdown</DialogTitle>
             <DialogDescription className="text-xs">This month's expenses by category</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 py-2">
-            {finSnap?.spendByCategory && Object.entries(finSnap.spendByCategory as Record<string, number>)
-              .sort(([, a], [, b]) => b - a)
-              .map(([cat, amt]) => (
-                <div key={cat} className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
-                  <span className="text-xs capitalize">{cat}</span>
-                  <span className="text-xs font-semibold tabular-nums">{formatMoney(amt)}</span>
-                </div>
-              ))}
-            {(!finSnap?.spendByCategory || Object.keys(finSnap.spendByCategory).length === 0) && (
-              <p className="text-xs text-muted-foreground text-center py-4">No expenses this month</p>
-            )}
-            <div className="flex items-center justify-between pt-2 border-t font-semibold">
-              <span className="text-xs">Total</span>
-              <span className="text-sm tabular-nums">{formatMoney(finSnap?.totalMonthlySpend || 0)}</span>
-            </div>
-            {finSnap?.lastMonthTotal > 0 && (
-              <p className="text-xs text-muted-foreground">
-                vs last month: {formatMoney(finSnap.lastMonthTotal)} ({finSnap.spendTrend > 0 ? "+" : ""}{finSnap.spendTrend}%)
-              </p>
-            )}
-          </div>
+          {(() => {
+            const categories = finSnap?.spendByCategory
+              ? Object.entries(finSnap.spendByCategory as Record<string, number>).sort(([, a], [, b]) => b - a)
+              : [];
+            const total = finSnap?.totalMonthlySpend || 0;
+            const SPEND_COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ef4444","#3b82f6","#f97316","#ec4899","#84cc16","#6366f1"];
+            return (
+              <div className="space-y-1.5 py-2">
+                {categories.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No expenses this month</p>}
+                {categories.map(([cat, amt], i) => {
+                  const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
+                  const color = SPEND_COLORS[i % SPEND_COLORS.length];
+                  return (
+                    <div key={cat} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                          <span className="text-xs capitalize">{cat}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">{pct}%</span>
+                          <span className="text-xs font-semibold tabular-nums w-16 text-right">{formatMoney(amt)}</span>
+                        </div>
+                      </div>
+                      <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                {categories.length > 0 && (
+                  <div className="flex items-center justify-between pt-2 border-t">
+                    <span className="text-xs font-semibold">Total</span>
+                    <span className="text-sm font-bold tabular-nums">{formatMoney(total)}</span>
+                  </div>
+                )}
+                {finSnap?.lastMonthTotal > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    vs last month: {formatMoney(finSnap.lastMonthTotal)}
+                    <span className={`ml-1 font-medium ${finSnap.spendTrend > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {finSnap.spendTrend > 0 ? '+' : ''}{finSnap.spendTrend}%
+                    </span>
+                  </p>
+                )}
+              </div>
+            );
+          })()}
           <ViewPageLink href="/dashboard/finance" label="View Finance Page" />
         </DialogContent>
       </Dialog>
@@ -468,8 +493,8 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       <Dialog open={popup === "bills"} onOpenChange={() => setPopup(null)}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-sm">Upcoming Bills</DialogTitle>
-            <DialogDescription className="text-xs">Bills due in the next 30 days</DialogDescription>
+            <DialogTitle className="text-sm">Overdue &amp; Upcoming Bills</DialogTitle>
+            <DialogDescription className="text-xs">Overdue bills + bills due in the next 7 days</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[50vh]">
             <div className="space-y-1.5 py-2">
@@ -501,6 +526,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
 
       {/* Tasks Popup */}
       <TasksPopup open={popup === "tasks"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
+      <HabitsPopup open={popup === "habits"} onClose={() => setPopup(null)} />
 
       {/* Expiring Documents Popup */}
       <Dialog open={popup === "docs"} onOpenChange={() => setPopup(null)}>
@@ -652,6 +678,99 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
 }
 
 // ─── Section: Action Required (replaces NeedsAttention) ──────────────────────
+
+// ─── Habits Popup ────────────────────────────────────────────────────────────
+function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const today = new Date().toLocaleDateString('en-CA');
+  const { data: habits = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/habits"],
+    queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
+    enabled: open,
+  });
+  const checkinMutation = useMutation({
+    mutationFn: ({ id }: { id: string }) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: today }),
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === id
+          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'temp-' + Date.now() }], currentStreak: (h.currentStreak || 0) + 1 }
+          : h
+        )
+      );
+      return { prev };
+    },
+    onSuccess: () => {
+      toast({ title: "Logged!" });
+    },
+    onError: (_e: any, _v: any, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Check-in failed", variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+  });
+  const activeHabits = habits.filter((h: any) => !h.archivedAt);
+  const todayDone = activeHabits.filter((h: any) => h.checkins?.some((c: any) => c.date === today)).length;
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-sm max-h-[85vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="text-sm flex items-center gap-2">
+            <Flame className="h-4 w-4 text-orange-400" /> Habits Today
+            {activeHabits.length > 0 && <Badge variant="secondary" className="ml-1">{todayDone}/{activeHabits.length}</Badge>}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            {activeHabits.length === 0 ? "No habits tracked yet" : todayDone === activeHabits.length ? "All done for today!" : `${todayDone} of ${activeHabits.length} completed`}
+          </DialogDescription>
+        </DialogHeader>
+        <ScrollArea className="flex-1 max-h-[55vh]">
+          {isLoading ? (
+            <div className="space-y-2 py-2">{[1,2,3].map(i => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+          ) : activeHabits.length === 0 ? (
+            <div className="py-6 text-center">
+              <Flame className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-xs text-muted-foreground">No habits yet</p>
+            </div>
+          ) : (
+            <div className="space-y-1.5 py-1 pr-2">
+              {activeHabits.map((h: any) => {
+                const done = h.checkins?.some((c: any) => c.date === today);
+                const streak = h.currentStreak || 0;
+                return (
+                  <div key={h.id} className={`flex items-center gap-3 p-2.5 rounded-xl border transition-colors ${
+                    done ? "bg-green-500/10 border-green-500/30" : "border-border/50 hover:bg-muted/40"
+                  }`}>
+                    <button
+                      onClick={() => !done && checkinMutation.mutate({ id: h.id })}
+                      disabled={done || checkinMutation.isPending}
+                      className={`shrink-0 w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all ${
+                        done ? "bg-green-500 border-green-500 text-white" : "border-primary/40 hover:bg-primary/10"
+                      }`}
+                    >
+                      {done && <Check className="h-3.5 w-3.5" />}
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-xs font-medium truncate ${done ? "line-through text-muted-foreground" : ""}`}>{h.name}</p>
+                      {streak > 0 && <p className="text-[10px] text-orange-400">{streak}-day streak</p>}
+                    </div>
+                    <Badge variant={done ? "outline" : "secondary"} className={`text-xs shrink-0 ${done ? "border-green-500/30 text-green-600" : ""}`}>
+                      {done ? "Done" : "Log it"}
+                    </Badge>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function ActionRequiredSection({ stats, enhanced, profileId }: { stats: DashboardStats; enhanced: any; profileId?: string }) {
   const { toast } = useToast();
@@ -1872,6 +1991,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
 
   return (
     <CollapsibleSection accent="43 85% 52%" icon={DollarSign} label="Finance" count={recentExpenses.length || undefined} testId="section-finance">
+      {/* Two-column internal layout on desktop — no dead zones */}
+      <div className="md:grid md:grid-cols-2 md:gap-4">
+      {/* LEFT: KPIs + budget */}
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
           <button onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
@@ -1934,6 +2056,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             </p>
           </button>
         </div>
+      </div>{/* end LEFT */}
+      {/* RIGHT: Pie chart + recent expenses */}
+      <div className="space-y-2 mt-2 md:mt-0">
         {/* Spending donut chart */}
         {Object.keys(byCategory).length > 0 && (() => {
           const catData = Object.entries(byCategory)
@@ -1992,7 +2117,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 w-full" onClick={() => navigate("/dashboard/finance")}>
           View All Finance →
         </Button>
-      </div>
+      </div>{/* end RIGHT */}
+      </div>{/* end two-col grid */}
 
       {/* Spending Drill-Down */}
       <DrillDownDialog
@@ -2094,6 +2220,43 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
 
 // ─── Section: AI Summary ─────────────────────────────────────────────────────
 
+// ─ Simple inline markdown renderer: **bold**, *italic*, \n→<br> ───────────────────────────
+function RenderMarkdown({ text }: { text: string }) {
+  const lines = text.split(/\n+/);
+  return (
+    <div className="text-xs leading-relaxed space-y-1">
+      {lines.map((line, li) => {
+        // Remove leading ## headings, render as bold
+        const stripped = line.replace(/^#{1,3}\s+/, '');
+        const parts: React.ReactNode[] = [];
+        let remaining = stripped;
+        let key = 0;
+        // Bold **text**
+        while (remaining.length > 0) {
+          const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
+          const italicMatch = remaining.match(/\*(.+?)\*/);
+          const firstBold = boldMatch ? remaining.indexOf(boldMatch[0]) : Infinity;
+          const firstItalic = italicMatch ? remaining.indexOf(italicMatch[0]) : Infinity;
+          if (boldMatch && firstBold <= firstItalic) {
+            if (firstBold > 0) parts.push(<span key={key++}>{remaining.slice(0, firstBold)}</span>);
+            parts.push(<strong key={key++} className="font-semibold text-foreground">{boldMatch[1]}</strong>);
+            remaining = remaining.slice(firstBold + boldMatch[0].length);
+          } else if (italicMatch && firstItalic < Infinity) {
+            if (firstItalic > 0) parts.push(<span key={key++}>{remaining.slice(0, firstItalic)}</span>);
+            parts.push(<em key={key++}>{italicMatch[1]}</em>);
+            remaining = remaining.slice(firstItalic + italicMatch[0].length);
+          } else {
+            parts.push(<span key={key++}>{remaining}</span>);
+            break;
+          }
+        }
+        if (!stripped.trim()) return null;
+        return <p key={li}>{parts}</p>;
+      })}
+    </div>
+  );
+}
+
 function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefined; enhanced: any }) {
   const [summary, setSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2118,7 +2281,7 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
   return summary ? (
     <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
       <div className="space-y-2">
-        <p className="text-xs leading-relaxed">{summary}</p>
+        <RenderMarkdown text={summary} />
         <div className="flex items-center justify-between">
           {lastGenerated && <span className="text-xs text-muted-foreground">Generated at {lastGenerated}</span>}
           <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={generateSummary} disabled={loading}>
@@ -2216,17 +2379,21 @@ interface DashboardSection {
 const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
   { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
+  // Left+Right columns: only short, snappy sections — no tall sections in either column
   { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
   { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left" },
-  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "right" },
-  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "left" },
-  // Bills is full-width so it spans below both columns — prevents dead zone when one column is shorter
+  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "right" },
+  // Finance, Bills, Activity are full-width — they're too tall for a column and look better spanning full
+  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "full" },
   { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
 ];
+// Layout rule: LEFT = [Today, Health] RIGHT = [Action Required, Goals]
+// FULL = [Finance, Bills, Activity]
+// This eliminates dead zones — both columns now have similarly-sized sections
 
-const LAYOUT_VERSION = 3; // Bump when section structure changes — forces re-apply defaults for existing users
+const LAYOUT_VERSION = 4; // Bump: Finance/Bills/Activity moved to full-width to eliminate column dead zones
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -2543,42 +2710,24 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          {/* Desktop: individual buttons */}
-          <div className="hidden sm:flex items-center gap-1.5">
-            <Button variant="outline" size="sm" className="h-7 px-2 gap-1 text-xs"
-              onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
-              <Settings className="h-3 w-3" /> Customize
-            </Button>
-            <Button variant="outline" size="sm" className="h-7 px-2 gap-1 text-xs"
-              onClick={handleExport} data-testid="btn-export">
-              <Download className="h-3 w-3" /> Export
-            </Button>
-            <Button variant="outline" size="sm" className="h-7 px-2 gap-1 text-xs"
-              onClick={() => setImportOpen(true)} data-testid="btn-import">
-              <UploadCloud className="h-3 w-3" /> Import
-            </Button>
-          </div>
-          {/* Mobile: overflow menu */}
-          <div className="sm:hidden">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" className="h-8 w-8" data-testid="btn-dashboard-menu">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
-                  <Settings className="h-4 w-4 mr-2" /> Customize
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleExport} data-testid="btn-export">
-                  <Download className="h-4 w-4 mr-2" /> Export Data
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setImportOpen(true)} data-testid="btn-import">
-                  <UploadCloud className="h-4 w-4 mr-2" /> Import Backup
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" className="h-8 w-8" data-testid="btn-dashboard-menu">
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
+                <Settings className="h-4 w-4 mr-2" /> Customize
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExport} data-testid="btn-export">
+                <Download className="h-4 w-4 mr-2" /> Export Data
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setImportOpen(true)} data-testid="btn-import">
+                <UploadCloud className="h-4 w-4 mr-2" /> Import Backup
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

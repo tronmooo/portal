@@ -1016,35 +1016,37 @@ function InfoTab({
         </div>
       )}
 
-      {/* ── Stats Row ── */}
-      <div className="grid grid-cols-4 gap-2">
-        <Card className="p-2.5 text-center">
-          <p className="text-base font-bold">{docsCount}</p>
-          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
-            <FileText className="h-2.5 w-2.5" /> Docs
-          </p>
-        </Card>
-        <Card className="p-2.5 text-center">
-          <p className="text-base font-bold">
-            {expensesTotal > 0 ? `$${expensesTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "0"}
-          </p>
-          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
-            <DollarSign className="h-2.5 w-2.5" /> Spent
-          </p>
-        </Card>
-        <Card className="p-2.5 text-center">
-          <p className="text-base font-bold">{openTasksCount}</p>
-          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
-            <ListTodo className="h-2.5 w-2.5" /> Tasks
-          </p>
-        </Card>
-        <Card className="p-2.5 text-center">
-          <p className="text-base font-bold">{trackersCount}</p>
-          <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
-            <Activity className="h-2.5 w-2.5" /> Trackers
-          </p>
-        </Card>
-      </div>
+      {/* ── Stats Row ── Only for person/self/pet — hero already shows these stats for asset types */}
+      {["self","person","pet"].includes(profile.type) && (
+        <div className="grid grid-cols-4 gap-2">
+          <Card className="p-2.5 text-center">
+            <p className="text-base font-bold">{docsCount}</p>
+            <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
+              <FileText className="h-2.5 w-2.5" /> Docs
+            </p>
+          </Card>
+          <Card className="p-2.5 text-center">
+            <p className="text-base font-bold">
+              {expensesTotal > 0 ? `$${expensesTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "0"}
+            </p>
+            <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
+              <DollarSign className="h-2.5 w-2.5" /> Spent
+            </p>
+          </Card>
+          <Card className="p-2.5 text-center">
+            <p className="text-base font-bold">{openTasksCount}</p>
+            <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
+              <ListTodo className="h-2.5 w-2.5" /> Tasks
+            </p>
+          </Card>
+          <Card className="p-2.5 text-center">
+            <p className="text-base font-bold">{trackersCount}</p>
+            <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
+              <Activity className="h-2.5 w-2.5" /> Trackers
+            </p>
+          </Card>
+        </div>
+      )}
 
       {/* ── Subscription Insights ── */}
       {profile.type === "subscription" && (() => {
@@ -1888,9 +1890,140 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     return "ok";
   }
 
+  // (ownership is now handled by the top-right dropdown in the page header)
+
+  // ── spending chart data (monthly bar chart) ──────────────────
+  const monthlyBarData = sortedMonths.slice(-12).map(m => ({
+    month: new Date(m + "-01").toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+    amount: expensesByMonth[m] || 0,
+  }));
+
   // ── render ─────────────────────────────────────────────────────
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 0 — Net Worth Overview (person/self only)       */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {["self","person"].includes(profile.type) && (() => {
+        const children = (profile as any).childProfiles || [];
+        // Assets: vehicles, property, investments, banking with a value field
+        const assetTypes = ["vehicle","property","investment","asset","account","banking"];
+        const assets = children.filter((c: any) => assetTypes.includes(c.type));
+        const totalAssets = assets.reduce((s: number, c: any) => {
+          const val = Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || c.fields?.accountBalance || 0);
+          return s + val;
+        }, 0);
+        // Liabilities: loans with a balance
+        const loans = children.filter((c: any) => c.type === "loan" || c.fields?.loanBalance || c.fields?.remainingBalance);
+        const totalLiabilities = loans.reduce((s: number, c: any) => {
+          const bal = Number(c.fields?.remainingBalance || c.fields?.loanBalance || c.fields?.balance || 0);
+          return s + bal;
+        }, 0);
+        const netWorth = totalAssets - totalLiabilities;
+        // Monthly subscriptions
+        const subs = children.filter((c: any) => c.type === "subscription" || c.type === "insurance");
+        const monthlySubscriptions = subs.reduce((s: number, c: any) => {
+          const cost = Number(c.fields?.monthlyCost || c.fields?.cost || c.fields?.monthlyPremium || 0);
+          return s + cost;
+        }, 0);
+
+        return (
+          <Card className="bg-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-primary" /> Financial Overview
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {/* Net Worth Hero */}
+              <div className={`rounded-xl p-3 mb-3 ${
+                netWorth >= 0 ? "bg-green-500/8 border border-green-500/20" : "bg-red-500/8 border border-red-500/20"
+              }`}>
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Net Worth</p>
+                <p className={`text-2xl font-bold tabular-nums ${netWorth >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                  {netWorth < 0 ? "-" : ""}{formatCurrency(Math.abs(netWorth))}
+                </p>
+                {(totalAssets > 0 || totalLiabilities > 0) && (
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {formatCurrency(totalAssets)} assets − {formatCurrency(totalLiabilities)} liabilities
+                  </p>
+                )}
+              </div>
+              {/* 3-col metrics */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="text-center p-2 rounded-lg bg-muted/30">
+                  <p className="text-base font-bold tabular-nums text-foreground">{formatCurrency(totalAssets)}</p>
+                  <p className="text-[11px] text-muted-foreground">Assets</p>
+                  <p className="text-[10px] text-muted-foreground/70">{assets.length} items</p>
+                </div>
+                <div className="text-center p-2 rounded-lg bg-muted/30">
+                  <p className="text-base font-bold tabular-nums text-red-500">{formatCurrency(totalLiabilities)}</p>
+                  <p className="text-[11px] text-muted-foreground">Liabilities</p>
+                  <p className="text-[10px] text-muted-foreground/70">{loans.length} loan{loans.length !== 1 ? "s" : ""}</p>
+                </div>
+                <div className="text-center p-2 rounded-lg bg-muted/30">
+                  <p className="text-base font-bold tabular-nums text-foreground">{formatCurrency(monthlySubscriptions)}/mo</p>
+                  <p className="text-[11px] text-muted-foreground">Subscriptions</p>
+                  <p className="text-[10px] text-muted-foreground/70">{subs.length} active</p>
+                </div>
+              </div>
+              {/* Asset list */}
+              {assets.length > 0 && (
+                <div className="mt-3 space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Assets</p>
+                  {assets.slice(0, 6).map((c: any) => (
+                    <div key={c.id} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs truncate max-w-[140px]">{c.name}</span>
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 capitalize">{c.type}</Badge>
+                      </div>
+                      <span className="text-xs font-semibold tabular-nums">
+                        {formatCurrency(Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || 0))}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Loan/liability list */}
+              {loans.length > 0 && (
+                <div className="mt-3 space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Liabilities</p>
+                  {loans.slice(0, 4).map((c: any) => (
+                    <div key={c.id} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
+                      <span className="text-xs truncate max-w-[160px]">{c.name}</span>
+                      <span className="text-xs font-semibold tabular-nums text-red-500">
+                        -{formatCurrency(Number(c.fields?.remainingBalance || c.fields?.loanBalance || c.fields?.balance || 0))}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Monthly burn */}
+              {(monthlyBurn > 0 || monthlySubscriptions > 0) && (
+                <div className="mt-3 pt-3 border-t border-border/40">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Monthly burn rate</span>
+                    <span className="text-xs font-semibold tabular-nums">{formatCurrency(monthlyBurn + monthlySubscriptions)}/mo</span>
+                  </div>
+                  {monthlySubscriptions > 0 && (
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-[11px] text-muted-foreground">Subscriptions</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{formatCurrency(monthlySubscriptions)}/mo</span>
+                    </div>
+                  )}
+                  {avgPerMonth > 0 && (
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-[11px] text-muted-foreground">Avg expenses</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{formatCurrency(avgPerMonth)}/mo</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 1 — Summary stat cards                         */}
@@ -2279,6 +2412,33 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                 ))}
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 7 — Monthly Spending Trend (bar chart)          */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {!isLoan && !isInvestment && monthlyBarData.length >= 2 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-muted-foreground" /> Monthly Spending
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={140}>
+              <BarChart data={monthlyBarData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={monthlyBarData.length > 6 ? 1 : 0} />
+                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={38} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(0)+'k' : v}`} />
+                <Tooltip
+                  contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
+                  formatter={(val: number) => [formatCurrency(val), "Spent"]}
+                />
+                <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} maxBarSize={32} />
+              </BarChart>
+            </ResponsiveContainer>
           </CardContent>
         </Card>
       )}
@@ -5807,12 +5967,83 @@ export default function ProfileDetailPage() {
     refetch();
   }
 
+  // ── Owner dropdown (asset / vehicle / loan / subscription etc.) ───────────────
+  const [showOwnerMenu, setShowOwnerMenu] = useState(false);
+  const ownerMenuRef = useRef<HTMLDivElement>(null);
+
+  const assetTypes = ["vehicle","asset","subscription","loan","investment","property","insurance","medical","account"];
+  const isAssetProfile = !!profile && assetTypes.includes(profile.type);
+
+  const { data: ownerCandidates } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: isAssetProfile,
+    staleTime: 60000,
+  });
+  const personOptions = (ownerCandidates || []).filter((p: any) =>
+    ["self","person"].includes(p.type) && !p.fields?._parentProfileId
+  );
+  const currentOwnerLabel = profile?.fields?.ownerName || null;
+
+  const setOwnerMutation = useMutation({
+    mutationFn: async (ownerProfile: any | null) => {
+      const res = await apiRequest("PATCH", `/api/profiles/${id}`, {
+        fields: {
+          ...(profile?.fields || {}),
+          ownerProfileId: ownerProfile?.id || null,
+          ownerName: ownerProfile?.name || null,
+          // _parentProfileId drives ALL filter queries (dashboard, linked, profiles pages)
+          // — must be kept in sync with the owner so filtering works correctly
+          _parentProfileId: ownerProfile?.id || null,
+        },
+      });
+      return res.json();
+    },
+    onSuccess: (_, ownerProfile) => {
+      toast({ title: ownerProfile ? `Owned by ${ownerProfile.name}` : "Set to Shared" });
+      handleSaved();
+    },
+    onError: (err: Error) => toast({ title: "Failed to update owner", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  useEffect(() => {
+    if (!showOwnerMenu) return;
+    const close = (e: MouseEvent) => {
+      if (ownerMenuRef.current && !ownerMenuRef.current.contains(e.target as Node)) setShowOwnerMenu(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showOwnerMenu]);
+
   if (isLoading) {
     return (
-      <div className="p-4 md:p-6 space-y-4 overflow-y-auto h-full">
-        <div className="h-8 w-32 rounded skeleton-shimmer" />
-        <div className="h-32 rounded-lg skeleton-shimmer" />
-        <div className="h-48 rounded-lg skeleton-shimmer" />
+      <div className="overflow-y-auto h-full pb-24">
+        {/* Hero skeleton */}
+        <div className="px-4 md:px-6 pt-4 pb-6 bg-muted/20 animate-pulse">
+          <div className="flex items-center justify-between mb-3">
+            <div className="h-4 w-24 rounded bg-muted" />
+            <div className="flex gap-1.5">
+              <div className="h-7 w-12 rounded bg-muted" />
+              <div className="h-7 w-16 rounded bg-muted" />
+            </div>
+          </div>
+          <div className="flex items-start gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-muted" />
+            <div className="flex-1 space-y-2 pt-1">
+              <div className="h-5 w-36 rounded bg-muted" />
+              <div className="h-4 w-16 rounded bg-muted" />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mt-4">
+            {[1,2,3].map(i => <div key={i} className="h-14 rounded-lg bg-muted" />)}
+          </div>
+        </div>
+        {/* Content skeleton */}
+        <div className="px-4 md:px-6 pt-4 space-y-3">
+          <div className="h-8 rounded-lg bg-muted/50" />
+          <div className="h-32 rounded-xl bg-muted/30" />
+          <div className="h-20 rounded-xl bg-muted/30" />
+        </div>
       </div>
     );
   }
@@ -5843,7 +6074,47 @@ export default function ProfileDetailPage() {
           <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-back">
             <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
           </Link>
-          <div className="flex gap-1.5">
+          <div className="flex items-center gap-1.5">
+            {/* Owner dropdown — only on asset / vehicle / loan / subscription etc. */}
+            {isAssetProfile && personOptions.length > 0 && (
+              <div className="relative" ref={ownerMenuRef}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5 bg-background/60 backdrop-blur-sm font-medium"
+                  onClick={() => setShowOwnerMenu(v => !v)}
+                  data-testid="button-owner-dropdown"
+                >
+                  <User className="h-3 w-3" />
+                  {currentOwnerLabel || "Shared"}
+                  <ChevronDown className="h-2.5 w-2.5 opacity-70" />
+                </Button>
+                {showOwnerMenu && (
+                  <div className="absolute right-0 top-full mt-1 z-50 min-w-[130px] rounded-lg border border-border/80 bg-card shadow-lg overflow-hidden py-1">
+                    <button
+                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted/70 transition-colors ${
+                        !currentOwnerLabel ? "text-primary font-semibold" : "text-foreground"
+                      }`}
+                      onClick={() => { setOwnerMutation.mutate(null); setShowOwnerMenu(false); }}
+                    >
+                      Shared
+                    </button>
+                    <div className="mx-2 my-0.5 border-t border-border/40" />
+                    {personOptions.map(p => (
+                      <button
+                        key={p.id}
+                        className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted/70 transition-colors ${
+                          currentOwnerLabel === p.name ? "text-primary font-semibold" : "text-foreground"
+                        }`}
+                        onClick={() => { setOwnerMutation.mutate(p); setShowOwnerMenu(false); }}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -5904,17 +6175,7 @@ export default function ProfileDetailPage() {
                   <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
                 </Badge>
               ))}
-              {/* Ownership badge — show who owns this asset/vehicle/loan */}
-              {profile.fields?.ownerId && (
-                <Badge variant="outline" className="text-xs gap-1 border-primary/30 text-primary/80">
-                  <User className="h-2.5 w-2.5" /> {profile.fields.ownerName || 'Owner'}
-                </Badge>
-              )}
-              {profile.fields?.ownerName && !profile.fields?.ownerId && (
-                <Badge variant="outline" className="text-xs gap-1 border-primary/30 text-primary/80">
-                  <User className="h-2.5 w-2.5" /> {profile.fields.ownerName}
-                </Badge>
-              )}
+              {/* owner is now shown in the top-right dropdown button — no badge needed here */}
             </div>
             {profile.notes && (
               <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{profile.notes}</p>

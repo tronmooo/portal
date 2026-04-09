@@ -96,9 +96,12 @@ import {
   Check,
   Dumbbell,
   Link2,
+  Mail,
+  Share2,
+  Loader2,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document } from "@shared/schema";
 import { ShareButton, DocumentViewerDialog } from "@/components/DocumentViewer";
@@ -933,7 +936,7 @@ function AddEntryDialog({
   const [values, setValues] = useState<Record<string, any>>({});
   const [notes, setNotes] = useState("");
 
-  const mutation = useMutation({
+  const mutation = useMutation<any,Error,void>({
     mutationFn: async () => {
       const coerced: Record<string, any> = {};
       for (const f of tracker.fields) {
@@ -961,17 +964,39 @@ function AddEntryDialog({
       });
       return res.json();
     },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/trackers"] });
+      const coerced: Record<string, any> = {};
+      for (const f of tracker.fields) {
+        const raw = values[f.name];
+        if (f.type === "number") coerced[f.name] = raw !== undefined && raw !== "" ? parseFloat(raw) : undefined;
+        else if (f.type === "boolean") coerced[f.name] = raw === true || raw === "true";
+        else coerced[f.name] = raw ?? "";
+      }
+      const tempEntry = { id: 'temp-' + Date.now(), values: coerced, notes: notes.trim() || undefined, timestamp: new Date().toISOString(), computed: {} };
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
+        (old || []).map((t: any) => t.id === tracker.id
+          ? { ...t, entries: [...(t.entries || []), tempEntry] }
+          : t
+        )
+      );
+      return { prev };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setValues({});
       setNotes("");
       onOpenChange(false);
       toast({ title: "Entry logged", description: `Added entry to ${tracker.name}` });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
   });
 
@@ -1104,18 +1129,32 @@ function DeleteEntryButton({
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
 
-  const mutation = useMutation({
+  const mutation = useMutation<any,Error,void>({
     mutationFn: async () => {
       await apiRequest("DELETE", `/api/trackers/${trackerId}/entries/${entryId}`);
     },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/trackers"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
+        (old || []).map((t: any) => t.id === trackerId
+          ? { ...t, entries: (t.entries || []).filter((e: any) => e.id !== entryId) }
+          : t
+        )
+      );
+      return { prev };
+    },
     onSuccess: () => {
+      toast({ title: "Entry deleted" });
+    },
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Entry deleted" });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -2016,7 +2055,7 @@ function computeHealthScore(trackers: Tracker[]): number | null {
   return factors > 0 ? Math.round(score / factors) : null;
 }
 
-function TrackerSummary({ trackers, profiles }: { trackers: Tracker[]; profiles?: { id: string; name: string }[] }) {
+function TrackerSummary({ trackers, profiles, onTrackerClick }: { trackers: Tracker[]; profiles?: { id: string; name: string }[]; onTrackerClick?: (trackerId: string) => void }) {
   if (trackers.length === 0) return null;
 
   // Entries this week
@@ -2053,10 +2092,15 @@ function TrackerSummary({ trackers, profiles }: { trackers: Tracker[]; profiles?
         <span className="text-sm font-bold tabular-nums" style={{ color: CHART_COLORS.primary }}>{weeklyEntries}</span>
         <span className="text-xs-tight text-muted-foreground">This Week</span>
       </div>
-      <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-most-active">
+      <button
+        className="flex flex-col items-center p-1.5 rounded-md border border-border/30 hover:bg-muted/40 active:scale-95 transition-all cursor-pointer"
+        data-testid="summary-most-active"
+        onClick={() => { const t = trackers.find(t => t.name === mostActive.name); if (t && onTrackerClick) onTrackerClick(t.id); }}
+        title={mostActive.count > 0 ? `Open ${mostActive.name}` : undefined}
+      >
         <span className="text-xs font-bold truncate w-full text-center" style={{ color: CHART_COLORS.tertiary }}>{mostActive.count > 0 ? cleanTrackerName(mostActive.name, profiles, mostActive.lp) : "—"}</span>
         <span className="text-xs-tight text-muted-foreground">{mostActive.count > 0 ? `${mostActive.count} entries` : "Most Active"}</span>
-      </div>
+      </button>
       <div className="flex flex-col items-center p-1.5 rounded-md border border-border/30" data-testid="summary-best-streak">
         <span className="text-sm font-bold tabular-nums" style={{ color: CHART_COLORS.gold }}>{bestStreak.streak > 0 ? `${bestStreak.streak}d` : "—"}</span>
         <span className="text-xs-tight text-muted-foreground truncate w-full text-center">{bestStreak.name ? cleanTrackerName(bestStreak.name, profiles) : "Streak"}</span>
@@ -3249,9 +3293,52 @@ export default function TrackersPage() {
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docDeleteConfirmId, setDocDeleteConfirmId] = useState<string | null>(null);
+  const [sendDocId, setSendDocId] = useState<string | null>(null); // kept for legacy ref cleanup
+  const [shareLoadingId, setShareLoadingId] = useState<string | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const [uploadProfileId, setUploadProfileId] = useState<string>("");
+  // ── Native document sharing ──────────────────────────────────────
+  // Tapping the share button fetches the file and opens the device’s native
+  // share sheet (iOS/Android).  Picking Mail attaches the file automatically.
+  // On desktop without Web Share API, the file downloads instead.
+  const handleShareDoc = async (doc: Document) => {
+    setShareLoadingId(doc.id);
+    try {
+      const resp = await apiRequest("GET", `/api/documents/${doc.id}/file`);
+      const blob = await resp.blob();
+      const mime = doc.mimeType || blob.type || "application/octet-stream";
+      const extMap: Record<string, string> = {
+        "application/pdf": ".pdf", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+        "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+        "text/plain": ".txt", "text/csv": ".csv",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+      };
+      const ext = extMap[mime] || "";
+      const filename = doc.name.includes(".") ? doc.name : `${doc.name}${ext}`;
+      const file = new File([blob], filename, { type: mime });
+
+      // iOS/Android: Web Share API — opens native share sheet including Mail
+      if (typeof navigator !== "undefined" && navigator.share &&
+          (navigator as any).canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: doc.name });
+        toast({ title: "Share sheet opened" });
+      } else {
+        // Desktop fallback: download the file
+        const url = URL.createObjectURL(blob);
+        const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast({ title: `"${filename}" downloaded`, description: "Open your email client and attach the file." });
+      }
+    } catch (err: any) {
+      toast({ title: "Could not share", description: err?.message || "Unknown error", variant: "destructive" });
+    } finally {
+      setShareLoadingId(null);
+    }
+  };
+
   // Unified section filter: which sections to show
   const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers">(() => {
     try { return (sessionStorage.getItem("portol_linked_filter") as any) || "all"; } catch { return "all"; }
@@ -3451,7 +3538,14 @@ export default function TrackersPage() {
             </button>
           </Link>
 
-          <span className="text-xs text-muted-foreground">{filteredTrackers.length} trackers</span>
+          <span className="text-xs text-muted-foreground">
+            {sectionFilter === "trackers" ? `${filteredTrackers.length} trackers`
+             : sectionFilter === "documents" ? `${filteredDocuments.length} documents`
+             : sectionFilter === "all" ? `${filteredTrackers.length + filteredDocuments.length} items`
+             : sectionFilter === "subscriptions" ? "subscriptions"
+             : sectionFilter === "profiles" ? "assets"
+             : `${filteredTrackers.length} trackers`}
+          </span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="flex items-center border rounded-md p-0.5">
@@ -3555,7 +3649,7 @@ export default function TrackersPage() {
 
       {/* Summary cards */}
       {(sectionFilter === "all" || sectionFilter === "trackers") && filteredTrackers.length > 0 && (
-        <TrackerSummary trackers={filteredTrackers} profiles={profiles || undefined} />
+        <TrackerSummary trackers={filteredTrackers} profiles={profiles || undefined} onTrackerClick={setSelectedTrackerId} />
       )}
 
       {/* Assets & Vehicles — grouped by type */}
@@ -3809,7 +3903,7 @@ export default function TrackersPage() {
               };
               const colorClass = DOC_TYPE_COLORS[doc.type] || "bg-slate-500/10 text-slate-500";
               const isExpanded = expandedDocId === doc.id;
-              const hasPreview = !!(doc.fileData || doc.thumbnailData);
+              const hasPreview = !!(doc.fileData || (doc as any).thumbnailData);
               return (
                 <div key={doc.id} className="rounded-xl border bg-card overflow-hidden transition-all" data-testid={`global-doc-${doc.id}`}>
                   {/* Row */}
@@ -3839,6 +3933,19 @@ export default function TrackersPage() {
                     </button>
                     {/* Single eye (full view) + delete */}
                     <div className="flex gap-0.5 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handleShareDoc(doc)}
+                        disabled={shareLoadingId === doc.id}
+                        title="Share / email this document"
+                        data-testid={`button-send-doc-${doc.id}`}
+                      >
+                        {shareLoadingId === doc.id
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <Share2 className="h-3.5 w-3.5" />}
+                      </Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setViewingDoc(doc)} title="Open full view" data-testid={`button-view-doc-global-${doc.id}`}>
                         <Eye className="h-3.5 w-3.5" />
                       </Button>
@@ -4238,7 +4345,8 @@ export default function TrackersPage() {
         );
       })()}
 
-      {/* Document viewer dialog */}
+      {/* Send Dialog removed — now uses native share sheet (Web Share API) */}
+
       {viewingDoc && (
         <DocumentViewerDialog
           id={viewingDoc.id}

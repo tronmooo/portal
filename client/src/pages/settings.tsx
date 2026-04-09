@@ -122,6 +122,11 @@ export default function SettingsPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
+  // Fetch document count
+  const { data: allDocs = [] } = useQuery<any[]>({
+    queryKey: ["/api/documents"],
+    queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
+  });
 
   async function handleExport() {
     setExporting(true);
@@ -265,7 +270,7 @@ export default function SettingsPage() {
                 <StatCard icon={Users} label="Profiles" value={profiles.length} href="/profiles" accent="188 55% 50%" />
                 <StatCard icon={ListTodo} label="Active Tasks" value={stats?.activeTasks || 0} href="/dashboard" accent="262 65% 62%" />
                 <StatCard icon={Activity} label="Trackers" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" />
-                <StatCard icon={FileText} label="Documents" value={0} href="/linked" accent="25 80% 54%" />
+                <StatCard icon={FileText} label="Documents" value={allDocs.length} href="/linked" accent="25 80% 54%" />
               </div>
             </div>
 
@@ -525,68 +530,7 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* ─── Data Export ─── */}
-        <div className="rounded-xl border border-border/40 bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b border-border/30">
-            <h3 className="text-sm font-semibold">Export Your Data</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Download all your Portol data</p>
-          </div>
-          <div className="px-4 py-3 space-y-2">
-            <button
-              onClick={async () => {
-                try {
-                  const [profiles, tasks, expenses, events, habits, goals] = await Promise.all([
-                    fetch('/api/profiles').then(r => r.json()),
-                    fetch('/api/tasks').then(r => r.json()),
-                    fetch('/api/expenses').then(r => r.json()),
-                    fetch('/api/events').then(r => r.json()),
-                    fetch('/api/habits').then(r => r.json()),
-                    fetch('/api/goals').then(r => r.json()),
-                  ]);
-                  const data = { exportedAt: new Date().toISOString(), profiles, tasks, expenses, events, habits, goals };
-                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a'); a.href = url; a.download = `portol-export-${new Date().toISOString().slice(0,10)}.json`;
-                  a.click(); URL.revokeObjectURL(url);
-                } catch (e) { console.error(e); }
-              }}
-              className="w-full flex items-center gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 text-left transition-colors"
-              data-testid="button-export-json"
-            >
-              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Download className="h-4 w-4 text-primary" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">Export as JSON</p>
-                <p className="text-xs text-muted-foreground">All data in machine-readable format</p>
-              </div>
-            </button>
-            <button
-              onClick={async () => {
-                try {
-                  const expenses = await fetch('/api/expenses').then(r => r.json());
-                  const rows = [['Date','Description','Amount','Category']];
-                  for (const e of expenses) rows.push([e.date||'', e.description||'', e.amount||'', e.category||'']);
-                  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
-                  const blob = new Blob([csv], { type: 'text/csv' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a'); a.href = url; a.download = `portol-expenses-${new Date().toISOString().slice(0,10)}.csv`;
-                  a.click(); URL.revokeObjectURL(url);
-                } catch (e) { console.error(e); }
-              }}
-              className="w-full flex items-center gap-3 p-3 rounded-lg bg-muted/40 hover:bg-muted/60 text-left transition-colors"
-              data-testid="button-export-csv"
-            >
-              <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                <Download className="h-4 w-4 text-amber-500" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">Export Expenses as CSV</p>
-                <p className="text-xs text-muted-foreground">For spreadsheets and accounting tools</p>
-              </div>
-            </button>
-          </div>
-        </div>
+        {/* Duplicate Export section removed — Data Management → Export Backup above covers this (fix #27) */}
 
         {/* ─── Privacy & Security ─── */}
         <Card data-testid="card-privacy">

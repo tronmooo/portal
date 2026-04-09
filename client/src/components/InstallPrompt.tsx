@@ -7,11 +7,14 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-let globalDismissed = false;
+// Persist across component remounts using sessionStorage
+let globalDismissed = (() => {
+  try { return sessionStorage.getItem('portol_install_dismissed') === '1'; } catch { return false; }
+})();
 
 export function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [dismissed, setDismissed] = useState(globalDismissed);
+  const [dismissed, setDismissed] = useState(() => globalDismissed);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -37,6 +40,7 @@ export function InstallPrompt() {
 
   function handleDismiss() {
     globalDismissed = true;
+    try { sessionStorage.setItem('portol_install_dismissed', '1'); } catch {}
     setDismissed(true);
   }
 

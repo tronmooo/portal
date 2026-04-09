@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
@@ -37,7 +38,10 @@ interface Props {
 
 export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
-  const [open, setOpen] = useState(false);
+  // CRITICAL: separate state per UI — shared state causes the Sheet overlay to
+  // mount on desktop and block ALL page clicks, making tabs unresponsive.
+  const [desktopOpen, setDesktopOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [filter, setFilter] = useState(getProfileFilter);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -182,41 +186,74 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
 
   return (
     <>
-      <Button
-        variant="outline"
-        size={compact ? "sm" : "default"}
-        className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
-        onClick={() => setOpen(true)}
-        data-testid="button-profile-filter"
-      >
-        <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
-        <span className="truncate max-w-[100px]">{label}</span>
-        {selectedCount > 0 && (
-          <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">
-            {selectedCount}
-          </Badge>
-        )}
-        <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
-      </Button>
-
-      {/* Bottom sheet for filter — reliable scrolling on all devices */}
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="bottom" className="max-h-[70vh] rounded-t-2xl px-2 pb-6 flex flex-col">
-          <SheetHeader className="px-2 pb-2 shrink-0">
-            <div className="flex items-center justify-between">
-              <SheetTitle className="text-sm">Filter by Profile</SheetTitle>
+      {/* Desktop: Popover dropdown (desktopOpen state — isolated from Sheet) */}
+      <div className="hidden md:block">
+        <Popover open={desktopOpen} onOpenChange={setDesktopOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              size={compact ? "sm" : "default"}
+              className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
+              data-testid="button-profile-filter"
+            >
+              <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
+              <span className="truncate max-w-[100px]">{label}</span>
+              {selectedCount > 0 && (
+                <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">{selectedCount}</Badge>
+              )}
+              <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-60 p-2 max-h-[400px] overflow-y-auto z-50">
+            <div className="flex items-center justify-between mb-2 px-1">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Filter by Person</span>
               {!isEveryone && (
-                <Button variant="ghost" size="sm" className="h-7 text-xs px-2 gap-1" onClick={handleEveryone}>
+                <Button variant="ghost" size="sm" className="h-6 text-xs px-1.5 gap-1" onClick={() => { handleEveryone(); setDesktopOpen(false); }}>
                   <X className="h-3 w-3" /> Clear
                 </Button>
               )}
             </div>
-          </SheetHeader>
-          <div className="overflow-y-auto min-h-0 flex-1 -mx-2 px-2 overscroll-contain">
-            {listContent}
-          </div>
-        </SheetContent>
-      </Sheet>
+            <div onClick={() => setDesktopOpen(false)}>
+              {listContent}
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
+
+      {/* Mobile: Bottom sheet (mobileOpen state — isolated from Popover) */}
+      <div className="md:hidden">
+        <Button
+          variant="outline"
+          size={compact ? "sm" : "default"}
+          className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
+          onClick={() => setMobileOpen(true)}
+          data-testid="button-profile-filter-mobile"
+        >
+          <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
+          <span className="truncate max-w-[100px]">{label}</span>
+          {selectedCount > 0 && (
+            <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">{selectedCount}</Badge>
+          )}
+          <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
+        </Button>
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetContent side="bottom" className="max-h-[70vh] rounded-t-2xl px-2 pb-6 flex flex-col">
+            <SheetHeader className="px-2 pb-2 shrink-0">
+              <div className="flex items-center justify-between">
+                <SheetTitle className="text-sm">Filter by Profile</SheetTitle>
+                {!isEveryone && (
+                  <Button variant="ghost" size="sm" className="h-7 text-xs px-2 gap-1" onClick={handleEveryone}>
+                    <X className="h-3 w-3" /> Clear
+                  </Button>
+                )}
+              </div>
+            </SheetHeader>
+            <div className="overflow-y-auto min-h-0 flex-1 -mx-2 px-2 overscroll-contain">
+              {listContent}
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
     </>
   );
 }

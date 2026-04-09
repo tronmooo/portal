@@ -195,7 +195,7 @@ function TaskItem({
   const { toast } = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const toggleMutation = useMutation({
+  const toggleMutation = useMutation<any,Error,void>({
     mutationFn: async () => {
       const newStatus = task.status === "done" ? "todo" : "done";
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: newStatus });
@@ -215,7 +215,7 @@ function TaskItem({
       invalidateTaskQueries();
       toast({ title: task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed` });
     },
-    onError: (err: Error, _vars, context) => {
+    onError: (err: Error, _vars, context: any) => {
       // Rollback optimistic update on error
       if (context?.prevQueries) {
         for (const [key, data] of context.prevQueries) {
@@ -226,25 +226,47 @@ function TaskItem({
     },
   });
 
-  const restoreMutation = useMutation({
+  const restoreMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("PATCH", `/api/tasks/${task.id}/restore`),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+        (old || []).map(t => t.id === task.id ? { ...t, status: "todo" as const } : t)
+      );
+      return { prevQueries };
+    },
     onSuccess: () => {
-      invalidateTaskQueries();
       toast({ title: `"${task.title}" restored` });
     },
-    onError: (err: Error) => toast({ title: `Failed to restore "${task.title}"`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v: unknown, ctx: any) => {
+      if (ctx?.prevQueries) { for (const [key, data] of ctx.prevQueries) queryClient.setQueryData(key, data); }
+      toast({ title: `Failed to restore "${task.title}"`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => { invalidateTaskQueries(); },
   });
 
-  const deleteMutation = useMutation({
+  const deleteMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("DELETE", `/api/tasks/${task.id}`),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+        (old || []).filter(t => t.id !== task.id)
+      );
+      return { prevQueries };
+    },
     onSuccess: () => {
-      invalidateTaskQueries();
       toast({
         title: `"${task.title}" deleted`,
         action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction>,
       });
     },
-    onError: (err: Error) => toast({ title: `Failed to delete "${task.title}"`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v: unknown, ctx: any) => {
+      if (ctx?.prevQueries) { for (const [key, data] of ctx.prevQueries) queryClient.setQueryData(key, data); }
+      toast({ title: `Failed to delete "${task.title}"`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => { invalidateTaskQueries(); },
   });
 
   return (

@@ -343,7 +343,30 @@ function KeepAlive() {
     };
     ping(); // Immediate ping to pre-warm cache on mount
     const id = setInterval(ping, 90_000); // Then every 90 seconds
-    return () => clearInterval(id);
+
+    // ── Visibility recovery: when user returns after ≥15s absence, warm server + refresh data
+    let hiddenAt = 0;
+    const onVisChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+      } else {
+        const awayMs = Date.now() - hiddenAt;
+        if (hiddenAt > 0 && awayMs >= 15_000) {
+          ping(); // Re-warm Vercel cold-started function immediately
+          // Invalidate dashboard + stats so they refresh with fresh data
+          setTimeout(() => {
+            queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
+            queryClient.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
+          }, 800); // slight delay to let warmup respond first
+        }
+        hiddenAt = 0;
+      }
+    };
+    document.addEventListener('visibilitychange', onVisChange);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisChange);
+    };
   }, [user]);
   return null;
 }
@@ -471,10 +494,7 @@ function App() {
                       <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
                         <NotificationBell />
-                        <div className="hidden md:flex items-center gap-1">
-                          <CalendarButton />
-                          <SettingsButton />
-                        </div>
+                        {/* Calendar + Settings are in the sidebar on desktop — removed redundant header icons (fix #28) */}
                         <ProfileButton />
                       </div>
                     </header>

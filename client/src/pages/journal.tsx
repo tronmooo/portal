@@ -35,15 +35,28 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
   const MoodIcon = mood.icon;
   const dateObj = new Date(entry.createdAt);
 
-  const deleteMutation = useMutation({
+  const deleteMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("DELETE", `/api/journal/${entry.id}`),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/journal"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/journal"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/journal"] }, (old) =>
+        (old || []).filter((e: any) => e.id !== entry.id)
+      );
+      return { prev };
+    },
     onSuccess: () => {
+      toast({ title: "Journal entry deleted" });
+    },
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Journal entry deleted" });
     },
-    onError: (err: Error) => toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -166,14 +179,38 @@ export default function JournalPage() {
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/journal", data),
+    onMutate: async (data: any) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/journal"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/journal"] });
+      const tempEntry = {
+        id: 'temp-' + Date.now(),
+        content: data.content,
+        mood: data.mood,
+        energy: data.energy,
+        date: new Date().toLocaleDateString('en-CA'),
+        createdAt: new Date().toISOString(),
+        tags: [],
+        highlights: [],
+        gratitude: [],
+      };
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/journal"] }, (old) =>
+        [tempEntry, ...(old || [])]
+      );
+      return { prev };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setMood(null); setContent(""); setEnergy(3); setShowCreate(false);
       toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
     },
-    onError: (err: Error) => toast({ title: "Failed to create journal entry", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to create journal entry", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
   });
 
   // 7-day mood strip

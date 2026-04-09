@@ -30,13 +30,20 @@ function HabitCard({ habit }: { habit: Habit }) {
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
   const accentColor = habit.color || "#4F98A3";
 
-  const checkinMutation = useMutation({
+  const checkinMutation = useMutation<any, Error, void>({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === habit.id
+          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'temp-' + Date.now() }], currentStreak: (h.currentStreak || 0) + 1 }
+          : h
+        )
+      );
+      return { prev };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       const newCount = todayCheckins + 1;
       if (newCount >= targetPerDay) {
         toast({ title: `✨ ${habit.name} complete!`, description: targetPerDay > 1 ? `All ${targetPerDay} done for today.` : "Keep the streak going!" });
@@ -44,15 +51,24 @@ function HabitCard({ habit }: { habit: Habit }) {
         toast({ title: `${habit.name} — ${newCount} / ${targetPerDay}`, description: `${targetPerDay - newCount} more to go today` });
       }
     },
-    onError: (err: Error) => toast({ title: `Failed to log ${habit.name}`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v: unknown, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: `Failed to log ${habit.name}`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
   });
 
-  const restoreMutation = useMutation({
+  const restoreMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("PATCH", `/api/habits/${habit.id}/restore`),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `"${habit.name}" restored` }); },
   });
 
-  const deleteMutation = useMutation({
+  const deleteMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });

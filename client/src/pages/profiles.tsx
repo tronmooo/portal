@@ -969,7 +969,9 @@ function CreateProfileDialog({
 
 // ─── Profile Card ────────────────────────────────────────────────────────────
 
-const HIDDEN_FIELDS = ["class", "donor", "provider", "patientId", "property"];
+const HIDDEN_FIELDS = ["class", "donor", "provider", "patientId", "property", "_parentProfileId", "ownerProfileId", "ownerName"];
+// Vehicle/asset-specific fields that should not appear on person/pet profile cards
+const VEHICLE_SPECIFIC_FIELDS = ["make", "model", "year", "vin", "mileage", "color_ext", "color_int", "trim", "transmission", "fuelType", "engineSize", "licenseplate", "odo"];
 
 const formatFieldValue = (key: string, value: any): string => {
   if (value === true || value === "true") return "Yes";
@@ -1023,8 +1025,11 @@ function ProfileCard({
   profile: Profile;
   onDelete: (id: string) => void;
 }) {
+  const isPersonType = ["self", "person", "pet"].includes(profile.type);
   const fields = Object.entries(profile.fields).filter(
-    ([key, v]) => v !== null && v !== undefined && v !== "" && !HIDDEN_FIELDS.includes(key)
+    ([key, v]) => v !== null && v !== undefined && v !== "" &&
+      !HIDDEN_FIELDS.includes(key) &&
+      !(isPersonType && VEHICLE_SPECIFIC_FIELDS.includes(key))
   );
 
   const initials = profile.name
@@ -1107,21 +1112,17 @@ function ProfileCard({
                   ))}
                 </div>
               )}
-              {(profile.tags?.length > 0 || linkedCount > 0) && (
-                <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  {profile.tags?.slice(0, 3).map((tag) => (
-                    <Badge key={tag} variant="outline" className="text-xs">
-                      <Tag className="h-2 w-2 mr-0.5" />
-                      {tag}
-                    </Badge>
-                  ))}
-                  {linkedCount > 0 && (
-                    <span className="text-xs text-muted-foreground">
-                      {linkedCount} linked items
-                    </span>
-                  )}
-                </div>
-              )}
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                {profile.tags?.slice(0, 3).map((tag) => (
+                  <Badge key={tag} variant="outline" className="text-xs">
+                    <Tag className="h-2 w-2 mr-0.5" />
+                    {tag}
+                  </Badge>
+                ))}
+                <span className="text-xs text-muted-foreground">
+                  {linkedCount} linked item{linkedCount !== 1 ? 's' : ''}
+                </span>
+              </div>
             </div>
             <div className="flex items-center gap-1 shrink-0 mt-0.5">
               <Button

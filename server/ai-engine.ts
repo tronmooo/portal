@@ -1860,10 +1860,32 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
 // ============================================================
 
 function buildSystemPrompt(context: string): string {
-  return `You are Portol AI — the brain of a centralized personal life operating system. You help users manage their entire life: profiles (people, pets, vehicles, accounts), health tracking, tasks, expenses, calendar events, habits, obligations, journal entries, memories, and documents.
+  return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
-EXISTING DATA (reference these when the user mentions them):
+EXISTING DATA (this is fresh from the database — use it for every answer):
 ${context}
+
+DIAGNOSTICS & INSIGHTS MODE:
+When the user asks questions like "how am I doing?", "give me a health summary", "what's my financial situation?", "diagnose my habits", "what do I need to focus on?", or any open-ended question about their status:
+- Cross-reference ALL data sources (trackers, expenses, calendar, habits, goals) to form real observations
+- Call out specific numbers, trends, and anomalies
+- Prioritize actionable insights over generic statements
+- Example: instead of "You have 2 open tasks", say "You have 2 tasks due today: [title 1] and [title 2]. Based on your calendar, you have 3 hours free this afternoon."
+- Example: instead of "Your spending this month is $X", say "$1,862 spent this month — shopping is 63% ($1,179) which is abnormally high vs your 6-month average of ~$800/month."
+
+MEDICATION TRACKING (separate system from habits):
+- When users mention taking, logging, or tracking medication, prescription drugs, or supplements, use create_tracker with category="medication" if no tracker exists yet
+- Medication tracker fields MUST include: { drug: "Name", dosage: "Xmg", taken: true/false, time: "HH:MM", notes: "..." }
+- Medication adherence = entries where taken=true / total entries × 100%
+- NEVER lump medications into habit check-ins. Medications are structured data, not binary check-offs.
+- If a user says "I took my Metformin 500mg" → log_tracker_entry to the Metformin tracker (or create it) with { drug: "Metformin", dosage: "500mg", taken: true }
+- If a user says "set up a medication tracker for Lisinopril 10mg daily" → create_tracker with name="Lisinopril", category="medication", fields including drug, dosage, frequency, prescriber, startDate
+
+CALENDAR DATA ACCURACY:
+- All events MUST include correct ownership (who it belongs to), correct date and time (timezone-aware), and correct category
+- Tasks with a due date appear on the calendar automatically — do NOT also create an event for the same task
+- Subscriptions/obligations appear on the calendar on their due dates automatically — do NOT create events for them
+- Only create calendar events for actual scheduled occurrences (appointments, meetings, activities)
 
 BEHAVIOR:
 - Be concise and confirm what you did after each action.
@@ -4640,7 +4662,38 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       return `"${d.name}" (${d.type})${keyFields ? ` [${keyFields}]` : ''}`;
     }).join("; ") || "none"}`,
     `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
-  ].join("\n");
+    // Financial intelligence — net worth and burn rate for AI diagnostics
+    (() => {
+      const selfProf = profiles.find((p: any) => p.type === "self");
+      if (!selfProf) return "";
+      const children = profiles.filter((p: any) => p.fields?._parentProfileId === selfProf.id);
+      const assetTypes = ["vehicle","property","investment","asset","account","banking"];
+      const totalAssets = children.filter((c: any) => assetTypes.includes(c.type))
+        .reduce((s, c) => s + Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || 0), 0);
+      const totalLiabs = children.filter((c: any) => c.type === "loan" || c.fields?.loanBalance)
+        .reduce((s, c) => s + Number(c.fields?.remainingBalance || c.fields?.loanBalance || 0), 0);
+      const monthlySubs = obligations.filter((o: any) => o.status !== "cancelled")
+        .reduce((s, o) => {
+          const amt = Number(o.amount || 0);
+          const f = (o.frequency || "").toLowerCase();
+          if (f === "weekly") return s + amt * 4.33;
+          if (f === "annual" || f === "yearly") return s + amt / 12;
+          return s + amt;
+        }, 0);
+      const thisMonthSpend = expenses.filter(e => e.date?.startsWith(new Date().toISOString().slice(0,7)))
+        .reduce((s, e) => s + Number(e.amount || 0), 0);
+      return `Financial Snapshot: Net Worth ~$${(totalAssets - totalLiabs).toLocaleString()}, Assets $${totalAssets.toLocaleString()}, Liabilities $${totalLiabs.toLocaleString()}, Monthly subscriptions $${Math.round(monthlySubs)}/mo, This month's spending $${Math.round(thisMonthSpend)}`;
+    })(),
+    // Medication trackers — special category for the AI to reference
+    (() => {
+      const medTrackers = trackers.filter((t: any) => t.category === "medication" || t.name.toLowerCase().includes("medication") || t.name.toLowerCase().includes("prescri"));
+      if (medTrackers.length === 0) return "";
+      return `Medications (${medTrackers.length}): ${medTrackers.map((t: any) => {
+        const latest = t.entries[t.entries.length - 1];
+        return `${t.name}${latest ? ` (last taken: ${latest.timestamp?.slice(0,10)}, dosage: ${JSON.stringify(latest.values).slice(0,60)})` : " (no entries yet)"}`;
+      }).join("; ")}`;
+    })(),
+  ].filter(Boolean).join("\n");
 
   const systemPrompt = buildSystemPrompt(context);
 

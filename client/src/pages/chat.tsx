@@ -921,7 +921,7 @@ function SlowResponseHint() {
 const WELCOME_MSG: ChatMessage = {
   id: "welcome",
   role: "assistant",
-  content: "",
+  content: "Hi! I'm your Portol AI. Ask me to log health data, track expenses, create events, add tasks, open documents, and more. What would you like to do?",
   timestamp: new Date().toISOString(),
 };
 // Persist chat history to sessionStorage so it survives page reloads
@@ -965,6 +965,7 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
   const [saving, setSaving] = useState(false);
   const [deleted, setDeleted] = useState(!!isDeleted);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   if (deleted) {
     return (
@@ -1616,7 +1617,7 @@ export default function ChatPage() {
 
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
-        <div className="max-w-2xl mx-auto space-y-4">
+        <div className={`max-w-2xl mx-auto space-y-4 ${messages.length <= 1 ? 'min-h-[40vh] flex flex-col justify-end' : ''}`}>
 
           {/* Search bar */}
           {searchOpen && (
@@ -1747,7 +1748,7 @@ export default function ChatPage() {
                       };
                       const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
                       // Build a meaningful title — always uppercase tracker/type label
-                      const isTrackerEntry = action.type === 'log_entry' || action.type === 'log_tracker_entry';
+                      const isTrackerEntry = action.type === 'log_entry' || (action.type as string) === 'log_tracker_entry';
                       const trackerName = (action.data?.trackerName || '').toUpperCase();
                       const whoFor = action.data?.forProfile
                         ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
@@ -1763,7 +1764,7 @@ export default function ChatPage() {
                         ? String(action.data.values.item) : '';
                       const entityTitle = isTrackerEntry
                         ? (entryItem || trackerName || 'Entry')
-                        : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || action.title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
+                        : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
                       const entityDetails = isTrackerEntry
                         ? entryValues
                         : action.data?.amount
