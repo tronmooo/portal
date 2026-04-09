@@ -2776,7 +2776,9 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
     const now = new Date();
-    const today = now.toISOString().slice(0, 10);
+    // Use user's timezone for 'today' — toISOString() is UTC and causes
+    // events to disappear after ~5pm PST when UTC rolls to the next day
+    const today = getUserToday(this._timezone);
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
     // Multi-select filter support

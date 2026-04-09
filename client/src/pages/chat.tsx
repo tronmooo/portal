@@ -1727,7 +1727,9 @@ export default function ChatPage() {
                       const entityId = action.data?._entityId;
                       const isUndone = action.data?._undone;
                       // All create/log actions can be undone
+                      // Mapping covers BOTH the raw tool name AND the mapped ParsedAction type
                       const undoEndpoints: Record<string, string> = {
+                        // By ParsedAction type (what gets stored in action.type)
                         create_task: "tasks",
                         log_expense: "expenses",
                         create_event: "events",
@@ -1738,13 +1740,26 @@ export default function ChatPage() {
                         journal_entry: "journal",
                         create_artifact: "artifacts",
                         create_tracker: "trackers",
+                        log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
+                        // Also by raw tool name (fallback)
                         log_tracker_entry: "tracker-entries",
                         add_tracker_entry: "tracker-entries",
                       };
-                      const canUndo = entityId && !isUndone && undoEndpoints[action.type];
-                      // Get the entity title/name from action data
-                      const entityTitle = action.data?.title || action.data?.name || action.data?.description || action.data?.content || action.title || "";
-                      const entityDetails = action.data?.amount ? `$${action.data.amount}` : action.data?.value ? String(action.data.value) : "";
+                      const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
+                      // Build a meaningful title from tracker name + values
+                      const trackerEntry = action.type === 'log_entry' && action.data?.trackerName;
+                      const entryValues = trackerEntry && action.data?.values
+                        ? Object.entries(action.data.values as Record<string,any>)
+                            .filter(([k]) => k !== '_notes')
+                            .map(([k, v]) => `${v} ${k}`)
+                            .slice(0, 3).join(', ')
+                        : '';
+                      const entityTitle = trackerEntry
+                        ? `${action.data.trackerName}${entryValues ? ': ' + entryValues : ''}`
+                        : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || action.title || '');
+                      const entityDetails = action.data?.amount
+                        ? `$${Number(action.data.amount).toFixed(2)}`
+                        : action.data?.value ? String(action.data.value) : '';
                       return (
                         <div
                           key={i}
