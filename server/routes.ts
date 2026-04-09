@@ -239,7 +239,7 @@ export async function registerRoutes(
       if (message.length > 5000) {
         return res.status(400).json({ error: "Message too long (max 5000 characters)" });
       }
-      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId, getTimezone(req));
+      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
@@ -287,7 +287,7 @@ export async function registerRoutes(
       // MIME type validation
       const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
       const safeMime = ALLOWED_MIMES.includes(mimeType) ? mimeType : 'application/octet-stream';
-      const result = await processFileUpload(fileName, safeMime, fileData, message, profileId, getTimezone(req));
+      const result = await processFileUpload(fileName, safeMime, fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
       log.error("[Upload]", err?.message || "unknown error");
@@ -348,8 +348,7 @@ export async function registerRoutes(
             mimeType || "image/jpeg",
             fileData,
             message,
-            profileId !== "none" ? profileId : undefined,
-            getTimezone(req)
+            profileId !== "none" ? profileId : undefined
           );
 
           // Determine which profile it was linked to
