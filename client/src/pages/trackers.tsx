@@ -3055,6 +3055,13 @@ export default function TrackersPage() {
     queryKey: ["/api/trackers", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/trackers${trackerProfileParam}`).then(r => r.json()),
   });
+  // Delay skeleton — if data loads from cache in <200ms the skeleton never flashes
+  const [showTrackerSkeleton, setShowTrackerSkeleton] = useState(false);
+  useEffect(() => {
+    if (!isLoading) { setShowTrackerSkeleton(false); return; }
+    const tid = setTimeout(() => setShowTrackerSkeleton(true), 200);
+    return () => clearTimeout(tid);
+  }, [isLoading]);
 
   const { data: profiles } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -3197,20 +3204,14 @@ export default function TrackersPage() {
   const allTrackerCats = [...new Set((trackers || []).map(t => getCanonicalGroup(t.category)))]
     .sort((a, b) => (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99));
 
-  if (isLoading) {
+  if (showTrackerSkeleton && !trackers) {
     return (
       <div className="p-4 md:p-6 space-y-4">
         <div className="h-8 w-40 rounded skeleton-shimmer" />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-20 rounded-lg skeleton-shimmer" />
-          ))}
+          {[...Array(4)].map((_, i) => <div key={i} className="h-14 rounded-lg skeleton-shimmer" />)}
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-44 rounded-lg skeleton-shimmer" />
-          ))}
-        </div>
+        {[...Array(3)].map((_, i) => <div key={i} className="h-24 rounded-lg skeleton-shimmer" />)}
       </div>
     );
   }

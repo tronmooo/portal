@@ -2400,6 +2400,13 @@ export default function DashboardPage() {
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
   });
+  // Delay dashboard skeleton — instant if data is cached
+  const [showDashSkeleton, setShowDashSkeleton] = useState(false);
+  useEffect(() => {
+    if (!statsLoading) { setShowDashSkeleton(false); return; }
+    const dsk = setTimeout(() => setShowDashSkeleton(true), 200);
+    return () => clearTimeout(dsk);
+  }, [statsLoading]);
 
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
@@ -2482,7 +2489,7 @@ export default function DashboardPage() {
     let content: React.ReactNode = null;
     switch (id) {
       case "kpis":
-        content = statsLoading ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
+        content = (showDashSkeleton && !stats) ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
           stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
         break;
       case "today":

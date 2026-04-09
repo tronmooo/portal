@@ -348,6 +348,36 @@ function KeepAlive() {
   return null;
 }
 
+// Prefetch all main page data immediately after login.
+// This eliminates skeleton loading states when switching tabs —
+// by the time the user navigates anywhere, data is already in the React Query cache.
+const ALL_PREFETCH_KEYS = [
+  '/api/trackers',
+  '/api/profiles',
+  '/api/events',
+  '/api/stats',
+  '/api/dashboard-enhanced',
+  '/api/habits',
+  '/api/goals',
+  '/api/expenses',
+  '/api/obligations',
+  '/api/notifications',
+];
+
+function DataPrefetch() {
+  const { user } = useAuth();
+  const prefetched = useRef(false);
+  useEffect(() => {
+    if (!user || prefetched.current) return;
+    prefetched.current = true;
+    // Fire all queries in parallel — no await, best-effort
+    for (const key of ALL_PREFETCH_KEYS) {
+      queryClient.prefetchQuery({ queryKey: [key] }).catch(() => {});
+    }
+  }, [user]);
+  return null;
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
@@ -416,6 +446,7 @@ function App() {
           <Router hook={useHashLocation}>
             <ScrollToTop />
             <KeepAlive />
+            <DataPrefetch />
             <SwipeNav />
             <PullToRefresh />
             <AuthGate>

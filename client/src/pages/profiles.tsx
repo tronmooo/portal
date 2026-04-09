@@ -1157,6 +1157,12 @@ export default function ProfilesPage() {
     staleTime: 0, // Always fetch fresh — profiles change via chat and must be up to date
     refetchOnMount: "always",
   });
+  const [showProfileSkeleton, setShowProfileSkeleton] = useState(false);
+  useEffect(() => {
+    if (!isLoading) { setShowProfileSkeleton(false); return; }
+    const pid = setTimeout(() => setShowProfileSkeleton(true), 200);
+    return () => clearTimeout(pid);
+  }, [isLoading]);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -1191,14 +1197,12 @@ export default function ProfilesPage() {
     },
   });
 
-  if (isLoading) {
+  if (showProfileSkeleton && !profiles) {
     return (
       <div className="p-4 md:p-6 space-y-4">
         <div className="h-8 w-40 rounded skeleton-shimmer" />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-28 rounded-lg skeleton-shimmer" />
-          ))}
+          {[...Array(4)].map((_, i) => <div key={i} className="h-20 rounded-lg skeleton-shimmer" />)}
         </div>
       </div>
     );
