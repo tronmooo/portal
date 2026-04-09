@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -371,46 +372,47 @@ function parseDuration(val: any): number {
   return parseFloat(str) || 0;
 }
 
-// ---- Streak calculator for habits ----
-function calculateStreak(checkins: { date: string }[]): { current: number; longest: number } {
+// ---- Streak calculator for habits (supports targetPerDay) ----
+function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1, timezone: string = DEFAULT_TIMEZONE): { current: number; longest: number } {
   if (checkins.length === 0) return { current: 0, longest: 0 };
-  const dates = [...new Set(checkins.map(c => c.date))].sort().reverse();
 
-  // Use timezone-aware date math to avoid DST issues
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-  function addDays(dateStr: string, days: number): string {
-    const d = new Date(dateStr + 'T12:00:00'); // noon to avoid DST edge
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+  // Count check-ins per date
+  const countByDate = new Map<string, number>();
+  for (const c of checkins) {
+    countByDate.set(c.date, (countByDate.get(c.date) || 0) + 1);
   }
-  const yesterdayStr = addDays(todayStr, -1);
+  // A day is "complete" if check-in count >= targetPerDay
+  const completeDates = [...countByDate.entries()]
+    .filter(([, count]) => count >= targetPerDay)
+    .map(([date]) => date)
+    .sort()
+    .reverse();
+  if (completeDates.length === 0) return { current: 0, longest: 0 };
+
+  const todayStr = getUserToday(timezone);
+  const yesterdayStr = tzAddDays(todayStr, -1);
 
   let current = 0;
-  let longest = 0;
-  let tempStreak = 0;
 
-  // Check if the most recent checkin is today or yesterday (allow 1-day gap for "current")
-  if (dates[0] === todayStr || dates[0] === yesterdayStr) {
-    // Walk backwards from the most recent checkin date
-    let expectedDate = dates[0];
-    for (let i = 0; i < dates.length; i++) {
-      if (dates[i] === expectedDate) {
+  // Check if the most recent complete day is today or yesterday (allow 1-day gap for "current")
+  if (completeDates[0] === todayStr || completeDates[0] === yesterdayStr) {
+    let expectedDate = completeDates[0];
+    for (let i = 0; i < completeDates.length; i++) {
+      if (completeDates[i] === expectedDate) {
         current++;
-        expectedDate = addDays(expectedDate, -1);
-      } else if (dates[i] < expectedDate) {
-        // gap found
+        expectedDate = tzAddDays(expectedDate, -1);
+      } else if (completeDates[i] < expectedDate) {
         break;
       }
     }
   }
 
-  // Calculate longest streak from all dates
-  const allDates = [...new Set(checkins.map(c => c.date))].sort();
-  tempStreak = 1;
-  longest = 1;
+  // Calculate longest streak from all complete dates
+  const allDates = [...completeDates].sort();
+  let tempStreak = 1;
+  let longest = 1;
   for (let i = 1; i < allDates.length; i++) {
-    const expected = addDays(allDates[i - 1], 1);
-    if (allDates[i] === expected) {
+    if (allDates[i] === tzAddDays(allDates[i - 1], 1)) {
       tempStreak++;
       longest = Math.max(longest, tempStreak);
     } else {
@@ -461,10 +463,9 @@ function generateInsights(
       new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
     let streak = 0;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayFitness = getUserToday();
     for (let i = 0; i < 30; i++) {
-      const checkDate = new Date(today); checkDate.setDate(checkDate.getDate() - i);
-      const dayStr = checkDate.toISOString().slice(0, 10);
+      const dayStr = tzAddDays(todayFitness, -i);
       const hasEntry = allFitnessEntries.some(e => e.timestamp.slice(0, 10) === dayStr);
       if (hasEntry) streak++; else if (i > 0) break;
     }
@@ -584,7 +585,7 @@ function generateInsights(
   }
 
   // 9. Calorie summary
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = getUserToday();
   let totalCalsBurned = 0;
   for (const t of trackers) {
     for (const e of t.entries) {
@@ -933,7 +934,7 @@ export class MemStorage implements IStorage {
       }
       // Expand recurring
       if (ev.recurrence !== "none") {
-        const base = new Date(ev.date);
+        const base = parseLocalDate(ev.date);
         for (let i = 1; i <= 90; i++) {
           const next = new Date(base);
           switch (ev.recurrence) {
@@ -943,7 +944,7 @@ export class MemStorage implements IStorage {
             case "monthly":  next.setMonth(next.getMonth() + i); break;
             case "yearly":   next.setFullYear(next.getFullYear() + i); break;
           }
-          const nextStr = next.toISOString().slice(0, 10);
+          const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
           if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
           if (nextStr >= startDate) {
@@ -1122,13 +1123,17 @@ export class MemStorage implements IStorage {
   async checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined> {
     const habit = this.habits.get(habitId);
     if (!habit) return undefined;
-    const checkinDate = date || new Date().toISOString().slice(0, 10);
-    // Don't double-checkin same day
-    if (habit.checkins.some(c => c.date === checkinDate)) return habit.checkins.find(c => c.date === checkinDate);
+    const checkinDate = date || getUserToday();
+    // Allow multiple check-ins per day up to targetPerDay (matches Supabase implementation)
+    const todayCheckins = habit.checkins.filter(c => c.date === checkinDate);
+    const maxPerDay = habit.targetPerDay || 1;
+    if (todayCheckins.length >= maxPerDay) {
+      return todayCheckins[todayCheckins.length - 1];
+    }
     const checkin: HabitCheckin = { id: randomUUID(), date: checkinDate, value, notes, timestamp: new Date().toISOString() };
     habit.checkins.push(checkin);
-    // Recalculate streaks
-    const { current, longest } = calculateStreak(habit.checkins);
+    // Recalculate streaks (with targetPerDay support)
+    const { current, longest } = calculateStreak(habit.checkins, habit.targetPerDay || 1);
     habit.currentStreak = current;
     habit.longestStreak = Math.max(longest, habit.longestStreak);
     this.logActivity("habit", `Checked in: ${habit.name}${value ? ` (${value})` : ""}`);
@@ -1166,7 +1171,7 @@ export class MemStorage implements IStorage {
     const payment: ObligationPayment = { id: randomUUID(), amount, date: new Date().toISOString(), method, confirmationNumber };
     ob.payments.push(payment);
     // Advance next due date
-    const nextDue = new Date(ob.nextDueDate);
+    const nextDue = parseLocalDate(ob.nextDueDate);
     switch (ob.frequency) {
       case "weekly": nextDue.setDate(nextDue.getDate() + 7); break;
       case "biweekly": nextDue.setDate(nextDue.getDate() + 14); break;
@@ -1174,7 +1179,7 @@ export class MemStorage implements IStorage {
       case "quarterly": nextDue.setMonth(nextDue.getMonth() + 3); break;
       case "yearly": nextDue.setFullYear(nextDue.getFullYear() + 1); break;
     }
-    ob.nextDueDate = nextDue.toISOString().slice(0, 10);
+    ob.nextDueDate = nextDue.toLocaleDateString('en-CA');
     this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);
     return payment;
   }
@@ -1214,7 +1219,7 @@ export class MemStorage implements IStorage {
   async getJournalEntries() { return Array.from(this.journal.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()); }
   async createJournalEntry(data: InsertJournalEntry): Promise<JournalEntry> {
     const entry: JournalEntry = {
-      id: randomUUID(), date: data.date || new Date().toISOString().slice(0, 10),
+      id: randomUUID(), date: data.date || getUserToday(),
       mood: data.mood, content: data.content || "", tags: data.tags || [],
       energy: data.energy, gratitude: data.gratitude, highlights: data.highlights,
       createdAt: new Date().toISOString(),
@@ -1338,13 +1343,12 @@ export class MemStorage implements IStorage {
     for (const t of trackers) { weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length; }
 
     const streaks: { name: string; days: number }[] = [];
+    const todayStrStreaks = getUserToday();
     for (const t of trackers) {
       if (t.entries.length < 2) continue;
       let streak = 0;
-      const today = new Date(); today.setHours(0, 0, 0, 0);
       for (let i = 0; i < 30; i++) {
-        const checkDate = new Date(today); checkDate.setDate(checkDate.getDate() - i);
-        const dayStr = checkDate.toISOString().slice(0, 10);
+        const dayStr = tzAddDays(todayStrStreaks, -i);
         if (t.entries.some(e => e.timestamp.slice(0, 10) === dayStr)) streak++; else if (i > 0) break;
       }
       if (streak >= 2) streaks.push({ name: t.name, days: streak });
@@ -1355,7 +1359,7 @@ export class MemStorage implements IStorage {
     let completedCheckins = 0;
     if (totalDailyHabits > 0) {
       for (let i = 0; i < 7; i++) {
-        const dayStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+        const dayStr = tzAddDays(todayStrStreaks, -i);
         for (const h of habits) {
           if (h.checkins.some(c => c.date === dayStr)) completedCheckins++;
         }
@@ -1372,9 +1376,8 @@ export class MemStorage implements IStorage {
 
     // Journal streak
     let journalStreak = 0;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
     for (let i = 0; i < 30; i++) {
-      const dayStr = new Date(today.getTime() - i * 86400000).toISOString().slice(0, 10);
+      const dayStr = tzAddDays(todayStrStreaks, -i);
       if (journalEntries.some(j => j.date === dayStr)) journalStreak++; else if (i > 0) break;
     }
 
@@ -1407,7 +1410,7 @@ export class MemStorage implements IStorage {
   // ---- Enhanced Dashboard Data ----
   async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
     const now = new Date();
-    const today = now.toISOString().slice(0, 10);
+    const today = getUserToday();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
 

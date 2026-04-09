@@ -1,6 +1,12 @@
 import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { createClient } from "@supabase/supabase-js";
+import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+
+/** Extract user timezone from request header, with fallback */
+function getTimezone(req: Request): string {
+  return (req.headers['x-timezone'] as string) || DEFAULT_TIMEZONE;
+}
 
 // Augment Express Request with auth middleware userId
 interface AuthenticatedRequest extends Request {
@@ -233,7 +239,7 @@ export async function registerRoutes(
       if (message.length > 5000) {
         return res.status(400).json({ error: "Message too long (max 5000 characters)" });
       }
-      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
+      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId, getTimezone(req));
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
@@ -281,7 +287,7 @@ export async function registerRoutes(
       // MIME type validation
       const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
       const safeMime = ALLOWED_MIMES.includes(mimeType) ? mimeType : 'application/octet-stream';
-      const result = await processFileUpload(fileName, safeMime, fileData, message, profileId);
+      const result = await processFileUpload(fileName, safeMime, fileData, message, profileId, getTimezone(req));
       res.json(result);
     } catch (err: any) {
       log.error("[Upload]", err?.message || "unknown error");
@@ -342,7 +348,8 @@ export async function registerRoutes(
             mimeType || "image/jpeg",
             fileData,
             message,
-            profileId !== "none" ? profileId : undefined
+            profileId !== "none" ? profileId : undefined,
+            getTimezone(req)
           );
 
           // Determine which profile it was linked to
@@ -675,7 +682,7 @@ export async function registerRoutes(
       const filteredDocuments = documents.filter(d => mp(d.linkedProfiles));
       const insights = generateSmartInsights({
         profiles, trackers, tasks, expenses, habits: filteredHabits, obligations, journal, documents: filteredDocuments, goals, events,
-      });
+      }, getTimezone(req));
       res.json(insights);
     } catch (err: any) {
       log.error("[Insights]", err?.message || "unknown error");
@@ -1329,7 +1336,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Budgets ----
   app.get("/api/budgets", asyncHandler(async (req, res) => {
-    const month = (req.query.month as string) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
     const budgets = await storage.getBudgets(month);
     res.json({ month, budgets });
   }));
@@ -1337,20 +1344,20 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.post("/api/budgets", asyncHandler(async (req, res) => {
     const { month, category, amount, notes } = req.body;
     if (!category || amount === undefined) return res.status(400).json({ error: "category and amount required" });
-    const m = month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const m = month || getUserCurrentMonth(getTimezone(req));
     const budget = await storage.addBudget(m, category, Number(amount), notes);
     res.json(budget);
   }));
 
   app.patch("/api/budgets/:id", asyncHandler(async (req, res) => {
-    const month = (req.query.month as string) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
     const ok = await storage.updateBudget(month, req.params.id, req.body);
     if (!ok) return res.status(404).json({ error: "Budget not found" });
     res.json({ success: true });
   }));
 
   app.delete("/api/budgets/:id", asyncHandler(async (req, res) => {
-    const month = (req.query.month as string) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
     const ok = await storage.deleteBudget(month, req.params.id);
     if (!ok) return res.status(404).json({ error: "Budget not found" });
     res.json({ success: true });
@@ -1497,8 +1504,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/calendar/timeline", asyncHandler(async (req, res) => {
     const startRaw = req.query.start as string;
     const endRaw = req.query.end as string;
-    const start = (startRaw && isValidDateStr(startRaw)) ? startRaw : new Date().toISOString().slice(0, 10);
-    const endDefault = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+    const tz = getTimezone(req);
+    const start = (startRaw && isValidDateStr(startRaw)) ? startRaw : getUserToday(tz);
+    const endDefault = toLocalDateStr(new Date(Date.now() + 60 * 86400000), tz);
     const end = (endRaw && isValidDateStr(endRaw)) ? endRaw : endDefault;
     const profileIdsRaw = req.query.profileIds as string | undefined;
     const profileIds = profileIdsRaw ? profileIdsRaw.split(",").filter(Boolean) : undefined;
@@ -1974,7 +1982,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const notifications: Notification[] = [];
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().slice(0, 10);
+      const notifTz = getTimezone(req);
+      const todayStr = getUserToday(notifTz);
 
       // Helper: try to parse various date formats into a Date object
       const parseDate = (val: string): Date | null => {
@@ -2310,7 +2319,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Export / Import ----
-  app.get("/api/export", asyncHandler(async (_req, res) => {
+  app.get("/api/export", asyncHandler(async (req, res) => {
     try {
       const data = {
         version: 1,
@@ -2329,7 +2338,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         domains: await storage.getDomains(),
       };
       res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+      res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
       res.json(data);
     } catch (err: any) {
       log.error("[Export]", err?.message || "unknown error");
@@ -2539,7 +2548,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
           if (isNaN(amount) || amount === 0) { skipped++; continue; }
 
           const description = fields[colMap.description ?? colMap.amount] || `Row ${i}`;
-          const date = colMap.date !== undefined ? fields[colMap.date] : new Date().toISOString().slice(0, 10);
+          const date = colMap.date !== undefined ? fields[colMap.date] : getUserToday(getTimezone(req));
           const csvCategory = colMap.category !== undefined ? fields[colMap.category] : undefined;
           const category = csvCategory || autoCategory(description);
 
@@ -2547,7 +2556,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
           let normalizedDate = date;
           const parsed = new Date(date);
           if (!isNaN(parsed.getTime())) {
-            normalizedDate = parsed.toISOString().slice(0, 10);
+            normalizedDate = parsed.toLocaleDateString('en-CA');
           }
 
           await storage.createExpense({
@@ -2811,11 +2820,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       // Build compact data snapshot
       const now = new Date();
+      const snapTz = getTimezone(req);
       const weekAgo = new Date(now.getTime() - 7 * 86400000);
       const monthAgo = new Date(now.getTime() - 30 * 86400000);
-      const todayStr = now.toISOString().slice(0, 10);
-      const weekAgoStr = weekAgo.toISOString().slice(0, 10);
-      const monthAgoStr = monthAgo.toISOString().slice(0, 10);
+      const todayStr = getUserToday(snapTz);
+      const weekAgoStr = toLocalDateStr(weekAgo, snapTz);
+      const monthAgoStr = toLocalDateStr(monthAgo, snapTz);
 
       // Tracker entries (last 30 per tracker)
       const trackerSnapshot = trackers.map(t => ({
@@ -2868,7 +2878,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // Upcoming obligations
       const upcomingObligations = obligations.filter(o => {
         if (!o.nextDueDate) return false;
-        return o.nextDueDate >= todayStr && o.nextDueDate <= new Date(now.getTime() + 14 * 86400000).toISOString().slice(0, 10);
+        return o.nextDueDate >= todayStr && o.nextDueDate <= toLocalDateStr(new Date(now.getTime() + 14 * 86400000), snapTz);
       }).map(o => ({ name: o.name, amount: o.amount, dueDate: o.nextDueDate, autopay: o.autopay }));
 
       // Document expiration warnings
@@ -3310,21 +3320,22 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
         // Also check for title+date duplicates
         const startParsed = new Date(gcEvent.start);
-        const eventDate = startParsed.toISOString().slice(0, 10);
+        const gcalTz = getTimezone(req);
+        const eventDate = toLocalDateStr(startParsed, gcalTz);
         const isDuplicate = existingEvents.some(
           (e: any) => e.title === gcEvent.title && e.date === eventDate
         );
         if (isDuplicate) continue;
 
         // Map Google Calendar event → Portol event
-        const startTime = gcEvent.is_all_day ? undefined : startParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+        const startTime = gcEvent.is_all_day ? undefined : startParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: gcalTz });
         const endParsed = gcEvent.end ? new Date(gcEvent.end) : null;
-        const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : endParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+        const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : endParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: gcalTz });
 
         // Determine end date for multi-day events
         let endDateStr: string | undefined;
         if (endParsed) {
-          const ed = endParsed.toISOString().slice(0, 10);
+          const ed = toLocalDateStr(endParsed, gcalTz);
           if (ed !== eventDate) endDateStr = ed;
         }
 
