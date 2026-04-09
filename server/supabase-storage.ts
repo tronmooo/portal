@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+import { getUserToday } from "../shared/timezone";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -2686,7 +2687,7 @@ export class SupabaseStorage implements IStorage {
       if (streak >= 2) streaks.push({ name: t.name, days: streak });
     }
 
-    const todayStr2 = now.toISOString().slice(0, 10);
+    const todayStr2 = getUserToday(this._timezone);
     const allActiveHabits = habits.filter(h => h.frequency === "daily" || h.frequency === "weekly");
     // For daily habits, check if completed today. For weekly habits, check if completed this week.
     const weekStart = new Date(now);

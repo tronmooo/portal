@@ -928,7 +928,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
               className="flex items-center gap-1.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors rounded px-1 -mx-1">
               <Clock className="h-3 w-3 text-primary shrink-0" />
               <span className="text-xs font-medium text-primary tabular-nums shrink-0 w-10">
-                {ev.time || "All day"}
+                {ev.time ? (() => { const [h,m]=ev.time.split(':').map(Number); const ap=h>=12?'PM':'AM'; const h12=h%12||12; return m?`${h12}:${String(m).padStart(2,'0')} ${ap}`:`${h12} ${ap}`; })() : "All day"}
               </span>
               <span className="text-xs-loose truncate flex-1">{ev.title}</span>
               {ev.location && (
