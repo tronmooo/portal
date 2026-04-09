@@ -133,8 +133,11 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
     <div className="space-y-0.5">
       {/* Everyone option */}
       <button
-        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors ${isEveryone ? "bg-primary/10 text-primary font-medium" : "hover:bg-accent active:bg-accent"}`}
+        className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-sm transition-all active:scale-[0.97] ${
+          isEveryone ? 'bg-primary/10 text-primary font-medium border border-primary/30' : 'hover:bg-accent active:bg-accent border border-transparent'
+        }`}
         onClick={handleEveryone}
+        style={{ minHeight: '52px', WebkitTapHighlightColor: 'transparent' }}
         data-testid="filter-everyone"
       >
         <div className={`h-5 w-5 rounded border-2 flex items-center justify-center shrink-0 ${isEveryone ? "bg-primary border-primary" : "border-muted-foreground/30"}`}>
@@ -156,9 +159,12 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
         return (
           <button
             key={p.id}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors ${checked ? "bg-primary/10 font-medium" : "hover:bg-accent active:bg-accent"}`}
+            className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-sm transition-all active:scale-[0.97] ${
+              checked ? 'bg-primary/10 font-medium border border-primary/30' : 'hover:bg-accent active:bg-accent border border-transparent'
+            }`}
             onClick={() => handleToggle(p.id, p.name)}
             data-testid={`filter-profile-${p.id}`}
+            style={{ minHeight: '52px', WebkitTapHighlightColor: 'transparent' }}
           >
             <Checkbox
               checked={checked}
@@ -206,10 +212,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
               )}
             </div>
           </SheetHeader>
-          <div
-            className="overflow-y-auto min-h-0 flex-1 -mx-2 px-2 overscroll-contain"
-            style={{ WebkitOverflowScrolling: 'touch' }}
-          >
+          <div className="overflow-y-auto min-h-0 flex-1 -mx-2 px-2 overscroll-contain">
             {listContent}
           </div>
         </SheetContent>

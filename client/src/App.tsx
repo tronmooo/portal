@@ -269,38 +269,55 @@ function SwipeNav() {
   const [location, navigate] = useLocation();
   const startX = useRef<number | null>(null);
   const startY = useRef<number | null>(null);
+  const startTime = useRef<number>(0);
+  const didMove = useRef(false);
 
   const TAB_ORDER = ['/', '/dashboard', '/linked', '/calendar', '/profiles'];
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
+    // Don't intercept if touch started on an interactive element
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, textarea, select, [role="button"], [data-radix-dialog-content]')) return;
     startX.current = e.touches[0].clientX;
     startY.current = e.touches[0].clientY;
+    startTime.current = Date.now();
+    didMove.current = false;
+  }, []);
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    if (startX.current === null) return;
+    const dx = e.touches[0].clientX - startX.current;
+    const dy = e.touches[0].clientY - startY.current!;
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) didMove.current = true;
   }, []);
 
   const handleTouchEnd = useCallback((e: TouchEvent) => {
-    if (startX.current === null || startY.current === null) return;
+    if (startX.current === null || !didMove.current) { startX.current = null; return; }
     const dx = e.changedTouches[0].clientX - startX.current;
-    const dy = e.changedTouches[0].clientY - startY.current;
-    // Only horizontal swipes (more horizontal than vertical, and > 60px)
-    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    const currentTab = TAB_ORDER.find(t => t === location || (t !== '/' && location.startsWith(t))) || '/';
-    const idx = TAB_ORDER.indexOf(currentTab);
-    if (dx < 0 && idx < TAB_ORDER.length - 1) navigate(TAB_ORDER[idx + 1]); // swipe left = next tab
-    if (dx > 0 && idx > 0) navigate(TAB_ORDER[idx - 1]); // swipe right = prev tab
+    const dy = e.changedTouches[0].clientY - startY.current!;
+    const elapsed = Date.now() - startTime.current;
     startX.current = null;
     startY.current = null;
+    // Require: horizontal > 80px, clearly horizontal (3:1 ratio), completed in < 600ms
+    if (Math.abs(dx) < 80 || Math.abs(dx) < Math.abs(dy) * 3 || elapsed > 600) return;
+    const currentTab = TAB_ORDER.find(t => t === location || (t !== '/' && location.startsWith(t))) || '/';
+    const idx = TAB_ORDER.indexOf(currentTab);
+    if (dx < 0 && idx < TAB_ORDER.length - 1) navigate(TAB_ORDER[idx + 1]);
+    if (dx > 0 && idx > 0) navigate(TAB_ORDER[idx - 1]);
   }, [location, navigate]);
 
   useEffect(() => {
     const main = document.getElementById('main-content');
     if (!main) return;
     main.addEventListener('touchstart', handleTouchStart, { passive: true });
+    main.addEventListener('touchmove', handleTouchMove, { passive: true });
     main.addEventListener('touchend', handleTouchEnd, { passive: true });
     return () => {
       main.removeEventListener('touchstart', handleTouchStart);
+      main.removeEventListener('touchmove', handleTouchMove);
       main.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [handleTouchStart, handleTouchEnd]);
+  }, [handleTouchStart, handleTouchMove, handleTouchEnd]);
 
   return null;
 }

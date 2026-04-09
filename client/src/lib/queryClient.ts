@@ -91,10 +91,10 @@ export const queryClient = new QueryClient({
       refetchInterval: false,
       refetchOnWindowFocus: false, // Don't refetch when switching browser tabs
       refetchOnMount: true,        // Refetch if data is stale on mount
-      // 5-minute stale time: data fetched < 5 min ago is served from cache INSTANTLY.
-      // Matches our server-side 5-min cache TTL perfectly.
-      // Critical for tab switching — without this, every tab switch fires every API call.
-      staleTime: 5 * 60 * 1000,
+      // 2-minute stale time: data fetched < 2 min ago is served from cache INSTANTLY.
+      // Balances freshness vs performance — 2 min is enough for normal browsing
+      // but still refetches if you've been away from a page for a while.
+      staleTime: 2 * 60 * 1000,
       gcTime: 30 * 60 * 1000, // Keep unused data for 30 minutes
       retry: (failureCount, error) => {
         if (error instanceof Error) {

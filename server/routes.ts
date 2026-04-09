@@ -615,7 +615,7 @@ export async function registerRoutes(
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
     const stats = await storage.getStats(undefined, filterIds);
-    setCache(cacheKey, stats, 5 * 60 * 1000); // 5-minute cache
+    setCache(cacheKey, stats, 2 * 60 * 1000); // 2-minute cache
     res.json(stats);
   }));
 
@@ -628,7 +628,7 @@ export async function registerRoutes(
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
     const data = await storage.getDashboardEnhanced(undefined, filterIds);
-    setCache(cacheKey, data, 5 * 60 * 1000); // 5-minute cache
+    setCache(cacheKey, data, 2 * 60 * 1000); // 2-minute cache
     res.json(data);
   }));
 
@@ -2072,7 +2072,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const severityOrder: Record<string, number> = { critical: 0, warning: 1, info: 2 };
       notifications.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
-      setCache(notifCacheKey, notifications, 5 * 60 * 1000); // 5-minute cache
+      setCache(notifCacheKey, notifications, 2 * 60 * 1000); // 2-minute cache
       res.json(notifications);
     } catch (err: any) {
       log.error("[Notifications]", err?.message || "unknown error");

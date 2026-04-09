@@ -174,17 +174,25 @@ h1, h2, h3, .text-xl, .text-2xl {
 @layer base {
   * {
     @apply border-border;
-    /* Eliminate 300ms tap delay on all interactive elements */
-    touch-action: manipulation;
   }
   body {
     @apply font-sans antialiased bg-background text-foreground;
-    /* Prevent double-tap zoom which delays tap events */
-    touch-action: pan-x pan-y;
   }
-  a, button, [role="button"] {
+  /* Eliminate 300ms tap delay ONLY on interactive elements, not all elements.
+     Setting touch-action: manipulation on * breaks scrollable containers on iOS. */
+  a, button, [role="button"], label, summary {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+  }
+  input, textarea, select {
+    touch-action: manipulation;
+  }
+  /* Instant visual press feedback on ALL tappable elements — users see immediate response */
+  button:active:not(:disabled), a:active, [role="button"]:active {
+    opacity: 0.8;
+    transform: scale(0.98);
+    transition: transform 50ms ease, opacity 50ms ease;
   }
 }
 
