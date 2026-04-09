@@ -94,6 +94,18 @@ function fmtMonthYear(year: number, month: number) {
   });
 }
 
+/** Convert "18:00" → "6 PM", "08:30" → "8:30 AM" */
+function fmt12(time: string | undefined): string {
+  if (!time) return '';
+  const [hStr, mStr] = time.split(':');
+  const h = parseInt(hStr, 10);
+  const m = parseInt(mStr || '0', 10);
+  if (isNaN(h)) return time;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+
 function fmtDateFull(dateStr: string) {
   return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", {
     weekday: "long",
@@ -535,7 +547,7 @@ function EventDetailDialog({
           {item.time && (
             <div className="flex items-center gap-2 text-sm">
               <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-              <span>{item.time}{item.endTime ? ` \u2013 ${item.endTime}` : ""}</span>
+              <span>{fmt12(item.time)}{item.endTime ? ` – ${fmt12(item.endTime)}` : ""}</span>
             </div>
           )}
 
@@ -680,7 +692,7 @@ function DayAgenda({
               <div className="flex items-center gap-1.5 mt-0.5">
                 {item.time && (
                   <span className="text-xs text-muted-foreground">
-                    {item.time}{item.endTime ? ` \u2013 ${item.endTime}` : ""}
+                    {fmt12(item.time)}{item.endTime ? ` – ${fmt12(item.endTime)}` : ""}
                   </span>
                 )}
                 {item.allDay && !item.time && (
@@ -971,26 +983,19 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               return (
                 <button
                   key={idx}
-                  className={`relative min-h-[64px] md:min-h-[90px] p-1 md:p-1.5 border-b border-r border-border/40 transition-all text-left flex flex-col ${
-                    day.isCurrentMonth ? "" : "opacity-35"
-                  } ${isSelected && !isToday ? "bg-primary/8 ring-1 ring-inset ring-primary/40" : !isSelected && !isToday ? "hover:bg-muted/30 active:bg-muted/50" : ""} ${
-                    isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/40" : ""
+                  className={`relative min-h-[44px] md:min-h-[100px] p-0.5 md:p-1 border-b border-r border-border/40 transition-all text-left flex flex-col ${
+                    day.isCurrentMonth ? "" : "opacity-40"
+                  } ${isSelected && !isToday ? "bg-primary/5 ring-1 ring-inset ring-primary/30" : !isSelected && !isToday ? "hover:bg-muted/30" : ""} ${
+                    isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/30" : ""
                   }`}
-                  onClick={() => {
-                    setSelectedDate(day.date);
-                    // Auto-scroll to the day agenda below the calendar
-                    setTimeout(() => {
-                      document.querySelector('[data-testid="section-day-agenda"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    }, 100);
-                  }}
+                  onClick={() => setSelectedDate(day.date)}
                   onDoubleClick={() => { setQuickAddDate(day.date); setAddOpen(true); }}
                   data-testid={`day-cell-${day.date}`}
                 >
-                  {/* Day number */}
                   <span
-                    className={`text-xs leading-none ${
+                    className={`text-xs md:text-xs leading-none ${
                       isToday
-                        ? "font-bold text-primary bg-primary/20 rounded-full w-5 h-5 flex items-center justify-center text-xs-tight"
+                        ? "font-bold text-primary bg-primary/20 rounded-full w-4 h-4 md:w-5 md:h-5 flex items-center justify-center text-xs-tight md:text-xs"
                         : "font-medium"
                     }`}
                   >
@@ -1000,38 +1005,36 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                   {/* Event indicators */}
                   {hasItems && (
                     <div className="flex-1 flex flex-col gap-0.5 mt-1 overflow-hidden">
-                      {/* Desktop: show titles */}
+                      {/* Show up to 2 items as mini labels on desktop */}
                       <div className="hidden sm:flex flex-col gap-0.5">
                         {dayItems.slice(0, 2).map(item => (
                           <div
                             key={item.id}
                             className={`text-xs-tight leading-tight truncate px-1 py-0.5 rounded ${item.completed ? 'line-through opacity-50' : ''}`}
-                            style={{ backgroundColor: `${item.color}18`, color: item.color }}
+                            style={{
+                              backgroundColor: `${item.color}18`,
+                              color: item.color,
+                            }}
                           >
-                            {item.time ? `${item.time.slice(0, 5)} ` : ''}{item.title}
+                            {item.completed ? '✓ ' : ''}{item.time ? `${fmt12(item.time)} ` : ''}{item.title}
                           </div>
                         ))}
                         {dayItems.length > 2 && (
-                          <span className="text-xs-tight font-semibold text-primary px-1">+{dayItems.length - 2}</span>
+                          <span className="text-xs font-medium text-primary hover:underline cursor-pointer px-1 py-0.5">
+                            +{dayItems.length - 2} more
+                          </span>
                         )}
                       </div>
 
-                      {/* Mobile: event count badge + type dots */}
-                      <div className="sm:hidden flex flex-col gap-0.5 mt-auto">
-                        {/* Count badge */}
-                        <div className="flex items-center justify-between px-0.5">
-                          <span className="text-[9px] font-bold tabular-nums rounded-full px-1 py-0.5"
-                            style={{ background: `${dotColors[0] || '#3b82f6'}20`, color: dotColors[0] || '#3b82f6' }}>
-                            {dayItems.length}
-                          </span>
-                        </div>
-                        {/* Type dots */}
-                        <div className="flex gap-0.5">
-                          {dotColors.slice(0, 3).map((color, i) => (
-                            <div key={i} className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
-                          ))}
-                          {dotColors.length > 3 && <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />}
-                        </div>
+                      {/* Mobile: just dots */}
+                      <div className="sm:hidden flex gap-0.5 mt-auto">
+                        {dotColors.map((color, i) => (
+                          <div
+                            key={i}
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ backgroundColor: color }}
+                          />
+                        ))}
                       </div>
 
                       {/* Category type dots at bottom */}
@@ -1171,7 +1174,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                         }}
                       >
                         <span className="font-medium">{item.title}</span>
-                        {height >= 30 && <div className="text-[9px] opacity-80">{item.time?.slice(0, 5)}{item.endTime ? ` – ${item.endTime.slice(0, 5)}` : ''}</div>}
+                        {height >= 30 && <div className="text-[9px] opacity-80">{fmt12(item.time)}{item.endTime ? ` – ${fmt12(item.endTime)}` : ''}</div>}
                       </button>
                     );
                   });
@@ -1216,7 +1219,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               {timedItems.map(item => (
                 <button key={item.id} onClick={() => setDetailItem(item)}
                   className="flex items-center gap-3 w-full text-left py-2.5 px-3 hover:bg-muted/50 transition-colors">
-                  <span className="text-xs font-mono text-muted-foreground w-12 shrink-0">{item.time?.slice(0,5)}</span>
+                  <span className="text-xs text-muted-foreground w-14 shrink-0">{fmt12(item.time)}</span>
                   <div className="w-1 h-6 rounded-full shrink-0" style={{ backgroundColor: TYPE_COLORS[item.type] || "#888" }} />
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium truncate">{item.title}</p>
@@ -1273,7 +1276,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate text-foreground">{ev.title}</p>
                           <div className="flex items-center gap-2 mt-0.5">
-                            {ev.time && <span className="text-xs text-muted-foreground tabular-nums">{ev.time}</span>}
+                            {ev.time && <span className="text-xs text-muted-foreground">{fmt12(ev.time)}</span>}
                             {ev.type && <span className="text-xs text-muted-foreground capitalize">{ev.type}</span>}
                           </div>
                         </div>
@@ -1332,7 +1335,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                   onClick={() => { setSelectedDate(todayStr); setDetailItem(item); }}
                 >
                   <span className="text-[10px] text-muted-foreground tabular-nums w-12 shrink-0">
-                    {item.time ? item.time.slice(0, 5) : 'All day'}
+                    {item.time ? fmt12(item.time) : 'All day'}
                   </span>
                   <div
                     className="w-1.5 h-1.5 rounded-full shrink-0"

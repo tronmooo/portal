@@ -107,6 +107,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   ResponsiveContainer,
   CartesianGrid,
   AreaChart,
@@ -4205,6 +4206,9 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
 
   const hasLoanData = loanBalance > 0 || interestRate > 0 || monthlyPayment > 0;
 
+  // Payoff calculator state — must be at component top level (hook rule)
+  const [extraPmt, setExtraPmt] = useState(0);
+
   // Inline edit form state
   const [editing, setEditing] = useState(false);
   const [formBalance, setFormBalance] = useState(String(loanBalance || ""));
@@ -4428,6 +4432,147 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
           </div>
         </Card>
       )}
+
+      {/* Visual Charts */}
+      {schedule.length > 0 && (() => {
+        // Sample every N months so chart isn't too dense (max ~24 points)
+        const step = Math.max(1, Math.floor(schedule.length / 24));
+        const chartData = schedule
+          .filter((_, i) => i % step === 0 || i === schedule.length - 1)
+          .map(r => ({
+            month: r.month,
+            balance: Math.round(r.balance),
+            principal: Math.round(r.principal),
+            interest: Math.round(r.interest),
+          }));
+        const pieData2 = [
+          { name: 'Principal', value: Math.round(loanBalance) },
+          { name: 'Total Interest', value: Math.round(totalInterest) },
+        ];
+        const COLORS2 = ['#10b981', '#ef4444'];
+        return (
+          <>
+            {/* Balance paydown + P/I split */}
+            <Card className="p-4">
+              <h3 className="text-xs font-semibold mb-3">Balance Paydown</h3>
+              <ResponsiveContainer width="100%" height={160}>
+                <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="lgBal" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                  <Tooltip
+                    contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }}
+                    formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Balance']}
+                  />
+                  <Area type="monotone" dataKey="balance" stroke="#3b82f6" fill="url(#lgBal)" strokeWidth={2} name="Balance" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </Card>
+
+            {/* Principal vs Interest per payment stacked bar */}
+            <Card className="p-4">
+              <h3 className="text-xs font-semibold mb-1">Principal vs Interest Per Payment</h3>
+              <p className="text-[10px] text-muted-foreground mb-3">Green = principal paid · Red = interest charged</p>
+              <ResponsiveContainer width="100%" height={120}>
+                <BarChart data={chartData} margin={{ top: 2, right: 4, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${v}`} />
+                  <Tooltip
+                    contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }}
+                    formatter={(v: any, n: string) => [`$${Number(v).toFixed(0)}`, n]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: '11px' }} />
+                  <Bar dataKey="principal" name="Principal" fill="#10b981" stackId="a" radius={[0,0,0,0]} />
+                  <Bar dataKey="interest" name="Interest" fill="#ef4444" stackId="a" radius={[3,3,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+
+            {/* Principal vs Total Interest donut */}
+            <Card className="p-4">
+              <div className="flex items-center gap-4">
+                <ResponsiveContainer width={120} height={120}>
+                  <PieChart>
+                    <Pie data={pieData2} cx="50%" cy="50%" innerRadius={30} outerRadius={50} paddingAngle={3} dataKey="value">
+                      {pieData2.map((_, i) => <Cell key={i} fill={COLORS2[i % COLORS2.length]} />)}
+                    </Pie>
+                    <Tooltip contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }} formatter={(v: any) => `$${Number(v).toLocaleString()}`} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="space-y-2">
+                  <div>
+                    <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-green-500 shrink-0" /><span className="text-xs">Principal</span></div>
+                    <p className="text-sm font-bold tabular-nums ml-4">{formatCurrency(loanBalance)}</p>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-red-500 shrink-0" /><span className="text-xs">Total Interest</span></div>
+                    <p className="text-sm font-bold tabular-nums text-red-400 ml-4">{formatCurrency(totalInterest)}</p>
+                  </div>
+                  <div className="pt-1 border-t border-border/40">
+                    <p className="text-xs text-muted-foreground">Total Cost</p>
+                    <p className="text-sm font-bold tabular-nums">{formatCurrency(totalCost)}</p>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            {/* Extra Payment Calculator */}
+            {loanBalance > 0 && interestRate > 0 && (() => {
+              function simPayoff(extra: number) {
+                const r = interestRate / 100 / 12;
+                const base = schedule.length > 0 ? schedule[0].payment : monthlyPayment;
+                const pmt = base + extra;
+                let bal = loanBalance; let months = 0; let totInt = 0;
+                while (bal > 0.005 && months < 1200) {
+                  const intCharge = bal * r; const prin = Math.min(pmt - intCharge, bal);
+                  bal -= prin; totInt += intCharge; months++;
+                }
+                return { months, totInt };
+              }
+              const base = simPayoff(0);
+              const extra = simPayoff(extraPmt);
+              const saved = Math.max(0, base.months - extra.months);
+              const intSaved = Math.max(0, base.totInt - extra.totInt);
+              return (
+                <Card className="p-4">
+                  <h3 className="text-xs font-semibold mb-3">Payoff Calculator</h3>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Extra monthly payment</span>
+                      <span className="text-sm font-bold text-primary">${extraPmt}/mo</span>
+                    </div>
+                    <input
+                      type="range" min={0} max={Math.round(monthlyPayment || 500)} step={25}
+                      value={extraPmt}
+                      onChange={e => setExtraPmt(Number(e.target.value))}
+                      className="w-full accent-primary"
+                    />
+                    <div className="grid grid-cols-2 gap-3 pt-1">
+                      <div className="rounded-xl bg-green-500/8 border border-green-500/20 p-3 text-center">
+                        <p className="text-[10px] text-muted-foreground mb-1">Months saved</p>
+                        <p className="text-xl font-bold text-green-500">{saved}</p>
+                        <p className="text-[9px] text-muted-foreground">Pay off {extra.months > 0 ? (() => { const d = new Date(new Date(startDate || new Date()).getTime()); d.setMonth(d.getMonth() + extra.months); return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); })() : '—'}</p>
+                      </div>
+                      <div className="rounded-xl bg-red-500/8 border border-red-500/20 p-3 text-center">
+                        <p className="text-[10px] text-muted-foreground mb-1">Interest saved</p>
+                        <p className="text-lg font-bold text-red-400">{formatCurrency(intSaved)}</p>
+                        <p className="text-[9px] text-muted-foreground">Total left: {formatCurrency(extra.totInt)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })()}
+          </>
+        );
+      })()}
 
       {/* Amortization Schedule (first 12 + last 3) */}
       {schedule.length > 0 && (
