@@ -94,6 +94,8 @@ import {
   Box,
   Pencil,
   Check,
+  Dumbbell,
+  Link2,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Link } from "wouter";
@@ -133,8 +135,12 @@ import { CHART_COLORS } from "@/lib/chart-colors";
 // Each tracker category gets a distinct accent color (HSL) and a matching icon.
 
 export const TRACKER_CATEGORY_ACCENT: Record<string, string> = {
-  health:       "173 60% 44%",
-  fitness:      "155 60% 44%",
+  health:       "173 60% 44%",   // teal — medical/vitals
+  fitness:      "25 85% 55%",    // orange — energy/movement
+  exercise:     "25 85% 55%",
+  workout:      "25 85% 55%",
+  running:      "25 85% 55%",
+  weight:       "25 75% 52%",    // slightly different orange for body weight
   nutrition:    "94  60% 42%",
   sleep:        "262 60% 62%",
   mental:       "310 50% 58%",
@@ -175,12 +181,27 @@ export function getCategoryAccent(category: string): string {
 // ── Canonical Category Groups ──────────────────────────────────────────────────
 // Map raw DB categories → canonical display groups
 const CANONICAL_GROUP_MAP: Record<string, string> = {
-  // Health & Fitness
-  health:       "Health & Fitness",
-  fitness:      "Health & Fitness",
-  sleep:        "Health & Fitness",
-  nutrition:    "Health & Fitness",
-  mental:       "Health & Fitness",
+  // Health (body vitals, medical, sleep, nutrition, mental)
+  health:       "Health",
+  sleep:        "Health",
+  nutrition:    "Health",
+  mental:       "Health",
+  medical:      "Health",
+  vitals:       "Health",
+  hydration:    "Health",
+  diet:         "Health",
+  mood:         "Health",
+  // Fitness (movement, exercise, performance)
+  fitness:      "Fitness",
+  exercise:     "Fitness",
+  workout:      "Fitness",
+  sport:        "Fitness",
+  running:      "Fitness",
+  cardio:       "Fitness",
+  strength:     "Fitness",
+  steps:        "Fitness",
+  activity:     "Fitness",
+  weight:       "Fitness",
   // Finance
   finance:      "Finance",
   budget:       "Finance",
@@ -205,16 +226,98 @@ const CANONICAL_GROUPS: Record<string, {
   accent: string;
   description: string;
   order: number;
+  connectedGroups?: string[]; // groups this one shares data relationships with
 }> = {
-  "Health & Fitness":   { icon: HeartPulse, accent: "173 60% 44%", description: "Vitals, workouts, sleep, nutrition", order: 1 },
-  "Finance":            { icon: TrendingUp, accent: "43 85% 52%",  description: "Spending, saving, investing", order: 2 },
-  "Habits & Routines":  { icon: Flame,      accent: "155 60% 44%", description: "Daily habits and routines", order: 3 },
-  "Productivity":       { icon: Target,     accent: "262 65% 62%", description: "Work, learning, focus", order: 4 },
-  "Other":              { icon: Box,        accent: "240 20% 60%", description: "Custom and uncategorized", order: 5 },
+  "Health":             { icon: HeartPulse, accent: "173 60% 44%", description: "Vitals, sleep, nutrition, mental", order: 1, connectedGroups: ["Fitness"] },
+  "Fitness":            { icon: Dumbbell,   accent: "25 85% 55%",  description: "Exercise, workouts, performance",  order: 2, connectedGroups: ["Health"] },
+  "Finance":            { icon: TrendingUp, accent: "43 85% 52%",  description: "Spending, saving, investing",       order: 3 },
+  "Habits & Routines":  { icon: Flame,      accent: "155 60% 44%", description: "Daily habits and routines",         order: 4, connectedGroups: ["Health", "Fitness"] },
+  "Productivity":       { icon: Target,     accent: "262 65% 62%", description: "Work, learning, focus",             order: 5 },
+  "Other":              { icon: Box,        accent: "240 20% 60%", description: "Custom and uncategorized",          order: 6 },
 };
 
 function getCanonicalGroup(category: string): string {
   return CANONICAL_GROUP_MAP[category?.toLowerCase()] || "Other";
+}
+
+// ── Cross-Group Connection Panel ──────────────────────────────────────────────
+// Shows mini sparklines of trackers from a connected group,
+// visualizing cross-category relationships (e.g. sleep vs fitness performance)
+function CrossGroupPanel({ fromGroup, allTrackers, onSelectTracker }: {
+  fromGroup: string;
+  allTrackers: Tracker[];
+  onSelectTracker: (t: Tracker) => void;
+}) {
+  const def = CANONICAL_GROUPS[fromGroup];
+  if (!def?.connectedGroups?.length) return null;
+
+  const connected = def.connectedGroups
+    .map(g => ({
+      groupName: g,
+      def: CANONICAL_GROUPS[g],
+      trackers: allTrackers.filter(t => getCanonicalGroup(t.category) === g).slice(0, 4),
+    }))
+    .filter(c => c.trackers.length > 0);
+
+  if (connected.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-xl border border-border/40 bg-muted/20 overflow-hidden">
+      <div className="px-3 py-2 flex items-center gap-2 border-b border-border/30">
+        <Link2 className="h-3 w-3 text-muted-foreground/60" />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/60">Connected Categories</span>
+      </div>
+      {connected.map(({ groupName, def: gDef, trackers: gTrackers }) => (
+        <div key={groupName} className="px-3 py-2">
+          <div className="flex items-center gap-1.5 mb-2">
+            {gDef && <gDef.icon className="h-3 w-3" style={{ color: `hsl(${gDef.accent})` }} />}
+            <span className="text-xs font-semibold" style={{ color: `hsl(${gDef?.accent})` }}>{groupName}</span>
+            <span className="text-[9px] text-muted-foreground/50 ml-1">{gDef?.description}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {gTrackers.map(t => {
+              const recentEntries = (t.entries || []).slice(-14);
+              const vals = recentEntries
+                .map(e => { const keys = Object.keys(e.values || {}); return keys.length ? e.values[keys[0]] : null; })
+                .filter((v): v is number => typeof v === 'number');
+              const latest = vals[vals.length - 1];
+              const sparkMax = Math.max(...vals, 1);
+              const sparkMin = Math.min(...vals, 0);
+              const sparkRange = sparkMax - sparkMin || 1;
+              const tAccent = TRACKER_CATEGORY_ACCENT[t.category?.toLowerCase()] || gDef?.accent || '240 20% 60%';
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => onSelectTracker(t)}
+                  className="relative rounded-lg bg-card/60 border border-border/40 p-2 text-left hover:bg-muted/40 active:scale-[0.98] transition-all overflow-hidden"
+                >
+                  <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{ background: `hsl(${tAccent})` }} />
+                  <div className="pl-1.5">
+                    <p className="text-[10px] font-semibold truncate text-foreground/80">{t.name}</p>
+                    {latest != null && (
+                      <p className="text-xs font-bold tabular-nums" style={{ color: `hsl(${tAccent})` }}>
+                        {typeof latest === 'number' ? (latest % 1 === 0 ? latest : latest.toFixed(1)) : latest}
+                        {t.fields?.[0]?.unit ? ` ${t.fields[0].unit}` : ''}
+                      </p>
+                    )}
+                    {/* Mini sparkline */}
+                    {vals.length > 1 && (
+                      <svg width="100%" height="16" viewBox={`0 0 ${vals.length * 6} 16`} preserveAspectRatio="none" className="mt-0.5 opacity-60">
+                        <polyline
+                          points={vals.map((v, i) => `${i * 6},${16 - ((v - sparkMin) / sparkRange) * 14}`).join(' ')}
+                          fill="none" stroke={`hsl(${tAccent})`} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                        />
+                      </svg>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ── Time Range Filter ──────────────────────────────────────────────────────────
@@ -1800,7 +1903,7 @@ function computeBestStreak(trackers: Tracker[]): { name: string; streak: number 
 }
 
 function computeHealthScore(trackers: Tracker[]): number | null {
-  const healthTrackers = trackers.filter((t) => t.category === "health" || t.category === "sleep" || t.category === "fitness");
+  const healthTrackers = trackers.filter((t) => getCanonicalGroup(t.category) === "Health" || getCanonicalGroup(t.category) === "Fitness");
   if (healthTrackers.length === 0) return null;
 
   let score = 0;
@@ -3987,16 +4090,24 @@ export default function TrackersPage() {
 
               {/* Trackers in this group — hidden when collapsed */}
               {!isGroupCollapsed && (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pl-1">
-                  {grouped[cat].map((tracker) => (
-                    <TrackerCard
-                      key={tracker.id}
-                      tracker={tracker}
-                      onDelete={(id) => setDeleteTargetId(id)}
-                      onOpenDetail={(id) => setSelectedTrackerId(id)}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pl-1">
+                    {grouped[cat].map((tracker) => (
+                      <TrackerCard
+                        key={tracker.id}
+                        tracker={tracker}
+                        onDelete={(id) => setDeleteTargetId(id)}
+                        onOpenDetail={(id) => setSelectedTrackerId(id)}
+                      />
+                    ))}
+                  </div>
+                  {/* Cross-group connection panel — shows related trackers from connected categories */}
+                  <CrossGroupPanel
+                    fromGroup={cat}
+                    allTrackers={trackers || []}
+                    onSelectTracker={(t) => setSelectedTrackerId(t.id)}
+                  />
+                </>
               )}
             </div>
           );
