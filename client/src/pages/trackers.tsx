@@ -3375,12 +3375,15 @@ export default function TrackersPage() {
 
   if (showTrackerSkeleton && !trackers) {
     return (
-      <div className="p-4 md:p-6 space-y-4">
-        <div className="h-8 w-40 rounded skeleton-shimmer" />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[...Array(4)].map((_, i) => <div key={i} className="h-14 rounded-lg skeleton-shimmer" />)}
+      <div className="p-3 md:p-5 space-y-3">
+        {/* Compact skeleton — small placeholders, not full-width blocks */}
+        <div className="h-7 w-32 rounded skeleton-shimmer" />
+        <div className="flex gap-2 overflow-x-hidden">
+          {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
         </div>
-        {[...Array(3)].map((_, i) => <div key={i} className="h-24 rounded-lg skeleton-shimmer" />)}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+          {[...Array(8)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
+        </div>
       </div>
     );
   }

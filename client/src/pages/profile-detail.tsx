@@ -1002,40 +1002,21 @@ function InfoTab({
 
   return (
     <div className="space-y-3">
-      {/* ── 1. Profile Header Card ── */}
-      <Card className={`bg-gradient-to-br ${profileGradient(profile.type)} border-0`}>
-        <CardContent className="p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${profileAccent(profile.type)}`}>
-                {profileIcon(profile.type)}
-              </div>
-              <div className="min-w-0">
-                <h3 className="font-semibold text-sm leading-tight truncate">{profile.name}</h3>
-                {subtitleParts.length > 0 && (
-                  <p className="text-xs text-muted-foreground mt-0.5 truncate">{subtitleParts.join(" · ")}</p>
-                )}
-                <Badge variant="secondary" className={`text-xs mt-1 capitalize ${profileAccent(profile.type)}`}>
-                  {profile.type}
-                </Badge>
-              </div>
+      {/* ── Header summary row (no name repetition — hero already shows that) ── */}
+      {/* Show subtitle details + key value if relevant */}
+      {(subtitleParts.length > 0 || keyValueEntry) && (
+        <div className="flex items-center justify-between px-1 pb-1 border-b border-border/30">
+          <p className="text-xs text-muted-foreground">{subtitleParts.join(" · ")}</p>
+          {keyValueEntry && (
+            <div className="text-right">
+              <p className="text-[10px] text-muted-foreground">{keyValueEntry.label}</p>
+              <p className="text-sm font-bold tabular-nums">{keyValueEntry.value}</p>
             </div>
-            <div className="flex flex-col items-end gap-1.5 shrink-0">
-              {keyValueEntry && (
-                <div className="text-right">
-                  <p className="text-xs text-muted-foreground">{keyValueEntry.label}</p>
-                  <p className="text-base font-bold leading-tight">{keyValueEntry.value}</p>
-                </div>
-              )}
-              <Button variant="outline" size="sm" className="h-7 text-xs gap-1 bg-background/60" onClick={onEdit} data-testid="button-edit-profile">
-                <Edit className="h-3 w-3" /> Edit
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          )}
+        </div>
+      )}
 
-      {/* ── 2. Mini Stats Row ── */}
+      {/* ── Stats Row ── */}
       <div className="grid grid-cols-4 gap-2">
         <Card className="p-2.5 text-center">
           <p className="text-base font-bold">{docsCount}</p>
@@ -5923,6 +5904,17 @@ export default function ProfileDetailPage() {
                   <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
                 </Badge>
               ))}
+              {/* Ownership badge — show who owns this asset/vehicle/loan */}
+              {profile.fields?.ownerId && (
+                <Badge variant="outline" className="text-xs gap-1 border-primary/30 text-primary/80">
+                  <User className="h-2.5 w-2.5" /> {profile.fields.ownerName || 'Owner'}
+                </Badge>
+              )}
+              {profile.fields?.ownerName && !profile.fields?.ownerId && (
+                <Badge variant="outline" className="text-xs gap-1 border-primary/30 text-primary/80">
+                  <User className="h-2.5 w-2.5" /> {profile.fields.ownerName}
+                </Badge>
+              )}
             </div>
             {profile.notes && (
               <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{profile.notes}</p>

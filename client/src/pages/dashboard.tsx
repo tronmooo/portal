@@ -2221,11 +2221,12 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left" },
   { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "right" },
   { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "left" },
-  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "right" },
+  // Bills is full-width so it spans below both columns — prevents dead zone when one column is shorter
+  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
 ];
 
-const LAYOUT_VERSION = 2; // Bump when section structure changes
+const LAYOUT_VERSION = 3; // Bump when section structure changes — forces re-apply defaults for existing users
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
