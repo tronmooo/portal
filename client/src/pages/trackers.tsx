@@ -3248,6 +3248,7 @@ export default function TrackersPage() {
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
+  const [docDeleteConfirmId, setDocDeleteConfirmId] = useState<string | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const [uploadProfileId, setUploadProfileId] = useState<string>("");
@@ -3838,7 +3839,7 @@ export default function TrackersPage() {
                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setViewingDoc(doc)} title="Open full view" data-testid={`button-view-doc-global-${doc.id}`}>
                         <Eye className="h-3.5 w-3.5" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => docDeleteMutation.mutate(doc.id)} data-testid={`button-delete-doc-global-${doc.id}`}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => setDocDeleteConfirmId(doc.id)} data-testid={`button-delete-doc-global-${doc.id}`}>
                         <X className="h-3.5 w-3.5" />
                       </Button>
                     </div>
@@ -4207,6 +4208,32 @@ export default function TrackersPage() {
         open={!!selectedTracker}
         onClose={() => setSelectedTrackerId(null)}
       />
+
+      {/* Document delete confirmation */}
+      {docDeleteConfirmId && (() => {
+        const docName = allDocuments.find(d => d.id === docDeleteConfirmId)?.name || "this document";
+        return (
+          <AlertDialog open onOpenChange={(open) => { if (!open) setDocDeleteConfirmId(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete document?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  <span className="font-medium text-foreground">"{docName}"</span> will be permanently deleted and cannot be recovered.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => setDocDeleteConfirmId(null)}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                  onClick={() => { docDeleteMutation.mutate(docDeleteConfirmId); setDocDeleteConfirmId(null); setExpandedDocId(null); }}
+                >
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        );
+      })()}
 
       {/* Document viewer dialog */}
       {viewingDoc && (

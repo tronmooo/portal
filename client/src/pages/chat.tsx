@@ -1722,50 +1722,84 @@ export default function ChatPage() {
 
                 {/* Action badges */}
                 {msg.actions && msg.actions.length > 0 && (
-                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  <div className="mt-3 space-y-1.5">
                     {msg.actions.map((action, i) => {
                       const entityId = action.data?._entityId;
                       const isUndone = action.data?._undone;
-                      const canUndo = entityId && !isUndone && ["create_task","log_expense","create_event","create_habit","create_obligation","create_goal","create_profile","journal_entry","create_artifact","create_tracker"].includes(action.type);
-                      const undoEndpoint: Record<string, string> = {
-                        create_task: "tasks", log_expense: "expenses", create_event: "events",
-                        create_habit: "habits", create_obligation: "obligations", create_goal: "goals",
-                        create_profile: "profiles", journal_entry: "journal", create_artifact: "artifacts",
+                      // All create/log actions can be undone
+                      const undoEndpoints: Record<string, string> = {
+                        create_task: "tasks",
+                        log_expense: "expenses",
+                        create_event: "events",
+                        create_habit: "habits",
+                        create_obligation: "obligations",
+                        create_goal: "goals",
+                        create_profile: "profiles",
+                        journal_entry: "journal",
+                        create_artifact: "artifacts",
                         create_tracker: "trackers",
+                        log_tracker_entry: "tracker-entries",
+                        add_tracker_entry: "tracker-entries",
                       };
+                      const canUndo = entityId && !isUndone && undoEndpoints[action.type];
+                      // Get the entity title/name from action data
+                      const entityTitle = action.data?.title || action.data?.name || action.data?.description || action.data?.content || action.title || "";
+                      const entityDetails = action.data?.amount ? `$${action.data.amount}` : action.data?.value ? String(action.data.value) : "";
                       return (
-                        <Badge
+                        <div
                           key={i}
-                          variant="outline"
-                          className={`text-xs flex items-center gap-1 ${isUndone ? "line-through opacity-50 border-red-600/30 bg-red-500/5" : "text-muted-foreground border-green-600/30 bg-green-500/5"}`}
-                          data-testid={`badge-action-${action.type}-${i}`}
+                          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                            isUndone
+                              ? "border-red-500/20 bg-red-500/5 opacity-60"
+                              : "border-green-500/25 bg-green-500/6"
+                          }`}
+                          data-testid={`action-card-${action.type}-${i}`}
                         >
-                          {isUndone ? <X className="h-2.5 w-2.5 text-red-500" /> : <Check className="h-2.5 w-2.5 text-green-600" />}
-                          {actionLabel(action.type)}
+                          {/* Status icon */}
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                            isUndone ? "bg-red-500/15" : "bg-green-500/15"
+                          }`}>
+                            {isUndone
+                              ? <X className="h-3.5 w-3.5 text-red-500" />
+                              : <Check className="h-3.5 w-3.5 text-green-600" />}
+                          </div>
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-xs font-semibold ${
+                              isUndone ? "line-through text-muted-foreground" : "text-foreground"
+                            }`}>
+                              {entityTitle || actionLabel(action.type)}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {actionLabel(action.type)}{entityDetails ? ` · ${entityDetails}` : ""}
+                              {isUndone && " · Undone"}
+                            </p>
+                          </div>
+                          {/* Undo button */}
                           {canUndo && (
                             <button
-                              className="ml-1 p-0.5 rounded hover:bg-destructive/20 transition-colors"
+                              className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-medium border border-destructive/30 text-destructive hover:bg-destructive/10 active:scale-95 transition-all"
                               title="Undo this action"
+                              data-testid={`button-undo-${action.type}-${i}`}
                               onClick={async (e) => {
                                 e.stopPropagation();
-                                const ep = undoEndpoint[action.type];
+                                const ep = undoEndpoints[action.type];
                                 if (!ep) return;
                                 try {
                                   await apiRequest("DELETE", `/api/${ep}/${entityId}`);
-                                  // Mark as undone in local state
                                   action.data = { ...action.data, _undone: true };
                                   setMessages(prev => prev.map(m => ({ ...m })));
                                   queryClient.invalidateQueries();
-                                  toast({ title: "Action undone" });
+                                  toast({ title: "Undone", description: entityTitle || actionLabel(action.type) });
                                 } catch {
-                                  toast({ title: "Failed to undo", variant: "destructive" });
+                                  toast({ title: "Could not undo", variant: "destructive" });
                                 }
                               }}
                             >
-                              <X className="h-2.5 w-2.5 text-muted-foreground hover:text-destructive" />
+                              Undo
                             </button>
                           )}
-                        </Badge>
+                        </div>
                       );
                     })}
                   </div>

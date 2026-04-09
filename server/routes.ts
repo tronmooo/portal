@@ -1213,6 +1213,18 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!deleted) return res.status(404).json({ error: "Entry not found" });
     res.json({ success: true });
   }));
+  // Convenience endpoint: delete tracker entry by entry ID only (for chat undo)
+  app.delete("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
+    const trackers = await storage.getTrackers();
+    for (const t of trackers) {
+      const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
+      if (entry) {
+        const deleted = await storage.deleteTrackerEntry(t.id, req.params.entryId);
+        if (deleted) return res.json({ success: true });
+      }
+    }
+    return res.status(404).json({ error: "Entry not found" });
+  }));
   app.delete("/api/trackers/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getTracker(req.params.id);
     if (!existing) return res.status(404).json({ error: "Tracker not found" });
