@@ -240,6 +240,70 @@ function getCanonicalGroup(category: string): string {
   return CANONICAL_GROUP_MAP[category?.toLowerCase()] || "Other";
 }
 
+// ── DocInlinePreview ───────────────────────────────────────────────────
+// Fetches file data with auth then renders inline (img/PDF/etc)
+function DocInlinePreview({ docId, mimeType, name, onOpen }: {
+  docId: string; mimeType: string; name: string; onOpen: () => void;
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let url: string | null = null;
+    setLoading(true); setError(false); setBlobUrl(null);
+    // apiRequest goes through the auth interceptor — sends Authorization header
+    apiRequest('GET', `/api/documents/${docId}/file`)
+      .then(res => res.blob())
+      .then(blob => {
+        url = URL.createObjectURL(blob);
+        setBlobUrl(url);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [docId]);
+
+  const isImg = mimeType?.startsWith('image/');
+  const isPdf = mimeType === 'application/pdf';
+
+  return (
+    <div className="border-t border-border/50 bg-muted/20 p-2">
+      {loading && (
+        <div className="flex items-center justify-center py-8">
+          <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
+      {!loading && error && (
+        <div className="flex flex-col items-center py-5 gap-2">
+          <FileText className="h-8 w-8 text-muted-foreground/30" />
+          <p className="text-xs text-muted-foreground">Could not load preview</p>
+          <Button size="sm" variant="outline" className="text-xs gap-1.5" onClick={onOpen}>
+            <Eye className="h-3.5 w-3.5" /> Open Full View
+          </Button>
+        </div>
+      )}
+      {!loading && !error && blobUrl && (
+        isImg ? (
+          <img src={blobUrl} alt={name} className="w-full rounded-lg object-contain max-h-80" />
+        ) : isPdf ? (
+          <div className="rounded-lg overflow-hidden">
+            <iframe src={blobUrl} title={name} className="w-full rounded-lg border-0" style={{ height: '420px' }} />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center py-5 gap-2">
+            <FileText className="h-8 w-8 text-muted-foreground/30" />
+            <p className="text-xs text-muted-foreground">{name}</p>
+            <Button size="sm" variant="outline" className="text-xs gap-1.5" onClick={onOpen}>
+              <Eye className="h-3.5 w-3.5" /> Open Full View
+            </Button>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 // ── Cross-Group Connection Panel ──────────────────────────────────────────────
 // Shows mini sparklines of trackers from a connected group,
 // visualizing cross-category relationships (e.g. sleep vs fitness performance)
@@ -3779,45 +3843,8 @@ export default function TrackersPage() {
                       </Button>
                     </div>
                   </div>
-                  {/* Inline preview — expands below the row, loads via /file endpoint */}
-                  {isExpanded && (() => {
-                    // Use the /api/documents/:id/file URL directly — no base64 needed
-                    const fileUrl = `/api/documents/${doc.id}/file`;
-                    const isImg = doc.mimeType?.startsWith('image/');
-                    const isPdf = doc.mimeType === 'application/pdf';
-                    return (
-                      <div className="border-t border-border/50 bg-muted/20 p-2">
-                        {isImg ? (
-                          <img
-                            src={fileUrl}
-                            alt={doc.name}
-                            className="w-full rounded-lg object-contain max-h-80"
-                            onError={(e) => { (e.target as HTMLImageElement).style.display='none'; }}
-                          />
-                        ) : isPdf ? (
-                          <div className="rounded-lg overflow-hidden">
-                            <iframe
-                              src={`${fileUrl}#view=FitH&toolbar=0`}
-                              title={doc.name}
-                              className="w-full rounded-lg border-0"
-                              style={{ height: '420px' }}
-                            />
-                          </div>
-                        ) : (
-                          // Other file types — show thumbnail if available, else open button
-                          <div className="flex flex-col items-center py-5 gap-3">
-                            <div className="w-16 h-16 rounded-xl bg-muted/60 flex items-center justify-center">
-                              <FileText className="h-8 w-8 text-muted-foreground/40" />
-                            </div>
-                            <p className="text-xs text-muted-foreground">{doc.name}</p>
-                            <Button size="sm" variant="outline" className="text-xs gap-1.5" onClick={() => setViewingDoc(doc)}>
-                              <Eye className="h-3.5 w-3.5" /> Open Full View
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
+                  {/* Inline preview — fetches full doc with auth, renders inline */}
+                  {isExpanded && <DocInlinePreview docId={doc.id} mimeType={doc.mimeType} name={doc.name} onOpen={() => setViewingDoc(doc)} />}
                 </div>
               );
             })}
