@@ -709,7 +709,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm max-h-[85vh] flex flex-col p-0 gap-0 relative rounded-2xl overflow-hidden">
+      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl overflow-hidden" style={{ top: '6%', transform: 'translateX(-50%)', maxHeight: '80vh' }}>
         {/* Any.do header */}
         <div className="flex items-center justify-between px-4 pt-3 pb-3 border-b border-border/40">
           <div className="flex items-center gap-2">
@@ -844,7 +844,7 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingHabit(false); setNewHabitName(''); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm max-h-[85vh] flex flex-col p-0 gap-0 relative rounded-2xl overflow-hidden">
+      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl overflow-hidden" style={{ top: '6%', transform: 'translateX(-50%)', maxHeight: '80vh' }}>
         {/* Header — 44px touch targets, no AI button */}
         <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-border/40">
           <span className="font-bold text-base text-foreground">Today's Habits</span>
