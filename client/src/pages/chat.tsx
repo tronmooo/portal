@@ -291,20 +291,27 @@ function actionIcon(type: string) {
   switch (type) {
     case "create_tracker":
     case "log_entry":
+    case "delete_tracker_entry":
+    case "update_tracker_entry":
       return <Activity className="h-3 w-3" />;
     case "create_profile":
     case "update_profile":
       return <User className="h-3 w-3" />;
     case "create_task":
+    case "complete_task":
+    case "delete_task":
       return <ListTodo className="h-3 w-3" />;
     case "log_expense":
       return <DollarSign className="h-3 w-3" />;
     case "create_event":
+    case "complete_event":
       return <CalendarDays className="h-3 w-3" />;
     case "create_goal":
       return <Target className="h-3 w-3" />;
     case "create_habit":
     case "checkin_habit":
+    case "uncomplete_habit":
+    case "delete_habit":
       return <Flame className="h-3 w-3" />;
     case "journal_entry":
       return <BookOpen className="h-3 w-3" />;
@@ -316,8 +323,33 @@ function actionIcon(type: string) {
   }
 }
 
+const ACTION_LABELS: Record<string, string> = {
+  create_task: "Create Task",
+  complete_task: "Complete Task",
+  delete_task: "Delete Task",
+  create_habit: "Create Habit",
+  checkin_habit: "Checkin Habit",
+  uncomplete_habit: "Undo Habit",
+  delete_habit: "Delete Habit",
+  create_goal: "Create Goal",
+  create_event: "Create Event",
+  complete_event: "Complete Event",
+  log_entry: "Log Entry",
+  create_tracker: "Create Tracker",
+  delete_tracker_entry: "Delete Entry",
+  update_tracker_entry: "Update Entry",
+  journal_entry: "Journal Entry",
+  log_expense: "Log Expense",
+  create_profile: "Create Profile",
+  update_profile: "Update Profile",
+  create_obligation: "Add Bill",
+  pay_obligation: "Pay Bill",
+  save_memory: "Remember",
+  retrieve: "Retrieve",
+};
+
 function actionLabel(type: string) {
-  return type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return ACTION_LABELS[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 // ── Inline document previews in chat messages ─────────────────────────────────
@@ -1163,6 +1195,13 @@ export default function ChatPage() {
     });
   };
   const [input, setInput] = useState("");
+  // Read prefill set by popup AI buttons (sessionStorage approved for this use)
+  useEffect(() => {
+    try {
+      const prefill = sessionStorage.getItem('portol_chat_prefill');
+      if (prefill) { setInput(prefill); sessionStorage.removeItem('portol_chat_prefill'); }
+    } catch {}
+  }, []);
   const speech = useSpeechInput((text) => setInput(prev => prev ? prev + ' ' + text : text));
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -2052,7 +2091,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-1.5">
                   {messages.length > 1 && (
                     <button
-                      onClick={() => setMessagesRaw([WELCOME_MSG])}
+                      onClick={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
                       className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex items-center gap-1"
                       data-testid="button-reset-chat"
                     >

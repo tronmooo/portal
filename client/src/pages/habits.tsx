@@ -28,7 +28,10 @@ function HabitCard({ habit }: { habit: Habit }) {
   const targetPerDay = (habit as any).targetPerDay || 1;
   const completedToday = todayCheckins >= targetPerDay;
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
-  const accentColor = habit.color || "#4F98A3";
+  // Auto-assign vivid colors from palette if no distinctive color set
+  const VIVID_PALETTE = ['#E8545A','#E67E3B','#E8A838','#4BAE63','#2E9EBF','#7B68EE','#C2558B','#5B8FDB','#48C7A0','#D4628A'];
+  const accentColor = (habit.color && habit.color !== '#4F98A3') ? habit.color : VIVID_PALETTE[habit.id.charCodeAt(0) % VIVID_PALETTE.length];
+
 
   const checkinMutation = useMutation<any, Error, void>({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
@@ -90,89 +93,42 @@ function HabitCard({ habit }: { habit: Habit }) {
   const completedDays = last14.filter(d => d.done).length;
 
   return (
+    // SOLID COLOR card — full accentColor background, white text, Habituator style
     <div
-      className={`relative rounded-xl border overflow-hidden transition-all ${
-        completedToday ? "border-[--accent]/30 bg-[--accent]/5" : "border-border bg-card"
-      }`}
-      style={{ "--accent": accentColor } as any}
+      className="relative rounded-2xl overflow-hidden transition-all active:scale-[0.99]"
+      style={{
+        background: completedToday
+          ? `linear-gradient(135deg, ${accentColor}, ${accentColor}cc)`
+          : `linear-gradient(135deg, ${accentColor}ee, ${accentColor}bb)`,
+        boxShadow: `0 4px 16px ${accentColor}40`,
+      }}
       data-testid={`card-habit-${habit.id}`}
     >
-      {/* Accent top bar */}
-      <div className="h-0.5 w-full" style={{ background: `linear-gradient(90deg, ${accentColor}, ${accentColor}40)` }} />
+      <div className="flex items-center gap-3 px-4 py-3.5">
 
-      <div className="px-4 pt-3 pb-3">
-        {/* Header row */}
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: accentColor + "22" }}>
-              <Icon className="h-4 w-4" style={{ color: accentColor }} />
-            </div>
-            <div className="min-w-0">
-              <div className="font-semibold text-sm leading-tight">
-                <EditableTitle
-                  value={habit.name}
-                  onSave={async (n) => {
-                    await apiRequest("PATCH", `/api/habits/${habit.id}`, { name: n });
-                    queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-                    toast({ title: `Renamed to “${n}”` });
-                  }}
-                />
-              </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                {habit.currentStreak > 0 ? (
-                  <span className="flex items-center gap-1 text-xs font-medium text-orange-500">
-                    <Flame className="h-3 w-3" />{habit.currentStreak}d
-                  </span>
-                ) : null}
-                {habit.longestStreak > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Trophy className="h-3 w-3" />Best {habit.longestStreak}d
-                  </span>
-                )}
-                <span className="text-xs text-muted-foreground capitalize">{habit.frequency}{targetPerDay > 1 ? ` · ${targetPerDay}×` : ""}</span>
-              </div>
-            </div>
-          </div>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <button className="p-1.5 rounded-lg text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0">
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader><AlertDialogTitle>Delete “{habit.name}”?</AlertDialogTitle><AlertDialogDescription>This habit and all its history will be removed.</AlertDialogDescription></AlertDialogHeader>
-              <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => deleteMutation.mutate()} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{deleteMutation.isPending ? "Deleting…" : "Delete"}</AlertDialogAction></AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+        {/* Icon in semi-transparent white circle */}
+        <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 bg-white/20">
+          {completedToday
+            ? <Check className="h-5 w-5 text-white" strokeWidth={3} />
+            : <Icon className="h-5 w-5 text-white" />}
         </div>
 
-        {/* TODAY'S PROGRESS — segmented tap bar */}
-        <div className="mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-muted-foreground">
-              {completedToday ? (
-                <span className="font-semibold" style={{ color: accentColor }}>Done for today ✓</span>
-              ) : todayCheckins > 0 ? (
-                <span>{todayCheckins} / {targetPerDay} — {targetPerDay - todayCheckins} more to go</span>
-              ) : (
-                <span>Tap to check in</span>
-              )}
+        {/* Name + dots */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-sm leading-tight truncate text-white">
+              {habit.name}
             </span>
-            {!completedToday && (
-              <button
-                onClick={() => checkinMutation.mutate()}
-                disabled={checkinMutation.isPending}
-                data-testid={`button-checkin-${habit.id}`}
-                className="text-xs px-2.5 py-1 rounded-full font-medium transition-all active:scale-95 disabled:opacity-50"
-                style={{ backgroundColor: accentColor + "22", color: accentColor, border: `1px solid ${accentColor}44` }}
-              >
-                {checkinMutation.isPending ? "…" : `+ Check In`}
-              </button>
+            {habit.currentStreak > 0 && (
+              <span className="text-[11px] font-bold text-white/90 shrink-0">
+                🔥{habit.currentStreak}
+              </span>
             )}
           </div>
-          {/* Segmented bar — N segments for N required check-ins */}
-          <div className="flex gap-1">
-            {Array.from({ length: targetPerDay }).map((_, idx) => {
+
+          {/* Progress dots — white circles, tap each to fill */}
+          <div className="flex items-center gap-2 mt-2">
+            {Array.from({ length: Math.min(targetPerDay, 10) }).map((_, idx) => {
               const filled = idx < todayCheckins;
               return (
                 <button
@@ -180,89 +136,70 @@ function HabitCard({ habit }: { habit: Habit }) {
                   onClick={() => !filled && !checkinMutation.isPending && checkinMutation.mutate()}
                   disabled={filled || checkinMutation.isPending}
                   data-testid={`button-seg-${habit.id}-${idx}`}
-                  className="flex-1 h-8 rounded-lg transition-all duration-200 active:scale-y-95 flex items-center justify-center relative overflow-hidden"
-                  style={{
-                    backgroundColor: filled ? accentColor : accentColor + "1a",
-                    border: `1px solid ${filled ? accentColor : accentColor + "33"}`,
-                  }}
+                  className="relative active:scale-90 disabled:cursor-default touch-manipulation transition-all duration-200"
+                  style={{ width: 26, height: 26, minWidth: 26 }}
                 >
-                  {filled && <Check className="h-4 w-4 text-white" strokeWidth={2.5} />}
-                  {!filled && checkinMutation.isPending && idx === todayCheckins && (
-                    <div className="h-3.5 w-3.5 rounded-full border-2 animate-spin" style={{ borderColor: accentColor + "80", borderTopColor: accentColor }} />
-                  )}
-                  {!filled && !checkinMutation.isPending && (
-                    <span className="text-xs" style={{ color: accentColor + "99" }}>{idx + 1}</span>
-                  )}
+                  <div
+                    className="w-full h-full rounded-full border-2 flex items-center justify-center transition-all duration-150"
+                    style={{
+                      backgroundColor: filled ? 'rgba(255,255,255,0.9)' : 'transparent',
+                      borderColor: filled ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)',
+                    }}
+                  >
+                    {filled && (
+                      <Check className="h-3.5 w-3.5" style={{ color: accentColor }} strokeWidth={3} />
+                    )}
+                    {!filled && checkinMutation.isPending && idx === todayCheckins && (
+                      <div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                    )}
+                  </div>
                 </button>
               );
             })}
+            <span className="text-[11px] font-semibold text-white/80 ml-1">
+              {completedToday ? '✓ Done' : todayCheckins > 0 ? `${todayCheckins}/${targetPerDay}` : habit.frequency}
+            </span>
           </div>
-        </div>
 
-        {/* 14-day day-of-week grid */}
-        <div className="mt-4">
-          {/* Bar chart */}
-          <div className="flex gap-[3px] items-end h-7 mb-1">
-            {last14.map((day, i) => {
-              const pct = targetPerDay > 0 ? Math.min(day.count / targetPerDay, 1) : 0;
-              return (
-                <div
-                  key={i}
-                  className="flex-1 flex flex-col items-center justify-end"
-                >
-                  <div
-                    title={`${day.date}: ${day.done ? "done" : day.count > 0 ? `${day.count}/${targetPerDay}` : "—"}`}
-                    className="w-full rounded-t-sm transition-all"
-                    style={{
-                      height: day.done ? "100%" : pct > 0 ? `${Math.round(pct * 60) + 40}%` : "20%",
-                      backgroundColor: day.done
-                        ? accentColor
-                        : pct > 0
-                        ? accentColor + "77"
-                        : day.isToday ? "hsl(var(--muted-foreground) / 0.2)" : "hsl(var(--muted-foreground) / 0.1)",
-                    }}
-                  />
-                </div>
-              );
-            })}
-          </div>
-          {/* Day labels row — Mon Tue Wed Thu Fri Sat Sun */}
-          <div className="flex gap-[3px]">
-            {last14.map((day, i) => (
+          {/* 7-day dots */}
+          <div className="flex items-center gap-1.5 mt-1.5">
+            {last14.slice(7).map((day, i) => (
               <div
                 key={i}
-                className="flex-1 text-center"
-              >
-                <span
-                  className={`block text-[9px] font-medium leading-tight ${
-                    day.isToday
-                      ? "font-bold"
-                      : ""
-                  } ${day.isSunday ? "" : ""}`}
-                  style={{
-                    color: day.done
-                      ? accentColor
-                      : day.isToday
-                      ? "hsl(var(--foreground))"
-                      : "hsl(var(--muted-foreground) / 0.8)",
-                  }}
-                >
-                  {day.dayLabel}
-                </span>
-              </div>
+                className="rounded-full"
+                style={{
+                  width: 6, height: 6,
+                  backgroundColor: day.done ? 'rgba(255,255,255,0.9)' : day.count > 0 ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.2)',
+                }}
+              />
             ))}
-          </div>
-          {/* Summary row */}
-          <div className="flex items-center justify-between mt-1.5">
-            <span className="text-[10px] text-muted-foreground/60">2 weeks</span>
-            <span
-              className="text-[10px] font-semibold"
-              style={{ color: completedDays >= 10 ? accentColor : completedDays >= 5 ? "hsl(var(--muted-foreground))" : "hsl(var(--muted-foreground) / 0.6)" }}
-            >
-              {completedDays}/14 days
+            <span className="text-[9px] text-white/50 ml-0.5">
+              {last14.slice(7).filter(d => d.done).length}/7
             </span>
           </div>
         </div>
+
+        {/* Delete */}
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <button className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors shrink-0">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete "{habit.name}"?</AlertDialogTitle>
+              <AlertDialogDescription>All check-in history will be permanently removed.</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => deleteMutation.mutate()} className="bg-destructive text-destructive-foreground">
+                {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
       </div>
     </div>
   );

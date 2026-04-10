@@ -192,6 +192,7 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
     storage.getMemories(),
     storage.getDocuments(),
     storage.getGoals(),
+    storage.getJournalEntries(), // index 10
   ]);
   contextCacheMap.set(cacheKey, { data, timestamp: now });
   // Evict old entries to prevent memory leak
@@ -319,6 +320,38 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
+  // ┌─ JOURNAL FAST-PATH (runs BEFORE multi-intent guard) ─────────────────────┐
+  // This bypasses the AI entirely for journal entries because the AI
+  // persistently hallucinates that profiles "already have entries."
+  const journalForMatch = lower.match(/(?:add|create|write|log)\s+(?:a\s+)?journal\s+(?:entry\s+)?for\s+(\w+)(?:\s*[:\-—]+\s*|\s+(?:saying|about|that|he|she|they)\s+)(.+)/i);
+  if (journalForMatch) {
+    const profileName = journalForMatch[1].trim();
+    const content = journalForMatch[2].trim();
+    const contentLC = content.toLowerCase();
+    let mood: string = 'neutral';
+    if (/amazing|incredible|fantastic|best/.test(contentLC)) mood = 'amazing';
+    else if (/great|wonderful|excellent|energized|motivated|awesome/.test(contentLC)) mood = 'great';
+    else if (/good|fine|nice|happy|pleasant/.test(contentLC)) mood = 'good';
+    else if (/okay|alright|decent/.test(contentLC)) mood = 'okay';
+    else if (/bad|rough|sore|tired|down|upset|stressed/.test(contentLC)) mood = 'bad';
+    else if (/awful|horrible|dreadful|sick/.test(contentLC)) mood = 'awful';
+    else if (/terrible|miserable|worst/.test(contentLC)) mood = 'terrible';
+    const profiles = await storage.getProfiles();
+    const profile = profiles.find(p => p.name.toLowerCase() === profileName.toLowerCase())
+      || profiles.find(p => p.name.toLowerCase().includes(profileName.toLowerCase()));
+    const entry = await storage.createJournalEntry({ mood: mood as any, content, tags: [] });
+    if (profile) {
+      try {
+        await storage.updateJournalEntry(entry.id, { linkedProfiles: [profile.id] } as any);
+        await storage.linkProfileTo(profile.id, "journal", entry.id).catch(() => {});
+      } catch {}
+    }
+    actions.push({ type: "journal_entry", category: "journal", data: { mood, content, forProfile: profileName } });
+    results.push(entry);
+    return { matched: true, reply: `Journal entry saved for ${profile?.name || profileName}. Mood: ${mood}. "${content.slice(0, 100)}"`, actions, results };
+  }
+  // └─ END JOURNAL FAST-PATH ──────────────────────────────────────────┘
+
   // GUARD: Skip fast-path for multi-intent messages.
   // If the message contains multiple verbs/actions, conjunctions, or multiple sentences,
   // let the AI handle it to preserve all intents.
@@ -445,8 +478,11 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     }
   }
 
-  // ---- Habit check-in: "done meditation", "did water", "checked in reading" ----
-  const habitCheckinMatch = lower.match(/^(?:done|did|completed?|checked?\s*in|✓|✅)\s+(.+)/);
+  // ---- Habit check-in (expanded): "done meditation", "mark off my run", "I went on my morning run" ----
+  const habitCheckinMatch = lower.match(/^(?:done|did|completed?|checked?\s*in|✓|✅)\s+(.+)/)
+    || lower.match(/^(?:mark|check)\s+off\s+(?:my\s+|that\s+(?:i\s+)?)?(.+?)(?:\s+(?:habit|today|for today|on my (?:habits?|list)))?$/)
+    || lower.match(/^i\s+(?:went\s+on|did|completed|finished)\s+(?:my\s+)?(.+?)(?:\s+today|\s+this morning|\s+tonight)?$/)
+    || lower.match(/^(?:more often (?:that|than)\s+)?i\s+went\s+(?:on|for)\s+(?:my\s+)?(.+?)$/);
   if (habitCheckinMatch) {
     const habitName = habitCheckinMatch[1].trim();
     const habits = await storage.getHabits();
@@ -552,6 +588,8 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     results.push(entry);
     return { matched: true, reply: `Logged mood: ${mood}. Add more thoughts whenever you want.`, actions, results };
   }
+
+  // (Journal fast-path for profiles moved to top of tryFastPath — before multi-intent guard)
 
   // ---- Memory save: "remember that X" ----
   const rememberMatch = lower.match(/^remember\s+(?:that\s+)?(.+)/);
@@ -1129,22 +1167,24 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "complete_task",
-    description: "Mark a task as complete. Find by title (partial match).",
+    description: "Mark a task as DONE/COMPLETE. Use this when user says 'I completed X', 'mark X as done', 'finished X task', 'checked off X', 'did X', 'I did the X task'. Find by title. NEVER use create_task when the user is referring to completing an EXISTING task. If task is not found, say so — do NOT create a new one.",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Title of the task to complete (partial match)" },
+        forProfile: { type: "string", description: "Profile name to narrow the search when the user mentions whose task it is (e.g. 'Joe', 'Mom')." },
       },
       required: ["title"],
     },
   },
   {
     name: "delete_task",
-    description: "Delete a task by title.",
+    description: "Permanently delete a task by title. Use when user says 'delete X task', 'remove X', 'get rid of X task'. NEVER use this when user says 'complete' or 'done' — those use complete_task instead.",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Title of the task to delete (partial match)" },
+        forProfile: { type: "string", description: "Profile name to narrow the search." },
       },
       required: ["title"],
     },
@@ -1167,27 +1207,45 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "create_tracker",
-    description: "Create a new tracker for NUMERIC TIME-SERIES data only. Use smart field definitions: Blood Pressure [systolic:number, diastolic:number, pulse:number]. Weight [weight:number]. Running [distance:number, duration:number, pace:number, caloriesBurned:number]. Sleep [hours:number, quality:text]. Nutrition [calories:number, protein:number, carbs:number, fat:number, sugar:number, fiber:number, item:text]. Do NOT create trackers for: medication (use update_profile), water intake habits (use create_habit), or binary daily actions (use create_habit).",
+    description: `Create a smart tracker that auto-generates the right fields for ANY domain. YOU decide the fields based on what the user wants to track.
+
+FIELD INFERENCE RULES — generate fields dynamically:
+• HEALTH: Blood Pressure → [systolic:number, diastolic:number, pulse:number, position:select(sitting,standing,lying)]. Blood Glucose → [reading:number, context:select(fasting,post-meal,bedtime), insulinDose:number]. Symptoms → [symptom:text, severity:number(1-10), duration:text, triggers:text]. Pain → [level:number(1-10), location:text, type:select(sharp,dull,throbbing,burning), triggers:text].
+• MEDICATION: [drugName:text, dosage:text, timeTaken:text, adherence:select(taken,skipped,missed), sideEffects:text, notes:text]. Category MUST be "medication".
+• FITNESS: Running → [distance:number, duration:number, pace:number, caloriesBurned:number, intensity:select(easy,moderate,hard)]. Strength → [exercise:text, sets:number, reps:number, weight:number]. Yoga → [duration:number, poses:text, flexibility:number(1-10)].
+• NUTRITION: [item:text, calories:number, protein:number, carbs:number, fat:number, mealType:select(breakfast,lunch,dinner,snack)].
+• SLEEP: [hours:number, quality:select(poor,fair,good,excellent), bedtime:text, wakeTime:text, disturbances:number].
+• MENTAL: Mood → [mood:select(great,good,okay,bad,awful), energy:number(1-5), anxiety:number(1-10), triggers:text]. Meditation → [duration:number, type:select(guided,breathing,body-scan,unguided), focusQuality:number(1-10)].
+• LIFESTYLE: Screen Time → [totalMinutes:number, category:select(social,work,entertainment), focusSessions:number]. Reading → [pages:number, minutes:number, book:text]. Pet Care → [activity:select(feeding,walking,grooming,medication), duration:number, notes:text].
+• FINANCE: Spending → [amount:number, category:text, description:text]. Savings → [amount:number, goal:text, method:text].
+• CUSTOM: For anything else, infer 3-6 relevant fields. Use number for measurable values, select for predefined options, text for free-form, boolean for yes/no.
+
+RULES: Always include at least 2 fields. Use select type with options in parentheses for categorical data. Use number for anything measurable. Include a notes:text field for complex trackers. Set category to the best match: health, fitness, nutrition, sleep, mental, lifestyle, finance, medication, custom.`,
     input_schema: {
       type: "object" as const,
       properties: {
-        name: { type: "string", description: "Tracker name" },
-        category: { type: "string", description: "Category (health, fitness, nutrition, sleep, finance, custom)" },
-        unit: { type: "string", description: "Unit of measurement" },
+        name: { type: "string", description: "Tracker name (e.g. 'Blood Pressure', 'Tylenol', 'Running')" },
+        category: { type: "string", description: "Category: health | fitness | nutrition | sleep | mental | lifestyle | finance | medication | custom" },
+        unit: { type: "string", description: "Primary unit if applicable (mg/dL, lbs, miles, minutes, etc.)" },
         fields: {
           type: "array",
           items: {
             type: "object",
             properties: {
-              name: { type: "string" },
-              type: { type: "string", enum: ["number", "text", "boolean", "select", "duration"] },
+              name: { type: "string", description: "Field key (camelCase)" },
+              type: { type: "string", enum: ["number", "text", "boolean", "select", "duration"], description: "Field type" },
+              label: { type: "string", description: "Human-readable label" },
+              unit: { type: "string", description: "Unit for this field (mg, lbs, min, etc.)" },
+              options: { type: "array", items: { type: "string" }, description: "Options for select fields" },
+              min: { type: "number", description: "Min value for number fields" },
+              max: { type: "number", description: "Max value for number fields" },
             },
           },
-          description: "Field definitions",
+          description: "Smart field definitions — generate these dynamically based on what the user wants to track",
         },
-        forProfile: { type: "string", description: "Name of the profile this tracker belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
+        forProfile: { type: "string", description: "Profile name this tracker belongs to (e.g. 'Joe', 'Mom', 'Max'). ALWAYS set for person/pet/vehicle." },
       },
-      required: ["name"],
+      required: ["name", "fields"],
     },
   },
 
@@ -1310,11 +1368,12 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "checkin_habit",
-    description: "Check in to a habit (mark it done for today). Find by name.",
+    description: "Check in to a habit — mark it DONE for today. Use this whenever the user says 'I did X', 'mark X done', 'completed X habit', 'checked off X'. Find by habit name. Set forProfile when checking in someone else's habit (e.g. 'Joe', 'Rex', 'Mom').",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
+        forProfile: { type: "string", description: "Profile name if this habit belongs to someone other than the user (e.g. 'Joe', 'Rex', 'Mom'). Omit for user's own habits." },
       },
       required: ["name"],
     },
@@ -1356,18 +1415,18 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- Journal ---
   {
     name: "journal_entry",
-    description: "Create a journal/mood entry.",
+    description: "Create a journal/mood entry for the user or for a specific profile. Use when user says 'add a journal entry', 'log that X felt Y', 'write that X happened', 'journal entry for Joe'. mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.",
     input_schema: {
       type: "object" as const,
       properties: {
-        mood: { type: "string", enum: ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"], description: "Mood level. Map user's words: 'amazing/incredible/fantastic' → amazing, 'great/wonderful/excellent' → great, 'good/fine/pretty good' → good, 'okay/alright/decent' → okay, 'meh/so-so/indifferent' → neutral, 'bad/rough/down' → bad, 'awful/horrible/dreadful' → awful, 'terrible/miserable/worst' → terrible" },
-        content: { type: "string", description: "Journal content" },
+        mood: { type: "string", enum: ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"], description: "Mood level (optional — infer from context). 'amazing/incredible' → amazing, 'great/wonderful' → great, 'good/fine' → good, 'okay/alright' → okay, 'meh/indifferent' → neutral, 'bad/rough/sore/tired' → bad, 'awful/horrible' → awful, 'terrible/miserable' → terrible. Default: 'neutral'" },
+        content: { type: "string", description: "Journal content. Write a full sentence summarizing what the user said." },
         energy: { type: "number", description: "Energy level 1-5" },
         gratitude: { type: "array", items: { type: "string" }, description: "Things grateful for" },
         highlights: { type: "array", items: { type: "string" }, description: "Day highlights" },
-        forProfile: { type: "string", description: "REQUIRED when journal is for a specific person. Set to exact profile name." },
+        forProfile: { type: "string", description: "Set to the EXACT profile name when the journal entry is for someone else (e.g. 'Joe', 'Mom'). Creates a separate entry linked to that profile." },
       },
-      required: ["mood"],
+      required: [],
     },
   },
 
@@ -1489,14 +1548,16 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "update_goal",
-    description: "Update or complete a goal. Use when user wants to mark a goal complete, change the target, or abandon a goal.",
+    description: "Update or complete a goal. Use when user wants to: mark a goal complete/done/achieved ('I finished my goal', 'mark goal as done'), change the target, abandon a goal, link it to a tracker, or update current progress. NEVER use create_goal when user is referring to an EXISTING goal.",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Goal title to find (partial match)" },
-        status: { type: "string", enum: ["active", "completed", "abandoned"], description: "New status" },
+        status: { type: "string", enum: ["active", "completed", "abandoned"], description: "New status. Use 'completed' when user says they finished/achieved/completed the goal." },
         target: { type: "number", description: "New target value" },
         deadline: { type: "string", description: "New deadline (ISO date)" },
+        trackerId: { type: "string", description: "Tracker name to link this goal to (partial match). Use when user says 'add my goal to the X tracker' or 'link my goal to X'." },
+        currentProgress: { type: "number", description: "Set current progress value. Use when user says 'I've done X of my goal' or 'I'm at X on my goal'." },
       },
       required: ["title"],
     },
@@ -1689,6 +1750,60 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         title: { type: "string", description: "Goal title (partial match)" },
       },
       required: ["title"],
+    },
+  },
+  // ─── MISSING TOOLS: uncomplete_habit, complete_event, tracker entry CRUD ───
+  {
+    name: "uncomplete_habit",
+    description: "Remove/undo a habit check-in for today (or a specific date). Use when user says 'unmark X habit', 'undo my X checkin', 'I didn't actually do X', 'remove today's X checkin'. This is the OPPOSITE of checkin_habit.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Habit name (partial match)" },
+        forProfile: { type: "string", description: "Profile name if unchecking someone else's habit." },
+        date: { type: "string", description: "Date to uncheck (YYYY-MM-DD). Defaults to today." },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "complete_event",
+    description: "Mark a calendar event as completed/attended. Use when user says 'I went to X', 'I attended X', 'X is done', 'mark X event complete', 'I completed my X appointment'. This marks it done WITHOUT deleting it. Different from delete_event which removes it entirely.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Event title (partial match)" },
+        forProfile: { type: "string", description: "Profile name to narrow search." },
+        removeFromSchedule: { type: "boolean", description: "If true, also removes the event from the upcoming calendar view. Default false." },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "delete_tracker_entry",
+    description: "Delete a specific logged entry from a tracker. Use when user says 'remove my X entry', 'delete that X log', 'undo my X log from today'. Removes a single data point, not the whole tracker.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        trackerName: { type: "string", description: "Name of the tracker (partial match)" },
+        forProfile: { type: "string", description: "Profile name to narrow tracker search." },
+        entryIndex: { type: "number", description: "0 = most recent entry (default). 1 = second most recent, etc." },
+      },
+      required: ["trackerName"],
+    },
+  },
+  {
+    name: "update_tracker_entry",
+    description: "Update/edit a previously logged tracker entry. Use when user says 'change my X log to Y', 'I actually slept 8 hours not 7', 'update today's weight to X', 'correct my X entry'. Edits the most recent entry by default.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        trackerName: { type: "string", description: "Name of the tracker (partial match)" },
+        forProfile: { type: "string", description: "Profile name to narrow tracker search." },
+        values: { type: "object", description: "New values to set for the entry (replaces old values)." },
+        entryIndex: { type: "number", description: "0 = most recent entry (default). 1 = second most recent, etc." },
+      },
+      required: ["trackerName", "values"],
     },
   },
   {
@@ -1936,7 +2051,13 @@ BEHAVIOR:
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
-- BIAS TO ACTION: When the user asks to create, schedule, or add something, DO IT immediately. Do NOT ask for unnecessary details. If they say "schedule a doctor appointment for Mom next week", create a task with title "Schedule doctor appointment for Mom" and due date next week. Don't ask which doctor, what time, etc. — the user can fill in details later. The goal is to capture the intent quickly, not interrogate the user.
+- BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
+  - "I went on my morning run" → checkin_habit(name: "Morning Run") — DO NOT ask 3 options
+  - "Mark off my run" → checkin_habit(name: "Running" or "Morning Run" — find closest match) — DO NOT ask which one
+  - "schedule a doctor appointment" → create_task immediately
+  - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
+  - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
+  - The ONLY time you should ask is if the user's message is genuinely unclear about WHAT action they want (not which entity).
 - When searching, use the search tool to find relevant data before answering.
 
 PROFILE CREATION — CRITICAL RULE:
@@ -1954,6 +2075,98 @@ Phrases that do NOT mean "create a profile" — just include the name in the tas
 - "$30 dinner with Hop" → create_expense with description "Dinner with Hop".
 
 The rule is simple: if the user is describing an ACTION (task, expense, event) that MENTIONS a person, just put the name in the title. Only use forProfile if that person ALREADY EXISTS as a profile. If they don't exist as a profile, leave forProfile empty — the task will be linked to the self (Me) profile automatically.
+
+═══════════════════════════════════════════════════════════════════════
+UNIVERSAL ACTION LAYER — EXACT TOOL ROUTING (ZERO TOLERANCE RULES)
+═══════════════════════════════════════════════════════════════════════
+
+THE PIPELINE: User message → parse ALL intents → execute each tool → report exact truth.
+NEVER ask clarifying questions for CRUD operations. Just execute. If it fails, report the failure.
+
+━━━ COMPLETION vs DELETION vs UPDATE (DIFFERENT THINGS) ━━━
+- "mark X done" / "I completed X" / "finished X" / "checked off X" → complete_task OR checkin_habit OR update_goal(status:completed) OR complete_event
+- "delete X" / "remove X" / "get rid of X" → delete_task OR delete_habit OR delete_event OR delete_goal OR delete_tracker
+- "update X" / "change X to" / "edit X" → update_task OR update_habit OR update_goal OR update_event OR update_tracker_entry
+- "undo X" / "unmark X" / "I didn't do X" → uncomplete_habit (remove checkin)
+- NEVER use create_* when user says complete/done/finished for an EXISTING item
+- NEVER use delete_* when user says complete/done/mark
+
+━━━ TASK CRUD ━━━
+- create: create_task → status defaults to pending
+- complete: complete_task(title, forProfile?) → sets status=done, NEVER create a new task instead
+- update: update_task(title, changes)
+- delete: delete_task(title, forProfile?)
+- If complete_task returns not-found: say "Task not found" — do NOT create_task as a fallback
+
+━━━ HABIT CRUD ━━━
+- create: create_habit(name, forProfile?)
+- mark done TODAY: checkin_habit(name, forProfile?) → adds today's check-in
+- undo/unmark: uncomplete_habit(name, forProfile?, date?) → removes check-in
+- update: update_habit(name, changes)
+- delete: delete_habit(name)
+
+━━━ GOAL CRUD ━━━
+- create: create_goal(title, type, target, unit, deadline, forProfile?, trackerId?, habitId?)
+- check progress: get_goal_progress(query?)
+- mark ACHIEVED/DONE: update_goal(title, status:"completed") — NEVER use delete_goal for this
+- update target/deadline: update_goal(title, target?, deadline?)
+- link to tracker: update_goal(title, trackerId:"tracker name")
+- set progress manually: update_goal(title, currentProgress:N)
+- delete: delete_goal(title)
+
+━━━ EVENT CRUD ━━━
+- create: create_event(title, date, time?, forProfile?)
+- update (change time/date): update_event(title, changes)
+- mark attended/done: complete_event(title, forProfile?, removeFromSchedule?)
+  - removeFromSchedule=true → marks done AND removes from calendar
+  - removeFromSchedule=false → marks done, stays on calendar
+- delete: delete_event(title, forProfile?) → fully removes
+- "I went to X" / "I attended X" → complete_event
+- "remove X from my schedule" → complete_event(removeFromSchedule:true)
+- "cancel X" → delete_event OR update_event(changes:{status:"cancelled"})
+
+━━━ TRACKER CRUD ━━━
+- create tracker: create_tracker(name, category, fields, forProfile?)
+- log entry: log_tracker_entry(trackerName, values, forProfile?)
+- update most recent entry: update_tracker_entry(trackerName, values, forProfile?, entryIndex?)
+- delete most recent entry: delete_tracker_entry(trackerName, forProfile?, entryIndex?)
+- rename/update tracker: update_tracker(trackerName, changes)
+- delete entire tracker: delete_tracker(name)
+
+━━━ JOURNAL CRUD ━━━
+- create: journal_entry(mood, content, forProfile?)
+- update today's: update_journal(date:"today's date", changes)
+- delete: delete_journal(date)
+CRITICAL: "Add a journal entry for X saying Y" → ALWAYS journal_entry(content:Y, forProfile:X). NEVER create_task for journal entries.
+NEVER say "X already has a journal entry" unless the Journal Entries context above explicitly shows an entry "for:X". If the context shows no entry for X, just call journal_entry — do NOT assume one exists.
+"X felt Y" / "X was feeling Y" / "note that X felt Y" → journal_entry. Infer mood: sore/tired/rough=bad, happy/good=good, motivated/energized=great, neutral/normal=okay.
+If journal_entry succeeds, say "Journal entry saved for [name]."
+NEVER substitute a create_task when the user explicitly asks for a journal entry.
+
+━━━ MULTI-ACTION COMPOUND COMMANDS ━━━
+When user says MULTIPLE things in one message, execute ALL of them as SEPARATE tool calls.
+Example: "Joe completed his water habit, delete his stretching task, create a goal to lose 5 pounds"
+→ Tool 1: checkin_habit(name:"Water", forProfile:"Joe")
+→ Tool 2: delete_habit(name:"Stretching") OR delete_task(title:"Stretching") — if ambiguous, DELETE BOTH and say so
+→ Tool 3: create_goal(title:"Lose 5 pounds", type:"weight_loss", target:5, unit:"lbs", forProfile:"Joe")
+All 3 must execute. Report: ✅ Water habit checked in for Joe, ✅ Stretching deleted, ✅ Goal created.
+
+PROFILE CONTEXT INHERITANCE: If the user sets a profile context ("Joe completed..., his task..., his habit..."),
+apply forProfile:"Joe" to ALL subsequent actions in the same message until profile changes.
+
+━━━ AMBIGUITY RESOLUTION ━━━
+If "delete Joe's running thing" could match habit OR tracker OR event:
+1. Look at the data context above — see what actually exists for Joe with "running" in the name
+2. If only ONE type matches → do it
+3. If multiple types match → tell user: "I found a Running habit AND a Running tracker for Joe. Which one should I delete?"
+NEVER delete randomly. NEVER delete the wrong item.
+
+━━━ HONESTY RULES ━━━
+- If a tool returns {error: "..."} → tell the user it FAILED. Never say "Done!" on failure.
+- If item not found → say "I couldn't find [X]" with specific name. Offer to search.
+- If action succeeded → confirm with: what was done, for whom, the item name, and the new state.
+- Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
+- Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 
 TOOL CHOICE RULES — CRITICAL:
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
@@ -2683,14 +2896,32 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "complete_task": {
       const tasks = await storage.getTasks();
-      const result = safeMatchEntity(tasks, input.title || "", t => t.title, { filter: t => t.status !== "done" });
-      if (!result.match) return { error: result.error || "Task not found", candidates: result.candidates };
+      // Filter by profile if specified
+      let taskPool = tasks.filter(t => t.status !== "done");
+      if (input.forProfile) {
+        const allProfs = await storage.getProfiles();
+        const prof = allProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) taskPool = taskPool.filter(t => (t.linkedProfiles || []).includes(prof.id));
+      }
+      const result = safeMatchEntity(taskPool, input.title || "", t => t.title);
+      if (!result.match) {
+        // fallback: search all tasks (any profile, any status)
+        const fallback = safeMatchEntity(tasks, input.title || "", t => t.title);
+        if (fallback.match && fallback.match.status === "done") return { alreadyDone: true, title: fallback.match.title };
+        return { error: result.error || "Task not found", candidates: result.candidates };
+      }
       return storage.updateTask(result.match.id, { status: "done" });
     }
 
     case "delete_task": {
       const tasks = await storage.getTasks();
-      const result = safeMatchEntity(tasks, input.title || "", t => t.title, { isDestructive: true });
+      let taskPool = tasks;
+      if (input.forProfile) {
+        const allProfs = await storage.getProfiles();
+        const prof = allProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) taskPool = tasks.filter(t => (t.linkedProfiles || []).includes(prof.id));
+      }
+      const result = safeMatchEntity(taskPool, input.title || "", t => t.title, { isDestructive: true });
       if (!result.match) return { error: result.error || "Task not found", candidates: result.candidates };
       await storage.deleteTask(result.match.id);
       return { deleted: true, title: result.match.title, id: result.match.id };
@@ -3090,7 +3321,23 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      const habit = habits.find(h => h.name.toLowerCase().includes((input.name || "").toLowerCase()));
+      const nameQuery = (input.name || "").toLowerCase();
+      // Filter by profile if specified
+      let eligible = habits;
+      if (input.forProfile) {
+        const allProfs = await storage.getProfiles();
+        const prof = allProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
+      } else {
+        // Default: prefer habits linked to self profile
+        const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
+        if (selfProf) {
+          const selfHabits = habits.filter(h => (h.linkedProfiles || []).includes(selfProf.id));
+          if (selfHabits.length > 0) eligible = selfHabits;
+        }
+      }
+      const habit = eligible.find(h => h.name.toLowerCase().includes(nameQuery))
+        ?? habits.find(h => h.name.toLowerCase().includes(nameQuery)); // fallback to any
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       return storage.checkinHabit(habit.id);
     }
@@ -3203,10 +3450,14 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "journal_entry": {
-      // Check if a journal entry already exists for today
       const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      const allJournalEntries = await storage.getJournalEntries();
-      const existingToday = allJournalEntries.find(j => j.date === todayDate);
+      // When forProfile is set: ALWAYS create a new entry for that profile (no de-dup).
+      // De-dup only applies to self-profile entries.
+      let existingToday: any = null;
+      if (!input.forProfile) {
+        const allJournalEntries = await storage.getJournalEntries();
+        existingToday = allJournalEntries.find(j => j.date === todayDate) || null;
+      }
 
       let entry: any;
       if (existingToday) {
@@ -3414,6 +3665,18 @@ async function executeTool(name: string, input: any): Promise<any> {
       if (input.status) changes.status = input.status;
       if (input.target) changes.target = input.target;
       if (input.deadline) changes.deadline = input.deadline;
+      if (input.currentProgress !== undefined && input.currentProgress !== null) changes.current = input.currentProgress;
+      // Link to tracker by name
+      if (input.trackerId) {
+        const trackers = await storage.getTrackers();
+        const found = trackers.find(t => t.name.toLowerCase().includes((input.trackerId || "").toLowerCase()));
+        if (found) {
+          changes.trackerId = found.id;
+          logger.info("ai", `Linked goal "${goal.title}" to tracker "${found.name}"`);
+        } else {
+          logger.warn("ai", `Tracker not found for goal link: ${input.trackerId}`);
+        }
+      }
       return storage.updateGoal(goal.id, changes);
     }
 
@@ -3501,6 +3764,94 @@ async function executeTool(name: string, input: any): Promise<any> {
       return { deleted: true, title: deResult.match.title, id: deResult.match.id };
     }
 
+    // ─── NEW HANDLERS ─────────────────────────────────────────────────────────
+
+    case "uncomplete_habit": {
+      const habits = await storage.getHabits();
+      const nameQ = (input.name || "").toLowerCase();
+      let eligible = habits;
+      if (input.forProfile) {
+        const profs = await storage.getProfiles();
+        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
+      } else {
+        const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
+        if (selfProf) { const sh = habits.filter(h => (h.linkedProfiles||[]).includes(selfProf.id)); if (sh.length > 0) eligible = sh; }
+      }
+      const habit = eligible.find(h => h.name.toLowerCase().includes(nameQ)) ?? habits.find(h => h.name.toLowerCase().includes(nameQ));
+      if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
+      const targetDate = input.date || new Date().toLocaleDateString('en-CA');
+      // Find and delete today's checkin
+      const fullHabit = await storage.getHabit(habit.id);
+      const checkin = (fullHabit?.checkins || []).find((c: any) => c.date === targetDate);
+      if (!checkin) return { error: `No check-in found for "${habit.name}" on ${targetDate}` };
+      await storage.deleteHabitCheckin(habit.id, checkin.id);
+      return { uncompleted: true, habitName: habit.name, date: targetDate };
+    }
+
+    case "complete_event": {
+      const events = await storage.getEvents();
+      let evtPool = events;
+      if (input.forProfile) {
+        const profs = await storage.getProfiles();
+        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) evtPool = events.filter(e => (e.linkedProfiles || []).includes(prof.id));
+      }
+      const ceResult = safeMatchEntity(evtPool, input.title || "", e => e.title);
+      if (!ceResult.match) return { error: ceResult.error || "Event not found", candidates: ceResult.candidates };
+      const completed = await storage.updateEvent(ceResult.match.id, { status: "completed" } as any);
+      if (input.removeFromSchedule) {
+        // Also mark as hidden from upcoming by setting date to past
+        await storage.deleteEvent(ceResult.match.id);
+        return { completed: true, deleted: true, title: ceResult.match.title };
+      }
+      return { completed: true, title: ceResult.match.title, event: completed };
+    }
+
+    case "delete_tracker_entry": {
+      const trackers = await storage.getTrackers();
+      let trackerPool = trackers;
+      if (input.forProfile) {
+        const profs = await storage.getProfiles();
+        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) trackerPool = trackers.filter(t => (t.linkedProfiles || []).includes(prof.id));
+      }
+      const dteResult = safeMatchEntity(trackerPool, input.trackerName || "", t => t.name);
+      if (!dteResult.match) return { error: dteResult.error || "Tracker not found", candidates: dteResult.candidates };
+      const tracker = dteResult.match;
+      const entries = tracker.entries || [];
+      if (entries.length === 0) return { error: `Tracker "${tracker.name}" has no entries to delete.` };
+      const idx = input.entryIndex ?? 0;
+      const entry = entries[entries.length - 1 - idx]; // 0 = most recent
+      if (!entry) return { error: `No entry found at index ${idx}` };
+      await storage.deleteTrackerEntry(tracker.id, entry.id);
+      return { deleted: true, trackerName: tracker.name, entryId: entry.id, values: entry.values };
+    }
+
+    case "update_tracker_entry": {
+      const trackers = await storage.getTrackers();
+      let trackerPool2 = trackers;
+      if (input.forProfile) {
+        const profs = await storage.getProfiles();
+        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) trackerPool2 = trackers.filter(t => (t.linkedProfiles || []).includes(prof.id));
+      }
+      const uteResult = safeMatchEntity(trackerPool2, input.trackerName || "", t => t.name);
+      if (!uteResult.match) return { error: uteResult.error || "Tracker not found", candidates: uteResult.candidates };
+      const uTracker = uteResult.match;
+      const uEntries = uTracker.entries || [];
+      if (uEntries.length === 0) return { error: `Tracker "${uTracker.name}" has no entries to update.` };
+      const uIdx = input.entryIndex ?? 0;
+      const uEntry = uEntries[uEntries.length - 1 - uIdx];
+      if (!uEntry) return { error: `No entry found at index ${uIdx}` };
+      // Delete old entry and re-log with new values (storage doesn't have updateTrackerEntry)
+      await storage.deleteTrackerEntry(uTracker.id, uEntry.id);
+      const newEntry = await storage.logEntry({ trackerId: uTracker.id, values: { ...uEntry.values, ...input.values }, notes: uEntry.notes });
+      return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: input.values, newEntry };
+    }
+
+    // ─── END NEW HANDLERS ─────────────────────────────────────────────────────
+
     case "delete_tracker": {
       const trackers = await storage.getTrackers();
       const dtResult = safeMatchEntity(trackers, input.name || "", t => t.name, { isDestructive: true });
@@ -3519,17 +3870,41 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "delete_journal": {
       const entries = await storage.getJournalEntries();
-      const match = entries.find(e => e.date === input.date);
-      if (!match) return { error: `No journal entry found for date "${input.date}"` };
-      await storage.deleteJournalEntry(match.id);
-      return { deleted: true, date: match.date, id: match.id };
+      const today = new Date().toLocaleDateString('en-CA');
+      // Match by date (today/yesterday shorthand) or most recent if no date given
+      let matchEntry = input.date ? entries.find(e => e.date === input.date) : null;
+      if (!matchEntry) matchEntry = entries.find(e => e.date === today) ?? entries[entries.length - 1] ?? null;
+      // Also filter by profile if specified
+      if (input.forProfile && matchEntry) {
+        const profs = await storage.getProfiles();
+        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) {
+          const profEntry = entries.filter(e => ((e as any).linkedProfiles || []).includes(prof.id))
+            .sort((a, b) => b.date.localeCompare(a.date))[0];
+          if (profEntry) matchEntry = profEntry;
+        }
+      }
+      if (!matchEntry) return { error: `No journal entry found for date "${input.date || today}"` };
+      await storage.deleteJournalEntry(matchEntry.id);
+      return { deleted: true, date: matchEntry.date, id: matchEntry.id };
     }
 
     case "update_journal": {
       const entries = await storage.getJournalEntries();
-      const entry = entries.find(e => e.date === input.date);
-      if (!entry) return { error: `No journal entry found for date "${input.date}"` };
-      const updated = await storage.updateJournalEntry(entry.id, input.changes);
+      const today2 = new Date().toLocaleDateString('en-CA');
+      let matchEntry2 = input.date ? entries.find(e => e.date === input.date) : null;
+      if (!matchEntry2) matchEntry2 = entries.find(e => e.date === today2) ?? entries[entries.length - 1] ?? null;
+      if (input.forProfile && matchEntry2) {
+        const profs = await storage.getProfiles();
+        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) {
+          const profEntry = entries.filter(e => ((e as any).linkedProfiles || []).includes(prof.id))
+            .sort((a, b) => b.date.localeCompare(a.date))[0];
+          if (profEntry) matchEntry2 = profEntry;
+        }
+      }
+      if (!matchEntry2) return { error: `No journal entry found for date "${input.date || today2}"` };
+      const updated = await storage.updateJournalEntry(matchEntry2.id, input.changes);
       return { updated: true, journal: updated };
     }
 
@@ -4634,7 +5009,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   // ALWAYS invalidate cache at the start of every chat request so AI sees the CURRENT database state.
   // This ensures manual UI edits (creates, deletes, updates) are reflected immediately.
   invalidateContextCache(userId);
-  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
+  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = [
@@ -4662,6 +5037,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       return `"${d.name}" (${d.type})${keyFields ? ` [${keyFields}]` : ''}`;
     }).join("; ") || "none"}`,
     `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
+    // Journal entries intentionally EXCLUDED from context — the journal_entry tool handles all checks.
+    // Including them caused the AI to hallucinate that profiles "already have entries" based on content similarity.
     // Financial intelligence — net worth and burn rate for AI diagnostics
     (() => {
       const selfProf = profiles.find((p: any) => p.type === "self");
@@ -4730,7 +5107,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           response = await getClient().messages.create({
-            model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+            model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
             max_tokens: 4096,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
@@ -4978,8 +5355,8 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     update_profile: "update_profile",
     delete_profile: "retrieve",
     create_task: "create_task",
-    complete_task: "create_task",
-    delete_task: "create_task",
+    complete_task: "complete_task",
+    delete_task: "delete_task",
     log_tracker_entry: "log_entry",
     create_tracker: "create_tracker",
     create_expense: "log_expense",
@@ -5000,6 +5377,10 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     create_goal: "create_goal",
     update_goal: "create_goal",
     delete_goal: "create_goal",
+    uncomplete_habit: "checkin_habit",
+    complete_event: "complete_event",
+    delete_tracker_entry: "log_entry",
+    update_tracker_entry: "log_entry",
     retrieve_document: "retrieve",
     generate_chart: "retrieve",
     generate_table: "retrieve",

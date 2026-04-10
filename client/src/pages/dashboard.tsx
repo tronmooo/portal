@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription, DialogClose,
 } from "@/components/ui/dialog";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
@@ -496,7 +496,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
             <DialogTitle className="text-sm">Overdue &amp; Upcoming Bills</DialogTitle>
             <DialogDescription className="text-xs">Overdue bills + bills due in the next 7 days</DialogDescription>
           </DialogHeader>
-          <ScrollArea className="max-h-[50vh]">
+          <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
             <div className="space-y-1.5 py-2">
               {(finSnap?.upcomingBills || []).map((bill: any) => {
                 const urgent = bill.daysUntil <= 3;
@@ -519,7 +519,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                 <p className="text-xs text-muted-foreground text-center py-4">No upcoming bills</p>
               )}
             </div>
-          </ScrollArea>
+          </div>
           <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
         </DialogContent>
       </Dialog>
@@ -539,7 +539,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
             </DialogTitle>
             <DialogDescription className="text-xs">Documents with upcoming or past expiration dates</DialogDescription>
           </DialogHeader>
-          <ScrollArea className="flex-1 max-h-[60vh]">
+          <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '60vh' }}>
             <div className="space-y-1.5 py-2 pr-2">
               {(enhanced?.expiringDocuments || []).map((doc: any, i: number) => {
                 const expired = doc.status === "expired";
@@ -572,7 +572,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                 </div>
               )}
             </div>
-          </ScrollArea>
+          </div>
           <ViewPageLink href="/dashboard/documents" label="View All Documents" />
         </DialogContent>
       </Dialog>
@@ -583,111 +583,233 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
 // ─── Tasks Popup ──────────────────────────────────────────────────────────────
 
 function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: { open: boolean; onClose: () => void; filterIds?: string[]; filterMode?: string }) {
-  const [, navigate] = useLocation();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [addingTo, setAddingTo] = useState<string | null>(null);
+  // Force refetch when popup opens — prevents stale cache after AI chat mutations
+  useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); } }, [open]);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: tasks = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
+    staleTime: 0,  // ALWAYS fetch fresh — never serve cached data in popups
     enabled: open,
   });
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, status, title }: { id: string; status: string; title?: string }) =>
-      apiRequest("PATCH", `/api/tasks/${id}`, { status }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
+  const createMutation = useMutation({
+    mutationFn: (title: string) => apiRequest("POST", "/api/tasks", { title, priority: "medium", status: "todo" }),
+    onMutate: async (title) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prev = queryClient.getQueryData(["/api/tasks", filterMode, ...filterIds]);
+      queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
+        [{ id: 'tmp-' + Date.now(), title, status: 'todo', priority: 'medium' }, ...(old || [])]
+      );
+      return { prev };
     },
-    onError: () => toast({ title: "Failed to update task", variant: "destructive" }),
+    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task added" }); },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string; title?: string }) => apiRequest("PATCH", `/api/tasks/${id}`, { status }),
+    onMutate: async ({ id, status }) => {
+      const prev = queryClient.getQueryData(["/api/tasks", filterMode, ...filterIds]);
+      queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
+        (old || []).map((t: any) => t.id === id ? { ...t, status } : t)
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/tasks/${id}`),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: `"${variables.title || "Task"}" deleted` });
+    mutationFn: ({ id }: { id: string }) => apiRequest("DELETE", `/api/tasks/${id}`),
+    onMutate: async ({ id }) => {
+      const prev = queryClient.getQueryData(["/api/tasks", filterMode, ...filterIds]);
+      queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) => (old || []).filter((t: any) => t.id !== id));
+      return { prev };
     },
-    onError: () => toast({ title: "Failed to delete task", variant: "destructive" }),
+    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
   });
 
-  const activeTasks = tasks.filter((t: any) => t.status !== "done").sort((a: any, b: any) => {
-    const p: Record<string, number> = { high: 0, medium: 1, low: 2 };
-    return (p[a.priority] ?? 2) - (p[b.priority] ?? 2);
-  });
-  const doneTasks = tasks.filter((t: any) => t.status === "done").slice(0, 5);
-  const PRIORITY_CLR: Record<string, string> = { high: "text-red-500 border-red-500/40", medium: "text-amber-500 border-amber-500/40", low: "" };
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); })();
+  const pending = tasks.filter((t: any) => t.status !== 'done');
+  const done = tasks.filter((t: any) => t.status === 'done').slice(0, 5);
+  const todayTasks = pending.filter((t: any) => !t.dueDate || t.dueDate <= todayStr);
+  const tomorrowTasks = pending.filter((t: any) => t.dueDate === tomorrowStr);
+  const upcomingTasks = pending.filter((t: any) => t.dueDate && t.dueDate > tomorrowStr);
+
+  // Priority color lines — exact Any.do style
+  const PLINE: Record<string, string> = { high: '#E53935', medium: '#FFA726', low: '#42A5F5' };
+
+  const handleAdd = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    const title = newTaskTitle.trim();
+    if (!title) return;
+    createMutation.mutate(title);
+    setNewTaskTitle("");
+    setAddingTo(null);
+  };
+
+  const TaskRow = ({ t, dimmed = false }: { t: any; dimmed?: boolean }) => (
+    <div className={`flex items-start gap-3 px-4 py-2.5 ${dimmed ? 'opacity-50' : 'hover:bg-muted/30'} transition-colors`}>
+      <button
+        onClick={() => toggleMutation.mutate({ id: t.id, status: dimmed ? 'todo' : 'done' })}
+        className="shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center touch-manipulation"
+      >
+        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-muted-foreground/20 border-muted-foreground/30' : 'border-muted-foreground/40 hover:border-primary'}`}>
+          {dimmed && <Check className="h-3 w-3 text-muted-foreground/50" strokeWidth={3} />}
+        </div>
+      </button>
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
+        {/* Priority color line — Any.do style */}
+        {!dimmed && t.priority && (
+          <div className="h-[2.5px] w-7 rounded-full mt-1" style={{ backgroundColor: PLINE[t.priority] || '#42A5F5' }} />
+        )}
+        {t.dueDate && t.dueDate !== todayStr && !dimmed && (
+          <span className="text-[10px] text-muted-foreground mt-0.5 block">{fmtDate(t.dueDate)}</span>
+        )}
+      </div>
+      {dimmed && (
+        <button onClick={() => deleteMutation.mutate({ id: t.id })} className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-muted-foreground touch-manipulation">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+
+  const SectionHeader = ({ label, section }: { label: string; section: string }) => (
+    <div className="flex items-center justify-between px-4 pt-3 pb-1">
+      <span className="font-bold text-base text-foreground">{label}</span>
+      <button onClick={() => setAddingTo(section)} className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-muted transition-colors" data-testid={`button-add-to-${section}`}>
+        <Plus className="h-4 w-4 text-muted-foreground" />
+      </button>
+    </div>
+  );
+
+  const AddRow = ({ section }: { section: string }) => addingTo === section ? (
+    <div className="px-4 py-2">
+      <input
+        autoFocus
+        data-testid={`input-new-task-${section}`}
+        className="w-full text-sm bg-muted/40 border border-border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+        placeholder="I want to..."
+        value={newTaskTitle}
+        onChange={e => setNewTaskTitle(e.target.value)}
+        onKeyDown={handleAdd}
+        onBlur={() => { if (!newTaskTitle.trim()) setAddingTo(null); }}
+      />
+    </div>
+  ) : null;
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md max-h-[85vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="text-sm flex items-center gap-2">
-            <ListTodo className="h-4 w-4 text-primary" />
-            Tasks
-            <Badge variant="secondary" className="ml-1">{activeTasks.length} active</Badge>
-          </DialogTitle>
-        </DialogHeader>
-        <ScrollArea className="flex-1 max-h-[60vh]">
+    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); } }}>
+      <DialogContent hideCloseButton className="max-w-sm max-h-[88vh] flex flex-col p-0 gap-0 relative">
+        {/* Any.do header */}
+        <div className="flex items-center justify-between px-4 pt-3 pb-3 border-b border-border/40">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-sm bg-red-500 flex items-center justify-center">
+              <Check className="h-4 w-4 text-white" strokeWidth={3} />
+            </div>
+            <span className="font-bold text-sm uppercase tracking-wide text-foreground">All Tasks</span>
+            <Badge variant="secondary">{pending.length}</Badge>
+          </div>
+          {/* Close — absolute positioned with z-index to avoid touch overlap */}
+          <DialogClose className="absolute right-3 top-3 z-10 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
+            <X className="h-5 w-5" />
+          </DialogClose>
+        </div>
+
+        <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '65vh' }}>
           {isLoading ? (
-            <div className="space-y-2 py-2">{[1,2,3].map(i => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
           ) : (
-            <div className="space-y-1 py-1 pr-2">
-              {activeTasks.map((t: any) => (
-                <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted/50 transition-colors group">
-                  <button onClick={() => toggleMutation.mutate({ id: t.id, status: "done", title: t.title })}
-                    className="shrink-0 w-4 h-4 rounded border border-primary/40 hover:bg-primary/10 flex items-center justify-center">
-                    {toggleMutation.isPending ? <span className="animate-spin h-2 w-2 border border-primary rounded-full border-t-transparent" /> : null}
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs truncate">{t.title}</p>
-                    <div className="flex items-center gap-1.5">
-                      <Badge variant="outline" className={`text-xs-tight px-1 py-0 h-3.5 ${PRIORITY_CLR[t.priority] || ""}`}>{t.priority}</Badge>
-                      {t.dueDate && <span className="text-xs-tight text-muted-foreground">{fmtDate(t.dueDate)}</span>}
-                    </div>
-                  </div>
-                  <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={() => deleteMutation.mutate({ id: t.id, title: t.title })} disabled={deleteMutation.isPending}><Trash2 className="h-3 w-3" /></Button>
-                </div>
-              ))}
-              {doneTasks.length > 0 && (
-                <div className="pt-2 border-t border-border/30">
-                  <p className="text-xs text-muted-foreground mb-1">{doneTasks.length} recently completed</p>
-                  {doneTasks.map((t: any) => (
-                    <div key={t.id} className="flex items-center gap-2 py-1 text-muted-foreground">
-                      <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
-                      <span className="text-xs line-through truncate">{t.title}</span>
-                    </div>
-                  ))}
-                </div>
+            <div className="pb-4">
+              {/* TODAY */}
+              <SectionHeader label="Today" section="today" />
+              <AddRow section="today" />
+              {todayTasks.length === 0 && !addingTo && (
+                <p className="text-sm text-muted-foreground px-4 py-2">Nothing due today</p>
               )}
-              {activeTasks.length === 0 && doneTasks.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-6">No tasks yet</p>
+              {todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}
+
+              {/* Completed (grayed, strikethrough) */}
+              {done.length > 0 && (
+                <>
+                  <div className="my-1 mx-4 border-t border-border/30" />
+                  {done.map((t: any) => <TaskRow key={t.id} t={t} dimmed />)}
+                </>
               )}
+
+              {/* TOMORROW */}
+              {(tomorrowTasks.length > 0 || addingTo === 'tomorrow') && (
+                <>
+                  <SectionHeader label="Tomorrow" section="tomorrow" />
+                  <AddRow section="tomorrow" />
+                  {tomorrowTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}
+                </>
+              )}
+
+              {/* UPCOMING */}
+              <SectionHeader label="Upcoming" section="upcoming" />
+              <AddRow section="upcoming" />
+              {upcomingTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}
             </div>
           )}
-        </ScrollArea>
-        <ViewPageLink href="/dashboard/tasks" label="View All Tasks" />
+        </div>
+
+        {/* Bottom input — Any.do "I want to..." bar */}
+        <div className="border-t border-border/30 px-4 py-3 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+            <ListTodo className="h-4 w-4 text-primary" />
+          </div>
+          <input
+            className="flex-1 text-sm bg-transparent focus:outline-none text-muted-foreground placeholder:text-muted-foreground/60"
+            placeholder="I want to..."
+            data-testid="input-quick-task"
+            value={addingTo === 'quick' ? newTaskTitle : ''}
+            onChange={e => { setNewTaskTitle(e.target.value); setAddingTo('quick'); }}
+            onKeyDown={handleAdd}
+            onFocus={() => setAddingTo('quick')}
+          />
+        </div>
       </DialogContent>
     </Dialog>
   );
 }
 
-// ─── Section: Action Required (replaces NeedsAttention) ──────────────────────
-
-// ─── Habits Popup ────────────────────────────────────────────────────────────
 function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const today = new Date().toLocaleDateString('en-CA');
+  const [, navigate] = useLocation();
+  const [addingHabit, setAddingHabit] = useState(false);
+  const [newHabitName, setNewHabitName] = useState('');
+  // Force refetch when popup opens — prevents stale cache after AI chat mutations
+  useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); } }, [open]);
+
+  const createHabitMutation = useMutation({
+    mutationFn: (name: string) => apiRequest('POST', '/api/habits', { name, frequency: 'daily' }),
+    onSuccess: () => {
+      setNewHabitName(''); setAddingHabit(false);
+      queryClient.invalidateQueries({ queryKey: ['/api/habits'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
+      toast({ title: 'Habit created' });
+    },
+    onError: () => toast({ title: 'Failed to create habit', variant: 'destructive' }),
+  });
+
   const { data: habits = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/habits"],
     queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
     enabled: open,
+    staleTime: 0,  // ALWAYS fetch fresh — never serve cached data in popups
   });
+
   const checkinMutation = useMutation({
     mutationFn: ({ id }: { id: string }) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: today }),
     onMutate: async ({ id }) => {
@@ -695,78 +817,204 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === id
-          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'temp-' + Date.now() }], currentStreak: (h.currentStreak || 0) + 1 }
-          : h
-        )
+          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }] }
+          : h)
       );
       return { prev };
     },
-    onSuccess: () => {
-      toast({ title: "Logged!" });
-    },
     onError: (_e: any, _v: any, ctx: any) => {
-      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
-      toast({ title: "Check-in failed", variant: "destructive" });
+      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
   });
-  const activeHabits = habits.filter((h: any) => !h.archivedAt);
-  const todayDone = activeHabits.filter((h: any) => h.checkins?.some((c: any) => c.date === today)).length;
+
+  const active = habits.filter((h: any) => !h.archivedAt);
+  const VIVID = ['#6C5CE7','#E84393','#E55353','#F6A623','#2ECC71','#3498DB','#E67E22','#9B59B6','#1ABC9C','#E74C3C'];
+
+  // Group by category if available, else default group
+  const grouped: Record<string, any[]> = {};
+  active.forEach((h: any) => {
+    const cat = (h as any).category || h.group || 'Daily';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(h);
+  });
+
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-sm max-h-[85vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="text-sm flex items-center gap-2">
-            <Flame className="h-4 w-4 text-orange-400" /> Habits Today
-            {activeHabits.length > 0 && <Badge variant="secondary" className="ml-1">{todayDone}/{activeHabits.length}</Badge>}
-          </DialogTitle>
-          <DialogDescription className="text-xs">
-            {activeHabits.length === 0 ? "No habits tracked yet" : todayDone === activeHabits.length ? "All done for today!" : `${todayDone} of ${activeHabits.length} completed`}
-          </DialogDescription>
-        </DialogHeader>
-        <ScrollArea className="flex-1 max-h-[55vh]">
+    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingHabit(false); setNewHabitName(''); } }}>
+      <DialogContent hideCloseButton className="max-w-sm max-h-[88vh] flex flex-col p-0 gap-0 relative">
+        {/* Header — 44px touch targets, no AI button */}
+        <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-border/40">
+          <span className="font-bold text-base text-foreground">Today's Habits</span>
+          <div className="flex items-center gap-0">
+            {/* Add habit — 44px touch target */}
+            <button
+              onClick={() => setAddingHabit(v => !v)}
+              className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${
+                addingHabit ? 'bg-primary text-primary-foreground' : 'hover:bg-muted active:bg-muted/80 text-muted-foreground'
+              }`}
+            >
+              <Plus className="h-5 w-5" />
+            </button>
+            {/* Close — absolute positioned with z-index to avoid touch overlap */}
+            <DialogClose className="absolute right-3 top-3 z-10 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
+              <X className="h-5 w-5" />
+            </DialogClose>
+          </div>
+        </div>
+
+        {/* Inline add habit form */}
+        {addingHabit && (
+          <div className="px-3 pt-3 pb-1">
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                className="flex-1 text-sm bg-muted/40 border border-border rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-muted-foreground/50"
+                placeholder="New habit name (e.g. Drink water)..."
+                value={newHabitName}
+                onChange={e => setNewHabitName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && newHabitName.trim()) createHabitMutation.mutate(newHabitName.trim());
+                  if (e.key === 'Escape') { setAddingHabit(false); setNewHabitName(''); }
+                }}
+              />
+              <button
+                onClick={() => newHabitName.trim() && createHabitMutation.mutate(newHabitName.trim())}
+                disabled={!newHabitName.trim() || createHabitMutation.isPending}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-semibold disabled:opacity-40 shrink-0"
+              >
+                {createHabitMutation.isPending ? '...' : 'Add'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Native scroll — NOT ScrollArea (broken on iOS Safari in dialogs) */}
+        <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '70vh' }}>
           {isLoading ? (
-            <div className="space-y-2 py-2">{[1,2,3].map(i => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
-          ) : activeHabits.length === 0 ? (
-            <div className="py-6 text-center">
-              <Flame className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-              <p className="text-xs text-muted-foreground">No habits yet</p>
+            <div className="px-3 space-y-2 py-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-14 rounded-2xl" />)}</div>
+          ) : active.length === 0 ? (
+            <div className="py-10 text-center px-4">
+              <Flame className="h-12 w-12 text-muted-foreground/20 mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground mb-4">No habits tracked yet</p>
+              <Button onClick={() => setAddingHabit(true)}>Add your first habit</Button>
             </div>
           ) : (
-            <div className="space-y-1.5 py-1 pr-2">
-              {activeHabits.map((h: any) => {
-                const done = h.checkins?.some((c: any) => c.date === today);
-                const streak = h.currentStreak || 0;
-                return (
-                  <div key={h.id} className={`flex items-center gap-3 p-2.5 rounded-xl border transition-colors ${
-                    done ? "bg-green-500/10 border-green-500/30" : "border-border/50 hover:bg-muted/40"
-                  }`}>
-                    <button
-                      onClick={() => !done && checkinMutation.mutate({ id: h.id })}
-                      disabled={done || checkinMutation.isPending}
-                      className={`shrink-0 w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all ${
-                        done ? "bg-green-500 border-green-500 text-white" : "border-primary/40 hover:bg-primary/10"
-                      }`}
-                    >
-                      {done && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-xs font-medium truncate ${done ? "line-through text-muted-foreground" : ""}`}>{h.name}</p>
-                      {streak > 0 && <p className="text-[10px] text-orange-400">{streak}-day streak</p>}
-                    </div>
-                    <Badge variant={done ? "outline" : "secondary"} className={`text-xs shrink-0 ${done ? "border-green-500/30 text-green-600" : ""}`}>
-                      {done ? "Done" : "Log it"}
-                    </Badge>
+            <div className="px-3 pb-4">
+              {Object.entries(grouped).map(([category, items]) => (
+                <div key={category}>
+                  {/* Category header — orange text like Habituator */}
+                  <div className="flex items-center gap-2 py-2 px-1">
+                    <span className="text-sm font-bold" style={{ color: '#F6A623' }}>{category}</span>
+                    <ChevronDown className="h-4 w-4" style={{ color: '#F6A623' }} />
                   </div>
-                );
-              })}
+
+                  <div className="space-y-2">
+                    {items.map((h: any, idx: number) => {
+                      const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
+                      const target = (h as any).targetPerDay || 1;
+                      const todayCount = (h.checkins || []).filter((c: any) => c.date === today).length;
+                      const allDone = todayCount >= target;
+                      const streak = h.currentStreak || 0;
+                      // emoji based on name keywords
+                      const getEmoji = (name: string) => {
+                        const n = name.toLowerCase();
+                        if (n.includes('meditat') || n.includes('mindful')) return '🧘';
+                        if (n.includes('journal') || n.includes('write') || n.includes('diary')) return '📝';
+                        if (n.includes('water') || n.includes('drink') || n.includes('hydrat')) return '💧';
+                        if (n.includes('run') || n.includes('jog')) return '🏃';
+                        if (n.includes('exercise') || n.includes('workout') || n.includes('gym') || n.includes('lift')) return '💪';
+                        if (n.includes('walk') || n.includes('step')) return '👣';
+                        if (n.includes('read') || n.includes('book')) return '📚';
+                        if (n.includes('sleep') || n.includes('bed')) return '😴';
+                        if (n.includes('eat') || n.includes('food') || n.includes('meal')) return '🥗';
+                        if (n.includes('vitamin') || n.includes('pill') || n.includes('medication') || n.includes('medicine')) return '💊';
+                        if (n.includes('bathroom') || n.includes('toilet')) return '🚿';
+                        if (n.includes('teeth') || n.includes('brush') || n.includes('dental')) return '🦷';
+                        if (n.includes('guitar') || n.includes('music') || n.includes('piano') || n.includes('practic')) return '🎸';
+                        if (n.includes('alcohol') || n.includes('drink') || n.includes('wine') || n.includes('beer')) return '🍷';
+                        if (n.includes('smok') || n.includes('cigarett')) return '🚬';
+                        if (n.includes('phone') || n.includes('screen')) return '📱';
+                        if (n.includes('rex') || n.includes('dog') || n.includes('pet')) return '🐕';
+                        if (n.includes('stretch') || n.includes('yoga')) return '🤸';
+                        return '⭐';
+                      };
+                      const emoji = getEmoji(h.name);
+
+                      return (
+                        // FULL SOLID COLOR ROW — exact Habituator style
+                        <div
+                          key={h.id}
+                          className="rounded-2xl overflow-hidden relative"
+                          style={{ background: `linear-gradient(135deg, ${color}, ${color}cc)`, boxShadow: `0 3px 12px ${color}40` }}
+                        >
+                          <div className="flex items-center gap-3 px-4 py-3">
+                            {/* Emoji icon */}
+                            <span className="text-xl shrink-0">{emoji}</span>
+
+                            {/* Name + dots */}
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-sm text-white truncate">
+                                {h.name}
+                                {streak > 0 && <span className="ml-2 text-white/70 text-xs">🔥{streak}</span>}
+                              </p>
+                              {/* CHECK-IN DOTS — filled white = done, empty ring = tap to log */}
+                              <div className="flex items-center gap-1.5 mt-1.5">
+                                {Array.from({ length: Math.min(target, 10) }).map((_, i) => {
+                                  const filled = i < todayCount;
+                                  return (
+                                    <button
+                                      key={i}
+                                      onClick={() => !filled && checkinMutation.mutate({ id: h.id })}
+                                      disabled={filled || checkinMutation.isPending}
+                                      className="touch-manipulation active:scale-90 transition-transform disabled:cursor-default flex items-center justify-center"
+                                      style={{ minWidth: 44, minHeight: 44 }}
+                                    >
+                                      <div
+                                        className="rounded-full border-2 transition-all duration-150"
+                                        style={{
+                                          width: 24, height: 24,
+                                          backgroundColor: filled ? 'rgba(255,255,255,0.9)' : 'transparent',
+                                          borderColor: filled ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)',
+                                        }}
+                                      />
+                                    </button>
+                                  );
+                                })}
+                                <span className="text-[11px] text-white/60 ml-1">
+                                  {allDone ? '✓' : `${todayCount}/${target}`}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Done checkmark or empty ring — tap to check in */}
+                            <button
+                              onClick={() => !allDone && checkinMutation.mutate({ id: h.id })}
+                              disabled={allDone || checkinMutation.isPending}
+                              className="min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0 touch-manipulation"
+                            >
+                              <div
+                                className="w-9 h-9 rounded-full border-2 flex items-center justify-center transition-all"
+                                style={{
+                                  backgroundColor: allDone ? 'rgba(255,255,255,0.9)' : 'transparent',
+                                  borderColor: allDone ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)',
+                                }}
+                              >
+                                {allDone && <Check className="h-4 w-4" style={{ color }} strokeWidth={3} />}
+                              </div>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -979,13 +1227,13 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
             </SheetTitle>
             <SheetDescription className="text-xs">All items that need your attention</SheetDescription>
           </SheetHeader>
-          <ScrollArea className="h-[calc(100vh-120px)] mt-4">
+          <div className="overflow-y-auto overscroll-contain mt-4" style={{ WebkitOverflowScrolling: 'touch', height: 'calc(100vh - 120px)' }}>
             <div className="space-y-0.5 pr-2">
               {allItems.map((item) => (
                 <AttentionItem key={`sheet-${item.sourceType}-${item.id}`} {...item} />
               ))}
             </div>
-          </ScrollArea>
+          </div>
         </SheetContent>
       </Sheet>
     </>
@@ -2479,7 +2727,7 @@ function CustomizeDialog({
           <DialogTitle className="text-sm">Customize Dashboard</DialogTitle>
           <DialogDescription className="text-xs">Reorder sections, toggle visibility, and change column placement.</DialogDescription>
         </DialogHeader>
-        <ScrollArea className="flex-1 -mx-6 px-6" style={{ maxHeight: "55vh" }}>
+        <div className="flex-1 -mx-6 px-6 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '55vh' }}>
           <div className="space-y-1 py-1">
             {draft.map((section, idx) => {
               const Icon = section.icon;
@@ -2516,7 +2764,7 @@ function CustomizeDialog({
               );
             })}
           </div>
-        </ScrollArea>
+        </div>
         <DialogFooter className="flex-row items-center justify-between sm:justify-between gap-2 pt-3 border-t">
           <button onClick={() => setDraft(DEFAULT_SECTIONS.map(s => ({ ...s })))}
             className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"

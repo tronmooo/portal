@@ -174,7 +174,7 @@ function generateInsights(
 export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
   private userId: string;
-  _timezone: string = 'UTC'; // user's timezone for date calculations
+  _timezone: string = 'America/Los_Angeles'; // user's timezone for date calculations
 
   constructor(supabaseUrl: string, supabaseServiceKey: string, userId: string) {
     this.supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -2030,7 +2030,7 @@ export class SupabaseStorage implements IStorage {
   async checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined> {
     const habit = await this.getHabit(habitId);
     if (!habit) return undefined;
-    const checkinDate = date || new Date().toISOString().slice(0, 10);
+    const checkinDate = date || getUserToday(this._timezone);
     // Allow multiple check-ins per day up to targetPerDay
     const todayCheckins = habit.checkins.filter(c => c.date === checkinDate);
     const maxPerDay = habit.targetPerDay || 1;
@@ -2279,7 +2279,7 @@ export class SupabaseStorage implements IStorage {
     const id = randomUUID();
     const now = new Date().toISOString();
     const { error } = await this.supabase.from("journal_entries").insert({
-      id, user_id: this.userId, date: data.date || now.slice(0, 10), mood: data.mood,
+      id, user_id: this.userId, date: data.date || getUserToday(this._timezone), mood: data.mood,
       content: data.content || "", tags: data.tags || [], energy: data.energy ?? null,
       gratitude: data.gratitude || null, highlights: data.highlights || null,
       linked_profiles: (data as any).linkedProfiles || [],

@@ -239,6 +239,9 @@ export async function registerRoutes(
       if (message.length > 5000) {
         return res.status(400).json({ error: "Message too long (max 5000 characters)" });
       }
+      // Pass user's timezone to AI engine so all date operations use the correct local date
+      const tz = getTimezone(req);
+      (storage as any)._timezone = tz;
       const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
       res.json(result);
     } catch (err: any) {

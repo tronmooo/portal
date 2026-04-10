@@ -10,7 +10,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
+import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel } from "@shared/schema";
 import { useState, useEffect } from "react";
@@ -155,8 +155,12 @@ export default function JournalPage() {
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [mood, setMood] = useState<MoodLevel | null>(null);
-  const [content, setContent] = useState("");
   const [energy, setEnergy] = useState(3);
+  const [grateful1, setGrateful1] = useState("");
+  const [grateful2, setGrateful2] = useState("");
+  const [grateful3, setGrateful3] = useState("");
+  const [makeAmazing, setMakeAmazing] = useState("");
+  const [affirmation, setAffirmation] = useState("");
   const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -173,7 +177,14 @@ export default function JournalPage() {
 
   const handleSaveJournal = () => {
     if (!mood) { toast({ title: "Select a mood", description: "Choose how you're feeling", variant: "destructive" }); return; }
-    if (!content.trim()) { toast({ title: "Write something", description: "Journal entry cannot be empty", variant: "destructive" }); return; }
+    const hasContent = grateful1.trim() || grateful2.trim() || grateful3.trim() || makeAmazing.trim() || affirmation.trim();
+    if (!hasContent) { toast({ title: "Write something", description: "Fill in at least one section", variant: "destructive" }); return; }
+    const parts: string[] = [];
+    const gratitudeLines = [grateful1, grateful2, grateful3].filter(g => g.trim());
+    if (gratitudeLines.length > 0) parts.push(`I AM GRATEFUL FOR:\n${gratitudeLines.map(g => `• ${g}`).join('\n')}`);
+    if (makeAmazing.trim()) parts.push(`HOW I CAN MAKE TODAY AMAZING:\n${makeAmazing}`);
+    if (affirmation.trim()) parts.push(`DAILY AFFIRMATION:\n${affirmation}`);
+    const content = parts.join('\n\n');
     createMutation.mutate({ mood, content, energy });
   };
 
@@ -199,7 +210,10 @@ export default function JournalPage() {
       return { prev };
     },
     onSuccess: () => {
-      setMood(null); setContent(""); setEnergy(3); setShowCreate(false);
+      setMood(null); setEnergy(3);
+      setGrateful1(""); setGrateful2(""); setGrateful3("");
+      setMakeAmazing(""); setAffirmation("");
+      setShowCreate(false);
       toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
     },
     onError: (err: Error, _v: any, ctx: any) => {
@@ -259,60 +273,127 @@ export default function JournalPage() {
         })}
       </div>
 
-      {/* Create form */}
+      {/* Create form — Sweet Setup 5-Minute AM template */}
       {showCreate && (
-        <Card className="p-4 space-y-3">
-          <p className="text-xs font-medium">How are you feeling?</p>
-          <div className="flex gap-2 justify-center">
-            {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => {
-              const MIcon = cfg.icon;
-              return (
-                <button
-                  key={key}
-                  onClick={() => setMood(key)}
-                  className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${mood === key ? "ring-2 ring-primary scale-105" : "opacity-60 hover:opacity-100"}`}
-                  data-testid={`button-mood-${key}`}
-                >
-                  <div className={`p-2 rounded-full ${cfg.bg}`}>
-                    <MIcon className="h-5 w-5" style={{ color: cfg.color }} />
-                  </div>
-                  <span className="text-xs">{cfg.label}</span>
-                </button>
-              );
-            })}
+        <div className="space-y-3">
+          {/* Date header */}
+          <div className="text-center py-1">
+            <p className="text-[11px] font-bold tracking-[0.2em] text-muted-foreground uppercase">5 Minute Morning Journal</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+            </p>
           </div>
 
-          <div>
-            <p className="text-xs font-medium mb-1">Energy level</p>
-            <div className="flex gap-1 items-center">
-              {[1, 2, 3, 4, 5].map(n => (
-                <button key={n} onClick={() => setEnergy(n)} className={`p-1 ${energy >= n ? "text-yellow-500" : "text-muted-foreground/30"}`}>
-                  <Zap className="h-4 w-4" fill={energy >= n ? "currentColor" : "none"} />
-                </button>
-              ))}
-              <span className="text-xs text-muted-foreground ml-2">{ENERGY_LABELS[energy]}</span>
+          {/* Mood selector */}
+          <Card className="overflow-hidden">
+            <div className="px-4 pt-4 pb-4">
+              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">How Are You Feeling?</p>
+              <div className="flex gap-1.5 flex-wrap justify-center">
+                {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => {
+                  const MIcon = cfg.icon;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setMood(key)}
+                      className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
+                        mood === key
+                          ? "ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/30 scale-105"
+                          : "opacity-50 hover:opacity-90 hover:bg-muted/50"
+                      }`}
+                      data-testid={`button-mood-${key}`}
+                    >
+                      <div className={`p-2 rounded-full ${cfg.bg}`}>
+                        <MIcon className="h-4 w-4" style={{ color: cfg.color }} />
+                      </div>
+                      <span className="text-[10px] font-medium">{cfg.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          </Card>
 
-          <Textarea
-            placeholder="What's on your mind today? Write as much as you want..."
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            rows={12}
-            className="min-h-[250px] text-base leading-relaxed resize-y"
-            data-testid="input-journal-content"
-          />
+          {/* Gratitude */}
+          <Card className="overflow-hidden">
+            <div className="px-4 pt-4 pb-5">
+              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">I Am Grateful For...</p>
+              <div className="space-y-4">
+                {[
+                  { value: grateful1, onChange: setGrateful1, num: 1 },
+                  { value: grateful2, onChange: setGrateful2, num: 2 },
+                  { value: grateful3, onChange: setGrateful3, num: 3 },
+                ].map(({ value, onChange, num }) => (
+                  <div key={num} className="flex items-center gap-3">
+                    <span className="text-xs text-muted-foreground font-bold w-4 shrink-0 select-none">{num}.</span>
+                    <input
+                      type="text"
+                      value={value}
+                      onChange={e => onChange(e.target.value)}
+                      placeholder={num === 1 ? "Someone or something that made you smile..." : num === 2 ? "A small win or moment of joy..." : "Something easy to overlook but valuable..."}
+                      className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 text-foreground"
+                      data-testid={`input-grateful-${num}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
 
+          {/* How to make today amazing */}
+          <Card className="overflow-hidden">
+            <div className="px-4 pt-4 pb-5">
+              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">How Can I Make Today Amazing?</p>
+              <textarea
+                value={makeAmazing}
+                onChange={e => setMakeAmazing(e.target.value)}
+                placeholder="One thing that would make today great..."
+                rows={3}
+                className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 resize-none text-foreground leading-relaxed"
+                data-testid="input-make-amazing"
+              />
+            </div>
+          </Card>
+
+          {/* Daily affirmation */}
+          <Card className="overflow-hidden">
+            <div className="px-4 pt-4 pb-5">
+              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">Daily Affirmation</p>
+              <input
+                type="text"
+                value={affirmation}
+                onChange={e => setAffirmation(e.target.value)}
+                placeholder="I am capable, confident, and worthy of..."
+                className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 text-foreground"
+                data-testid="input-affirmation"
+              />
+            </div>
+          </Card>
+
+          {/* Energy level */}
+          <Card className="overflow-hidden">
+            <div className="px-4 pt-4 pb-4">
+              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Energy Level</p>
+              <div className="flex gap-1 items-center">
+                {[1, 2, 3, 4, 5].map(n => (
+                  <button key={n} onClick={() => setEnergy(n)} className={`p-1 transition-colors ${energy >= n ? "text-yellow-500" : "text-muted-foreground/25 hover:text-muted-foreground/50"}`}>
+                    <Zap className="h-5 w-5" fill={energy >= n ? "currentColor" : "none"} />
+                  </button>
+                ))}
+                <span className="text-sm text-muted-foreground ml-2 font-medium">{ENERGY_LABELS[energy]}</span>
+              </div>
+            </div>
+          </Card>
+
+          {/* Save */}
           <Button
-            size="sm"
             disabled={createMutation.isPending}
             onClick={handleSaveJournal}
-            className="w-full"
+            className="w-full h-11 text-sm font-semibold"
             data-testid="button-save-journal"
           >
-            Save Entry
+            {createMutation.isPending ? "Saving..." : "Save Morning Entry"}
           </Button>
-        </Card>
+        </div>
       )}
 
       {isLoading ? (

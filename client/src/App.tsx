@@ -437,22 +437,9 @@ const sidebarStyle = {
 };
 
 // Detect new deploys and force reload — prevents stale UI after deployments
-let _knownVersion: string | null = null;
-let _versionInterval: ReturnType<typeof setInterval> | null = null;
-if (!_versionInterval) {
-  _versionInterval = setInterval(async () => {
-    try {
-      const res = await fetch("/api/version", { cache: "no-store" });
-      if (res.ok) {
-        const { version } = await res.json();
-        if (_knownVersion && version !== _knownVersion) {
-          window.location.reload();
-        }
-        _knownVersion = version;
-      }
-    } catch { /* offline, ignore */ }
-  }, 30000);
-}
+// Version check REMOVED — was causing 30-second freeze on iOS.
+// BUILD_VERSION changed on every Vercel cold start, triggering window.location.reload()
+// in a loop that iOS Safari couldn't handle, freezing all tabs.
 
 function App() {
   return (
