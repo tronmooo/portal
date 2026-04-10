@@ -719,8 +719,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
             <span className="font-bold text-sm uppercase tracking-wide text-foreground">All Tasks</span>
             <Badge variant="secondary">{pending.length}</Badge>
           </div>
-          {/* Close — absolute positioned with z-index to avoid touch overlap */}
-          <DialogClose className="absolute right-3 top-3 z-10 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
+          <DialogClose className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
             <X className="h-5 w-5" />
           </DialogClose>
         </div>
@@ -845,21 +844,19 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingHabit(false); setNewHabitName(''); } }}>
       <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl overflow-hidden" style={{ top: '6%', transform: 'translateX(-50%)', maxHeight: '80vh' }}>
-        {/* Header — 44px touch targets, no AI button */}
+        {/* Header */}
         <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-border/40">
           <span className="font-bold text-base text-foreground">Today's Habits</span>
-          <div className="flex items-center gap-0">
-            {/* Add habit — 44px touch target */}
+          <div className="flex items-center gap-1">
             <button
               onClick={() => setAddingHabit(v => !v)}
-              className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${
+              className={`w-10 h-10 flex items-center justify-center rounded-full transition-colors ${
                 addingHabit ? 'bg-primary text-primary-foreground' : 'hover:bg-muted active:bg-muted/80 text-muted-foreground'
               }`}
             >
               <Plus className="h-5 w-5" />
             </button>
-            {/* Close — absolute positioned with z-index to avoid touch overlap */}
-            <DialogClose className="absolute right-3 top-3 z-10 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
+            <DialogClose className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
               <X className="h-5 w-5" />
             </DialogClose>
           </div>

@@ -99,6 +99,8 @@ import {
   Mail,
   Share2,
   Loader2,
+  Pill,
+  TreePine,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
@@ -154,6 +156,13 @@ export const TRACKER_CATEGORY_ACCENT: Record<string, string> = {
   environment:  "155 45% 40%",
   habit:        "155 58% 46%",
   routine:      "155 58% 46%",
+  medication:   "340 70% 55%",
+  prescription: "340 70% 55%",
+  supplement:   "155 55% 48%",
+  drug:         "340 70% 55%",
+  lifestyle:    "120 45% 45%",
+  mood:         "280 60% 55%",
+  anxiety:      "310 50% 58%",
   custom:       "240 20% 60%",
   general:      "240 20% 60%",
   work:         "215 65% 55%",
@@ -188,12 +197,12 @@ const CANONICAL_GROUP_MAP: Record<string, string> = {
   health:       "Health",
   sleep:        "Health",
   nutrition:    "Health",
-  mental:       "Health",
+  mental:       "Mental & Wellness",
   medical:      "Health",
   vitals:       "Health",
   hydration:    "Health",
   diet:         "Health",
-  mood:         "Health",
+  mood:         "Mental & Wellness",
   // Fitness (movement, exercise, performance)
   fitness:      "Fitness",
   exercise:     "Fitness",
@@ -218,6 +227,24 @@ const CANONICAL_GROUP_MAP: Record<string, string> = {
   productivity: "Productivity",
   work:         "Productivity",
   education:    "Productivity",
+  // Medication
+  medication:   "Medication",
+  prescription: "Medication",
+  supplement:   "Medication",
+  drug:         "Medication",
+  // Mental & Wellness
+  meditation:   "Mental & Wellness",
+  mindfulness:  "Mental & Wellness",
+  anxiety:      "Mental & Wellness",
+  stress:       "Mental & Wellness",
+  journal:      "Mental & Wellness",
+  // Lifestyle
+  lifestyle:    "Lifestyle",
+  pet:          "Lifestyle",
+  plant:        "Lifestyle",
+  social:       "Lifestyle",
+  screen:       "Lifestyle",
+  reading:      "Lifestyle",
   // Other
   custom:       "Other",
   general:      "Other",
@@ -236,7 +263,10 @@ const CANONICAL_GROUPS: Record<string, {
   "Finance":            { icon: TrendingUp, accent: "43 85% 52%",  description: "Spending, saving, investing",       order: 3 },
   "Habits & Routines":  { icon: Flame,      accent: "155 60% 44%", description: "Daily habits and routines",         order: 4, connectedGroups: ["Health", "Fitness"] },
   "Productivity":       { icon: Target,     accent: "262 65% 62%", description: "Work, learning, focus",             order: 5 },
-  "Other":              { icon: Box,        accent: "240 20% 60%", description: "Custom and uncategorized",          order: 6 },
+  "Medication":         { icon: Pill,       accent: "340 70% 55%", description: "Medications, supplements, prescriptions", order: 0 },
+  "Mental & Wellness":  { icon: Brain,      accent: "280 60% 55%", description: "Mood, meditation, anxiety, stress",  order: 4.5 },
+  "Lifestyle":          { icon: TreePine,   accent: "120 45% 45%", description: "Pets, reading, screen time, social", order: 5.5 },
+  "Other":              { icon: Box,        accent: "240 20% 60%", description: "Custom and uncategorized",          order: 7 },
 };
 
 function getCanonicalGroup(category: string): string {
