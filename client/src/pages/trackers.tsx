@@ -854,16 +854,156 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
 
 // ── Detect Tracker Specialization ─────────────────────────────────────────────
 
-type TrackerSpecialization = "weight" | "bloodpressure" | "sleep" | "running" | "standard";
+type TrackerSpecialization = "weight" | "bloodpressure" | "sleep" | "running" | "medication" | "standard";
 
 function detectSpecialization(tracker: Tracker): TrackerSpecialization {
   const name = tracker.name.toLowerCase();
   const cat = tracker.category.toLowerCase();
+  if (cat === "medication" || cat === "prescription" || cat === "supplement") return "medication";
   if (cat === "health" && name.includes("weight")) return "weight";
   if (name.includes("blood") || name.includes("pressure")) return "bloodpressure";
   if (cat === "sleep") return "sleep";
   if (cat === "fitness" && name.includes("run")) return "running";
   return "standard";
+}
+
+// ── Medication Overview Component ─────────────────────────────────────────────
+function MedicationOverview({ tracker }: { tracker: Tracker }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const today = new Date().toLocaleDateString('en-CA');
+  const todayEntries = tracker.entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === today);
+  const takenToday = todayEntries.some(e => e.values?.adherence === 'taken' || e.values?.taken === true);
+
+  // Extract medication details from fields defaults or latest entry
+  const latestEntry = tracker.entries[tracker.entries.length - 1];
+  const getFieldDefault = (name: string) => {
+    const field = tracker.fields.find(f => f.name === name);
+    return (field as any)?.default || latestEntry?.values?.[name] || '';
+  };
+  const drugName = getFieldDefault('drugName') || tracker.name;
+  const dosage = getFieldDefault('dosage') || tracker.unit || '';
+  const frequency = getFieldDefault('frequency') || '';
+  const refillDate = getFieldDefault('refillDate') || '';
+  const prescriber = getFieldDefault('prescriber') || '';
+
+  // Log dose mutation
+  const logDoseMut = useMutation({
+    mutationFn: () => apiRequest('POST', `/api/trackers/${tracker.id}/entries`, {
+      values: { drugName, dosage, timeTaken: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), adherence: 'taken', frequency },
+      notes: `Dose taken at ${new Date().toLocaleTimeString()}`
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['/api/trackers'] });
+      toast({ title: `${drugName} logged`, description: `${dosage} taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
+    },
+    onError: () => toast({ title: 'Failed to log dose', variant: 'destructive' }),
+  });
+
+  // Adherence this week
+  const weekAgo = Date.now() - 7 * 86400000;
+  const weekEntries = tracker.entries.filter(e => new Date(e.timestamp).getTime() > weekAgo);
+  const weekTaken = weekEntries.filter(e => e.values?.adherence === 'taken' || e.values?.taken === true).length;
+  const adherencePct = weekEntries.length > 0 ? Math.round((weekTaken / Math.max(7, weekEntries.length)) * 100) : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Medication Card */}
+      <div className="rounded-xl border border-border/60 bg-gradient-to-br from-rose-500/10 via-transparent to-pink-500/5 p-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Pill className="h-5 w-5 text-rose-500" />
+              <h3 className="font-bold text-lg">{drugName}</h3>
+            </div>
+            {dosage && <p className="text-sm text-muted-foreground mt-1">Dosage: <span className="font-medium text-foreground">{dosage}</span></p>}
+            {frequency && <p className="text-sm text-muted-foreground">Frequency: <span className="font-medium text-foreground">{frequency}</span></p>}
+            {prescriber && <p className="text-sm text-muted-foreground">Prescriber: <span className="font-medium text-foreground">{prescriber}</span></p>}
+            {refillDate && <p className="text-sm text-muted-foreground">Refill: <span className="font-medium text-foreground">{refillDate}</span></p>}
+          </div>
+          {/* Today's status badge */}
+          <div className={`px-3 py-1.5 rounded-full text-xs font-bold ${
+            takenToday ? 'bg-green-500/20 text-green-500' : 'bg-amber-500/20 text-amber-500'
+          }`}>
+            {takenToday ? '✓ Taken today' : 'Not taken yet'}
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Log Button */}
+      {!takenToday && (
+        <button
+          onClick={() => logDoseMut.mutate()}
+          disabled={logDoseMut.isPending}
+          className="w-full py-3 rounded-xl bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+        >
+          <Pill className="h-4 w-4" />
+          {logDoseMut.isPending ? 'Logging...' : `Log ${dosage} ${drugName} Now`}
+        </button>
+      )}
+
+      {/* Weekly Adherence */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-muted/50 rounded-lg p-3 text-center">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">Adherence</p>
+          <p className="text-2xl font-bold tabular-nums">{adherencePct}%</p>
+          <p className="text-xs text-muted-foreground">this week</p>
+        </div>
+        <div className="bg-muted/50 rounded-lg p-3 text-center">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">Doses Logged</p>
+          <p className="text-2xl font-bold tabular-nums">{tracker.entries.length}</p>
+          <p className="text-xs text-muted-foreground">total</p>
+        </div>
+      </div>
+
+      {/* 7-day adherence strip */}
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-2">Last 7 Days</p>
+        <div className="flex gap-1">
+          {Array.from({ length: 7 }).map((_, i) => {
+            const d = new Date();
+            d.setDate(d.getDate() - (6 - i));
+            const dateStr = d.toLocaleDateString('en-CA');
+            const dayEntries = tracker.entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === dateStr);
+            const taken = dayEntries.some(e => e.values?.adherence === 'taken' || e.values?.taken === true);
+            const dayLabel = d.toLocaleDateString('en-US', { weekday: 'narrow' });
+            return (
+              <div key={i} className="flex-1 text-center">
+                <div className={`h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
+                  taken ? 'bg-green-500/20 text-green-500' : dateStr === today ? 'bg-amber-500/15 text-amber-500 border border-amber-500/30' : 'bg-muted/50 text-muted-foreground/40'
+                }`}>
+                  {taken ? '✓' : dateStr === today ? '•' : '–'}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{dayLabel}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Recent Entries */}
+      {tracker.entries.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-2">Recent Doses</p>
+          <div className="space-y-1.5">
+            {tracker.entries.slice(-5).reverse().map((e, i) => (
+              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/30 text-sm">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${e.values?.adherence === 'taken' || e.values?.taken ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <span>{e.values?.dosage || dosage}</span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {e.values?.timeTaken || new Date(e.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                  {' · '}
+                  {new Date(e.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Expanded Detail View ───────────────────────────────────────────────────────
@@ -2291,6 +2431,9 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
     { label: "90d", value: "90d" },
     { label: "All", value: "all" },
   ];
+
+  // Medication trackers get their own specialized view
+  if (specialization === 'medication') return <MedicationOverview tracker={tracker} />;
 
   return (
     <div className="space-y-4">
