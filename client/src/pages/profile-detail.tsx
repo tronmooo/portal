@@ -561,13 +561,18 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
       <span className="text-xs text-muted-foreground shrink-0 min-w-[80px] cursor-pointer" onClick={() => setEditing(true)}>{formatKey(fieldKey)}</span>
       <div className="flex items-center gap-1.5 min-w-0 justify-end">
         <span className="text-sm font-medium text-right break-words cursor-pointer" onClick={() => setEditing(true)}>{fieldValue}</span>
-        <Pencil className="h-2.5 w-2.5 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer" onClick={() => setEditing(true)} />
         <button
-          className="h-4 w-4 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-600"
-          onClick={(e) => { e.stopPropagation(); deleteMut.mutate(); }}
+          className="min-w-[32px] min-h-[32px] flex items-center justify-center rounded-md opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted"
+          onClick={() => setEditing(true)}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+        <button
+          className="min-w-[32px] min-h-[32px] flex items-center justify-center rounded-md opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-600 hover:bg-red-500/10 active:bg-red-500/20"
+          onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${formatKey(fieldKey)}"?`)) deleteMut.mutate(); }}
           data-testid={`delete-field-${fieldKey}`}
         >
-          <Trash2 className="h-2.5 w-2.5" />
+          <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
     </div>

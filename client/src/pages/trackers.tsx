@@ -3306,6 +3306,7 @@ function TrackerDetailDialog({
                 <DialogDescription className="text-xs mt-0.5">
                   {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
                   {tracker.unit ? ` · ${tracker.unit}` : ""}
+                  {tracker.category ? ` · ${tracker.category}` : ""}
                 </DialogDescription>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
