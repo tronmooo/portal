@@ -275,7 +275,7 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
         const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary?force=true`);
         return res.json();
       },
-      staleTime: 0,
+      staleTime: 10000,
     });
   }, [profileId]);
 
@@ -2897,7 +2897,7 @@ function TrackersTab({
   const { data: allTrackers } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers"],
     queryFn: async () => { const res = await apiRequest("GET", "/api/trackers"); return res.json(); },
-    staleTime: 0, // Always refetch when dialog opens
+    staleTime: 10000, // 10s 2014 dialog data stays fresh enough
   });
 
   const linkedIds = new Set(trackers.map(t => t.id));

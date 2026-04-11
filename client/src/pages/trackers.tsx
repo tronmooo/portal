@@ -102,7 +102,7 @@ import {
   Pill,
   TreePine,
 } from "lucide-react";
-import { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document } from "@shared/schema";
@@ -1443,9 +1443,8 @@ function KpiLine({ label, value, accent }: { label: string; value: string | numb
   );
 }
 
-function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void }) {
-  const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
-  const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
+const TrackerCardInner = React.memo(function TrackerCardInner({ tracker, onDelete, onOpenDetail, allProfiles }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void; allProfiles: Profile[] }) {
+  const linkedNames = (tracker.linkedProfiles || []).map(pid => allProfiles.find(p => p.id === pid)?.name).filter(Boolean);
   const profileLabel = linkedNames.length > 0 ? linkedNames[0] : '';
 
   const entries = tracker.entries || [];
@@ -1726,7 +1725,10 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
       </div>
     </div>
   );
-}
+});
+
+// TrackerCard alias — use TrackerCardInner directly with allProfiles prop from parent
+const TrackerCard = TrackerCardInner;
 // ── EntryRow ───────────────────────────────────────────────────────────────────
 
 function EntryRow({
@@ -3653,21 +3655,21 @@ export default function TrackersPage() {
   });
 
   // Unique doc types for filter chips — derived from profile-filtered docs (NOT type-filtered)
-  const docTypes = [...new Set(profileFilteredDocs.map(d => d.type).filter(Boolean))].sort();
+  const docTypes = useMemo(() => [...new Set(profileFilteredDocs.map(d => d.type).filter(Boolean))].sort(), [profileFilteredDocs]);
 
   // Fully filtered documents (profile + type + search)
-  const filteredDocuments = profileFilteredDocs.filter(d => {
+  const filteredDocuments = useMemo(() => profileFilteredDocs.filter(d => {
     if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
     if (docSearch) {
       const s = docSearch.toLowerCase();
       return d.name.toLowerCase().includes(s) || d.type?.toLowerCase().includes(s);
     }
     return true;
-  });
+  }), [profileFilteredDocs, docTypeFilter, docSearch]);
 
   // Unique canonical groups for filter chips
-  const allTrackerCats = [...new Set((trackers || []).map(t => getCanonicalGroup(t.category)))]
-    .sort((a, b) => (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99));
+  const allTrackerCats = useMemo(() => [...new Set((trackers || []).map(t => getCanonicalGroup(t.category)))]
+    .sort((a, b) => (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99)), [trackers]);
 
   if (showTrackerSkeleton && !trackers) {
     return (
@@ -3698,44 +3700,41 @@ export default function TrackersPage() {
   });
 
   // Apply profile filter — strict: only show trackers linked to the selected profile(s)
-  const filteredTrackers = (trackers || []).filter(t => {
-    // Profile filter — strict: only show trackers linked to the selected profile(s)
+  const filteredTrackers = useMemo(() => (trackers || []).filter(t => {
     if (filterMode === "selected" && filterIds.length > 0) {
       const linkedIds = t.linkedProfiles || [];
       const matchesProfile = linkedIds.some(id => filterIds.includes(id));
       if (!matchesProfile) return false;
     }
-    // Category filter (uses canonical groups)
     if (trackerCatFilter !== "all" && getCanonicalGroup(t.category) !== trackerCatFilter) return false;
     return true;
-  }).sort((a, b) => {
-    // Alphabetical by clean name (strips " - ProfileName" suffix)
-    const cleanA = cleanTrackerName(a.name).toLowerCase();
-    const cleanB = cleanTrackerName(b.name).toLowerCase();
-    return cleanA.localeCompare(cleanB);
-  });
+  }).sort((a, b) => cleanTrackerName(a.name).toLowerCase().localeCompare(cleanTrackerName(b.name).toLowerCase())
+  ), [trackers, filterMode, filterIds, trackerCatFilter]);
 
-  // Group trackers by canonical group (not raw category)
-  const canonicalGrouped = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
-    const group = getCanonicalGroup(t.category);
-    (acc[group] = acc[group] || []).push(t);
-    return acc;
-  }, {});
+  // Group trackers by canonical group
+  const { grouped, sortedCats } = useMemo(() => {
+    const g = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
+      const group = getCanonicalGroup(t.category);
+      (acc[group] = acc[group] || []).push(t);
+      return acc;
+    }, {});
+    const s = Object.keys(g).sort((a, b) =>
+      (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99)
+    );
+    return { grouped: g, sortedCats: s };
+  }, [filteredTrackers]);
 
-  // Sort groups by canonical order
-  const sortedCanonicalGroups = Object.keys(canonicalGrouped).sort((a, b) => {
-    const ao = CANONICAL_GROUPS[a]?.order ?? 99;
-    const bo = CANONICAL_GROUPS[b]?.order ?? 99;
-    return ao - bo;
-  });
-
-  // Keep backward compat: grouped = canonicalGrouped, sortedCats = sortedCanonicalGroups
-  const grouped = canonicalGrouped;
-  const sortedCats = sortedCanonicalGroups;
-
-  // Count trackers per profile for badges
-  const countForProfile = (profileId: string) =>
-    (trackers || []).filter(t => t.linkedProfiles?.includes(profileId)).length;
+  // Count trackers per profile for badges — memoized
+  const profileCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const t of trackers || []) {
+      for (const pid of t.linkedProfiles || []) {
+        map[pid] = (map[pid] || 0) + 1;
+      }
+    }
+    return map;
+  }, [trackers]);
+  const countForProfile = (profileId: string) => profileCounts[profileId] || 0;
 
   return (
     <div className="px-2 py-2 md:p-4 space-y-2 overflow-y-auto h-full pb-24" data-testid="page-trackers">
@@ -4617,6 +4616,7 @@ export default function TrackersPage() {
                           tracker={tracker}
                           onDelete={(id) => setDeleteTargetId(id)}
                           onOpenDetail={(id) => setSelectedTrackerId(id)}
+                          allProfiles={profiles || []}
                         />
                       ))}
                     </div>
