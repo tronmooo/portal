@@ -1905,11 +1905,14 @@ function CreateTrackerDialog({
         builtFields = [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true, options: undefined }];
       }
 
+      // Default linked profile to self ("Me")
+      const selfProf = (queryClient.getQueryData<any[]>(["/api/profiles"]) || []).find((p: any) => p.type === "self");
       const res = await apiRequest("POST", "/api/trackers", {
         name: name.trim(),
         category,
         unit: unit.trim() || undefined,
         fields: builtFields,
+        linkedProfiles: selfProf ? [selfProf.id] : [],
       });
       return res.json();
     },
@@ -4556,17 +4559,73 @@ export default function TrackersPage() {
           })}
         </div>
       ) : (
-        /* ── 4×4 COMPACT TILE GRID ── */
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-          {sortedCats.flatMap((cat) => grouped[cat]).map((tracker) => (
-            <TrackerCard
-              key={tracker.id}
-              tracker={tracker}
-              onDelete={(id) => setDeleteTargetId(id)}
-              onOpenDetail={(id) => setSelectedTrackerId(id)}
-            />
-          ))}
-        </div>
+        /* ── PERSON-GROUPED CARD GRID ── */
+        (() => {
+          // Group trackers by linked profile (person)
+          const allTrackersList = sortedCats.flatMap((cat) => grouped[cat]);
+          const personGroups: Record<string, { name: string; type: string; trackers: typeof allTrackersList }> = {};
+          const unlinked: typeof allTrackersList = [];
+          const selfProfile = (profiles || []).find(p => p.type === 'self');
+          const selfId = selfProfile?.id || '';
+
+          for (const t of allTrackersList) {
+            const lp = t.linkedProfiles || [];
+            if (lp.length === 0) {
+              // Default to "Me" if no linked profile
+              const key = selfId || '__me__';
+              if (!personGroups[key]) personGroups[key] = { name: selfProfile?.name || 'Me', type: 'self', trackers: [] };
+              personGroups[key].trackers.push(t);
+            } else {
+              for (const pid of lp) {
+                const prof = (profiles || []).find(p => p.id === pid);
+                const key = pid;
+                if (!personGroups[key]) personGroups[key] = { name: prof?.name || 'Unknown', type: prof?.type || 'person', trackers: [] };
+                personGroups[key].trackers.push(t);
+              }
+            }
+          }
+
+          // Sort: self first, then persons, then pets
+          const typeOrder: Record<string, number> = { self: 0, person: 1, pet: 2 };
+          const sortedPersonKeys = Object.keys(personGroups).sort((a, b) => {
+            const ta = typeOrder[personGroups[a].type] ?? 3;
+            const tb = typeOrder[personGroups[b].type] ?? 3;
+            return ta - tb || personGroups[a].name.localeCompare(personGroups[b].name);
+          });
+
+          const PERSON_ICONS: Record<string, string> = { self: '👤', person: '👥', pet: '🐾' };
+
+          return (
+            <div className="space-y-4">
+              {sortedPersonKeys.map(personKey => {
+                const group = personGroups[personKey];
+                const displayName = group.type === 'self' ? 'Me' : group.name;
+                const icon = PERSON_ICONS[group.type] || '👤';
+                return (
+                  <div key={personKey}>
+                    {/* Person header */}
+                    <div className="flex items-center gap-2 mb-2 px-0.5">
+                      <span className="text-sm">{icon}</span>
+                      <span className="text-xs font-bold text-foreground">{displayName}</span>
+                      <span className="text-[10px] text-muted-foreground">({group.trackers.length})</span>
+                    </div>
+                    {/* Tracker cards for this person */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {group.trackers.map((tracker) => (
+                        <TrackerCard
+                          key={tracker.id}
+                          tracker={tracker}
+                          onDelete={(id) => setDeleteTargetId(id)}
+                          onOpenDetail={(id) => setSelectedTrackerId(id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()
       ))}
 
       {/* Create tracker dialog */}
