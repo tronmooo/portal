@@ -1548,27 +1548,7 @@ function TrackerCard({
 
             <ComputedBadges computed={lastEntry.computed} />
 
-            {/* Compact sparkline (default, shown when detail NOT expanded) */}
-            {!detailExpanded && sparklineData.length > 1 && (
-              <div className="mt-3 h-16" key={`spark-${tracker.id}-${tracker.entries.length}`}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={sparklineData}>
-                    <Line
-                      type="monotone"
-                      dataKey="value"
-                      stroke={CHART_COLORS.primary}
-                      strokeWidth={1.5}
-                      dot={false}
-                    />
-                    <XAxis dataKey="date" hide />
-                    <YAxis hide domain={["auto", "auto"]} />
-                    <Tooltip
-                      contentStyle={tooltipStyle}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
+            {/* Sparkline REMOVED from card for performance — see detail view for charts */}
 
             {/* Full expanded detail view */}
             {detailExpanded && (
@@ -1639,19 +1619,43 @@ function TrackerCard({
               </div>
             ) : (
               <button
-                onClick={(e) => { e.stopPropagation(); setQuickAddId(tracker.id); }}
-                className="mt-1.5 w-full h-6 rounded-lg border border-dashed border-border/50 text-xs text-muted-foreground/60 hover:border-primary/40 hover:text-primary/60 transition-colors flex items-center justify-center gap-1"
+                onClick={(e) => { e.stopPropagation(); setAddEntryOpen(true); }}
+                className="mt-2 w-full h-9 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+                style={{ backgroundColor: `hsl(${catAccent} / 0.15)`, color: `hsl(${catAccent})` }}
                 data-testid={`quick-add-${tracker.id}`}
               >
-                <Plus className="h-3 w-3" /> Quick log
+                <Plus className="h-3.5 w-3.5" />
+                {specialization === 'medication' ? 'Log Dose'
+                  : specialization === 'bloodpressure' ? 'Add Reading'
+                  : specialization === 'running' ? 'Log Run'
+                  : specialization === 'sleep' ? 'Log Sleep'
+                  : specialization === 'weight' ? 'Log Weight'
+                  : tracker.category === 'fitness' ? 'Log Session'
+                  : tracker.category === 'nutrition' ? 'Log Meal'
+                  : 'Log Entry'}
               </button>
+            )}
+
+            {/* Last logged time */}
+            {lastEntry && (
+              <p className="text-[10px] text-muted-foreground/60 text-center mt-1">
+                Last: {(() => {
+                  const ms = Date.now() - new Date(lastEntry.timestamp).getTime();
+                  const mins = Math.floor(ms / 60000);
+                  if (mins < 60) return `${mins}m ago`;
+                  const hrs = Math.floor(mins / 60);
+                  if (hrs < 24) return `${hrs}h ago`;
+                  const days = Math.floor(hrs / 24);
+                  return `${days}d ago`;
+                })()}
+              </p>
             )}
 
             {/* Expand/collapse entries */}
             <Button
               variant="ghost"
               size="sm"
-              className="mt-2 h-7 text-xs w-full flex items-center gap-1 text-muted-foreground"
+              className="mt-1 h-7 text-xs w-full flex items-center gap-1 text-muted-foreground"
               onClick={() => setExpanded((v) => !v)}
               data-testid={`button-expand-${tracker.id}`}
             >
