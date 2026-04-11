@@ -623,12 +623,13 @@ function SubscriptionQuickActions({ profileId, status, onChanged, onEdit }: { pr
   );
 }
 
-function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
+function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFields }: {
   profileId: string;
   fieldKey: string;
   label: string;
   value: any;
   onSaved: () => void;
+  allFields?: Record<string, any>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value ?? ""));
@@ -636,6 +637,21 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
   const [finding, setFinding] = useState(false);
   const [foundValue, setFoundValue] = useState<{ estimatedValue: number; confidence: string; explanation: string; range?: { low: number; high: number } } | null>(null);
   const { toast } = useToast();
+
+  // Delete this field
+  const deleteField = async () => {
+    if (!confirm(`Delete "${label}"?`)) return;
+    try {
+      const rest = { ...(allFields || {}) };
+      delete rest[fieldKey];
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: rest });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      onSaved();
+      toast({ title: `"${label}" removed` });
+    } catch {
+      toast({ title: "Failed to delete", variant: "destructive" });
+    }
+  };
   const isValueField = fieldKey === "currentValue";
 
   const save = async () => {
@@ -694,11 +710,20 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved }: {
               )}
             </button>
           )}
-          <span className="text-xs font-medium">
+          <span className="text-xs font-medium max-w-[180px] truncate text-right">
             {value != null && value !== ""
               ? (isValueField && !isNaN(Number(value)) ? `$${Number(value).toLocaleString()}` : String(value))
               : <span className="text-muted-foreground/40 italic">tap to add</span>}
           </span>
+          {/* Delete button — always visible on mobile */}
+          {value != null && value !== "" && (
+            <button
+              onClick={(e) => { e.stopPropagation(); deleteField(); }}
+              className="w-7 h-7 flex items-center justify-center rounded-md opacity-50 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-500 hover:bg-red-500/10 active:bg-red-500/20"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </div>
     );
@@ -746,14 +771,31 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
       { key: "make", label: "Make" }, { key: "model", label: "Model" }, { key: "year", label: "Year" },
       { key: "trim", label: "Trim" }, { key: "vin", label: "VIN" }, { key: "licensePlate", label: "License Plate" },
       { key: "color", label: "Color" },
+      // Also match extracted PDF keys
+      { key: "vehicleMake", label: "Make" }, { key: "vehicleType", label: "Type" },
+      { key: "vehicleYear", label: "Year" }, { key: "vehicleVIN", label: "VIN" },
     ]},
     { title: "Purchase & Value", fields: [
       { key: "purchaseDate", label: "Purchase Date" }, { key: "purchasePrice", label: "Purchase Price" },
       { key: "currentValue", label: "Current Value" }, { key: "mileage", label: "Mileage" },
     ]},
+    { title: "Insurance", fields: [
+      { key: "insurer", label: "Insurer" }, { key: "insurerCode", label: "Insurer Code" },
+      { key: "policyNumber", label: "Policy Number" }, { key: "coverageType", label: "Coverage Type" },
+      { key: "namedInsured", label: "Named Insured" }, { key: "niacNumber", label: "NAIC Number" },
+      { key: "premium", label: "Premium" }, { key: "deductible", label: "Deductible" },
+      { key: "effectiveDate", label: "Effective Date" }, { key: "expirationDate", label: "Expiration Date" },
+      { key: "insurance", label: "Insurance" },
+    ]},
+    { title: "Financial", fields: [
+      { key: "accountType", label: "Account Type" }, { key: "institution", label: "Institution" },
+      { key: "totalDebits", label: "Total Debits" }, { key: "totalCredits", label: "Total Credits" },
+      { key: "balance", label: "Balance" }, { key: "paymentMethod", label: "Payment Method" },
+    ]},
     { title: "Status", fields: [
       { key: "condition", label: "Condition" }, { key: "location", label: "Location" },
-      { key: "insurance", label: "Insurance" }, { key: "registration", label: "Registration Exp" },
+      { key: "registration", label: "Registration Exp" },
+      { key: "ownerName", label: "Owner Name" },
     ]},
   ],
   person: [
@@ -1147,6 +1189,7 @@ function InfoTab({
                       label={label}
                       value={profile.fields[key]}
                       onSaved={handleSaved}
+                      allFields={profile.fields}
                     />
                   ))}
                 </CardContent>
@@ -1174,6 +1217,7 @@ function InfoTab({
                     label={formatKey(key)}
                     value={val}
                     onSaved={handleSaved}
+                    allFields={profile.fields}
                   />
                 ))}
             </CardContent>
@@ -1188,7 +1232,7 @@ function InfoTab({
             className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 transition-colors"
             onClick={() => toggleSection("__other__")}
           >
-            <span className="text-xs font-semibold">Other</span>
+            <span className="text-xs font-semibold">Other ({extraFields.length})</span>
             {collapsedSections.has("__other__")
               ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
               : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
@@ -1203,6 +1247,7 @@ function InfoTab({
                   label={formatKey(key)}
                   value={val}
                   onSaved={handleSaved}
+                  allFields={profile.fields}
                 />
               ))}
             </CardContent>
