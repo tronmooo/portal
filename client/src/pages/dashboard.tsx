@@ -593,7 +593,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const { data: tasks = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
-    staleTime: 10000,  // 10s — fresh enough for popups, prevents re-fetch on rapid toggles
+    staleTime: 0,  // ALWAYS fetch fresh — never serve cached data in popups
     enabled: open,
   });
 
@@ -806,7 +806,7 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
     queryKey: ["/api/habits"],
     queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
     enabled: open,
-    staleTime: 10000,  // 10s — fresh enough for popups, prevents re-fetch on rapid toggles
+    staleTime: 0,  // ALWAYS fetch fresh — never serve cached data in popups
   });
 
   const checkinMutation = useMutation({
@@ -2841,7 +2841,7 @@ export default function DashboardPage() {
         return res.json();
       } catch { return null; }
     },
-    staleTime: 30000, // 30s — no need to refetch stats every render
+    staleTime: 0,
   });
 
   const sections: DashboardSection[] =

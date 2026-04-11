@@ -53,14 +53,13 @@ export function AppSidebar() {
                 const Icon = item.icon;
                 return (
                   <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton asChild data-testid={`nav-${item.label.toLowerCase()}`}>
-                      <a
-                        href={`#${item.href}`}
-                        onClick={(e) => { e.preventDefault(); navigate(item.href); }}
-                        aria-current={isActive ? "page" : undefined}
-                        style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
-                        className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg relative"
-                      >
+                    <SidebarMenuButton
+                      data-testid={`nav-${item.label.toLowerCase()}`}
+                      onClick={() => { window.location.hash = item.href; }}
+                      aria-current={isActive ? "page" : undefined}
+                      style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                      className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg relative cursor-pointer"
+                    >
                         <div
                           className="absolute inset-0 rounded-lg"
                           style={isActive ? { background: `hsl(${item.accent} / 0.12)` } : {}}
@@ -77,7 +76,6 @@ export function AppSidebar() {
                           style={isActive ? { color: `hsl(${item.accent})` } : {}}>
                           {item.label}
                         </span>
-                      </a>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );
@@ -92,14 +90,14 @@ export function AppSidebar() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild data-testid="nav-settings">
-                  <a href="#/settings" onClick={(e) => { e.preventDefault(); navigate('/settings'); }}
+                  <button onClick={() => { window.location.hash = '/settings'; }}
                     style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
-                    className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-muted/60 w-full">
+                    className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-muted/60 w-full text-left">
                     <div className="w-7 h-7 rounded-lg bg-muted/50 flex items-center justify-center">
                       <Settings className="h-4 w-4 text-muted-foreground" />
                     </div>
                     <span className="text-sm font-medium text-muted-foreground">Settings</span>
-                  </a>
+                  </button>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>

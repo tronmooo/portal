@@ -29,7 +29,7 @@ export function MobileBottomNav() {
             <a
               key={tab.href}
               href={`#${tab.href}`}
-              onClick={(e) => { e.preventDefault(); navigate(tab.href); }}
+              onClick={(e) => { e.preventDefault(); window.location.hash = tab.href; }}
               className="relative flex flex-col items-center justify-center gap-0.5 min-h-[44px] min-w-[52px] px-2 py-1.5 rounded-xl select-none"
               style={{
                 WebkitTapHighlightColor: "transparent",
