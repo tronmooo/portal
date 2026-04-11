@@ -102,7 +102,7 @@ import {
   Pill,
   TreePine,
 } from "lucide-react";
-import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document } from "@shared/schema";
@@ -1443,7 +1443,7 @@ function KpiLine({ label, value, accent }: { label: string; value: string | numb
   );
 }
 
-const TrackerCardInner = React.memo(function TrackerCardInner({ tracker, onDelete, onOpenDetail, allProfiles }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void; allProfiles: Profile[] }) {
+const TrackerCardInner = memo(function TrackerCardInner({ tracker, onDelete, onOpenDetail, allProfiles }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void; allProfiles: Profile[] }) {
   const linkedNames = (tracker.linkedProfiles || []).map(pid => allProfiles.find(p => p.id === pid)?.name).filter(Boolean);
   const profileLabel = linkedNames.length > 0 ? linkedNames[0] : '';
 
