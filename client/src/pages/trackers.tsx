@@ -1364,10 +1364,9 @@ function DeleteEntryButton({
 }
 
 // ── TrackerCard ────────────────────────────────────────────────────────────────
-// Compact square tiles — each shows icon + name + mini visual + key stat.
-// Designed for a 4×4 grid so ~16 fit on screen at once.
+// Information-dense tiles: multiple KPIs, mini charts, stats text per card.
+// Each tracker type renders a completely different rich interior.
 
-// Helper: time-ago short
 function timeAgoShort(ts: string): string {
   const ms = Date.now() - new Date(ts).getTime();
   const mins = Math.floor(ms / 60000);
@@ -1377,218 +1376,353 @@ function timeAgoShort(ts: string): string {
   return `${Math.floor(hrs / 24)}d`;
 }
 
-// Helper: inline SVG sparkline
-function MiniSparkline({ values, color, width = 80, height = 28 }: { values: number[]; color: string; width?: number; height?: number }) {
+// Sparkline with area fill
+function Sparkline({ values, color, h = 28 }: { values: number[]; color: string; h?: number }) {
   if (values.length < 2) return null;
-  const mn = Math.min(...values);
-  const mx = Math.max(...values);
-  const range = mx - mn || 1;
+  const w = 100;
+  const mn = Math.min(...values), mx = Math.max(...values), rng = mx - mn || 1;
   const pts = values.map((v, i) => {
-    const x = (i / (values.length - 1)) * width;
-    const y = height - 2 - ((v - mn) / range) * (height - 4);
+    const x = (i / (values.length - 1)) * w;
+    const y = h - 2 - ((v - mn) / rng) * (h - 4);
     return `${x},${y}`;
   });
-  // area fill under sparkline
-  const areaPath = `M0,${height} L${pts.join(' L')} L${width},${height} Z`;
+  const uid = `sp${color.replace(/[^a-z0-9]/gi,'')}`;
   return (
-    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="w-full">
-      <defs>
-        <linearGradient id={`spark-${color.replace(/[^a-z0-9]/gi,'')}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.3" />
-          <stop offset="100%" stopColor={color} stopOpacity="0.02" />
-        </linearGradient>
-      </defs>
-      <path d={areaPath} fill={`url(#spark-${color.replace(/[^a-z0-9]/gi,'')})`} />
-      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+      <defs><linearGradient id={uid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.25" /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+      <path d={`M0,${h} L${pts.join(' L')} L${w},${h}Z`} fill={`url(#${uid})`} />
+      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-// Helper: tiny 7-day bar chart (medication adherence)
-function TinyBars({ entries, color }: { entries: TrackerEntry[]; color: string }) {
+// 7-day mini bars
+function WeekBars({ entries, color }: { entries: TrackerEntry[]; color: string }) {
   const days = Array.from({ length: 7 }).map((_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const dateStr = d.toLocaleDateString('en-CA');
-    return entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === dateStr).length;
+    const d = new Date(); d.setDate(d.getDate() - (6 - i));
+    return entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === d.toLocaleDateString('en-CA')).length;
   });
   const mx = Math.max(...days, 1);
   return (
-    <div className="flex items-end gap-[2px] h-6 w-full">
-      {days.map((c, i) => (
-        <div key={i} className="flex-1 rounded-sm" style={{
-          height: c > 0 ? `${Math.max(3, (c / mx) * 20)}px` : '2px',
-          backgroundColor: c > 0 ? color : 'hsl(var(--muted-foreground) / 0.12)',
-          opacity: c > 0 ? 0.85 : 0.3,
-        }} />
-      ))}
+    <div className="flex items-end gap-[2px] h-5">
+      {days.map((c, i) => <div key={i} className="flex-1 rounded-sm" style={{ height: c > 0 ? `${Math.max(3, (c / mx) * 18)}px` : '2px', backgroundColor: c > 0 ? color : 'hsl(var(--muted-foreground) / 0.1)', opacity: c > 0 ? 0.85 : 0.3 }} />)}
     </div>
   );
 }
 
-// Helper: tiny donut
-function TinyDonut({ value, max, color, size = 32 }: { value: number; max: number; color: string; size?: number }) {
-  const pct = max > 0 ? Math.min(1, value / max) : 0;
-  const r = (size - 6) / 2;
-  const circ = 2 * Math.PI * r;
+// Donut
+function Donut({ pct, color, size = 32, label }: { pct: number; color: string; size?: number; label?: string }) {
+  const r = (size - 5) / 2, circ = 2 * Math.PI * r;
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="hsl(var(--muted-foreground) / 0.1)" strokeWidth="3" />
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round"
-        strokeDasharray={`${pct * circ} ${circ}`} transform={`rotate(-90 ${size/2} ${size/2})`} />
-    </svg>
+    <div className="relative" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="hsl(var(--muted-foreground) / 0.08)" strokeWidth="3" />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeDasharray={`${Math.min(1, pct) * circ} ${circ}`} transform={`rotate(-90 ${size/2} ${size/2})`} />
+      </svg>
+      {label && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-bold" style={{ color }}>{label}</span>}
+    </div>
   );
 }
 
-function TrackerCard({
-  tracker,
-  onDelete,
-  onOpenDetail,
-}: {
-  tracker: Tracker;
-  onDelete: (id: string) => void;
-  onOpenDetail?: (id: string) => void;
-}) {
+// Progress bar
+function ProgressBar({ pct, color }: { pct: number; color: string }) {
+  return (
+    <div className="h-1 rounded-full bg-muted/30 overflow-hidden w-full">
+      <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, pct)}%`, backgroundColor: color }} />
+    </div>
+  );
+}
+
+// Stat line: label + value
+function KpiLine({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+  return (
+    <div className="flex items-center justify-between gap-1">
+      <span className="text-[9px] text-muted-foreground truncate">{label}</span>
+      <span className="text-[9px] font-bold tabular-nums text-foreground shrink-0" style={accent ? { color: accent } : undefined}>{value}</span>
+    </div>
+  );
+}
+
+function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void }) {
+  const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
+  const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
+  const profileLabel = linkedNames.length > 0 ? linkedNames[0] : '';
+
   const entries = tracker.entries || [];
   const lastEntry = entries[entries.length - 1];
-  const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields[0]?.name || "value";
-  const specialization = detectSpecialization(tracker);
+  const primaryField = tracker.fields.find(f => f.isPrimary)?.name || tracker.fields[0]?.name || 'value';
+  const spec = detectSpecialization(tracker);
   const catAccent = getCategoryAccent(tracker.category);
-  const accentColor = `hsl(${catAccent})`;
-  const isBP = specialization === "bloodpressure";
+  const ac = `hsl(${catAccent})`;
+  const isBP = spec === 'bloodpressure';
 
-  // Recent values for sparkline
   const recentVals = entries.slice(-14).map(e => {
-    if (isBP) return (e.values["systolic"] ?? e.values["systolic_pressure"]) as number;
+    if (isBP) return (e.values['systolic'] ?? e.values['systolic_pressure']) as number;
     return e.values[primaryField] as number;
   }).filter((v): v is number => typeof v === 'number');
 
-  // Time ago
-  const timeAgo = lastEntry ? timeAgoShort(lastEntry.timestamp) : null;
-
-  // Weekly entries
   const weekAgo = Date.now() - 7 * 86400000;
   const weekEntries = entries.filter(e => new Date(e.timestamp).getTime() > weekAgo);
+  const monthAgo = Date.now() - 30 * 86400000;
+  const monthEntries = entries.filter(e => new Date(e.timestamp).getTime() > monthAgo);
+  const timeAgo = lastEntry ? timeAgoShort(lastEntry.timestamp) : null;
 
-  // Field default helper
-  const getDefault = (name: string) => {
-    const field = tracker.fields.find(f => f.name === name);
-    return (field as any)?.default || lastEntry?.values?.[name] || '';
+  const getVal = (name: string) => {
+    const f = tracker.fields.find(ff => ff.name === name);
+    return (f as any)?.default || lastEntry?.values?.[name] || '';
   };
 
-  // Icon by specialization
-  const specIcon = specialization === "medication" ? <Pill className="h-3 w-3" />
-    : specialization === "bloodpressure" ? <Heart className="h-3 w-3" />
-    : specialization === "sleep" ? <Moon className="h-3 w-3" />
-    : specialization === "running" ? <Zap className="h-3 w-3" />
-    : specialization === "weight" ? <Activity className="h-3 w-3" />
-    : tracker.category?.toLowerCase() === 'nutrition' ? <Flame className="h-3 w-3" />
-    : tracker.category?.toLowerCase() === 'fitness' ? <Dumbbell className="h-3 w-3" />
-    : <Activity className="h-3 w-3" />;
+  // Compute stats
+  const avg = recentVals.length > 0 ? recentVals.reduce((a, b) => a + b, 0) / recentVals.length : null;
+  const mn = recentVals.length > 0 ? Math.min(...recentVals) : null;
+  const mx = recentVals.length > 0 ? Math.max(...recentVals) : null;
 
-  // ── Hero value (compact) ──
-  function heroValue(): { label: string; sub?: string } {
-    if (specialization === 'medication') {
-      const dosage = getDefault('dosage') || tracker.unit || '';
-      return { label: dosage || '—', sub: timeAgo ? `${timeAgo} ago` : '' };
+  // Streak calculator
+  const streak = (() => {
+    let s = 0;
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const ds = d.toLocaleDateString('en-CA');
+      if (entries.some(e => new Date(e.timestamp).toLocaleDateString('en-CA') === ds)) s++;
+      else break;
     }
-    if (isBP) {
-      const sys = lastEntry?.values["systolic"] ?? lastEntry?.values["systolic_pressure"];
-      const dia = lastEntry?.values["diastolic"] ?? lastEntry?.values["diastolic_pressure"];
-      return { label: sys != null ? `${sys}/${dia}` : '—' };
-    }
-    if (specialization === 'running') {
-      const distField = tracker.fields.find(f => f.name.toLowerCase().includes('dist') || f.name.toLowerCase().includes('mile'));
-      const dist = lastEntry?.values[distField?.name || primaryField];
-      return { label: dist != null ? `${typeof dist === 'number' ? dist.toFixed(1) : dist}` : '—', sub: tracker.unit || 'mi' };
-    }
-    if (specialization === 'sleep') {
-      const v = lastEntry?.values[primaryField];
-      return { label: typeof v === 'number' ? `${v.toFixed(1)}` : '—', sub: 'hrs' };
-    }
-    if (specialization === 'weight') {
-      const v = lastEntry?.values[primaryField];
-      return { label: typeof v === 'number' ? `${v.toFixed(1)}` : '—', sub: tracker.unit || 'lbs' };
-    }
-    if (['fitness', 'exercise', 'workout', 'sport'].includes(tracker.category?.toLowerCase())) {
-      return { label: `${weekEntries.length}`, sub: 'this wk' };
-    }
-    // Default
-    const v = lastEntry?.values[primaryField];
-    if (v == null) return { label: '—' };
-    const str = typeof v === 'number' ? v.toLocaleString() : String(v);
-    return { label: str.length > 8 ? str.slice(0, 8) : str, sub: tracker.unit || '' };
-  }
+    return s;
+  })();
 
-  // ── Mini visual ──
-  function renderMiniVisual() {
-    // Medication: 7-day bars
-    if (specialization === 'medication') {
-      return <TinyBars entries={entries} color={accentColor} />;
-    }
-    // Fitness with weekly donut
-    if (['fitness', 'exercise', 'workout', 'sport'].includes(tracker.category?.toLowerCase())) {
-      const goal = 7; // weekly sessions goal
+  const specIcon = spec === 'medication' ? <Pill className="h-3.5 w-3.5" />
+    : spec === 'bloodpressure' ? <Heart className="h-3.5 w-3.5" />
+    : spec === 'sleep' ? <Moon className="h-3.5 w-3.5" />
+    : spec === 'running' ? <Zap className="h-3.5 w-3.5" />
+    : spec === 'weight' ? <Activity className="h-3.5 w-3.5" />
+    : tracker.category?.toLowerCase() === 'nutrition' ? <Flame className="h-3.5 w-3.5" />
+    : tracker.category?.toLowerCase() === 'fitness' ? <Dumbbell className="h-3.5 w-3.5" />
+    : <Activity className="h-3.5 w-3.5" />;
+
+  // ── Type-specific rich body ──
+  function renderBody() {
+    // ── MEDICATION ──
+    if (spec === 'medication') {
+      const dosage = getVal('dosage') || tracker.unit || '';
+      const freq = getVal('frequency') || '';
+      const today = new Date().toLocaleDateString('en-CA');
+      const todayCount = entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === today).length;
+      const adherencePct = monthEntries.length > 0 ? Math.round((monthEntries.length / 30) * 100) : 0;
       return (
-        <div className="flex items-center justify-center">
-          <TinyDonut value={weekEntries.length} max={goal} color={accentColor} size={36} />
-        </div>
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold text-foreground">{dosage}</p>
+              {freq && <p className="text-[8px] text-muted-foreground">{freq}</p>}
+            </div>
+            <Donut pct={adherencePct / 100} color={ac} size={34} label={`${adherencePct}%`} />
+          </div>
+          <KpiLine label="Today" value={todayCount > 0 ? `${todayCount} dose${todayCount > 1 ? 's' : ''}` : 'Not taken'} accent={todayCount > 0 ? '#22c55e' : '#ef4444'} />
+          <KpiLine label="This Week" value={`${weekEntries.length} doses`} />
+          <KpiLine label="Streak" value={`${streak}d`} accent={streak >= 7 ? '#22c55e' : undefined} />
+          <WeekBars entries={entries} color={ac} />
+        </>
       );
     }
-    // Has numeric data: sparkline
-    if (recentVals.length >= 2) {
-      return <MiniSparkline values={recentVals} color={accentColor} height={24} />;
-    }
-    // Entries count bar
-    if (entries.length > 0) {
-      return <TinyBars entries={entries} color={accentColor} />;
-    }
-    // Empty placeholder
-    return <div className="h-6 flex items-center justify-center"><span className="text-[8px] text-muted-foreground/40">—</span></div>;
-  }
 
-  const { label: heroLabel, sub: heroSub } = heroValue();
+    // ── BLOOD PRESSURE ──
+    if (isBP) {
+      const sys = lastEntry?.values['systolic'] ?? lastEntry?.values['systolic_pressure'];
+      const dia = lastEntry?.values['diastolic'] ?? lastEntry?.values['diastolic_pressure'];
+      const sysVals = entries.slice(-14).map(e => (e.values['systolic'] ?? e.values['systolic_pressure']) as number).filter((v): v is number => typeof v === 'number');
+      const diaVals = entries.slice(-14).map(e => (e.values['diastolic'] ?? e.values['diastolic_pressure']) as number).filter((v): v is number => typeof v === 'number');
+      const sysAvg = sysVals.length > 0 ? Math.round(sysVals.reduce((a, b) => a + b, 0) / sysVals.length) : null;
+      const diaAvg = diaVals.length > 0 ? Math.round(diaVals.reduce((a, b) => a + b, 0) / diaVals.length) : null;
+      return (
+        <>
+          <div className="flex items-baseline gap-0.5">
+            <span className="text-xl font-black tabular-nums" style={{ color: ac }}>{sys ?? '—'}</span>
+            <span className="text-sm font-bold text-muted-foreground/50">/</span>
+            <span className="text-xl font-black tabular-nums" style={{ color: ac }}>{dia ?? '—'}</span>
+          </div>
+          {sysAvg && <KpiLine label="Avg" value={`${sysAvg}/${diaAvg}`} />}
+          <KpiLine label="Readings" value={`${entries.length} total`} />
+          <KpiLine label="This Week" value={`${weekEntries.length}`} />
+          <Sparkline values={sysVals} color={ac} h={24} />
+        </>
+      );
+    }
+
+    // ── RUNNING ──
+    if (spec === 'running') {
+      const distField = tracker.fields.find(f => f.name.toLowerCase().includes('dist') || f.name.toLowerCase().includes('mile'));
+      const paceField = tracker.fields.find(f => f.name.toLowerCase().includes('pace'));
+      const calField = tracker.fields.find(f => f.name.toLowerCase().includes('cal'));
+      const dist = lastEntry?.values[distField?.name || primaryField];
+      const pace = lastEntry?.values[paceField?.name || 'pace'];
+      const cal = lastEntry?.values[calField?.name || 'caloriesBurned'];
+      const allDists = entries.map(e => e.values[distField?.name || primaryField] as number).filter((v): v is number => typeof v === 'number');
+      const totalDist = allDists.reduce((a, b) => a + b, 0);
+      const unit = distField?.unit || tracker.unit || 'mi';
+      return (
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-baseline gap-0.5">
+                <span className="text-xl font-black tabular-nums text-foreground">{typeof totalDist === 'number' ? totalDist.toFixed(1) : '—'}</span>
+                <span className="text-[9px] text-muted-foreground">{unit} total</span>
+              </div>
+            </div>
+            <Donut pct={weekEntries.length / 5} color={ac} size={34} label={`${weekEntries.length}/5`} />
+          </div>
+          {dist != null && <KpiLine label="Last Run" value={`${typeof dist === 'number' ? dist.toFixed(1) : dist} ${unit}`} />}
+          {pace && <KpiLine label="Pace" value={`${pace}`} />}
+          {cal && <KpiLine label="Burned" value={`${cal} cal`} />}
+          <KpiLine label="Total Runs" value={`${entries.length}`} />
+          <Sparkline values={allDists.slice(-10)} color={ac} h={22} />
+        </>
+      );
+    }
+
+    // ── SLEEP ──
+    if (spec === 'sleep') {
+      const v = lastEntry?.values[primaryField];
+      const sleepAvg = avg;
+      return (
+        <>
+          <div className="flex items-baseline gap-1">
+            <span className="text-xl font-black tabular-nums text-foreground">{typeof v === 'number' ? v.toFixed(1) : '—'}</span>
+            <span className="text-[9px] text-muted-foreground">hrs last</span>
+          </div>
+          {sleepAvg && <KpiLine label="Avg" value={`${sleepAvg.toFixed(1)} hrs`} />}
+          {mn != null && mx != null && <KpiLine label="Range" value={`${mn.toFixed(1)}–${mx.toFixed(1)}`} />}
+          <KpiLine label="This Week" value={`${weekEntries.length} nights`} />
+          <Sparkline values={recentVals} color={ac} h={22} />
+        </>
+      );
+    }
+
+    // ── WEIGHT ──
+    if (spec === 'weight') {
+      const v = lastEntry?.values[primaryField];
+      const unit = tracker.unit || tracker.fields[0]?.unit || 'lbs';
+      const trend = recentVals.length >= 2 ? recentVals[recentVals.length - 1] - recentVals[0] : null;
+      return (
+        <>
+          <div className="flex items-baseline gap-1">
+            <span className="text-xl font-black tabular-nums text-foreground">{typeof v === 'number' ? v.toFixed(1) : '—'}</span>
+            <span className="text-[9px] text-muted-foreground">{unit}</span>
+          </div>
+          {trend != null && <KpiLine label="Trend" value={`${trend > 0 ? '+' : ''}${trend.toFixed(1)} ${unit}`} accent={trend < 0 ? '#22c55e' : trend > 0 ? '#ef4444' : undefined} />}
+          {avg && <KpiLine label="Avg" value={`${avg.toFixed(1)} ${unit}`} />}
+          <KpiLine label="Entries" value={`${entries.length}`} />
+          <Sparkline values={recentVals} color={ac} h={22} />
+        </>
+      );
+    }
+
+    // ── FITNESS ──
+    if (['fitness', 'exercise', 'workout', 'sport', 'cardio', 'strength'].includes(tracker.category?.toLowerCase())) {
+      const numFields = tracker.fields.filter(f => f.type === 'number');
+      const heroField = numFields[0];
+      const heroVal = lastEntry?.values[heroField?.name || primaryField];
+      return (
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[9px] text-muted-foreground">Weekly Sessions</p>
+              <span className="text-xl font-black tabular-nums text-foreground">{weekEntries.length}</span>
+            </div>
+            <Donut pct={weekEntries.length / 5} color={ac} size={34} label={`${weekEntries.length}`} />
+          </div>
+          {heroVal != null && heroField && <KpiLine label={heroField.name} value={`${typeof heroVal === 'number' ? heroVal.toLocaleString() : heroVal}${heroField.unit ? ` ${heroField.unit}` : ''}`} />}
+          <KpiLine label="Total" value={`${entries.length} sessions`} />
+          {streak > 0 && <KpiLine label="Streak" value={`${streak}d`} accent={streak >= 7 ? '#22c55e' : undefined} />}
+          <WeekBars entries={entries} color={ac} />
+        </>
+      );
+    }
+
+    // ── NUTRITION / HYDRATION ──
+    if (['nutrition', 'hydration', 'diet'].includes(tracker.category?.toLowerCase())) {
+      const latestVal = lastEntry?.values[primaryField];
+      // Show up to 3 field values from last entry
+      const fieldLines = tracker.fields.slice(0, 3).map(f => {
+        const v = lastEntry?.values[f.name];
+        if (v == null) return null;
+        return { label: f.name, value: `${typeof v === 'number' ? v.toLocaleString() : v}${f.unit ? ` ${f.unit}` : ''}` };
+      }).filter(Boolean) as { label: string; value: string }[];
+      return (
+        <>
+          {latestVal != null ? (
+            <div className="flex items-baseline gap-1">
+              <span className="text-base font-black tabular-nums text-foreground">
+                {typeof latestVal === 'number' ? latestVal.toLocaleString() : String(latestVal).slice(0, 16)}
+              </span>
+              {tracker.unit && <span className="text-[9px] text-muted-foreground">{tracker.unit}</span>}
+            </div>
+          ) : <p className="text-[9px] text-muted-foreground/60 italic">No data</p>}
+          {fieldLines.map((fl, i) => <KpiLine key={i} label={fl.label} value={fl.value} />)}
+          <KpiLine label="This Week" value={`${weekEntries.length} entries`} />
+          <KpiLine label="Total" value={`${entries.length}`} />
+          {recentVals.length >= 2 ? <Sparkline values={recentVals} color={ac} h={20} /> : <WeekBars entries={entries} color={ac} />}
+        </>
+      );
+    }
+
+    // ── DEFAULT ──
+    const v = lastEntry?.values[primaryField];
+    const fieldLines = tracker.fields.slice(0, 3).map(f => {
+      const fv = lastEntry?.values[f.name];
+      if (fv == null) return null;
+      return { label: f.name, value: `${typeof fv === 'number' ? fv.toLocaleString() : String(fv).slice(0, 20)}${f.unit ? ` ${f.unit}` : ''}` };
+    }).filter(Boolean) as { label: string; value: string }[];
+    return (
+      <>
+        {v != null ? (
+          <div className="flex items-baseline gap-1">
+            <span className="text-base font-black tabular-nums text-foreground">
+              {typeof v === 'number' ? v.toLocaleString() : String(v).slice(0, 16)}
+            </span>
+            {tracker.unit && <span className="text-[9px] text-muted-foreground">{tracker.unit}</span>}
+          </div>
+        ) : <p className="text-[9px] text-muted-foreground/60 italic">No entries</p>}
+        {fieldLines.map((fl, i) => <KpiLine key={i} label={fl.label} value={fl.value} />)}
+        <KpiLine label="Entries" value={`${entries.length}`} />
+        {streak > 0 && <KpiLine label="Streak" value={`${streak}d`} />}
+        {recentVals.length >= 2 ? <Sparkline values={recentVals} color={ac} h={20} /> : entries.length > 0 ? <WeekBars entries={entries} color={ac} /> : null}
+      </>
+    );
+  }
 
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="aspect-square rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.03] active:scale-[0.97] flex flex-col"
+      className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col"
       style={{
-        background: `linear-gradient(160deg, hsl(${catAccent} / 0.15) 0%, hsl(var(--card)) 50%)`,
+        background: `linear-gradient(160deg, hsl(${catAccent} / 0.14) 0%, hsl(var(--card)) 45%)`,
         border: `1px solid hsl(${catAccent} / 0.2)`,
-        boxShadow: `0 2px 12px hsl(${catAccent} / 0.06), inset 0 1px 0 hsl(${catAccent} / 0.08)`,
+        boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
       }}
       onClick={() => onOpenDetail?.(tracker.id)}
     >
-      {/* Top: icon + name */}
-      <div className="px-2 pt-2 pb-0.5 flex items-center gap-1.5 min-w-0">
-        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: accentColor }}>
+      {/* Header: icon + title + profile */}
+      <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
           {specIcon}
         </div>
-        <span className="text-[10px] font-semibold text-foreground truncate leading-tight">
-          {specialization === 'medication' ? (getDefault('drugName') || tracker.name) : tracker.name}
-        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-bold text-foreground truncate leading-tight">
+            {profileLabel ? `${profileLabel}: ` : ''}{tracker.name}
+          </p>
+        </div>
       </div>
 
-      {/* Middle: hero value */}
-      <div className="flex-1 flex flex-col items-center justify-center px-2 -mt-0.5">
-        <span className="text-lg font-black tabular-nums text-foreground leading-none">{heroLabel}</span>
-        {heroSub && <span className="text-[8px] text-muted-foreground mt-0.5">{heroSub}</span>}
+      {/* Rich body */}
+      <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5 min-h-0">
+        {renderBody()}
       </div>
 
-      {/* Visual */}
-      <div className="px-2 pb-1">
-        {renderMiniVisual()}
-      </div>
-
-      {/* Bottom: meta strip */}
-      <div className="px-2 pb-1.5 flex items-center justify-between">
-        <span className="text-[8px] font-medium capitalize px-1 py-0.5 rounded" style={{ backgroundColor: `hsl(${catAccent} / 0.12)`, color: accentColor }}>
+      {/* Footer */}
+      <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+        <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${catAccent} / 0.12)`, color: ac }}>
           {tracker.category || 'custom'}
         </span>
-        <span className="text-[8px] text-muted-foreground tabular-nums">
-          {timeAgo ? `${timeAgo}` : `${entries.length}`}
-        </span>
+        <span className="text-[7px] text-muted-foreground tabular-nums">{timeAgo || `${entries.length} entries`}</span>
       </div>
     </div>
   );
