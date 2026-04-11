@@ -1421,10 +1421,10 @@ function TrackerCard({
   return (
     <Card
       data-testid={`card-tracker-${tracker.id}`}
-      className="card-lift overflow-hidden"
-      style={{ borderTop: `2px solid hsl(${catAccent})` }}
+      className="card-lift overflow-hidden border-0"
+      style={{ borderLeft: `3px solid hsl(${catAccent})`, background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(${catAccent} / 0.04) 50%, transparent 100%)` }}
     >
-      <CardHeader className="pb-2" style={{ background: `linear-gradient(180deg, hsl(${catAccent} / 0.07) 0%, transparent 70%)` }}>
+      <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div>
             <CardTitle
@@ -1455,6 +1455,10 @@ function TrackerCard({
                 return null;
               })()}
               <span className="text-xs text-muted-foreground">· {tracker.entries.length} {tracker.entries.length === 1 ? 'entry' : 'entries'}</span>
+              {/* Category badge */}
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md" style={{ backgroundColor: `hsl(${catAccent} / 0.15)`, color: `hsl(${catAccent})` }}>
+                {tracker.category || 'custom'}
+              </span>
               {linkedProfileNames.map(p => {
                 const PIcon = PROFILE_TYPE_ICONS[p.type] || User;
                 return (
@@ -4365,8 +4369,9 @@ export default function TrackersPage() {
             return (
               <div
                 key={tracker.id}
-                className="border-b border-border/20 hover:bg-muted/20 cursor-pointer transition-all px-2.5 py-2 flex items-center gap-2 relative overflow-hidden"
+                className="border-b border-border/20 hover:bg-muted/30 cursor-pointer transition-all px-2.5 py-2 flex items-center gap-2 relative overflow-hidden"
                 data-testid={`tracker-row-${tracker.id}`}
+                style={{ background: `linear-gradient(90deg, hsl(${getCategoryAccent(tracker.category)} / 0.08) 0%, transparent 40%)` }}
                 onClick={() => setSelectedTrackerId(tracker.id)}
               >
                 {/* Category accent left bar */}
