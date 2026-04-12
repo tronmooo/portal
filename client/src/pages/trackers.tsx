@@ -3890,45 +3890,43 @@ export default function TrackersPage() {
               {collapsedSections.has("profiles") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("profiles") && (
-              <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
-                {sortedGroups.map(([groupName, items]) => (
-                  items.map(child => {
-                    const Icon = typeIcons[child.type] || Star;
-                    const fields = child.fields || {};
-                    const currentVal = fields.currentValue;
-                    const purchaseVal = fields.cost || fields.purchasePrice || fields.amount || fields.price;
-                    const year = fields.year || fields.purchaseDate?.slice(0, 4);
-                    const detail = [fields.make, fields.model, fields.brand].filter(Boolean).join(' ');
-                    const hasValue = currentVal || purchaseVal;
-                    return (
-                      <Link key={child.id} href={`/profiles/${child.id}`}>
-                        <div className="flex items-center gap-2 px-3 py-2.5 hover:bg-muted/40 active:bg-muted/60 cursor-pointer transition-colors" data-testid={`button-view-child-${child.id}`}>
-                          <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <span className="text-xs font-medium block truncate">{child.name}</span>
-                            {(detail || year) && <span className="text-xs text-muted-foreground">{[detail, year].filter(Boolean).join(' · ')}</span>}
-                          </div>
-                          <div className="text-right shrink-0">
-                            {currentVal ? (
-                              <div>
-                                <span className="text-xs font-semibold tabular-nums">${Number(currentVal).toLocaleString()}</span>
-                                <span className="block text-xs text-muted-foreground/60">est. value</span>
-                              </div>
-                            ) : purchaseVal ? (
-                              <div>
-                                <span className="text-xs font-medium tabular-nums text-muted-foreground">${Number(purchaseVal).toLocaleString()}</span>
-                                <span className="block text-xs text-muted-foreground/40">purchase</span>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-muted-foreground/40 italic">no value →</span>
-                            )}
-                          </div>
-                          <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                {sortedGroups.flatMap(([, items]) => items).map(child => {
+                  const Icon = typeIcons[child.type] || Star;
+                  const fields = child.fields || {};
+                  const currentVal = fields.currentValue;
+                  const purchaseVal = fields.cost || fields.purchasePrice || fields.amount || fields.price;
+                  const year = fields.year || fields.purchaseDate?.slice(0, 4);
+                  const make = fields.make || '';
+                  const model = fields.model || '';
+                  const mileage = fields.mileage || fields.odometer;
+                  const insurance = fields.insuranceProvider || fields.insurance || '';
+                  const accentHsl = child.type === 'vehicle' ? '262 60% 62%' : child.type === 'investment' ? '142 60% 45%' : child.type === 'property' ? '220 60% 55%' : '262 60% 62%';
+                  const ac = `hsl(${accentHsl})`;
+                  return (
+                    <Link key={child.id} href={`/profiles/${child.id}`}>
+                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`button-view-child-${child.id}`}>
+                        <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><Icon className="h-3.5 w-3.5" /></div>
+                          <p className="text-[10px] font-bold text-foreground truncate">{child.name}</p>
                         </div>
-                      </Link>
-                    );
-                  })
-                ))}
+                        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
+                          {currentVal ? <div className="flex items-baseline gap-1"><span className="text-xl font-black tabular-nums text-foreground">${Number(currentVal).toLocaleString()}</span></div>
+                          : purchaseVal ? <div className="flex items-baseline gap-1"><span className="text-lg font-black tabular-nums text-foreground">${Number(purchaseVal).toLocaleString()}</span><span className="text-[8px] text-muted-foreground">purchase</span></div>
+                          : <span className="text-[10px] text-muted-foreground/50 italic">No value set</span>}
+                          {(make || model) && <KpiLine label="Make/Model" value={[make, model].filter(Boolean).join(' ')} />}
+                          {year && <KpiLine label="Year" value={year} />}
+                          {mileage && <KpiLine label="Mileage" value={`${Number(mileage).toLocaleString()} mi`} />}
+                          {insurance && <KpiLine label="Insurance" value={String(insurance).slice(0, 16)} />}
+                        </div>
+                        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                          <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{child.type}</span>
+                          {year && <span className="text-[7px] text-muted-foreground">{year}</span>}
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -3963,18 +3961,45 @@ export default function TrackersPage() {
               {collapsedSections.has("subscriptions") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("subscriptions") && (
-              <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                 {subs.map(sub => {
                   const fields = sub.fields || {};
                   const cost = fields.cost || fields.amount || fields.price;
-                  const freq = fields.frequency || fields.billing || "monthly";
+                  const freq = fields.frequency || fields.billing || fields.billingCycle || 'monthly';
+                  const freqShort = String(freq).toLowerCase().includes('year') ? '/yr' : String(freq).toLowerCase().includes('week') ? '/wk' : '/mo';
+                  const category = fields.category || fields.type || '';
+                  const status = fields.status || (cost ? 'Active' : '');
+                  const provider = fields.provider || fields.company || '';
+                  const monthlyCost = cost ? (String(freq).toLowerCase().includes('year') ? Number(cost) / 12 : Number(cost)) : 0;
+                  const annualCost = monthlyCost * 12;
+                  const accentHsl = '43 85% 52%';
+                  const ac = `hsl(${accentHsl})`;
                   return (
                     <Link key={sub.id} href={`/profiles/${sub.id}`}>
-                      <div className="flex items-center gap-2 px-2 py-[6px] hover:bg-muted/40 active:bg-muted/60 cursor-pointer transition-colors" data-testid={`sub-card-${sub.id}`}>
-                        <CreditCard className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="text-xs-loose font-medium truncate flex-1">{sub.name}</span>
-                        {cost && <span className="text-xs font-medium tabular-nums">${cost}/{String(freq).slice(0, 3)}</span>}
-                        <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`sub-card-${sub.id}`}>
+                        <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><CreditCard className="h-3.5 w-3.5" /></div>
+                          <p className="text-[10px] font-bold text-foreground truncate">{sub.name}</p>
+                        </div>
+                        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
+                          {cost ? (
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-baseline gap-0.5">
+                                <span className="text-xl font-black tabular-nums text-foreground">${Number(cost).toLocaleString()}</span>
+                                <span className="text-[9px] text-muted-foreground">{freqShort}</span>
+                              </div>
+                              {annualCost > 0 && <Donut pct={Math.min(1, monthlyCost / 100)} color={ac} size={32} label={`$${Math.round(monthlyCost)}`} />}
+                            </div>
+                          ) : <span className="text-[10px] text-muted-foreground/50 italic">No cost set</span>}
+                          {annualCost > 0 && <KpiLine label="Annual" value={`$${Math.round(annualCost).toLocaleString()}/yr`} />}
+                          {provider && <KpiLine label="Provider" value={String(provider).slice(0, 18)} />}
+                          {category && <KpiLine label="Category" value={String(category).slice(0, 16)} />}
+                          {status && <KpiLine label="Status" value={status} accent={String(status).toLowerCase() === 'active' ? '#22c55e' : undefined} />}
+                        </div>
+                        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                          <span className="text-[7px] font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>Subscription</span>
+                          <span className="text-[7px] text-muted-foreground tabular-nums">{String(freq).slice(0, 8)}</span>
+                        </div>
                       </div>
                     </Link>
                   );
@@ -4087,72 +4112,39 @@ export default function TrackersPage() {
             <p className="text-xs text-muted-foreground mt-1">Upload files or ask Portol to save documents</p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
             {filteredDocuments.map(doc => {
-              const DOC_TYPE_COLORS: Record<string, string> = {
-                medical: "bg-red-500/10 text-red-500",
-                insurance: "bg-blue-500/10 text-blue-500",
-                legal: "bg-purple-500/10 text-purple-500",
-                financial: "bg-green-500/10 text-green-500",
-                identity: "bg-amber-500/10 text-amber-500",
-                warranty: "bg-orange-500/10 text-orange-500",
-                receipt: "bg-emerald-500/10 text-emerald-500",
+              const DOC_TYPE_HSL: Record<string, string> = {
+                medical: '0 72% 51%', insurance: '213 72% 51%', legal: '270 60% 55%',
+                financial: '142 60% 45%', identity: '38 92% 50%', warranty: '25 80% 54%',
+                receipt: '160 60% 45%', drivers_license: '38 92% 50%',
               };
-              const colorClass = DOC_TYPE_COLORS[doc.type] || "bg-slate-500/10 text-slate-500";
-              const isExpanded = expandedDocId === doc.id;
-              const hasPreview = !!(doc.fileData || (doc as any).thumbnailData);
+              const accentHsl = DOC_TYPE_HSL[doc.type] || '25 80% 54%';
+              const ac = `hsl(${accentHsl})`;
+              const linkedNames = (doc.linkedProfiles || []).map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
+              const createdDate = new Date(doc.createdAt);
+              const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
+              const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
               return (
-                <div key={doc.id} className="rounded-xl border bg-card overflow-hidden transition-all" data-testid={`global-doc-${doc.id}`}>
-                  {/* Row */}
-                  <div className="flex items-center gap-2.5 px-3 py-2.5">
-                    {/* Expand/collapse toggle — replaces the duplicate eye icon */}
-                    <button
-                      onClick={() => setExpandedDocId(isExpanded ? null : doc.id)}
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${colorClass} ${isExpanded ? 'ring-1 ring-current' : ''}`}
-                      title={isExpanded ? 'Collapse preview' : 'Preview document'}
-                      data-testid={`button-toggle-doc-${doc.id}`}
-                    >
-                      <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                    </button>
-                    {/* Doc info */}
-                    <button className="flex-1 min-w-0 text-left" onClick={() => setViewingDoc(doc)}>
-                      <p className="text-sm font-medium truncate text-primary">{doc.name}</p>
-                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                        <Badge variant="secondary" className="text-xs capitalize h-4 px-1">{doc.type?.replace(/_/g, " ")}</Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                        </span>
-                        {doc.linkedProfiles?.length > 0 && (() => {
-                          const linkedNames = doc.linkedProfiles.map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
-                          return linkedNames.length > 0 ? <span className="text-xs text-muted-foreground">{linkedNames.join(", ")}</span> : null;
-                        })()}
-                      </div>
-                    </button>
-                    {/* Single eye (full view) + delete */}
-                    <div className="flex gap-0.5 shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => handleShareDoc(doc)}
-                        disabled={shareLoadingId === doc.id}
-                        title="Share / email this document"
-                        data-testid={`button-send-doc-${doc.id}`}
-                      >
-                        {shareLoadingId === doc.id
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <Share2 className="h-3.5 w-3.5" />}
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setViewingDoc(doc)} title="Open full view" data-testid={`button-view-doc-global-${doc.id}`}>
-                        <Eye className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => setDocDeleteConfirmId(doc.id)} data-testid={`button-delete-doc-global-${doc.id}`}>
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
+                <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)}>
+                  <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+                    <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
+                    <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>
+                  </div>
+                  <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
+                    <span className="text-base font-black text-foreground capitalize">{doc.type?.replace(/_/g, ' ') || 'Document'}</span>
+                    <KpiLine label="Format" value={mimeShort} />
+                    <KpiLine label="Added" value={createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} />
+                    {linkedNames.length > 0 && <KpiLine label="Owner" value={linkedNames.join(', ')} />}
+                    {daysSince <= 7 && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
+                  </div>
+                  <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                    <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
+                    <div className="flex gap-1">
+                      <button onClick={(e) => { e.stopPropagation(); handleShareDoc(doc); }} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>
+                      <button onClick={(e) => { e.stopPropagation(); setDocDeleteConfirmId(doc.id); }} className="text-muted-foreground/60 hover:text-destructive"><X className="h-3 w-3" /></button>
                     </div>
                   </div>
-                  {/* Inline preview — fetches full doc with auth, renders inline */}
-                  {isExpanded && <DocInlinePreview docId={doc.id} mimeType={doc.mimeType} name={doc.name} onOpen={() => setViewingDoc(doc)} />}
                 </div>
               );
             })}
@@ -4429,17 +4421,55 @@ export default function TrackersPage() {
           })}
         </div>
       ) : (
-        /* ── 4×4 COMPACT TILE GRID ── */
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-          {sortedCats.flatMap((cat) => grouped[cat]).map((tracker) => (
-            <TrackerCard
-              key={tracker.id}
-              tracker={tracker}
-              onDelete={(id) => setDeleteTargetId(id)}
-              onOpenDetail={(id) => setSelectedTrackerId(id)}
-            />
-          ))}
-        </div>
+        /* ── PERSON-GROUPED CARD GRID ── */
+        (() => {
+          const allTrackersList = sortedCats.flatMap((cat) => grouped[cat]);
+          const personGroups: Record<string, { name: string; type: string; trackers: typeof allTrackersList }> = {};
+          const selfProfile = (profiles || []).find(p => p.type === 'self');
+          const selfId = selfProfile?.id || '';
+          for (const t of allTrackersList) {
+            const lp = t.linkedProfiles || [];
+            if (lp.length === 0) {
+              const key = selfId || '__me__';
+              if (!personGroups[key]) personGroups[key] = { name: selfProfile?.name || 'Me', type: 'self', trackers: [] };
+              personGroups[key].trackers.push(t);
+            } else {
+              for (const pid of lp) {
+                const prof = (profiles || []).find(p => p.id === pid);
+                if (!personGroups[pid]) personGroups[pid] = { name: prof?.name || 'Unknown', type: prof?.type || 'person', trackers: [] };
+                personGroups[pid].trackers.push(t);
+              }
+            }
+          }
+          const typeOrder: Record<string, number> = { self: 0, person: 1, pet: 2 };
+          const sortedKeys = Object.keys(personGroups).sort((a, b) => {
+            const ta = typeOrder[personGroups[a].type] ?? 3;
+            const tb = typeOrder[personGroups[b].type] ?? 3;
+            return ta - tb || personGroups[a].name.localeCompare(personGroups[b].name);
+          });
+          return (
+            <div className="space-y-4">
+              {sortedKeys.map(pk => {
+                const g = personGroups[pk];
+                const icon = g.type === 'self' ? '👤' : g.type === 'pet' ? '🐾' : '👥';
+                return (
+                  <div key={pk}>
+                    <div className="flex items-center gap-2 mb-2 px-0.5">
+                      <span className="text-sm">{icon}</span>
+                      <span className="text-xs font-bold text-foreground">{g.type === 'self' ? 'Me' : g.name}</span>
+                      <span className="text-[10px] text-muted-foreground">({g.trackers.length})</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {g.trackers.map(tracker => (
+                        <TrackerCard key={tracker.id} tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()
       ))}
 
       {/* Create tracker dialog */}
