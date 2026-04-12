@@ -2048,6 +2048,7 @@ BEHAVIOR:
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
 - TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
 - LIVE DATABASE CONTEXT: The data snapshot above (Profiles, Trackers, Tasks, etc.) is fetched FRESH from the database at the start of every message. It reflects ALL manual edits, deletions, and UI changes. Trust THIS data over conversation history. If the data snapshot doesn't list something, it does NOT exist — even if conversation history says you created it. Conversation history can be stale; the data snapshot is always current.
+- ANSWERING DATA QUESTIONS: When the user asks about their data ("what's my expiration date?", "how much is my car worth?", "what's Joe's birthday?", "how much do I spend on subscriptions?"), ALWAYS look up the answer from the data snapshot above. Documents include extracted fields in curly braces {field: value}. Profiles include fields like height, weight, birthday. Assets include currentValue, make, model, year. Subscriptions include cost, frequency. Trackers include latest values. NEVER guess or approximate — cite the exact data you see. If the data seems wrong, tell the user what you found and suggest they update it.
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
@@ -5013,7 +5014,12 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = [
-    `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => `${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("; ") || "none"}`,
+    `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => {
+      const fields = p.fields || {};
+      const keyFields = Object.entries(fields).filter(([k, v]) => v && !k.startsWith('_') && k !== 'notes').slice(0, 10).map(([k, v]) => `${k}: ${String(v).slice(0, 50)}`).join(', ');
+      const childCount = profiles.filter((c: any) => c.fields?._parentProfileId === p.id).length;
+      return `${p.name} (${p.type}, id:${p.id.slice(0,8)}${keyFields ? `, ${keyFields}` : ''}${childCount > 0 ? `, ${childCount} sub-profiles` : ''})`;
+    }).join("; ") || "none"}`,
     `Trackers (${trackers.length}): ${trackers.slice(0, 25).map(t => {
       const last = t.entries[t.entries.length - 1];
       const ownerNames = (t.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || pid.slice(0,8)).join(",");
@@ -5027,14 +5033,36 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       return `${h.name} (${h.frequency}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
     }).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
+    // Assets & vehicles with full field data
+    (() => {
+      const assetProfiles = profiles.filter((p: any) => ['vehicle', 'asset', 'investment', 'property'].includes(p.type));
+      if (assetProfiles.length === 0) return '';
+      return `Assets & Vehicles (${assetProfiles.length}): ${assetProfiles.slice(0, 20).map(a => {
+        const f = a.fields || {};
+        const details = Object.entries(f).filter(([k, v]) => v && !k.startsWith('_')).map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`).join(', ');
+        return `${a.name} (${a.type}) {${details}}`;
+      }).join('; ')}`;
+    })(),
+    // Subscriptions with full field data
+    (() => {
+      const subProfiles = profiles.filter((p: any) => p.type === 'subscription');
+      if (subProfiles.length === 0) return '';
+      return `Subscriptions (${subProfiles.length}): ${subProfiles.slice(0, 20).map(s => {
+        const f = s.fields || {};
+        const details = Object.entries(f).filter(([k, v]) => v && !k.startsWith('_')).map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`).join(', ');
+        return `${s.name} {${details}}`;
+      }).join('; ')}`;
+    })(),
     `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
-    `Documents (${documents.length}): ${documents.slice(0, 20).map(d => {
+    `Documents (${documents.length}): ${documents.slice(0, 25).map(d => {
       const ed = d.extractedData || {};
-      const keyFields = Object.entries(ed).slice(0, 8).map(([k, v]) => {
+      // Include ALL extracted fields without truncation for accurate answers
+      const allFields = Object.entries(ed).filter(([k]) => k !== 'rawText' && !k.startsWith('_')).map(([k, v]) => {
         const val = (v && typeof v === 'object' && 'value' in (v as any)) ? (v as any).value : v;
-        return `${k}: ${String(val).slice(0, 40)}`;
+        return `${k}: ${String(val)}`;
       }).join(', ');
-      return `"${d.name}" (${d.type})${keyFields ? ` [${keyFields}]` : ''}`;
+      const linkedNames = (d.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name).filter(Boolean).join(',');
+      return `"${d.name}" (${d.type}${linkedNames ? `, owner:${linkedNames}` : ''})${allFields ? ` {${allFields}}` : ''}`;
     }).join("; ") || "none"}`,
     `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
     // Journal entries intentionally EXCLUDED from context — the journal_entry tool handles all checks.
