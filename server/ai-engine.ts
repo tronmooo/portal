@@ -629,18 +629,28 @@ export async function processFileUpload(
   // Use Claude vision to analyze the image/document
   const extractionPrompt = `You extract data from uploaded documents for a personal document management app called Portol.
 
-The image may be rotated or sideways. Adjust your reading orientation to match the text.
+The image may be rotated, sideways, or at an angle. You MUST:
+1. First determine the orientation of the text in the image
+2. Mentally rotate the image so text reads normally (left to right, top to bottom)
+3. THEN read all fields
 
-RULE #1 — ABSOLUTE ZERO FABRICATION:
-You must ONLY return values you can read with 100% certainty from the document.
-- If even ONE character is unclear, DO NOT include that field.
-- Do NOT guess partial digits, dates, or addresses.
-- Do NOT autocomplete names, numbers, or any text.
-- If you're 95% sure but not 100%, DO NOT include it.
-- Return 3 correct fields rather than 10 fields where 3 are wrong.
-- WRONG DATA IS THE WORST POSSIBLE OUTCOME. Missing data is fine.
+For US driver's licenses photographed at an angle:
+- The large text at the top is the state name (e.g., "Florida", "California")
+- DOB is labeled "DOB" or has a birthday cake icon
+- EXP date is ALWAYS in the future relative to the ISS (issue) date
+- The license number is the longest number on the card
+- Read EVERY piece of text on the card — front has 15-20 data fields
 
-For each field you DO include, add a "confidence" key: "high" (100% certain, every character clear) or "medium" (very likely correct but image quality or rotation makes some characters harder to read). Include medium-confidence fields — the user can verify and correct them. Only exclude fields where you truly cannot make out the text at all.
+RULE #1 — EXTRACT EVERYTHING VISIBLE:
+Extract EVERY field you can read from the document. The user will review and correct any mistakes.
+- Read ALL text on the document, including small print, headers, footers, and sidebar text.
+- If a field is partially readable, include your best reading of it.
+- MORE DATA IS BETTER — the user can fix incorrect fields, but they can't fix MISSING fields.
+- For dates, read carefully: distinguish between DOB (birth), ISS (issue), and EXP (expiration).
+- For addresses, include the full address with city, state, zip.
+- For names, include first, middle, and last separately.
+
+Do NOT add a confidence field. Just extract the data directly into extractedData.
 
 RULE #2 — EXPIRATION DATE:
 Always look for the expiration/end date. It's the LATER date on the document.
@@ -686,9 +696,9 @@ Classify as: drivers_license, medical_report, lab_results, prescription, insuran
 ${userMessage ? `User said: "${userMessage}"` : ""}
 
 Return valid JSON:
-{"documentType": "...", "label": "Short title", "extractedData": {only fields you can clearly read}, "targetProfile": null, "trackerEntries": [], "summary": "one line"}
+{"documentType": "...", "label": "Short descriptive title", "extractedData": {ALL fields you can read from the document}, "targetProfile": null, "trackerEntries": [], "summary": "one line"}
 
-If you cannot read a field clearly, OMIT IT. Do not return null values — just don't include the field.`;
+Include as many fields as possible. For driver's licenses, aim for 15+ fields. For insurance cards, aim for 10+ fields. Do not return null values — just don't include fields you truly can't read at all.`;
 
   try {
     const isImage = mimeType.startsWith("image/");
@@ -727,7 +737,7 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514", // Use Sonnet for accurate vision extraction — Haiku misreads rotated text
-      max_tokens: 2048,
+      max_tokens: 4096,
       messages: [{
         role: "user",
         content: [
