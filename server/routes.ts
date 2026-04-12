@@ -81,6 +81,24 @@ function getCached(key: string): any | null {
 function setCache(key: string, data: any, ttlMs: number = 10000): void {
   responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
+// Clear ALL cached responses — call after any data mutation
+function clearAllCache(): void {
+  responseCache.clear();
+}
+
+// Middleware: clear server cache on ANY mutation (POST/PATCH/PUT/DELETE)
+// This ensures deleted documents, updated profiles, etc. are immediately reflected
+function cacheBustMiddleware(req: any, res: any, next: any) {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+    // Clear cache AFTER the response is sent (so the mutation completes first)
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 400) {
+        clearAllCache();
+      }
+    });
+  }
+  next();
+}
 
 // ── In-flight deduplication: if two requests for the same key arrive simultaneously,
 //    the second one piggybacks on the first DB query instead of firing its own.
@@ -152,6 +170,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // Clear server cache on any mutation so changes are reflected immediately
+  app.use(cacheBustMiddleware);
 
   // CORS — allow requests from the app's own domain and Capacitor
   app.use((req, res, next) => {

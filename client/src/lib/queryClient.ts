@@ -114,8 +114,13 @@ export const queryClient = new QueryClient({
     },
     mutations: {
       retry: false,
+      onSuccess: () => {
+        // Global: after ANY successful mutation, invalidate dashboard data
+        // This ensures deleted documents, updated profiles, etc. are reflected everywhere
+        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      },
       onError: (error: Error) => {
-        // Global fallback — individual mutation onError handlers take precedence
         console.error("Mutation failed:", error.message);
       },
     },
