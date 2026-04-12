@@ -1155,8 +1155,8 @@ export default function ProfilesPage() {
 
   const { data: profiles, isLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
-    staleTime: 0, // Always fetch fresh — profiles change via chat and must be up to date
-    refetchOnMount: "always",
+    staleTime: 15000, // 15s — mutations invalidate immediately
+    refetchOnMount: true,
   });
   const [showProfileSkeleton, setShowProfileSkeleton] = useState(false);
   useEffect(() => {
