@@ -627,78 +627,17 @@ export async function processFileUpload(
   const results: any[] = [];
 
   // Use Claude vision to analyze the image/document
-  const extractionPrompt = `You extract data from uploaded documents for a personal document management app called Portol.
+  const extractionPrompt = `Extract every data point you can read from this document. Return valid JSON:
 
-The image may be rotated, sideways, or at an angle. You MUST:
-1. First determine the orientation of the text in the image
-2. Mentally rotate the image so text reads normally (left to right, top to bottom)
-3. THEN read all fields
+{"documentType": "<type>", "label": "<short title>", "extractedData": {<every field you can read>}, "targetProfile": null, "trackerEntries": [], "summary": "<one line>"}
 
-For US driver's licenses photographed at an angle:
-- The large text at the top is the state name (e.g., "Florida", "California")
-- DOB is labeled "DOB" or has a birthday cake icon
-- EXP date is ALWAYS in the future relative to the ISS (issue) date
-- The license number is the longest number on the card
-- Read EVERY piece of text on the card — front has 15-20 data fields
+Document types: drivers_license, medical_report, lab_results, prescription, insurance_card, insurance_policy, receipt, invoice, bank_statement, vehicle_registration, warranty, pet_record, vaccination_record, or other.
 
-RULE #1 — EXTRACT EVERYTHING VISIBLE:
-Extract EVERY field you can read from the document. The user will review and correct any mistakes.
-- Read ALL text on the document, including small print, headers, footers, and sidebar text.
-- If a field is partially readable, include your best reading of it.
-- MORE DATA IS BETTER — the user can fix incorrect fields, but they can't fix MISSING fields.
-- For dates, read carefully: distinguish between DOB (birth), ISS (issue), and EXP (expiration).
-- For addresses, include the full address with city, state, zip.
-- For names, include first, middle, and last separately.
-
-Do NOT add a confidence field. Just extract the data directly into extractedData.
-
-RULE #2 — EXPIRATION DATE:
-Always look for the expiration/end date. It's the LATER date on the document.
-Common labels: EXP, RES, EXPIRES, VALID THROUGH, COVERAGE END, POLICY END, TERM END, BEST BY, VALID THRU.
-The issue date (ISS, ISSUED, EFFECTIVE) is the EARLIER date — do not confuse them.
-For US driver's licenses: the EXP date is ALWAYS later than the ISS date, typically 4-8 years after issue.
-If the image is rotated/sideways, mentally rotate it to read dates correctly. Read ALL dates on the card — there are usually 3: DOB, ISS, and EXP.
-
-RULE #2B — DRIVER'S LICENSE FIELDS:
-For any driver's license, extract ALL of these fields if visible:
-- firstName, lastName, middleName
-- dateOfBirth (DOB/BORN)
-- address, city, state, zip
-- licenseNumber (DL#/DD#)
-- expirationDate (EXP)
-- issueDate (ISS)
-- sex (M/F)
-- height, weight
-- eyeColor, hairColor
-- class (license class)
-- restrictions, endorsements
-- donor (true/false)
-- designation (SAFE DRIVER, etc.)
-Extract EVERY field you can read. More data is better — the user will verify.
-
-RULE #3 — DOLLAR AMOUNTS:
-Always extract total amounts. Scan entire document including corners and footers.
-Use numbers, not strings (1085, not "$1,085").
-
-RULE #4 — MEDICAL/LAB VALUES:
-For lab reports and medical documents, you MUST scan EVERY row of the results table and create a trackerEntries array.
-Each entry must have: trackerName (string), values (object with "value" key as a number), unit (string), category ("health").
-IMPORTANT: Read the ACTUAL numeric values printed in the document. Do NOT use placeholder or example numbers.
-Do NOT set values to 0. Every trackerEntry must have the real number from the document.
-Format: {"trackerName": "Test Name", "values": {"value": <ACTUAL_NUMBER_FROM_DOCUMENT>}, "unit": "unit", "category": "health"}
-Scan ALL rows in the results table — CBC panels, metabolic panels, lipid panels, etc. Do not stop at 2 values.
-
-RULE #5 — PROFILE MATCHING:
-Only set targetProfile if the document explicitly names a person/vehicle/pet that matches an existing profile. Otherwise null.
-
-Classify as: drivers_license, medical_report, lab_results, prescription, insurance_card, insurance_policy, receipt, invoice, bank_statement, vehicle_registration, citation, warranty, pet_record, vaccination_record, or other.
+For lab reports, also fill trackerEntries: [{"trackerName": "<test>", "values": {"value": <number>}, "unit": "<unit>", "category": "health"}]
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
 
-Return valid JSON:
-{"documentType": "...", "label": "Short descriptive title", "extractedData": {ALL fields you can read from the document}, "targetProfile": null, "trackerEntries": [], "summary": "one line"}
-
-Include as many fields as possible. For driver's licenses, aim for 15+ fields. For insurance cards, aim for 10+ fields. Do not return null values — just don't include fields you truly can't read at all.`;
+Extract every single field. Do not skip anything. Do not make up data — only return what you actually read from the document.`;
 
   try {
     const isImage = mimeType.startsWith("image/");
