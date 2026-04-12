@@ -597,14 +597,16 @@ export function DocumentViewerDialog({
       <DialogContent className="max-w-[96vw] md:max-w-6xl h-[92vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
         <DialogHeader className="px-4 py-3 border-b border-border shrink-0">
           <DialogTitle className="text-sm flex items-center gap-2">
-            <FileText className="h-4 w-4" />
-            {name}
-            {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal">{docType.replace(/_/g, ' ')}</span>}
-            {displayData && (
+            <FileText className="h-4 w-4 shrink-0" />
+            <span className="truncate">{name}</span>
+            {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal shrink-0">{docType.replace(/_/g, ' ')}</span>}
+          </DialogTitle>
+          {displayData && (
+            <div className="flex items-center gap-2 mt-1">
               <Button
                 variant="ghost"
                 size="sm"
-                className="ml-auto h-7 px-2"
+                className="h-7 px-2"
                 onClick={() => {
                   const link = document.createElement("a");
                   const prefix = mimeType === "application/pdf" ? "data:application/pdf;base64," : `data:${mimeType};base64,`;
@@ -616,8 +618,8 @@ export function DocumentViewerDialog({
                 <Download className="h-3.5 w-3.5 mr-1" />
                 Download
               </Button>
-            )}
-          </DialogTitle>
+            </div>
+          )}
         </DialogHeader>
 
         {loading ? (
