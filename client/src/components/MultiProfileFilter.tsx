@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { normalizeFilter } from "@/lib/filter-utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -103,10 +104,10 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
 
   const typeFiltered = (profiles || []).filter(p => {
     if (profileTypes && profileTypes.length > 0) {
-      return profileTypes.includes(p.type);
+      return profileTypes.some(t => normalizeFilter(t) === normalizeFilter(p.type));
     }
     // Only show primary profile types — not assets, vehicles, subscriptions, etc.
-    return ["person", "self", "pet"].includes(p.type);
+    return ["person", "self", "pet"].some(t => normalizeFilter(t) === normalizeFilter(p.type));
   });
 
   // Deduplicate by name+type — keep the one with the most linked data
@@ -156,6 +157,10 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
       </button>
 
       <div className="h-px bg-border my-1.5 mx-3" />
+
+      {sorted.length === 0 && (
+        <p className="text-xs text-muted-foreground text-center py-3 px-3">No profiles to filter by</p>
+      )}
 
       {sorted.map(p => {
         const checked = filter.selectedIds.includes(p.id);

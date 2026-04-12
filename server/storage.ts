@@ -177,6 +177,22 @@ export interface IStorage {
   updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string}): Promise<boolean>;
   deleteBudget(month: string, budgetId: string): Promise<boolean>;
   copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number>;
+
+  // Paychecks
+  getPaychecks(): Promise<any[]>;
+  createPaycheck(paycheck: { source: string; amount: number; expected_date: string; notes?: string }): Promise<any>;
+  confirmPaycheck(id: string, actual_amount?: number): Promise<any>;
+  deletePaycheck(id: string): Promise<void>;
+
+  // Loan Amortization
+  getLoanSchedule(loanId: string): Promise<any[]>;
+  getAllLoanSchedules(): Promise<any[]>;
+  createLoanSchedule(entries: Array<{ loan_id: string; loan_name: string; payment_number: number; payment_date: string; principal_amount: number; interest_amount: number; total_payment: number; remaining_balance: number }>): Promise<any[]>;
+  markLoanPayment(id: string): Promise<any>;
+
+  // Cashflow Projections
+  getCashflow(month?: string): Promise<any[]>;
+  upsertCashflow(entry: { month: string; week: number; projected_income?: number; projected_expenses?: number; actual_income?: number; actual_expenses?: number }): Promise<any>;
 }
 
 // ---- Human-readable tracker value formatting ----
@@ -1732,6 +1748,22 @@ export class MemStorage implements IStorage {
     this.budgetStore.set(toMonth, copied);
     return copied.length;
   }
+
+  // Paycheck stubs
+  async getPaychecks() { return []; }
+  async createPaycheck(p: any) { return { id: crypto.randomUUID(), ...p }; }
+  async confirmPaycheck(id: string, _actual_amount?: number) { return { id, confirmed: true }; }
+  async deletePaycheck(_id: string) {}
+
+  // Loan stubs
+  async getLoanSchedule(_loanId: string) { return []; }
+  async getAllLoanSchedules() { return []; }
+  async createLoanSchedule(entries: any[]) { return entries; }
+  async markLoanPayment(id: string) { return { id, paid: true }; }
+
+  // Cashflow stubs
+  async getCashflow(_month?: string) { return []; }
+  async upsertCashflow(entry: any) { return entry; }
 }
 
 // Storage factory — uses Supabase if env vars are set, otherwise falls back to SQLite

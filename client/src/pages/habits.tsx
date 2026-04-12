@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { stopProp } from "@/lib/event-utils";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
@@ -133,7 +134,7 @@ function HabitCard({ habit }: { habit: Habit }) {
               return (
                 <button
                   key={idx}
-                  onClick={() => !filled && !checkinMutation.isPending && checkinMutation.mutate()}
+                  onClick={stopProp(() => !filled && !checkinMutation.isPending && checkinMutation.mutate())}
                   disabled={filled || checkinMutation.isPending}
                   data-testid={`button-seg-${habit.id}-${idx}`}
                   className="relative active:scale-90 disabled:cursor-default touch-manipulation transition-all duration-200"
@@ -182,7 +183,7 @@ function HabitCard({ habit }: { habit: Habit }) {
         {/* Delete */}
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <button className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors shrink-0">
+            <button onClick={stopProp()} className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors shrink-0">
               <Trash2 className="h-3.5 w-3.5" />
             </button>
           </AlertDialogTrigger>

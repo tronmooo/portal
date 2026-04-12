@@ -1,4 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
+import { stopProp } from "@/lib/event-utils";
+import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -895,6 +897,8 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['/api/trackers'] });
+      qc.invalidateQueries({ queryKey: ['/api/stats'] });
+      qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
       toast({ title: `${drugName} logged`, description: `${dosage} taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
     },
     onError: () => toast({ title: 'Failed to log dose', variant: 'destructive' }),
@@ -1444,7 +1448,7 @@ function KpiLine({ label, value, accent }: { label: string; value: string | numb
 }
 
 function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void }) {
-  const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()), staleTime: 5 * 60 * 1000 });
+  const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
   const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
   const profileLabel = linkedNames.length > 0 ? linkedNames[0] : '';
 
@@ -2515,13 +2519,18 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
       </div>
 
       {/* Chart */}
-      {filtered.length > 0 && (
+      {filtered.length > 0 ? (
         <div className="h-[200px]" key={chartKey}>
           {specialization === "weight" && <WeightDetailChart entries={filtered} primaryField={primaryField} unit={tracker.unit} />}
           {specialization === "bloodpressure" && <BloodPressureDetailChart entries={filtered} />}
           {specialization === "sleep" && <SleepDetailChart entries={filtered} primaryField={primaryField} />}
           {specialization === "running" && <RunningDetailChart entries={filtered} primaryField={primaryField} />}
           {specialization === "standard" && <StandardDetailChart entries={filtered} primaryField={primaryField} unit={tracker.unit} />}
+        </div>
+      ) : (
+        <div className="text-center py-8">
+          <BarChart2 className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No entries in this time range</p>
         </div>
       )}
 
@@ -2947,7 +2956,7 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
 
   // Profile filter: only show entries for selected profile
   const profileFiltered = profileFilter === "all" ? sortedEntries
-    : sortedEntries.filter(e => (e as any).forProfile === profileFilter);
+    : sortedEntries.filter(e => normalizeFilter((e as any).forProfile) === normalizeFilter(profileFilter));
 
   const now = Date.now();
   const dateFilterMs: Record<string, number> = { "7d": 7*86400000, "30d": 30*86400000, "90d": 90*86400000 };
@@ -3328,7 +3337,7 @@ function TrackerDetailDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <Dialog open={open} onOpenChange={(v) => { if (!v) { setAddEntryOpen(false); setDeleteTrackerOpen(false); onClose(); } }}>
         <DialogContent className="max-w-2xl h-[90vh] max-h-[90vh] flex flex-col p-0" data-testid="tracker-detail-dialog">
           {/* ── Header ── */}
           <div className="px-5 pt-5 pb-3 pr-12 border-b shrink-0">
@@ -3417,6 +3426,7 @@ function TrackerDetailDialog({
           if (!v) {
             queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
             queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
           }
         }}
       />
@@ -3654,7 +3664,7 @@ export default function TrackersPage() {
 
   // Fully filtered documents (profile + type + search)
   const filteredDocuments = useMemo(() => profileFilteredDocs.filter(d => {
-    if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
+    if (docTypeFilter !== "all" && normalizeFilter(d.type) !== normalizeFilter(docTypeFilter)) return false;
     if (docSearch) {
       const s = docSearch.toLowerCase();
       return d.name.toLowerCase().includes(s) || d.type?.toLowerCase().includes(s);
@@ -3682,7 +3692,7 @@ export default function TrackersPage() {
       const linkedIds = t.linkedProfiles || [];
       if (!linkedIds.some(id => filterIds.includes(id))) return false;
     }
-    if (trackerCatFilter !== "all" && getCanonicalGroup(t.category) !== trackerCatFilter) return false;
+    if (trackerCatFilter !== "all" && normalizeFilter(getCanonicalGroup(t.category)) !== normalizeFilter(trackerCatFilter)) return false;
     return true;
   }).sort((a, b) => cleanTrackerName(a.name).toLowerCase().localeCompare(cleanTrackerName(b.name).toLowerCase())
   ), [trackers, filterMode, filterIds, trackerCatFilter]);
@@ -3862,7 +3872,13 @@ export default function TrackersPage() {
           if (pParent && filterIds.includes(pParent)) return true;
           return false;
         });
-        if (childProfiles.length === 0) return null;
+        if (childProfiles.length === 0) return (
+          <div className="rounded-lg border bg-card p-6 text-center">
+            <Star className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No assets or vehicles yet</p>
+            <p className="text-xs text-muted-foreground mt-1">Add vehicles, property, or investments to track them here</p>
+          </div>
+        );
 
         // Group by type
         const typeGroups: Record<string, typeof childProfiles> = {};
@@ -3944,7 +3960,13 @@ export default function TrackersPage() {
           if (pParent && filterIds.includes(pParent)) return true;
           return false;
         });
-        if (subs.length === 0) return null;
+        if (subs.length === 0) return (
+          <div className="rounded-lg border bg-card p-6 text-center">
+            <CreditCard className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No subscriptions or bills yet</p>
+            <p className="text-xs text-muted-foreground mt-1">Add recurring payments to track them here</p>
+          </div>
+        );
         return (
           <div className="space-y-2">
             <button onClick={() => toggleSection("subscriptions")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-subscriptions">
@@ -4089,7 +4111,7 @@ export default function TrackersPage() {
                   data-testid="filter-doctype-all"
                 >All ({profileFilteredDocs.length})</button>
                 {docTypes.map(t => {
-                  const count = profileFilteredDocs.filter(d => d.type === t).length;
+                  const count = profileFilteredDocs.filter(d => normalizeFilter(d.type) === normalizeFilter(t)).length;
                   return (
                     <button
                       key={t}
@@ -4141,8 +4163,8 @@ export default function TrackersPage() {
                   <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
                     <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
                     <div className="flex gap-1">
-                      <button onClick={(e) => { e.stopPropagation(); handleShareDoc(doc); }} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>
-                      <button onClick={(e) => { e.stopPropagation(); setDocDeleteConfirmId(doc.id); }} className="text-muted-foreground/60 hover:text-destructive"><X className="h-3 w-3" /></button>
+                      <button onClick={stopProp(() => handleShareDoc(doc))} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>
+                      <button onClick={stopProp(() => setDocDeleteConfirmId(doc.id))} className="text-muted-foreground/60 hover:text-destructive"><X className="h-3 w-3" /></button>
                     </div>
                   </div>
                 </div>

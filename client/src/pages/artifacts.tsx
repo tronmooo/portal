@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -151,7 +152,7 @@ export default function ArtifactsPage() {
           </div>
           <p className="text-xs text-muted-foreground">{artifacts.length} checklists & notes</p>
         </div>
-        <Button size="sm" onClick={() => setShowCreate(!showCreate)} data-testid="button-create-artifact">
+        <Button size="sm" onClick={() => { if (showCreate) { setTitle(""); setContent(""); setItems([""]); setCreateType("checklist"); } setShowCreate(!showCreate); }} data-testid="button-create-artifact">
           {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New</>}
         </Button>
       </div>
@@ -203,6 +204,8 @@ export default function ArtifactsPage() {
         <div className="space-y-3">
           {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
         </div>
+      ) : artifacts.length === 0 ? (
+        <EmptyState icon={FileText} title="No documents yet" description="Create a checklist or note to get started." />
       ) : (
         <>
           {pinned.length > 0 && (

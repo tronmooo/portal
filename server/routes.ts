@@ -1478,6 +1478,59 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
 
+  // ---- Paychecks ----
+  app.get("/api/paychecks", asyncHandler(async (req, res) => {
+    res.json(await storage.getPaychecks());
+  }));
+
+  app.post("/api/paychecks", asyncHandler(async (req, res) => {
+    const { source, amount, expected_date, notes } = req.body;
+    if (!source || !amount || !expected_date) return res.status(400).json({ error: "source, amount, expected_date required" });
+    res.json(await storage.createPaycheck({ source, amount, expected_date, notes }));
+  }));
+
+  app.patch("/api/paychecks/:id/confirm", asyncHandler(async (req, res) => {
+    const { actual_amount } = req.body;
+    res.json(await storage.confirmPaycheck(req.params.id, actual_amount));
+  }));
+
+  app.delete("/api/paychecks/:id", asyncHandler(async (req, res) => {
+    await storage.deletePaycheck(req.params.id);
+    res.json({ success: true });
+  }));
+
+  // ---- Loan Amortization ----
+  app.get("/api/loans/schedule", asyncHandler(async (req, res) => {
+    const loanId = req.query.loanId as string;
+    if (loanId) {
+      res.json(await storage.getLoanSchedule(loanId));
+    } else {
+      res.json(await storage.getAllLoanSchedules());
+    }
+  }));
+
+  app.post("/api/loans/schedule", asyncHandler(async (req, res) => {
+    const { entries } = req.body;
+    if (!Array.isArray(entries)) return res.status(400).json({ error: "entries array required" });
+    res.json(await storage.createLoanSchedule(entries));
+  }));
+
+  app.patch("/api/loans/payment/:id/mark", asyncHandler(async (req, res) => {
+    res.json(await storage.markLoanPayment(req.params.id));
+  }));
+
+  // ---- Cashflow ----
+  app.get("/api/cashflow", asyncHandler(async (req, res) => {
+    const month = req.query.month as string;
+    res.json(await storage.getCashflow(month));
+  }));
+
+  app.post("/api/cashflow", asyncHandler(async (req, res) => {
+    const { month, week, projected_income, projected_expenses, actual_income, actual_expenses } = req.body;
+    if (!month || !week) return res.status(400).json({ error: "month and week required" });
+    res.json(await storage.upsertCashflow({ month, week, projected_income, projected_expenses, actual_income, actual_expenses }));
+  }));
+
   // ---- Events ----
   app.get("/api/events", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || "anon";

@@ -6,6 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { stopProp } from "@/lib/event-utils";
 import {
   FileText,
   ZoomIn,
@@ -575,6 +576,7 @@ export function DocumentViewerDialog({
       setLoading(true);
       setFetchedData(null);
       setExtractedData(null);
+      setDocType(null);
       apiRequest("GET", `/api/documents/${id}`)
         .then(res => res.json())
         .then(doc => {
@@ -586,6 +588,12 @@ export function DocumentViewerDialog({
           setLoading(false);
         })
         .catch(() => setLoading(false));
+    } else {
+      // Reset all state on close
+      setFetchedData(null);
+      setExtractedData(null);
+      setDocType(null);
+      setLoading(false);
     }
   }, [open, id]);
 
@@ -1144,6 +1152,8 @@ export function DocumentDetailDialog({
     onSuccess: (updated) => {
       queryClient.setQueryData(["/api/documents", documentId], updated);
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Saved", description: "Document updated" });
     },
     onError: () => {

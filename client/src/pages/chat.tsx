@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { stopProp } from "@/lib/event-utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -1952,8 +1953,7 @@ export default function ChatPage() {
                               className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
                               title="Delete this entry"
                               data-testid={`button-undo-${action.type}-${i}`}
-                              onClick={async (e) => {
-                                e.stopPropagation();
+                              onClick={stopProp(async () => {
                                 const ep = undoEndpoints[action.type];
                                 if (!ep || !entityId) return;
                                 try {
@@ -1972,7 +1972,7 @@ export default function ChatPage() {
                                 } catch {
                                   toast({ title: "Delete failed — try again", variant: "destructive" });
                                 }
-                              }}
+                              })}
                             >
                               × Delete
                             </button>

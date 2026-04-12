@@ -230,6 +230,8 @@ export function CommandSearch() {
       setQuery("");
       setResults(null);
       setLoading(false);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (abortRef.current) abortRef.current.abort();
     }
   }, [open]);
 

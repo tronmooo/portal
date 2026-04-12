@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
@@ -251,7 +252,7 @@ export default function JournalPage() {
           </div>
           <p className="text-xs text-muted-foreground">{entries.length} entries</p>
         </div>
-        <Button size="sm" onClick={() => setShowCreate(!showCreate)} data-testid="button-new-journal">
+        <Button size="sm" onClick={() => { if (showCreate) { setMood(null); setEnergy(3); setGrateful1(""); setGrateful2(""); setGrateful3(""); setMakeAmazing(""); setAffirmation(""); } setShowCreate(!showCreate); }} data-testid="button-new-journal">
           {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New Entry</>}
         </Button>
       </div>
@@ -408,6 +409,8 @@ export default function JournalPage() {
           <p className="text-sm text-destructive">Failed to load data</p>
           <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
         </div>
+      ) : entries.length === 0 ? (
+        <EmptyState icon={MessageCircle} title="No journal entries yet" description="Start your morning journal to track your mood and gratitude." />
       ) : (
         <div className="grid gap-4">
           {entries.map(entry => (

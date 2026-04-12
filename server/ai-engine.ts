@@ -1254,6 +1254,56 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
 
+  // --- Paychecks, Loans, Cashflow ---
+  {
+    name: "log_expected_paycheck",
+    description: "Log an expected paycheck with source, amount, and expected date",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        source: { type: "string", description: "Paycheck source (employer name, freelance client, etc.)" },
+        amount: { type: "number", description: "Expected amount" },
+        expected_date: { type: "string", description: "Expected date (YYYY-MM-DD)" },
+        notes: { type: "string", description: "Optional notes" }
+      },
+      required: ["source", "amount", "expected_date"]
+    }
+  },
+  {
+    name: "confirm_paycheck_received",
+    description: "Confirm a paycheck was received. Marks it as confirmed with the actual received date and amount.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        paycheck_id: { type: "string", description: "ID of the paycheck to confirm" },
+        actual_amount: { type: "number", description: "Actual amount received (if different from expected)" }
+      },
+      required: ["paycheck_id"]
+    }
+  },
+  {
+    name: "get_loan_schedule",
+    description: "Get the full amortization schedule for a loan, showing each payment with principal, interest, and remaining balance",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        loan_id: { type: "string", description: "ID of the loan profile" }
+      },
+      required: ["loan_id"]
+    }
+  },
+  {
+    name: "get_cashflow",
+    description: "Get weekly cash flow projections vs actuals for a given month. Shows projected and actual income/expenses by week.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        month: { type: "string", description: "Month in YYYY-MM format (defaults to current month)" }
+      },
+      required: []
+    }
+  },
+
   // --- CRUD: Expenses ---
   {
     name: "create_expense",
@@ -3093,6 +3143,23 @@ async function executeTool(name: string, input: any): Promise<any> {
         percentUsed: b.amount > 0 ? Math.round(((byCategory[b.category] || 0) / b.amount) * 100) : 0,
       }));
       return { month, totalBudget, totalSpent, remaining: totalBudget - totalSpent, categories };
+    }
+
+    case "log_expected_paycheck": {
+      const r = await storage.createPaycheck({ source: input.source, amount: input.amount, expected_date: input.expected_date, notes: input.notes });
+      return { result: r, actions: [{ type: "create", category: "paycheck", data: r }] };
+    }
+    case "confirm_paycheck_received": {
+      const r = await storage.confirmPaycheck(input.paycheck_id, input.actual_amount);
+      return { result: r, actions: [{ type: "update", category: "paycheck", data: r }] };
+    }
+    case "get_loan_schedule": {
+      const schedule = await storage.getLoanSchedule(input.loan_id);
+      return { result: { loan_id: input.loan_id, payments: schedule.length, schedule: schedule.slice(0, 60) } };
+    }
+    case "get_cashflow": {
+      const cf = await storage.getCashflow(input.month);
+      return { result: { month: input.month || new Date().toISOString().slice(0, 7), weeks: cf } };
     }
 
     case "create_expense": {

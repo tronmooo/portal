@@ -193,7 +193,7 @@ export default function ObligationsPage() {
       </div>
 
       {/* Add Obligation Dialog */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(new Date().toISOString().slice(0, 10)); } setAddOpen(v); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-sm">New Obligation</DialogTitle>

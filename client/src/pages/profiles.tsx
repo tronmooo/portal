@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { EmptyState } from "@/components/EmptyState";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
@@ -54,6 +55,7 @@ import {
   Landmark,
   Package,
   ArrowLeft,
+  Search,
 } from "lucide-react";
 import type { Profile, ProfileType, InsertProfile } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1104,7 +1106,6 @@ export default function ProfilesPage() {
 
   const { data: profiles, isLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
-    staleTime: 15000, // 15s — mutations invalidate immediately
     refetchOnMount: true,
   });
   const [showProfileSkeleton, setShowProfileSkeleton] = useState(false);
@@ -1258,6 +1259,8 @@ export default function ProfilesPage() {
             <Plus className="w-4 h-4 mr-1" /> Add First Profile
           </Button>
         </div>
+      ) : filteredProfiles.length === 0 && searchQuery.trim() ? (
+        <EmptyState icon={Search} title="No matching profiles" description="Try a different search term." />
       ) : (
         sortedTypes.map((type) => (
           <div key={type}>

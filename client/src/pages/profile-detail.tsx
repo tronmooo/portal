@@ -1,4 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
+import { stopProp } from "@/lib/event-utils";
+import { normalizeFilter } from "@/lib/filter-utils";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
@@ -263,7 +265,6 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
     },
     enabled: !!profileId,
     retry: false,
-    staleTime: 1000 * 60 * 60, // 1 hour on client side
   });
 
   const handleRefresh = useCallback(async () => {
@@ -275,7 +276,6 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
         const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary?force=true`);
         return res.json();
       },
-      staleTime: 10000, // 10s
     });
   }, [profileId]);
 
@@ -698,7 +698,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
         <div className="flex items-center gap-1.5">
           {isValueField && (
             <button
-              onClick={findValue}
+              onClick={stopProp(findValue)}
               disabled={finding}
               className="opacity-0 group-hover:opacity-100 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all flex items-center gap-1 shrink-0"
               title="Find current market value using AI"
@@ -1034,7 +1034,7 @@ function InfoTab({
   // ── Stats from related data ──
   const docsCount = (profile.relatedDocuments || []).length;
   const expensesTotal = (profile.relatedExpenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
-  const openTasksCount = (profile.relatedTasks || []).filter((t: any) => t.status !== "done" && t.status !== "completed").length;
+  const openTasksCount = (profile.relatedTasks || []).filter((t: any) => normalizeFilter(t.status) !== normalizeFilter("done") && normalizeFilter(t.status) !== normalizeFilter("completed")).length;
   const trackersCount = (profile.relatedTrackers || []).length;
 
   // ── Field groups ──
@@ -1369,7 +1369,7 @@ function DocumentsTab({
   const docTypes = [...new Set(documents.map(d => d.type))].sort();
   // Filter documents
   const filteredDocs = documents.filter(d => {
-    if (docTypeFilter !== "all" && d.type !== docTypeFilter) return false;
+    if (docTypeFilter !== "all" && normalizeFilter(d.type) !== normalizeFilter(docTypeFilter)) return false;
     if (docSearch) {
       const q = docSearch.toLowerCase();
       return d.name.toLowerCase().includes(q) || d.type.toLowerCase().includes(q) || (d.tags || []).some(t => t.toLowerCase().includes(q));
@@ -1491,7 +1491,7 @@ function DocumentsTab({
             <div className="flex items-center gap-1 flex-wrap">
               <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({documents.length})</button>
               {docTypes.map(t => (
-                <button key={t} onClick={() => setDocTypeFilter(t)} className={`px-2 py-0.5 rounded text-xs font-medium capitalize transition-colors ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{t} ({documents.filter(d => d.type === t).length})</button>
+                <button key={t} onClick={() => setDocTypeFilter(t)} className={`px-2 py-0.5 rounded text-xs font-medium capitalize transition-colors ${normalizeFilter(docTypeFilter) === normalizeFilter(t) ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{t} ({documents.filter(d => normalizeFilter(d.type) === normalizeFilter(t)).length})</button>
               ))}
             </div>
           )}
@@ -2593,7 +2593,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       </Dialog>
 
       {/* Edit Expense Dialog */}
-      <Dialog open={!!editingExpense} onOpenChange={() => setEditingExpense(null)}>
+      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10)); } setEditingExpense(open ? editingExpense : null); }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-expense">
           <DialogHeader>
             <DialogTitle>Edit Expense</DialogTitle>
@@ -2897,7 +2897,6 @@ function TrackersTab({
   const { data: allTrackers } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers"],
     queryFn: async () => { const res = await apiRequest("GET", "/api/trackers"); return res.json(); },
-    staleTime: 10000, // 10s
   });
 
   const linkedIds = new Set(trackers.map(t => t.id));
@@ -3108,7 +3107,7 @@ function TrackersTab({
       </Dialog>
 
       {/* Log Entry Dialog */}
-      <Dialog open={!!showLogEntry} onOpenChange={() => setShowLogEntry(null)}>
+      <Dialog open={!!showLogEntry} onOpenChange={(open) => { if (!open) { setEntryValue(""); setEntryNotes(""); } setShowLogEntry(open ? showLogEntry : null); }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-log-entry">
           <DialogHeader>
             <DialogTitle>Log Entry</DialogTitle>
@@ -3658,7 +3657,7 @@ function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
   const typeCounts: Record<string, number> = {};
   for (const e of timeline) typeCounts[e.type] = (typeCounts[e.type] || 0) + 1;
 
-  const filtered = filter === "all" ? timeline : timeline.filter(e => e.type === filter);
+  const filtered = filter === "all" ? timeline : timeline.filter(e => normalizeFilter(e.type) === normalizeFilter(filter));
 
   // Group by relative date
   const now = new Date();
@@ -3808,8 +3807,8 @@ function TasksTab({
 
   const [taskFilter, setTaskFilter] = useState<"all" | "open" | "done">("all");
 
-  const open = tasks.filter(t => t.status !== "done");
-  const done = tasks.filter(t => t.status === "done");
+  const open = tasks.filter(t => normalizeFilter(t.status) !== normalizeFilter("done"));
+  const done = tasks.filter(t => normalizeFilter(t.status) === normalizeFilter("done"));
   const filtered = taskFilter === "open" ? open : taskFilter === "done" ? done : tasks;
 
   const PRIORITY_BADGE: Record<string, string> = {
@@ -5537,7 +5536,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       </Card>
 
       {/* Add Payment Dialog */}
-      <Dialog open={showAddPayment} onOpenChange={setShowAddPayment}>
+      <Dialog open={showAddPayment} onOpenChange={(open) => { if (!open) { setPayDesc(""); setPayAmount(""); setPayDate(new Date().toISOString().slice(0, 10)); setPayCategory("subscription"); } setShowAddPayment(open); }}>
         <DialogContent className="max-w-sm" data-testid="dialog-add-payment">
           <DialogHeader>
             <DialogTitle className="text-sm">Add Payment</DialogTitle>
@@ -5978,14 +5977,13 @@ export default function ProfileDetailPage() {
     reader.readAsDataURL(file);
   };
 
-  const { data: profile, isLoading, error, refetch } = useQuery<ProfileDetail>({
+  const { data: profile, isLoading, error } = useQuery<ProfileDetail>({
     queryKey: ["/api/profiles", id, "detail"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/profiles/${id}/detail`);
       return res.json();
     },
     enabled: !!id,
-    staleTime: 5000, // 5s — prevents re-fetch on rapid tab switches. Mutations invalidate immediately.
     refetchOnMount: true,
   });
 
@@ -6014,7 +6012,6 @@ export default function ProfileDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
     queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
     queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-    refetch();
   }
 
   // ── Owner dropdown (asset / vehicle / loan / subscription etc.) ───────────────
@@ -6028,7 +6025,6 @@ export default function ProfileDetailPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
     enabled: isAssetProfile,
-    staleTime: 60000,
   });
   const personOptions = (ownerCandidates || []).filter((p: any) =>
     ["self","person"].includes(p.type) && !p.fields?._parentProfileId

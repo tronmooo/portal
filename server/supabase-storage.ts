@@ -3142,6 +3142,73 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
+  // PAYCHECKS
+  // ============================================================
+  async getPaychecks(): Promise<any[]> {
+    const { data } = await this.supabase.from('paychecks').select('*').order('expected_date', { ascending: false });
+    return data || [];
+  }
+
+  async createPaycheck(paycheck: { source: string; amount: number; expected_date: string; notes?: string }): Promise<any> {
+    const { data, error } = await this.supabase.from('paychecks').insert({ ...paycheck, user_id: this.userId }).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async confirmPaycheck(id: string, actual_amount?: number): Promise<any> {
+    const update: any = { confirmed: true, received_date: new Date().toISOString().slice(0, 10) };
+    if (actual_amount != null) update.actual_amount = actual_amount;
+    const { data, error } = await this.supabase.from('paychecks').update(update).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async deletePaycheck(id: string): Promise<void> {
+    await this.supabase.from('paychecks').delete().eq('id', id);
+  }
+
+  // ============================================================
+  // LOAN AMORTIZATION
+  // ============================================================
+  async getLoanSchedule(loanId: string): Promise<any[]> {
+    const { data } = await this.supabase.from('loan_amortization').select('*').eq('loan_id', loanId).order('payment_number');
+    return data || [];
+  }
+
+  async getAllLoanSchedules(): Promise<any[]> {
+    const { data } = await this.supabase.from('loan_amortization').select('*').order('loan_name').order('payment_number');
+    return data || [];
+  }
+
+  async createLoanSchedule(entries: Array<{ loan_id: string; loan_name: string; payment_number: number; payment_date: string; principal_amount: number; interest_amount: number; total_payment: number; remaining_balance: number }>): Promise<any[]> {
+    const withUser = entries.map(e => ({ ...e, user_id: this.userId }));
+    const { data, error } = await this.supabase.from('loan_amortization').insert(withUser).select();
+    if (error) throw error;
+    return data || [];
+  }
+
+  async markLoanPayment(id: string): Promise<any> {
+    const { data, error } = await this.supabase.from('loan_amortization').update({ paid: true }).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  // ============================================================
+  // CASHFLOW PROJECTIONS
+  // ============================================================
+  async getCashflow(month?: string): Promise<any[]> {
+    const m = month || new Date().toISOString().slice(0, 7);
+    const { data } = await this.supabase.from('cashflow_projections').select('*').eq('month', m).order('week');
+    return data || [];
+  }
+
+  async upsertCashflow(entry: { month: string; week: number; projected_income?: number; projected_expenses?: number; actual_income?: number; actual_expenses?: number }): Promise<any> {
+    const { data, error } = await this.supabase.from('cashflow_projections').upsert({ ...entry, user_id: this.userId }, { onConflict: 'user_id,month,week' }).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  // ============================================================
   // SEED DATA
   // ============================================================
   async seedIfEmpty(): Promise<void> {

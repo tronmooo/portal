@@ -40,6 +40,8 @@ import {
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
+import { stopProp } from "@/lib/event-utils";
+import { normalizeFilter } from "@/lib/filter-utils";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -365,7 +367,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
 }
 
 function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
-  const expiredCount = (docs || []).filter(d => d.status === 'expired').length;
+  const expiredCount = (docs || []).filter(d => normalizeFilter(d.status) === normalizeFilter('expired')).length;
   const mostOverdue = (docs || []).filter(d => d.daysUntil < 0).sort((a,b) => a.daysUntil - b.daysUntil)[0];
   const isUrgent = expiredCount > 0;
   const accent = isUrgent ? '0 72% 52%' : '25 80% 54%';
@@ -432,7 +434,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       </div>
 
       {/* Spending Breakdown Popup */}
-      <Dialog open={popup === "spending"} onOpenChange={() => setPopup(null)}>
+      <Dialog open={popup === "spending"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">Spending Breakdown</DialogTitle>
@@ -490,7 +492,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       </Dialog>
 
       {/* Bills Popup */}
-      <Dialog open={popup === "bills"} onOpenChange={() => setPopup(null)}>
+      <Dialog open={popup === "bills"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">Overdue &amp; Upcoming Bills</DialogTitle>
@@ -529,7 +531,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       <HabitsPopup open={popup === "habits"} onClose={() => setPopup(null)} />
 
       {/* Expiring Documents Popup */}
-      <Dialog open={popup === "docs"} onOpenChange={() => setPopup(null)}>
+      <Dialog open={popup === "docs"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
         <DialogContent className="max-w-md max-h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
@@ -542,8 +544,8 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
           <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '60vh' }}>
             <div className="space-y-1.5 py-2 pr-2">
               {(enhanced?.expiringDocuments || []).map((doc: any, i: number) => {
-                const expired = doc.status === "expired";
-                const expiringSoon = doc.status === "expiring_soon";
+                const expired = normalizeFilter(doc.status) === normalizeFilter("expired");
+                const expiringSoon = normalizeFilter(doc.status) === normalizeFilter("expiring_soon");
                 return (
                   <div key={`${doc.documentId}-${i}`}
                     onClick={() => { setPopup(null); navigate(`/documents/${doc.documentId}`); }}
@@ -593,7 +595,6 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const { data: tasks = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
-    staleTime: 10000,  // 10s — fresh enough for popups
     enabled: open,
   });
 
@@ -608,7 +609,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       return { prev };
     },
     onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task added" }); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task added" }); },
   });
 
   const toggleMutation = useMutation({
@@ -621,7 +622,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       return { prev };
     },
     onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
   });
 
   const deleteMutation = useMutation({
@@ -632,13 +633,13 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       return { prev };
     },
     onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
   });
 
   const todayStr = new Date().toLocaleDateString('en-CA');
   const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); })();
-  const pending = tasks.filter((t: any) => t.status !== 'done');
-  const done = tasks.filter((t: any) => t.status === 'done').slice(0, 5);
+  const pending = tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done'));
+  const done = tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 5);
   const todayTasks = pending.filter((t: any) => !t.dueDate || t.dueDate <= todayStr);
   const tomorrowTasks = pending.filter((t: any) => t.dueDate === tomorrowStr);
   const upcomingTasks = pending.filter((t: any) => t.dueDate && t.dueDate > tomorrowStr);
@@ -757,6 +758,9 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
               {/* UPCOMING */}
               <SectionHeader label="Upcoming" section="upcoming" />
               <AddRow section="upcoming" />
+              {upcomingTasks.length === 0 && !addingTo && (
+                <p className="text-sm text-muted-foreground px-4 py-2">No upcoming tasks</p>
+              )}
               {upcomingTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}
             </div>
           )}
@@ -796,6 +800,7 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
     onSuccess: () => {
       setNewHabitName(''); setAddingHabit(false);
       queryClient.invalidateQueries({ queryKey: ['/api/habits'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
       queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
       toast({ title: 'Habit created' });
     },
@@ -806,7 +811,6 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
     queryKey: ["/api/habits"],
     queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
     enabled: open,
-    staleTime: 10000,  // 10s — fresh enough for popups
   });
 
   const checkinMutation = useMutation({
@@ -826,6 +830,7 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
@@ -1565,7 +1570,7 @@ interface GoalItem {
 function GoalProgressBar({ goal }: { goal: GoalItem }) {
   const hasValidTarget = goal.target > 0;
   const pct = hasValidTarget ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
-  const isComplete = goal.status === "completed" || pct >= 100;
+  const isComplete = normalizeFilter(goal.status) === normalizeFilter("completed") || pct >= 100;
   const daysLeft = goal.deadline ? Math.ceil((new Date(goal.deadline).getTime() - Date.now()) / 86400000) : null;
 
   if (!hasValidTarget) {
@@ -1592,7 +1597,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
         </span>
       </div>
       {(() => {
-        const isAtRisk = daysLeft !== null && daysLeft <= 30 && pct < 50 && goal.status === 'active';
+        const isAtRisk = daysLeft !== null && daysLeft <= 30 && pct < 50 && normalizeFilter(goal.status) === normalizeFilter('active');
         const isCompleted = isComplete;
         return (
           <div className="relative h-2 rounded-full overflow-hidden" style={{ background: 'hsl(var(--muted))' }}>
@@ -1615,7 +1620,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{goal.current} / {goal.target} {goal.unit}{(!goal.current && !isComplete) ? " · 0%" : ""}</span>
         {daysLeft != null && daysLeft > 0 && <span>{daysLeft}d left</span>}
-        {daysLeft != null && daysLeft <= 0 && goal.status === "active" && <span className="text-destructive">overdue</span>}
+        {daysLeft != null && daysLeft <= 0 && normalizeFilter(goal.status) === normalizeFilter("active") && <span className="text-destructive">overdue</span>}
       </div>
     </div>
   );
@@ -1684,8 +1689,8 @@ function GoalsSection({ profileId }: { profileId?: string }) {
 
   const [actionGoal, setActionGoal] = useState<GoalItem | null>(null);
   const [progressInput, setProgressInput] = useState("");
-  const activeGoals = goals.filter(g => g.status === "active");
-  const completedGoals = goals.filter(g => g.status === "completed");
+  const activeGoals = goals.filter(g => normalizeFilter(g.status) === normalizeFilter("active"));
+  const completedGoals = goals.filter(g => normalizeFilter(g.status) === normalizeFilter("completed"));
 
   if (isLoading) return <CollapsibleSection accent="188 70% 48%" icon={Target} label="Goals" testId="section-goals"><div className="h-16 bg-muted animate-pulse rounded-lg" /></CollapsibleSection>;
   if (goalsError) return <CollapsibleSection accent="188 70% 48%" icon={Target} label="Goals" testId="section-goals"><p className="text-destructive text-sm p-4">Failed to load goals. Please refresh.</p></CollapsibleSection>;
@@ -1925,7 +1930,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                 <Trash2 className="h-3 w-3 mr-1" /> Delete
               </Button>
             )}
-            {editGoal && editGoal.status === "active" && (
+            {editGoal && normalizeFilter(editGoal.status) === normalizeFilter("active") && (
               <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => updateMutation.mutate({ id: editGoal.id, status: "completed" })} disabled={updateMutation.isPending} data-testid="btn-complete-goal">
                 <Check className="h-3 w-3 mr-1" /> {updateMutation.isPending ? "Completing…" : "Complete"}
               </Button>
@@ -1978,18 +1983,18 @@ function BudgetManager() {
   const addMutation = useMutation({
     mutationFn: (data: {category: string; amount: number; notes?: string}) =>
       apiRequest("POST", "/api/budgets", { month, ...data }).then(r => r.json()),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); setAddOpen(false); setNewCat(""); setNewAmt(""); setNewNotes(""); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setAddOpen(false); setNewCat(""); setNewAmt(""); setNewNotes(""); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/budgets/${id}?month=${month}`),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
   });
 
   const updateMutation = useMutation({
     mutationFn: (data: {id: string; amount: number}) =>
       apiRequest("PATCH", `/api/budgets/${data.id}?month=${month}`, { amount: data.amount }),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); setEditId(null); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setEditId(null); },
   });
 
   const copyMutation = useMutation({
@@ -1999,7 +2004,7 @@ function BudgetManager() {
       const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
       return apiRequest("POST", "/api/budgets/copy", { fromMonth: prevMonth, toMonth: month }).then(r => r.json());
     },
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
   });
 
   const prevMonth = () => {
@@ -2053,6 +2058,9 @@ function BudgetManager() {
       </div>
 
       {/* Category breakdown */}
+      {budgets.length === 0 && (
+        <p className="text-xs text-muted-foreground text-center py-3">No budgets set for this month</p>
+      )}
       {budgets.length > 0 && (
         <div className="space-y-1.5">
           {budgets.map((b: any) => {
@@ -2198,7 +2206,6 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         })),
       };
     },
-    staleTime: 30000,
   });
 
   const monthlySpend = stats?.monthlySpend || 0;
@@ -2272,7 +2279,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
               }));
               const isUp = nwData[5].value >= nwData[0].value;
               return (
-                <div className="mt-2 px-1" onClick={e => e.stopPropagation()}>
+                <div className="mt-2 px-1" onClick={stopProp()}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">6-Month Trend</span>
                     <span className={`text-[10px] font-bold ${isUp ? 'text-green-500' : 'text-red-400'}`}>{isUp ? '↑' : '↓'} Trending</span>
@@ -2376,7 +2383,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).map(([cat, amt]) => ({
             label: cat.charAt(0).toUpperCase() + cat.slice(1),
             value: `$${amt.toLocaleString()}`,
-            sub: `${monthExpenses.filter(e => (e.category || "general") === cat).length} expenses`,
+            sub: `${monthExpenses.filter(e => normalizeFilter(e.category || "general") === normalizeFilter(cat)).length} expenses`,
             category: cat,
           })),
         ]}
@@ -2841,7 +2848,6 @@ export default function DashboardPage() {
         return res.json();
       } catch { return null; }
     },
-    staleTime: 30000, // 30s cache
   });
 
   const sections: DashboardSection[] =
@@ -2977,7 +2983,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Import Dialog */}
-      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+      <Dialog open={importOpen} onOpenChange={(o) => { if (!o) setImporting(false); setImportOpen(o); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Import Backup</DialogTitle>

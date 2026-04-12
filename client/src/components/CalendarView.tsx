@@ -2,6 +2,8 @@ import { formatApiError } from "@/lib/formatError";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { stopProp } from "@/lib/event-utils";
+import { normalizeFilter } from "@/lib/filter-utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -808,7 +810,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const itemsByDate = useMemo(() => {
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
-      if (filterType !== "all" && item.type !== filterType) continue;
+      if (filterType !== "all" && normalizeFilter(item.type) !== normalizeFilter(filterType)) continue;
       // Profile filter
       if (effectiveFilterMode === "selected" && effectiveFilterIds.length > 0) {
         const linked = item.linkedProfiles || [];
@@ -1016,7 +1018,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                               color: item.color,
                             }}
                             title={item.title}
-                            onClick={(e) => { e.stopPropagation(); setDetailItem(item); }}
+                            onClick={stopProp(() => setDetailItem(item))}
                             data-testid={`event-chip-${item.id}`}
                           >
                             {item.completed ? '✓ ' : ''}{item.time ? `${fmt12(item.time)} ` : ''}{item.title.length > 20 ? item.title.slice(0, 20) + '…' : item.title}
@@ -1025,7 +1027,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                         {dayItems.length > 2 && (
                           <button
                             className="w-full text-left text-xs font-medium text-primary hover:underline px-1 py-0.5"
-                            onClick={(e) => { e.stopPropagation(); setSelectedDate(day.date); }}
+                            onClick={stopProp(() => setSelectedDate(day.date))}
                             data-testid={`btn-more-${day.date}`}
                           >
                             +{dayItems.length - 2} more
@@ -1298,6 +1300,12 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       })()}
 
       {/* Day detail — only shows when user explicitly clicks a day (selected != today never auto-opens) */}
+      {filteredAgenda.length === 0 && selectedDate && (
+        <div className="rounded-lg border border-dashed border-border/40 bg-card/50 p-6 text-center" data-testid="section-day-agenda-empty">
+          <CalendarIcon className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
+          <p className="text-xs text-muted-foreground">No items on {fmtDateFull(selectedDate)}</p>
+        </div>
+      )}
       {filteredAgenda.length > 0 && (
         <div className="rounded-lg border border-border/40 bg-card/50" data-testid="section-day-agenda">
           <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">

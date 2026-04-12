@@ -1,4 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
+import { stopProp } from "@/lib/event-utils";
+import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -37,7 +39,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ToastAction } from "@/components/ui/toast";
-import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task } from "@shared/schema";
 import { useState, useEffect, useRef } from "react";
@@ -278,7 +280,7 @@ function TaskItem({
         <CardContent className="p-4 flex items-start gap-3">
           <Checkbox
             checked={task.status === "done"}
-            onCheckedChange={() => toggleMutation.mutate()}
+            onCheckedChange={stopProp(() => toggleMutation.mutate())}
             disabled={toggleMutation.isPending}
             className={`mt-0.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
             data-testid={`checkbox-task-${task.id}`}
@@ -330,7 +332,7 @@ function TaskItem({
             size="icon"
             variant="ghost"
             className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
-            onClick={() => setDeleteOpen(true)}
+            onClick={stopProp(() => setDeleteOpen(true))}
             disabled={deleteMutation.isPending}
             data-testid={`button-delete-task-${task.id}`}
           >
@@ -510,55 +512,63 @@ export default function TasksPage() {
         </div>
       ) : (
         <>
-          {(tabFilter === "all" || tabFilter === "open") && activeTasks.length > 0 && (
+          {(tabFilter === "all" || tabFilter === "open") && (
             <div className="space-y-2">
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
                 Active ({activeTasks.length})
               </h2>
-              {activeTasks.map(task => (
-                <SwipeableItem
-                  key={task.id}
-                  onSwipeLeft={async () => {
-                    try {
-                      await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "done" });
-                      invalidateTaskQueries();
-                    } catch {}
-                  }}
-                  onSwipeRight={async () => {
-                    try {
-                      const tomorrow = new Date();
-                      tomorrow.setDate(tomorrow.getDate() + 1);
-                      const dateStr = tomorrow.toISOString().slice(0, 10);
-                      await apiRequest("PATCH", `/api/tasks/${task.id}`, { dueDate: dateStr });
-                      invalidateTaskQueries();
-                    } catch {}
-                  }}
-                >
-                  <TaskItem task={task} onEdit={setEditTask} />
-                </SwipeableItem>
-              ))}
+              {activeTasks.length === 0 ? (
+                <EmptyState icon={ListTodo} title="No active tasks" description="All tasks are completed or create a new one." />
+              ) : (
+                activeTasks.map(task => (
+                  <SwipeableItem
+                    key={task.id}
+                    onSwipeLeft={async () => {
+                      try {
+                        await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "done" });
+                        invalidateTaskQueries();
+                      } catch {}
+                    }}
+                    onSwipeRight={async () => {
+                      try {
+                        const tomorrow = new Date();
+                        tomorrow.setDate(tomorrow.getDate() + 1);
+                        const dateStr = tomorrow.toISOString().slice(0, 10);
+                        await apiRequest("PATCH", `/api/tasks/${task.id}`, { dueDate: dateStr });
+                        invalidateTaskQueries();
+                      } catch {}
+                    }}
+                  >
+                    <TaskItem task={task} onEdit={setEditTask} />
+                  </SwipeableItem>
+                ))
+              )}
             </div>
           )}
-          {(tabFilter === "all" || tabFilter === "completed") && completedTasks.length > 0 && (
+          {(tabFilter === "all" || tabFilter === "completed") && (
             <div className="space-y-2">
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
                 Completed ({completedTasks.length})
               </h2>
-              {completedTasks.map(task => (
-                <SwipeableItem
-                  key={task.id}
-                  leftLabel="↩ Reopen"
-                  leftColor="#3b82f6"
-                  onSwipeLeft={async () => {
-                    try {
-                      await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "todo" });
-                      invalidateTaskQueries();
-                    } catch {}
-                  }}
-                >
-                  <TaskItem task={task} onEdit={setEditTask} />
-                </SwipeableItem>
-              ))}
+              {completedTasks.length === 0 ? (
+                <EmptyState icon={CheckCircle2} title="No completed tasks" description="Complete a task to see it here." />
+              ) : (
+                completedTasks.map(task => (
+                  <SwipeableItem
+                    key={task.id}
+                    leftLabel="↩ Reopen"
+                    leftColor="#3b82f6"
+                    onSwipeLeft={async () => {
+                      try {
+                        await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "todo" });
+                        invalidateTaskQueries();
+                      } catch {}
+                    }}
+                  >
+                    <TaskItem task={task} onEdit={setEditTask} />
+                  </SwipeableItem>
+                ))
+              )}
             </div>
           )}
         </>

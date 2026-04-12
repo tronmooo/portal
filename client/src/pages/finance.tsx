@@ -1,4 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
+import { stopProp } from "@/lib/event-utils";
+import { normalizeFilter } from "@/lib/filter-utils";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -10,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2 } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -71,7 +73,6 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
       toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
@@ -81,6 +82,44 @@ export default function FinancePage() {
     },
   });
 
+  // ── ALL hooks MUST be above early returns (React Rules of Hooks) ──
+  // Paychecks
+  const { data: paychecks = [] } = useQuery<any[]>({ queryKey: ["/api/paychecks"] });
+  const confirmPaycheckMut = useMutation({
+    mutationFn: async ({ id, actual_amount }: { id: string; actual_amount?: number }) => {
+      await apiRequest("PATCH", `/api/paychecks/${id}/confirm`, { actual_amount });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+  });
+  const deletePaycheckMut = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/paychecks/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+  });
+
+  // Loan Amortization
+  const { data: loanSchedules = [] } = useQuery<any[]>({ queryKey: ["/api/loans/schedule"] });
+  const markLoanPaymentMut = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("PATCH", `/api/loans/payment/${id}/mark`, {}); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+  });
+
+  // Cashflow
+  const cfMonth = new Date().toISOString().slice(0, 7);
+  const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
+
+  // ── Early returns (after ALL hooks) ──
   if (isLoading) {
     return (
       <div className="p-4 space-y-3">
@@ -99,13 +138,14 @@ export default function FinancePage() {
     </div>
   );
 
+  // ── Derived data (after hooks + early returns) ──
   // Apply profile filter client-side
   const profileFiltered = (expenses || []).filter(e => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const linked = e.linkedProfiles || [];
     return linked.some(id => filterIds.includes(id));
   });
-  const filtered = filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => e.category === filterCategory);
+  const filtered = filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => normalizeFilter(e.category) === normalizeFilter(filterCategory));
   const total = filtered.reduce((s, e) => s + e.amount, 0);
 
   // Group by category
@@ -115,6 +155,13 @@ export default function FinancePage() {
   }, {});
   const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }));
   const categories = [...new Set(profileFiltered.map(e => e.category))];
+
+  // Group loans by loan_name
+  const loanGroups = loanSchedules.reduce((acc: Record<string, any[]>, entry: any) => {
+    const name = entry.loan_name || "Unknown";
+    (acc[name] = acc[name] || []).push(entry);
+    return acc;
+  }, {});
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
@@ -143,7 +190,7 @@ export default function FinancePage() {
                 ))}
               </SelectContent>
             </Select>
-            <Dialog open={addOpen} onOpenChange={setAddOpen}>
+            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setNewExpense({ description: "", amount: "", category: "general", vendor: "" }); }}>
               <DialogTrigger asChild>
                 <Button size="sm" className="h-8 text-xs" data-testid="button-add-expense">
                   <Plus className="h-3.5 w-3.5 mr-1" /> Add Expense
@@ -343,6 +390,11 @@ export default function FinancePage() {
             </div>
           ) : (
             <div className="divide-y divide-border">
+              {filtered.length === 0 && profileFiltered.length > 0 && (
+                <div className="text-center py-6">
+                  <p className="text-sm text-muted-foreground">No expenses match the selected filter.</p>
+                </div>
+              )}
               {filtered.map((expense) => (
                 <div key={expense.id} className="flex items-center gap-3 py-3 group" data-testid={`expense-${expense.id}`}>
                   <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
@@ -359,21 +411,20 @@ export default function FinancePage() {
                   </div>
                   <span className="text-sm font-semibold tabular-nums shrink-0">${expense.amount.toFixed(2)}</span>
                   <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => {
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={stopProp(() => {
                       setEditingExpense(expense);
                       setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "", date: expense.date?.slice(0, 10) || "" });
-                    }} title="Edit"><Pencil className="h-3 w-3" /></Button>
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={async () => {
+                    })} title="Edit"><Pencil className="h-3 w-3" /></Button>
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={stopProp(async () => {
                       if (!confirm(`Delete "${expense.description}"?`)) return;
                       try {
                         await apiRequest("DELETE", `/api/expenses/${expense.id}`);
                         queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                         toast({ title: `"${expense.description}" deleted` });
                       } catch (err: any) { toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" }); }
-                    }} title="Delete"><Trash2 className="h-3 w-3" /></Button>
+                    })} title="Delete"><Trash2 className="h-3 w-3" /></Button>
                   </div>
                 </div>
               ))}
@@ -383,7 +434,7 @@ export default function FinancePage() {
       </Card>
 
       {/* Edit Expense Dialog */}
-      <Dialog open={!!editingExpense} onOpenChange={(open) => !open && setEditingExpense(null)}>
+      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setEditingExpense(null); setEditForm({ description: "", amount: "", category: "", vendor: "", date: "" }); setEditSaving(false); } }}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
           <div className="space-y-3">
@@ -417,7 +468,6 @@ export default function FinancePage() {
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                   toast({ title: `"${editForm.description}" updated` });
                   setEditingExpense(null);
                 } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }
@@ -427,6 +477,175 @@ export default function FinancePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── Paychecks Section ── */}
+      <div className="space-y-2">
+        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <Wallet className="h-3.5 w-3.5" /> Expected Paychecks ({paychecks.length})
+        </h2>
+        {paychecks.length === 0 ? (
+          <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
+            <p className="text-sm text-muted-foreground">No paychecks scheduled.</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
+            {paychecks.map((pc: any) => (
+              <div key={pc.id} className="flex items-center gap-3 px-3 py-2 group" style={{ background: pc.confirmed ? 'hsl(142 60% 50% / 0.05)' : undefined }}>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">{pc.source}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    {pc.confirmed && pc.received_date && <> · Received {new Date(pc.received_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</>}
+                  </p>
+                </div>
+                <span className="text-xs font-bold tabular-nums">${(pc.actual_amount || pc.amount).toLocaleString()}</span>
+                {pc.confirmed ? (
+                  <span className="text-[10px] font-semibold text-green-500 flex items-center gap-0.5"><Check className="h-3 w-3" /> Received</span>
+                ) : (
+                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-green-600 border-green-500/30"
+                    disabled={confirmPaycheckMut.isPending}
+                    onClick={stopProp(() => confirmPaycheckMut.mutate({ id: pc.id }))}>
+                    <Check className="h-3 w-3" /> Received
+                  </Button>
+                )}
+                <button className="text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center"
+                  onClick={stopProp(() => deletePaycheckMut.mutate(pc.id))}>
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Loan Amortization Section ── */}
+      <div className="space-y-2">
+        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <Landmark className="h-3.5 w-3.5" /> Loan Schedules ({Object.keys(loanGroups).length})
+        </h2>
+        {Object.keys(loanGroups).length === 0 ? (
+          <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
+            <p className="text-sm text-muted-foreground">No loan schedules found.</p>
+          </div>
+        ) : (
+          <>{Object.entries(loanGroups).map(([loanName, payments]: [string, any[]]) => {
+            const nextUnpaid = payments.find((p: any) => !p.paid);
+            return (
+              <div key={loanName} className="rounded-xl border border-border/40 overflow-hidden">
+                <div className="px-3 py-2 bg-muted/30 border-b border-border/30">
+                  <p className="text-xs font-semibold">{loanName}</p>
+                  <p className="text-[10px] text-muted-foreground">{payments.filter((p: any) => p.paid).length}/{payments.length} payments made</p>
+                </div>
+                <div className="max-h-48 overflow-y-auto">
+                  <table className="w-full text-[10px]">
+                    <thead className="sticky top-0 bg-background">
+                      <tr className="text-muted-foreground">
+                        <th className="text-left px-2 py-1 font-medium">#</th>
+                        <th className="text-left px-2 py-1 font-medium">Date</th>
+                        <th className="text-right px-2 py-1 font-medium">Principal</th>
+                        <th className="text-right px-2 py-1 font-medium">Interest</th>
+                        <th className="text-right px-2 py-1 font-medium">Total</th>
+                        <th className="text-right px-2 py-1 font-medium">Remaining</th>
+                        <th className="px-2 py-1"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payments.map((p: any) => {
+                        const isCurrent = nextUnpaid?.id === p.id;
+                        return (
+                          <tr key={p.id}
+                            className={`${p.paid ? 'bg-green-500/5 text-muted-foreground' : ''} ${isCurrent ? 'bg-primary/10 font-medium' : ''}`}>
+                            <td className="px-2 py-1">{p.payment_number}</td>
+                            <td className="px-2 py-1">{new Date(p.payment_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">${p.principal_amount?.toFixed(0)}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">${p.interest_amount?.toFixed(0)}</td>
+                            <td className="px-2 py-1 text-right tabular-nums font-medium">${p.total_payment?.toFixed(0)}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">${p.remaining_balance?.toLocaleString()}</td>
+                            <td className="px-2 py-1 text-center">
+                              {p.paid ? (
+                                <Check className="h-3 w-3 text-green-500 inline" />
+                              ) : isCurrent ? (
+                                <Button variant="ghost" size="sm" className="h-5 px-1 text-[10px]"
+                                  disabled={markLoanPaymentMut.isPending}
+                                  onClick={stopProp(() => markLoanPaymentMut.mutate(p.id))}>
+                                  Mark Paid
+                                </Button>
+                              ) : null}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}</>
+        )}
+      </div>
+
+      {/* ── Cash Flow Section ── */}
+      <div className="space-y-2">
+        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {new Date(cfMonth + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+        </h2>
+        {cashflow.length === 0 ? (
+          <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
+            <p className="text-sm text-muted-foreground">No cashflow data available.</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-border/40 overflow-hidden">
+            <div className="grid grid-cols-4 sm:grid-cols-5 divide-x divide-border/30">
+              {cashflow.map((wk: any) => {
+                const projNet = (wk.projected_income || 0) - (wk.projected_expenses || 0);
+                const actNet = wk.actual_income != null || wk.actual_expenses != null
+                  ? (wk.actual_income || 0) - (wk.actual_expenses || 0)
+                  : null;
+                return (
+                  <div key={wk.week} className="px-2 py-2 space-y-1">
+                    <p className="text-[10px] font-semibold text-muted-foreground">Week {wk.week}</p>
+                    <div className="space-y-0.5">
+                      <div className="flex justify-between text-[9px]">
+                        <span className="text-green-500">In</span>
+                        <span className="tabular-nums font-medium text-green-500">${(wk.projected_income || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-[9px]">
+                        <span className="text-red-400">Out</span>
+                        <span className="tabular-nums font-medium text-red-400">${(wk.projected_expenses || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-[9px] border-t border-border/30 pt-0.5">
+                        <span className="font-medium">Net</span>
+                        <span className={`tabular-nums font-bold ${projNet >= 0 ? 'text-green-500' : 'text-red-400'}`}>
+                          {projNet >= 0 ? '+' : ''}${projNet.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                    {actNet != null && (
+                      <div className="mt-1 pt-1 border-t border-dashed border-border/30 space-y-0.5">
+                        <p className="text-[8px] font-medium text-muted-foreground uppercase">Actual</p>
+                        <div className="flex justify-between text-[9px]">
+                          <span className="text-green-500">In</span>
+                          <span className="tabular-nums text-green-500">${(wk.actual_income || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-[9px]">
+                          <span className="text-red-400">Out</span>
+                          <span className="tabular-nums text-red-400">${(wk.actual_expenses || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-[9px]">
+                          <span className="font-medium">Net</span>
+                          <span className={`tabular-nums font-bold ${actNet >= 0 ? 'text-green-500' : 'text-red-400'}`}>
+                            {actNet >= 0 ? '+' : ''}${actNet.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
