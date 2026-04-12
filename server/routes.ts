@@ -281,6 +281,8 @@ export async function registerRoutes(
       if (!fileData || !fileName) {
         return res.status(400).json({ error: "fileName and fileData (base64) required" });
       }
+      // Debug: log what we received
+      console.log(`[Upload] File: ${fileName}, MIME: ${mimeType}, base64 length: ${fileData?.length}, first 40 chars: ${fileData?.slice(0, 40)}`);
       // File size validation: 10MB max (base64 is ~33% larger than binary)
       const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
       const fileSizeBytes = Math.ceil((fileData.length * 3) / 4);

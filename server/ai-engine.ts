@@ -645,12 +645,19 @@ Extract every single field. Do not skip anything. Do not make up data — only r
     const mediaType = isImage ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
 
     // Send the raw image directly to the API — no preprocessing.
-    // Claude's vision handles rotation/orientation natively.
+    // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,")
+    let cleanBase64 = base64Data;
+    if (cleanBase64.includes(',')) {
+      cleanBase64 = cleanBase64.split(',').pop() || cleanBase64;
+    }
+    // Strip any whitespace/newlines that could corrupt the base64
+    cleanBase64 = cleanBase64.replace(/\s/g, '');
+    console.log(`[extraction] Sending to Claude: type=${isImage ? 'image' : isPdf ? 'pdf' : 'text'}, mime=${mimeType}, base64 length=${cleanBase64?.length}, first 30 chars=${cleanBase64?.slice(0, 30)}`);
     const messageContent: any[] = [];
     if (isImage || isPdf) {
       messageContent.push({
         type: isPdf ? "document" : "image",
-        source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: base64Data },
+        source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: cleanBase64 },
       });
     } else {
       // Text files: decode and send as text
@@ -676,11 +683,13 @@ Extract every single field. Do not skip anything. Do not make up data — only r
     });
 
     const text = response.content[0].type === "text" ? response.content[0].text : "{}";
+    console.log(`[extraction] Claude response (first 500 chars): ${text.slice(0, 500)}`);
     let parsed: any;
     try {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
     } catch { parsed = {}; }
+    console.log(`[extraction] Parsed fields: ${Object.keys(parsed.extractedData || {}).join(', ')}`);
 
     // === TWO-PASS LAB EXTRACTION ===
     // If this is a lab report/medical document but Haiku missed the lab values, do a focused second pass
