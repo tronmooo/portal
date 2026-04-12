@@ -568,7 +568,7 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
           <Pencil className="h-3.5 w-3.5" />
         </button>
         <button
-          className="min-w-[32px] min-h-[32px] flex items-center justify-center rounded-md opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-600 hover:bg-red-500/10 active:bg-red-500/20"
+          className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-md opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-600 hover:bg-red-500/10 active:bg-red-500/20"
           onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${formatKey(fieldKey)}"?`)) deleteMut.mutate(); }}
           data-testid={`delete-field-${fieldKey}`}
         >
@@ -719,7 +719,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
           {value != null && value !== "" && (
             <button
               onClick={(e) => { e.stopPropagation(); deleteField(); }}
-              className="w-7 h-7 flex items-center justify-center rounded-md opacity-50 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-500 hover:bg-red-500/10 active:bg-red-500/20"
+              className="w-9 h-9 flex items-center justify-center rounded-md opacity-50 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-500 hover:bg-red-500/10 active:bg-red-500/20"
             >
               <Trash2 className="h-3 w-3" />
             </button>
@@ -2810,7 +2810,7 @@ function TrackerCard_Profile({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
                       onClick={() => setDeleteEntryId(entry.id)}
                       data-testid={`button-delete-entry-${entry.id}`}
                     >
@@ -4880,7 +4880,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Warranty Claims ({claims.length})</p>
-            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-claim"><Plus className="h-3 w-3" />Add Claim</Button>}
+            {!showAdd && <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-claim"><Plus className="h-3 w-3" />Add Claim</Button>}
           </div>
           {showAdd && (
             <div className="flex items-center gap-2 mb-2">
@@ -4952,7 +4952,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Redemptions ({redemptions.length})</p>
-            {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-redemption"><Plus className="h-3 w-3" />Record Redemption</Button>}
+            {!showAdd && <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-redemption"><Plus className="h-3 w-3" />Record Redemption</Button>}
           </div>
           {showAdd && (
             <div className="flex items-center gap-2 mb-2">
@@ -5013,7 +5013,7 @@ function AccessTab({ profile, profileId, onChanged }: { profile: any; profileId:
               <span className="text-xs text-muted-foreground">API Key</span>
               <div className="flex items-center gap-1">
                 <span className="text-xs font-mono">{showApiKey ? String(f.apiKey) : "••••••••••••"}</span>
-                <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => setShowApiKey(!showApiKey)} data-testid="button-toggle-apikey">
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setShowApiKey(!showApiKey)} data-testid="button-toggle-apikey">
                   <Eye className="h-3 w-3" />
                 </Button>
               </div>
@@ -5047,7 +5047,7 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
       <CardContent className="pt-4 pb-3">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Saved Credentials ({credentials.length})</p>
-          {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-credential"><Plus className="h-3 w-3" />Add Credential</Button>}
+          {!showAdd && <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-credential"><Plus className="h-3 w-3" />Add Credential</Button>}
         </div>
         {showAdd && (
           <div className="flex items-center gap-2 mb-2">

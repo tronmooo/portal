@@ -709,7 +709,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl overflow-hidden" style={{ top: '6%', transform: 'translateX(-50%)', maxHeight: '80vh' }}>
+      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-y-auto">
         {/* Any.do header */}
         <div className="flex items-center justify-between px-4 pt-3 pb-3 border-b border-border/40">
           <div className="flex items-center gap-2">
@@ -843,7 +843,7 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingHabit(false); setNewHabitName(''); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl overflow-hidden" style={{ top: '6%', transform: 'translateX(-50%)', maxHeight: '80vh' }}>
+      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-border/40">
           <span className="font-bold text-base text-foreground">Today's Habits</span>
@@ -2067,15 +2067,15 @@ function BudgetManager() {
                     {editId === b.id ? (
                       <form onSubmit={(e) => { e.preventDefault(); const val = parseFloat((e.target as any).amt.value); if (val > 0) updateMutation.mutate({ id: b.id, amount: val }); }} className="flex items-center gap-1">
                         <Input name="amt" type="number" defaultValue={b.amount} className="h-6 w-20 text-xs" step="0.01" autoFocus />
-                        <Button type="submit" variant="ghost" size="icon" className="h-5 w-5"><Check className="h-3 w-3" /></Button>
+                        <Button type="submit" variant="ghost" size="icon" className="h-8 w-8"><Check className="h-3 w-3" /></Button>
                       </form>
                     ) : (
                       <>
                         <span className="text-xs tabular-nums">${actual.toLocaleString()} / ${b.amount.toLocaleString()}</span>
-                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setEditId(b.id)} data-testid={`edit-budget-${b.category}`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditId(b.id)} data-testid={`edit-budget-${b.category}`}>
                           <Pencil className="h-2.5 w-2.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-5 w-5 text-destructive" onClick={() => deleteMutation.mutate(b.id)} data-testid={`delete-budget-${b.category}`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(b.id)} data-testid={`delete-budget-${b.category}`}>
                           <X className="h-2.5 w-2.5" />
                         </Button>
                       </>

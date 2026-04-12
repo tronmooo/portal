@@ -1670,7 +1670,7 @@ export default function ChatPage() {
                 className="flex-1 bg-transparent text-sm outline-none text-foreground placeholder:text-muted-foreground"
                 data-testid="input-chat-search"
               />
-              {searchQuery && <button onClick={() => setSearchQuery('')} className="text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>}
+              {searchQuery && <button onClick={() => setSearchQuery('')} className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>}
               <button onClick={() => { setSearchOpen(false); setSearchQuery(''); }} className="text-muted-foreground hover:text-foreground text-xs">Done</button>
             </div>
           )}
