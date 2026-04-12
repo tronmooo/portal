@@ -98,10 +98,10 @@ export const queryClient = new QueryClient({
       refetchInterval: false,
       refetchOnWindowFocus: false, // Don't refetch when switching browser tabs
       refetchOnMount: true,        // Refetch if data is stale on mount
-      // 2-minute stale time: data fetched < 2 min ago is served from cache INSTANTLY.
-      // Balances freshness vs performance — 2 min is enough for normal browsing
-      // but still refetches if you've been away from a page for a while.
-      staleTime: 2 * 60 * 1000,
+      // 5-second stale time: data shows instantly from cache, but refetches in background
+      // after 5 seconds. This means navigating between pages always gets fresh data
+      // while still feeling instant (cache serves immediately, refetch updates in background).
+      staleTime: 5000,
       gcTime: 30 * 60 * 1000, // Keep unused data for 30 minutes
       retry: (failureCount, error) => {
         if (error instanceof Error) {
