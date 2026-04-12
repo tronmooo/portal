@@ -644,24 +644,13 @@ Extract every single field. Do not skip anything. Do not make up data — only r
     const isPdf = mimeType === "application/pdf";
     const mediaType = isImage ? mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" : "image/jpeg";
 
-    // Auto-rotate images using EXIF orientation data (phones often save rotated)
-    let processedBase64 = base64Data;
-    if (isImage) {
-      try {
-        const sharp = require('sharp');
-        const inputBuffer = Buffer.from(base64Data, 'base64');
-        const rotated = await sharp(inputBuffer).rotate().jpeg({ quality: 90 }).toBuffer();
-        processedBase64 = rotated.toString('base64');
-      } catch { /* keep original if sharp fails */ }
-    }
-
-    // Build content based on file type
+    // Send the raw image directly to the API — no preprocessing.
+    // Claude's vision handles rotation/orientation natively.
     const messageContent: any[] = [];
     if (isImage || isPdf) {
-      // Images and PDFs can be sent to Vision API
       messageContent.push({
         type: isPdf ? "document" : "image",
-        source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: processedBase64 },
+        source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: base64Data },
       });
     } else {
       // Text files: decode and send as text
