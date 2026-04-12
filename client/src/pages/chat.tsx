@@ -1454,7 +1454,92 @@ export default function ChatPage() {
     });
   }, [messages, chatMutation.isPending, uploadMutation.isPending, batchUploadMutation.isPending]);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Correct image orientation using EXIF data + canvas (like the Claude app does)
+  const correctImageOrientation = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const arrayBuffer = reader.result as ArrayBuffer;
+        const dataView = new DataView(arrayBuffer);
+        
+        // Read EXIF orientation
+        let orientation = 1;
+        try {
+          if (dataView.getUint16(0, false) === 0xFFD8) { // JPEG
+            let offset = 2;
+            while (offset < dataView.byteLength - 2) {
+              const marker = dataView.getUint16(offset, false);
+              offset += 2;
+              if (marker === 0xFFE1) { // APP1 (EXIF)
+                const length = dataView.getUint16(offset, false);
+                const exifOffset = offset + 2;
+                if (dataView.getUint32(exifOffset, false) === 0x45786966) { // "Exif"
+                  const tiffOffset = exifOffset + 6;
+                  const littleEndian = dataView.getUint16(tiffOffset, false) === 0x4949;
+                  const ifdOffset = tiffOffset + dataView.getUint32(tiffOffset + 4, littleEndian);
+                  const entries = dataView.getUint16(ifdOffset, littleEndian);
+                  for (let i = 0; i < entries; i++) {
+                    const entryOffset = ifdOffset + 2 + i * 12;
+                    if (entryOffset + 12 > dataView.byteLength) break;
+                    if (dataView.getUint16(entryOffset, littleEndian) === 0x0112) { // Orientation tag
+                      orientation = dataView.getUint16(entryOffset + 8, littleEndian);
+                      break;
+                    }
+                  }
+                }
+                break;
+              } else if ((marker & 0xFF00) === 0xFF00) {
+                offset += dataView.getUint16(offset, false);
+              } else break;
+            }
+          }
+        } catch { /* keep orientation = 1 if parsing fails */ }
+
+        // If no rotation needed, use original file directly
+        if (orientation <= 1) {
+          const base64Reader = new FileReader();
+          base64Reader.onload = () => resolve((base64Reader.result as string).split(",")[1]);
+          base64Reader.onerror = reject;
+          base64Reader.readAsDataURL(file);
+          return;
+        }
+
+        // Apply rotation via canvas
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d')!;
+          const w = img.width, h = img.height;
+          
+          // Set canvas size based on rotation
+          if (orientation >= 5) { canvas.width = h; canvas.height = w; }
+          else { canvas.width = w; canvas.height = h; }
+          
+          // Apply transform
+          switch (orientation) {
+            case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
+            case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
+            case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
+            case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+            case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
+            case 7: ctx.transform(0, -1, -1, 0, h, w); break;
+            case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
+          }
+          
+          ctx.drawImage(img, 0, 0);
+          // Export as JPEG at 95% quality (high quality, minimal compression)
+          const corrected = canvas.toDataURL('image/jpeg', 0.95).split(',')[1];
+          resolve(corrected);
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
@@ -1464,22 +1549,31 @@ export default function ChatPage() {
         continue;
       }
 
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
+      try {
+        let base64: string;
+        if (file.type.startsWith('image/')) {
+          // Correct orientation for images (handles rotated iPhone photos)
+          base64 = await correctImageOrientation(file);
+        } else {
+          // Non-images: read as-is
+          base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+        }
         const newAttachment: StagedAttachment = {
           name: file.name,
-          mimeType: file.type,
+          mimeType: file.type.startsWith('image/') ? 'image/jpeg' : file.type, // Corrected images are always JPEG
           data: base64,
           previewUrl: URL.createObjectURL(file),
           profileId: "none",
         };
         setAttachments((prev) => [...prev, newAttachment]);
-      };
-      reader.onerror = () => {
+      } catch {
         toast({ title: `Failed to read "${file.name}"`, variant: "destructive" });
-      };
-      reader.readAsDataURL(file);
+      }
     }
 
     // Reset so same file can be selected again
