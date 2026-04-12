@@ -1018,38 +1018,16 @@ function getProfileBanner(type: string): string {
   return banners[type] || 'linear-gradient(135deg, hsl(40 5% 20%), hsl(40 5% 28%))';
 }
 
-function ProfileCard({
-  profile,
-  onDelete,
-}: {
-  profile: Profile;
-  onDelete: (id: string) => void;
-}) {
+function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: string) => void }) {
   const isPersonType = ["self", "person", "pet"].includes(profile.type);
   const fields = Object.entries(profile.fields).filter(
     ([key, v]) => v !== null && v !== undefined && v !== "" &&
       !HIDDEN_FIELDS.includes(key) &&
       !(isPersonType && VEHICLE_SPECIFIC_FIELDS.includes(key))
   );
-
-  const initials = profile.name
-    .split(" ")
-    .map((w: string) => w[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-
-  // Gradient per profile type
-  const PROFILE_GRADIENTS: Record<string, string> = {
-    self:         'linear-gradient(135deg, hsl(188 55% 50%), hsl(262 65% 62%))',
-    person:       'linear-gradient(135deg, hsl(215 70% 58%), hsl(188 55% 50%))',
-    pet:          'linear-gradient(135deg, hsl(43 85% 52%), hsl(25 80% 54%))',
-    vehicle:      'linear-gradient(135deg, hsl(262 60% 62%), hsl(310 45% 58%))',
-    asset:        'linear-gradient(135deg, hsl(155 60% 44%), hsl(188 55% 50%))',
-    loan:         'linear-gradient(135deg, hsl(0 68% 52%), hsl(25 80% 54%))',
-    subscription: 'linear-gradient(135deg, hsl(310 45% 58%), hsl(262 60% 62%))',
-  };
-  const avatarGradient = PROFILE_GRADIENTS[profile.type] || 'linear-gradient(135deg, hsl(240 20% 50%), hsl(240 20% 60%))';
+  const initials = profile.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+  const accentHsl = PROFILE_ACCENT[profile.type] || '188 65% 48%';
+  const ac = `hsl(${accentHsl})`;
   const linkedCount =
     (profile.linkedTrackers?.length || 0) +
     (profile.linkedExpenses?.length || 0) +
@@ -1057,89 +1035,60 @@ function ProfileCard({
     (profile.linkedEvents?.length || 0) +
     (profile.documents?.length || 0);
 
-  const handleDeleteClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onDelete(profile.id);
-  };
+  const TYPE_ICONS: Record<string, string> = { self: '\u{1F464}', person: '\u{1F465}', pet: '\u{1F43E}', vehicle: '\u{1F697}', asset: '\u2B50', loan: '\u{1F4B3}', subscription: '\u{1F504}', investment: '\u{1F4C8}', property: '\u{1F3E0}', medical: '\u{1FA7A}' };
 
   return (
     <Link href={`/profiles/${profile.id}`}>
-      <Card
+      <div
         data-testid={`card-profile-${profile.id}`}
-        className="card-lift cursor-pointer group overflow-hidden relative"
-        style={{ borderLeft: `3px solid hsl(${PROFILE_ACCENT[profile.type] || '188 65% 48%'})` }}
+        className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col group h-full"
+        style={{
+          background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`,
+          border: `1px solid hsl(${accentHsl} / 0.2)`,
+          boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)`,
+        }}
       >
-        {/* Profile banner */}
-        <div className="h-12 w-full rounded-t-xl" style={{ background: getProfileBanner(profile.type) }}>
-          <div className="h-full w-full flex items-end justify-end px-2 py-1">
-            <span className="text-[9px] text-white/60 font-medium uppercase tracking-wider">{profile.type}</span>
+        {/* Header: avatar + name + type */}
+        <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-white text-[10px] font-bold" style={{ background: `linear-gradient(135deg, hsl(${accentHsl}), hsl(${accentHsl} / 0.7))` }}>
+            {initials}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-bold text-foreground truncate" data-testid={`text-profile-name-${profile.id}`}>{profile.name}</p>
+            <span className="text-[8px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.15)`, color: ac }}>{profile.type}</span>
           </div>
         </div>
-        <CardContent className="p-4 relative">
-          <div className="flex items-start gap-3">
-            <Avatar className="h-10 w-10 shrink-0">
-              <AvatarFallback
-                className="text-xs font-bold text-white"
-                style={{ background: avatarGradient }}
-              >
-                {initials}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <h3
-                  className="text-sm font-semibold line-clamp-2"
-                  title={profile.name}
-                  data-testid={`text-profile-name-${profile.id}`}
-                >
-                  {profile.name}
-                </h3>
-                <Badge variant="secondary" className="text-xs capitalize shrink-0">
-                  {TYPE_LABELS[profile.type] || profile.type}
-                </Badge>
-              </div>
-              {fields.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {fields.slice(0, 4).map(([key, val]) => (
-                    <span
-                      key={key}
-                      className="inline-flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full bg-muted/60 text-foreground/70 border border-border/30"
-                    >
-                      <span className="text-muted-foreground">{key}:</span>
-                      <span className="font-medium truncate max-w-[80px]">{formatFieldValue(key, val)}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="mt-2 flex items-center gap-2 flex-wrap">
-                {profile.tags?.slice(0, 3).map((tag) => (
-                  <Badge key={tag} variant="outline" className="text-xs">
-                    <Tag className="h-2 w-2 mr-0.5" />
-                    {tag}
-                  </Badge>
-                ))}
-                <span className="text-xs text-muted-foreground">
-                  {linkedCount} linked item{linkedCount !== 1 ? 's' : ''}
-                </span>
-              </div>
+
+        {/* KPI lines — show key fields */}
+        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
+          {fields.slice(0, 5).map(([key, val]) => (
+            <div key={key} className="flex items-center justify-between gap-1">
+              <span className="text-[9px] text-muted-foreground truncate">{key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim()}</span>
+              <span className="text-[9px] font-bold tabular-nums text-foreground shrink-0">{formatFieldValue(key, String(val)).slice(0, 20)}</span>
             </div>
-            <div className="flex items-center gap-1 shrink-0 mt-0.5">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                data-testid={`btn-delete-profile-${profile.id}`}
-                onClick={handleDeleteClick}
-                type="button"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+          ))}
+          {linkedCount > 0 && (
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[9px] text-muted-foreground">Linked</span>
+              <span className="text-[9px] font-bold text-foreground">{linkedCount} items</span>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+          <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>
+            {TYPE_ICONS[profile.type] || '\u{1F4CB}'} {profile.type}
+          </span>
+          <button
+            className="h-8 w-8 flex items-center justify-center text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(profile.id); }}
+            data-testid={`btn-delete-profile-${profile.id}`}
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
     </Link>
   );
 }
@@ -1202,8 +1151,8 @@ export default function ProfilesPage() {
     return (
       <div className="p-4 md:p-6 space-y-4">
         <div className="h-8 w-40 rounded skeleton-shimmer" />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {[...Array(4)].map((_, i) => <div key={i} className="h-20 rounded-lg skeleton-shimmer" />)}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {[...Array(8)].map((_, i) => <div key={i} className="h-28 rounded-xl skeleton-shimmer" />)}
         </div>
       </div>
     );
@@ -1245,10 +1194,12 @@ export default function ProfilesPage() {
     (a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b)
   );
 
+  const TYPE_GROUP_ICONS: Record<string, string> = { self: '\u{1F464}', person: '\u{1F465}', pet: '\u{1F43E}', vehicle: '\u{1F697}', asset: '\u2B50', loan: '\u{1F4B3}', subscription: '\u{1F504}', investment: '\u{1F4C8}', property: '\u{1F3E0}', medical: '\u{1FA7A}' };
   const typeGroupLabel = (type: string) => {
-    if (type === "medical") return "Medical Providers";
+    const icon = TYPE_GROUP_ICONS[type] || '\u{1F4CB}';
+    if (type === "medical") return `${icon} Medical Providers`;
     const label = TYPE_LABELS[type] || type;
-    return `${label}s`;
+    return `${icon} ${label}s`;
   };
 
   const profileToDelete = deleteId ? (profiles || []).find((p) => p.id === deleteId) : null;
@@ -1313,7 +1264,7 @@ export default function ProfilesPage() {
             <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 capitalize">
               {typeGroupLabel(type)} ({grouped[type].length})
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
               {grouped[type].map((profile) => (
                 <ProfileCard
                   key={profile.id}
