@@ -640,12 +640,31 @@ You must ONLY return values you can read with 100% certainty from the document.
 - Return 3 correct fields rather than 10 fields where 3 are wrong.
 - WRONG DATA IS THE WORST POSSIBLE OUTCOME. Missing data is fine.
 
-For each field you DO include, add a "confidence" key: "high" (100% certain, every character clear) or "medium" (very likely correct but image quality makes it hard to be certain). Do NOT include any field where confidence would be "low".
+For each field you DO include, add a "confidence" key: "high" (100% certain, every character clear) or "medium" (very likely correct but image quality or rotation makes some characters harder to read). Include medium-confidence fields — the user can verify and correct them. Only exclude fields where you truly cannot make out the text at all.
 
 RULE #2 — EXPIRATION DATE:
 Always look for the expiration/end date. It's the LATER date on the document.
 Common labels: EXP, RES, EXPIRES, VALID THROUGH, COVERAGE END, POLICY END, TERM END, BEST BY, VALID THRU.
 The issue date (ISS, ISSUED, EFFECTIVE) is the EARLIER date — do not confuse them.
+For US driver's licenses: the EXP date is ALWAYS later than the ISS date, typically 4-8 years after issue.
+If the image is rotated/sideways, mentally rotate it to read dates correctly. Read ALL dates on the card — there are usually 3: DOB, ISS, and EXP.
+
+RULE #2B — DRIVER'S LICENSE FIELDS:
+For any driver's license, extract ALL of these fields if visible:
+- firstName, lastName, middleName
+- dateOfBirth (DOB/BORN)
+- address, city, state, zip
+- licenseNumber (DL#/DD#)
+- expirationDate (EXP)
+- issueDate (ISS)
+- sex (M/F)
+- height, weight
+- eyeColor, hairColor
+- class (license class)
+- restrictions, endorsements
+- donor (true/false)
+- designation (SAFE DRIVER, etc.)
+Extract EVERY field you can read. More data is better — the user will verify.
 
 RULE #3 — DOLLAR AMOUNTS:
 Always extract total amounts. Scan entire document including corners and footers.
@@ -707,7 +726,7 @@ If you cannot read a field clearly, OMIT IT. Do not return null values — just 
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: process.env.ANTHROPIC_EXTRACTION_MODEL || process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001", // Use same model as chat — Sonnet requires separate API access
+      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514", // Use Sonnet for accurate vision extraction — Haiku misreads rotated text
       max_tokens: 2048,
       messages: [{
         role: "user",
