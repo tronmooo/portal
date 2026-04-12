@@ -3666,10 +3666,54 @@ export default function TrackersPage() {
   const allTrackerCats = useMemo(() => [...new Set((trackers || []).map(t => getCanonicalGroup(t.category)))]
     .sort((a, b) => (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99)), [trackers]);
 
+  // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
+  const profilesWithTrackers = (profiles || []).filter(p =>
+    ["self", "person", "pet"].includes(p.type)
+  );
+  const sortedFilterProfiles = [...profilesWithTrackers].sort((a, b) => {
+    if (a.type === "self") return -1;
+    if (b.type === "self") return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  // Apply profile filter — memoized
+  const filteredTrackers = useMemo(() => (trackers || []).filter(t => {
+    if (filterMode === "selected" && filterIds.length > 0) {
+      const linkedIds = t.linkedProfiles || [];
+      if (!linkedIds.some(id => filterIds.includes(id))) return false;
+    }
+    if (trackerCatFilter !== "all" && getCanonicalGroup(t.category) !== trackerCatFilter) return false;
+    return true;
+  }).sort((a, b) => cleanTrackerName(a.name).toLowerCase().localeCompare(cleanTrackerName(b.name).toLowerCase())
+  ), [trackers, filterMode, filterIds, trackerCatFilter]);
+
+  // Group trackers by canonical group — memoized
+  const { grouped, sortedCats } = useMemo(() => {
+    const g = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
+      const group = getCanonicalGroup(t.category);
+      (acc[group] = acc[group] || []).push(t);
+      return acc;
+    }, {});
+    const s = Object.keys(g).sort((a, b) =>
+      (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99)
+    );
+    return { grouped: g, sortedCats: s };
+  }, [filteredTrackers]);
+
+  // Count trackers per profile for badges — memoized
+  const profileCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const t of trackers || []) {
+      for (const pid of t.linkedProfiles || []) map[pid] = (map[pid] || 0) + 1;
+    }
+    return map;
+  }, [trackers]);
+  const countForProfile = (profileId: string) => profileCounts[profileId] || 0;
+
+  // Skeleton loading state — MUST be after all hooks
   if (showTrackerSkeleton && !trackers) {
     return (
       <div className="p-3 md:p-5 space-y-3">
-        {/* Compact skeleton — small placeholders, not full-width blocks */}
         <div className="h-7 w-32 rounded skeleton-shimmer" />
         <div className="flex gap-2 overflow-x-hidden">
           {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
@@ -3680,62 +3724,6 @@ export default function TrackersPage() {
       </div>
     );
   }
-
-  // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
-  // Show self, person, and pet profiles in filter (not vehicles/assets)
-  const profilesWithTrackers = (profiles || []).filter(p =>
-    ["self", "person", "pet"].includes(p.type)
-  );
-
-  // Sort so "self" (Me) comes first
-  const sortedFilterProfiles = [...profilesWithTrackers].sort((a, b) => {
-    if (a.type === "self") return -1;
-    if (b.type === "self") return 1;
-    return a.name.localeCompare(b.name);
-  });
-
-  // Apply profile filter — strict: only show trackers linked to the selected profile(s)
-  const filteredTrackers = useMemo(() => (trackers || []).filter(t => {
-    // Profile filter — strict: only show trackers linked to the selected profile(s)
-    if (filterMode === "selected" && filterIds.length > 0) {
-      const linkedIds = t.linkedProfiles || [];
-      const matchesProfile = linkedIds.some(id => filterIds.includes(id));
-      if (!matchesProfile) return false;
-    }
-    // Category filter (uses canonical groups)
-    if (trackerCatFilter !== "all" && getCanonicalGroup(t.category) !== trackerCatFilter) return false;
-    return true;
-  }).sort((a, b) => {
-    // Alphabetical by clean name (strips " - ProfileName" suffix)
-    const cleanA = cleanTrackerName(a.name).toLowerCase();
-    const cleanB = cleanTrackerName(b.name).toLowerCase();
-    return cleanA.localeCompare(cleanB);
-  }), [trackers, filterMode, filterIds, trackerCatFilter]);
-
-  // Group trackers by canonical group (not raw category)
-  const { grouped, sortedCats } = useMemo(() => {
-    const g = filteredTrackers.reduce((acc: Record<string, Tracker[]>, t) => {
-      const group = getCanonicalGroup(t.category);
-      (acc[group] = acc[group] || []).push(t);
-      return acc;
-    }, {});
-    const s = Object.keys(g).sort((a, b) => {
-      const ao = CANONICAL_GROUPS[a]?.order ?? 99;
-      const bo = CANONICAL_GROUPS[b]?.order ?? 99;
-      return ao - bo;
-    });
-    return { grouped: g, sortedCats: s };
-  }, [filteredTrackers]);
-
-  // Count trackers per profile for badges
-  const profileCounts = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const t of trackers || []) {
-      for (const pid of t.linkedProfiles || []) map[pid] = (map[pid] || 0) + 1;
-    }
-    return map;
-  }, [trackers]);
-  const countForProfile = (profileId: string) => profileCounts[profileId] || 0;
 
   return (
     <div className="px-2 py-2 md:p-4 space-y-2 overflow-y-auto h-full pb-24" data-testid="page-trackers">
