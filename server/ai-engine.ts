@@ -736,7 +736,7 @@ Include as many fields as possible. For driver's licenses, aim for 15+ fields. F
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514", // Use Sonnet for accurate vision extraction — Haiku misreads rotated text
+      model: "claude-sonnet-4-5-20250929", // Sonnet 4.5/4.6 — same model as Claude app, best vision accuracy
       max_tokens: 4096,
       messages: [{
         role: "user",
@@ -5164,7 +5164,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           response = await getClient().messages.create({
-            model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+            model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5-20250929",
             max_tokens: 4096,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
