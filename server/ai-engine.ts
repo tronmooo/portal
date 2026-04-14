@@ -988,7 +988,7 @@ Return ONLY the JSON array, nothing else.`;
       mimeType,
       fileData: base64Data,
       extractedData: {},
-      linkedProfiles: profileId ? [profileId] : [],
+      linkedProfiles: profileId ? profileId.split(",").filter(Boolean) : [],
       tags: ["uploaded"],
     });
     const documentPreview = {
