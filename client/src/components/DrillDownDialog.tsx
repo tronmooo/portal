@@ -96,7 +96,7 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
               {/* Category breakdown */}
               {items.length > 0 && (
                 <div className="divide-y divide-border/50">
-                  {items.map((item, i) => (
+                  {items.slice().sort((a, b) => (a.label || '').localeCompare(b.label || '')).map((item, i) => (
                     <div key={item.id || i} className="py-2 flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-medium truncate">{item.label}</p>
@@ -130,7 +130,7 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
                   </div>
                   <ScrollArea className="max-h-[40vh]">
                     <div className="divide-y divide-border/30">
-                      {expenses.map((exp) => (
+                      {expenses.slice().sort((a, b) => (a.description || '').localeCompare(b.description || '')).map((exp) => (
                         <div key={exp.id} className="py-1.5 flex items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
                             <p className="text-xs-loose font-medium truncate">{exp.description}</p>
@@ -172,7 +172,7 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
                   </div>
                   <ScrollArea className="max-h-[40vh]">
                     <div className="divide-y divide-border/30">
-                      {tasks.map((t) => (
+                      {tasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((t) => (
                         <div key={t.id} className="py-1.5 flex items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
                             <p className={`text-xs-loose font-medium truncate ${t.status === "done" ? "line-through text-muted-foreground" : ""}`}>{t.title}</p>
@@ -202,7 +202,7 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
                   </div>
                   <ScrollArea className="max-h-[40vh]">
                     <div className="divide-y divide-border/30">
-                      {obligations.map((o) => (
+                      {obligations.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((o) => (
                         <div key={o.id} className="py-1.5 flex items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
                             <p className="text-xs-loose font-medium truncate">{o.name}</p>

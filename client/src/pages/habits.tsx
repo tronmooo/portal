@@ -327,7 +327,7 @@ export default function HabitsPage() {
         </div>
       ) : (
         <div className="grid gap-3">
-          {habits.map(habit => (
+          {habits.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(habit => (
             <HabitCard key={habit.id} habit={habit} />
           ))}
         </div>

@@ -1168,7 +1168,7 @@ function InfoTab({
 
       {/* ── 3. Grouped Field Sections (type-aware) ── */}
       {groups.length > 0 ? (
-        groups.map(group => {
+        groups.slice().sort((a, b) => a.title.localeCompare(b.title)).map(group => {
           const isCollapsed = collapsedSections.has(group.title);
           return (
             <Card key={group.title}>
@@ -1209,6 +1209,7 @@ function InfoTab({
             <CardContent className="px-4 pb-3 pt-0">
               {Object.entries(profile.fields)
                 .filter(([k, v]) => !k.startsWith("_") && v != null && v !== "" && typeof v !== "object")
+                .sort(([a], [b]) => a.localeCompare(b))
                 .map(([key, val]) => (
                   <GroupedInlineField
                     key={key}
@@ -1239,7 +1240,7 @@ function InfoTab({
           </button>
           {!collapsedSections.has("__other__") && (
             <CardContent className="px-4 pb-3 pt-0">
-              {extraFields.map(([key, val]) => (
+              {extraFields.slice().sort(([a], [b]) => a.localeCompare(b)).map(([key, val]) => (
                 <GroupedInlineField
                   key={key}
                   profileId={profile.id}
@@ -1286,7 +1287,7 @@ function InfoTab({
             <CardTitle className="text-xs font-semibold">Linked Profiles</CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
-            {(profile.childProfiles || []).map((child: any) => {
+            {(profile.childProfiles || []).slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((child: any) => {
               const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Package, loan: Wallet, investment: TrendingUp, property: Home, person: User, pet: PawPrint };
               const ChildIcon = iconMap[child.type] || Link2;
               return (
@@ -1330,7 +1331,7 @@ function InfoTab({
           <CardContent className="p-3">
             <div className="flex items-center gap-1.5 flex-wrap">
               <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
-              {profile.tags.map(tag => (
+              {profile.tags.slice().sort((a, b) => a.localeCompare(b)).map(tag => (
                 <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
               ))}
             </div>
@@ -1445,7 +1446,7 @@ function DocumentsTab({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="profile">This profile</SelectItem>
-              {childProfiles.map(c => (
+              {childProfiles.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map(c => (
                 <SelectItem key={c.id} value={c.id}>
                   <span className="flex items-center gap-1.5">
                     {c.name} <span className="text-muted-foreground capitalize">({c.type})</span>
@@ -1514,7 +1515,7 @@ function DocumentsTab({
         </Card>
       ) : (
         <div className="space-y-2">
-          {filteredDocs.map(doc => {
+          {filteredDocs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
             const expStatus = getExpirationStatus(doc);
             const expDate = doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
             return (
@@ -1705,9 +1706,9 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
   // ── expense categories ─────────────────────────────────────────
   const expenseCategories = [
-    "general", "food", "transport", "housing", "utilities",
-    "entertainment", "health", "education", "shopping",
-    "insurance", "pet", "vehicle", "travel", "other",
+    "education", "entertainment", "food", "general", "health",
+    "housing", "insurance", "other", "pet", "shopping",
+    "transport", "travel", "utilities", "vehicle",
   ];
 
   const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
@@ -2022,7 +2023,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
               {assets.length > 0 && (
                 <div className="mt-3 space-y-1">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Assets</p>
-                  {assets.slice(0, 6).map((c: any) => (
+                  {assets.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 6).map((c: any) => (
                     <div key={c.id} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
                       <div className="flex items-center gap-2">
                         <span className="text-xs truncate max-w-[140px]">{c.name}</span>
@@ -2039,7 +2040,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
               {loans.length > 0 && (
                 <div className="mt-3 space-y-1">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Liabilities</p>
-                  {loans.slice(0, 4).map((c: any) => (
+                  {loans.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 4).map((c: any) => (
                     <div key={c.id} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
                       <span className="text-xs truncate max-w-[160px]">{c.name}</span>
                       <span className="text-xs font-semibold tabular-nums text-red-500">
@@ -2201,7 +2202,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
             <p className="text-sm text-muted-foreground py-4 text-center">No recurring bills</p>
           ) : (
             <div className="divide-y divide-border">
-              {obligations.map(ob => {
+              {obligations.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(ob => {
                 const urgency = obligationUrgency(ob);
                 const rowClass =
                   urgency === "overdue" ? "bg-red-500/5" :
@@ -2989,7 +2990,7 @@ function TrackersTab({
     onError: (err: Error) => toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" }),
   });
 
-  const trackerCategories = ["custom", "health", "fitness", "finance", "productivity", "nutrition", "sleep", "mood", "weight", "other"];
+  const trackerCategories = ["custom", "finance", "fitness", "health", "mood", "nutrition", "other", "productivity", "sleep", "weight"];
 
   return (
     <div className="space-y-3">
@@ -3014,7 +3015,7 @@ function TrackersTab({
           </CardContent>
         </Card>
       ) : (
-        trackers.map(tracker => (
+        trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
           <TrackerCard_Profile
             key={tracker.id}
             tracker={tracker}
@@ -3090,7 +3091,7 @@ function TrackersTab({
             {unlinkableTrackers.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">All trackers are already linked</p>
             ) : (
-              unlinkableTrackers.map(tracker => (
+              unlinkableTrackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
                 <div key={tracker.id} className="flex items-center justify-between p-2 rounded-lg border border-border hover:bg-muted/50 transition-colors">
                   <div>
                     <p className="text-sm font-medium">{tracker.name}</p>
@@ -3362,7 +3363,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     const sorted = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     const lastDate = sorted[0]?.timestamp ? new Date(sorted[0].timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
     return { tracker: t, pf, latest, prev, avg7, trend, sparkData, lastDate };
-  }).filter((v: any) => v.latest != null);
+  }).filter((v: any) => v.latest != null).sort((a: any, b: any) => (a.tracker.name || '').localeCompare(b.tracker.name || ''));
 
   // ── Section 2: Top 3 trackers by entry count (trend charts) ─
   const topChartTrackers = [...healthTrackers]
@@ -3501,7 +3502,7 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
           <HeartPulse className="h-3 w-3" /> All Trackers
         </p>
         <div className="space-y-2">
-          {healthTrackers.map((t: any) => {
+          {healthTrackers.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((t: any) => {
             const pf = getPrimaryField(t);
             const latest = getLatestValue(t);
             const sortedEntries = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -3680,7 +3681,7 @@ function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
     else groups[3].items.push(e);
   }
 
-  const filterTypes = ["all", ...Object.keys(typeCounts)];
+  const filterTypes = ["all", ...Object.keys(typeCounts).sort((a, b) => a.localeCompare(b))];
 
   if (timeline.length === 0) {
     return (
@@ -3716,7 +3717,12 @@ function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
           <Card>
             <CardContent className="pt-3 pb-1">
               <div className="divide-y divide-border">
-                {g.items.map(entry => (
+                {g.items.slice().sort((a, b) => {
+                  // Within same date group, keep date-sorted but within same timestamp, sort alphabetically
+                  const timeDiff = new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+                  if (timeDiff !== 0) return timeDiff;
+                  return (a.title || '').localeCompare(b.title || '');
+                }).map(entry => (
                   <TimelineItem key={entry.id} entry={entry} />
                 ))}
               </div>
@@ -4150,7 +4156,7 @@ function EditProfileDialog({
     .filter(([_, v]) => v != null && typeof v !== "object")
     .map(([k]) => k);
   const suggested = SUGGESTED_FIELDS[profile.type] || [];
-  const allFieldKeys = [...new Set([...existingFieldKeys, ...suggested.map(s => s.key)])];
+  const allFieldKeys = [...new Set([...existingFieldKeys, ...suggested.map(s => s.key)])].sort((a, b) => a.localeCompare(b));
   // Initialize fields state with suggested fields that are empty
   for (const sf of suggested) {
     if (!(sf.key in fields)) fields[sf.key] = "";
@@ -4812,7 +4818,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
         <Card className="p-4">
           <h3 className="text-xs font-semibold mb-2">Linked Payments</h3>
           <div className="space-y-2">
-            {linkedObs.map((ob: any) => (
+            {linkedObs.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((ob: any) => (
               <div key={ob.id} className="flex items-center justify-between text-xs">
                 <span>{ob.name}</span>
                 <div className="flex items-center gap-2">
@@ -5226,7 +5232,7 @@ function LinkedSubsTab({ profile }: { profile: any }) {
           </div>
           {children.length > 0 ? (
             <div className="divide-y divide-border/30">
-              {children.map((sub: any) => (
+              {children.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((sub: any) => (
                 <div key={sub.id} className="flex items-center justify-between py-2">
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium truncate">{sub.name}</p>
@@ -5560,7 +5566,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
               <Select value={payCategory} onValueChange={setPayCategory}>
                 <SelectTrigger className="h-8 text-xs mt-1" data-testid="select-payment-category"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["subscription", "entertainment", "utilities", "software", "other"].map(c => (
+                  {["entertainment", "other", "software", "subscription", "utilities"].map(c => (
                     <SelectItem key={c} value={c} className="text-xs capitalize">{c}</SelectItem>
                   ))}
                 </SelectContent>
@@ -5812,7 +5818,7 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
         <CardContent className="px-4 pb-3 pt-0">
           {documents.length > 0 ? (
             <div className="space-y-0.5">
-              {documents.map((doc) => (
+              {documents.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((doc) => (
                 <div key={doc.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`document-row-${doc.id}`}>
                   <div className="flex items-center gap-2 min-w-0">
                     <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -6146,7 +6152,7 @@ export default function ProfileDetailPage() {
                       Shared
                     </button>
                     <div className="mx-2 my-0.5 border-t border-border/40" />
-                    {personOptions.map(p => (
+                    {personOptions.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map(p => (
                       <button
                         key={p.id}
                         className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted/70 transition-colors ${
@@ -6216,7 +6222,7 @@ export default function ProfileDetailPage() {
             <h1 className="text-xl font-semibold" data-testid="text-profile-detail-name">{profile.name}</h1>
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
               <Badge variant="secondary" className="text-xs capitalize">{profile.type}</Badge>
-              {profile.tags.map(tag => (
+              {profile.tags.slice().sort((a, b) => a.localeCompare(b)).map(tag => (
                 <Badge key={tag} variant="outline" className="text-xs">
                   <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
                 </Badge>

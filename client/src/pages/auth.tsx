@@ -239,7 +239,7 @@ export default function AuthPage() {
         <div className="text-center space-y-2">
           <div className="flex justify-center mb-1">
             <img
-              src="/portol-logo.png"
+              src="/portol-logo-clean.png"
               alt="Portol"
               className="w-20 h-20 object-contain"
               style={{ filter: 'drop-shadow(0 0 20px rgba(0,200,220,0.4))' }}

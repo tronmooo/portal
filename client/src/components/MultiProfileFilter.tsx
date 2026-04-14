@@ -126,8 +126,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
   }
   const filteredProfiles = Array.from(deduped.values());
 
-  const sortOrder: Record<string, number> = { self: 0, person: 1, pet: 2 };
-  const sorted = [...filteredProfiles].sort((a, b) => (sortOrder[a.type] ?? 5) - (sortOrder[b.type] ?? 5));
+  const sorted = [...filteredProfiles].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   const isEveryone = filter.mode === "everyone";
   const label = getFilterLabel();

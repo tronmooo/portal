@@ -153,7 +153,7 @@ export default function ObligationsPage() {
     onError: (err: Error) => toast({ title: "Failed to create bill", description: formatApiError(err), variant: "destructive" }),
   });
 
-  const sorted = [...obligations].sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime());
+  const sorted = [...obligations].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   const monthlyTotal = obligations.reduce((s, o) => {
     switch (o.frequency) {
       case "weekly": return s + o.amount * 4.33;
@@ -214,10 +214,10 @@ export default function ObligationsPage() {
                 <Select value={newFrequency} onValueChange={setNewFrequency}>
                   <SelectTrigger data-testid="select-obligation-frequency"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="weekly">Weekly</SelectItem>
                     <SelectItem value="biweekly">Biweekly</SelectItem>
                     <SelectItem value="monthly">Monthly</SelectItem>
                     <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
                     <SelectItem value="yearly">Yearly</SelectItem>
                   </SelectContent>
                 </Select>
@@ -229,13 +229,13 @@ export default function ObligationsPage() {
                 <Select value={newCategory} onValueChange={setNewCategory}>
                   <SelectTrigger data-testid="select-obligation-category"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="housing">Housing</SelectItem>
-                    <SelectItem value="loan">Loan</SelectItem>
-                    <SelectItem value="insurance">Insurance</SelectItem>
                     <SelectItem value="health">Health</SelectItem>
+                    <SelectItem value="housing">Housing</SelectItem>
+                    <SelectItem value="insurance">Insurance</SelectItem>
+                    <SelectItem value="loan">Loan</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
                     <SelectItem value="subscription">Subscription</SelectItem>
                     <SelectItem value="utility">Utility</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

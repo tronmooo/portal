@@ -978,7 +978,9 @@ Return ONLY the JSON array, nothing else.`;
 
     return { reply, actions, results, documentId: document.id, documentPreview, pendingExtraction };
   } catch (err: any) {
-    console.error("File extraction error:", err.message);
+    const errMsg = err?.message || String(err);
+    console.error("File extraction error:", errMsg);
+    console.error("File extraction stack:", err?.stack);
     // Still store the document even if AI fails
     const document = await storage.createDocument({
       name: fileName,
@@ -995,8 +997,19 @@ Return ONLY the JSON array, nothing else.`;
       mimeType: document.mimeType,
       data: document.fileData,
     };
+    // Provide a more informative error message
+    let reply = `Saved "${fileName}"`;
+    if (errMsg.includes('Could not process image') || errMsg.includes('invalid_image') || errMsg.includes('too large')) {
+      reply += ` but the image couldn't be processed (it may be too large or in an unsupported format). You can link it to a profile manually.`;
+    } else if (errMsg.includes('rate_limit') || errMsg.includes('429')) {
+      reply += ` but extraction is temporarily unavailable (rate limited). Try again in a minute.`;
+    } else if (errMsg.includes('overloaded') || errMsg.includes('529')) {
+      reply += ` but the AI service is busy right now. Try again shortly.`;
+    } else {
+      reply += ` but couldn't extract data automatically. You can link it to a profile manually.`;
+    }
     return {
-      reply: `Saved "${fileName}" but couldn't extract data automatically. You can link it to a profile manually.`,
+      reply,
       actions: [],
       results: [document],
       documentId: document.id,

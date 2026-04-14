@@ -442,7 +442,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
           </DialogHeader>
           {(() => {
             const categories = finSnap?.spendByCategory
-              ? Object.entries(finSnap.spendByCategory as Record<string, number>).sort(([, a], [, b]) => b - a)
+              ? Object.entries(finSnap.spendByCategory as Record<string, number>).sort(([a], [b]) => a.localeCompare(b))
               : [];
             const total = finSnap?.totalMonthlySpend || 0;
             const SPEND_COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ef4444","#3b82f6","#f97316","#ec4899","#84cc16","#6366f1"];
@@ -500,7 +500,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
           </DialogHeader>
           <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
             <div className="space-y-1.5 py-2">
-              {(finSnap?.upcomingBills || []).map((bill: any) => {
+              {(finSnap?.upcomingBills || []).slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((bill: any) => {
                 const urgent = bill.daysUntil <= 3;
                 const soon = bill.daysUntil <= 7;
                 return (
@@ -543,7 +543,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
           </DialogHeader>
           <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '60vh' }}>
             <div className="space-y-1.5 py-2 pr-2">
-              {(enhanced?.expiringDocuments || []).map((doc: any, i: number) => {
+              {(enhanced?.expiringDocuments || []).slice().sort((a: any, b: any) => (a.documentName || '').localeCompare(b.documentName || '')).map((doc: any, i: number) => {
                 const expired = normalizeFilter(doc.status) === normalizeFilter("expired");
                 const expiringSoon = normalizeFilter(doc.status) === normalizeFilter("expiring_soon");
                 return (
@@ -905,7 +905,7 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
             </div>
           ) : (
             <div className="px-3 pb-4">
-              {Object.entries(grouped).map(([category, items]) => (
+              {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([category, items]) => (
                 <div key={category}>
                   {/* Category header — orange text like Habituator */}
                   <div className="flex items-center gap-2 py-2 px-1">
@@ -914,7 +914,7 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
                   </div>
 
                   <div className="space-y-2">
-                    {items.map((h: any, idx: number) => {
+                    {items.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((h: any, idx: number) => {
                       const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
                       const target = (h as any).targetPerDay || 1;
                       const todayCount = (h.checkins || []).filter((c: any) => c.date === today).length;
@@ -1327,7 +1327,7 @@ function HealthSection({ data }: { data: any[] }) {
   const [, navigate] = useLocation();
   const [selectedTracker, setSelectedTracker] = useState<any>(null);
 
-  const filteredData = (data || []).filter((item: any) => !/test/i.test(item.name)).slice(0, 4);
+  const filteredData = (data || []).filter((item: any) => !/test/i.test(item.name)).sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 4);
 
   if (!data || data.length === 0) return (
     <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" testId="section-health">
@@ -1480,7 +1480,7 @@ function ObligationsSection({ data }: { data: any[] }) {
         </button>
         {expanded && (
           <div className="divide-y divide-border/30 pl-3">
-            {bills.map((bill: any) => (
+            {bills.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((bill: any) => (
               <div key={bill.id}
                 onClick={() => setSelectedBill(bill)}
                 className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-muted/40 rounded transition-colors">
@@ -1709,7 +1709,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
           </div>
         ) : (
           <div className="space-y-1">
-            {activeGoals.map(g => {
+            {activeGoals.slice().sort((a, b) => a.title.localeCompare(b.title)).map(g => {
               const goalCurrent = g.current || g.startValue || 0;
               const pct = g.target > 0 ? Math.min(100, Math.round((goalCurrent / g.target) * 100)) : 0;
               const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
@@ -1763,7 +1763,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
             {completedGoals.length > 0 && (
               <div className="pt-1.5 mt-1 border-t border-border/30">
                 <p className="text-xs-tight text-muted-foreground mb-0.5">{completedGoals.length} completed</p>
-                {completedGoals.slice(0, 2).map(g => (
+                {completedGoals.slice().sort((a, b) => a.title.localeCompare(b.title)).slice(0, 2).map(g => (
                   <div key={g.id} className="flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground/60">
                     <CheckCircle2 className="h-3 w-3 text-green-500/60 shrink-0" />
                     <span className="line-through truncate">{g.title}</span>
@@ -1907,14 +1907,14 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="custom">Custom</SelectItem>
-                    <SelectItem value="weight_loss">Weight Loss</SelectItem>
-                    <SelectItem value="weight_gain">Weight Gain</SelectItem>
-                    <SelectItem value="savings">Savings</SelectItem>
-                    <SelectItem value="spending_limit">Spending Limit</SelectItem>
                     <SelectItem value="fitness_distance">Fitness Distance</SelectItem>
                     <SelectItem value="fitness_frequency">Fitness Frequency</SelectItem>
-                    <SelectItem value="tracker_target">Tracker Target</SelectItem>
                     <SelectItem value="habit_streak">Habit Streak</SelectItem>
+                    <SelectItem value="savings">Savings</SelectItem>
+                    <SelectItem value="spending_limit">Spending Limit</SelectItem>
+                    <SelectItem value="tracker_target">Tracker Target</SelectItem>
+                    <SelectItem value="weight_gain">Weight Gain</SelectItem>
+                    <SelectItem value="weight_loss">Weight Loss</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1948,9 +1948,9 @@ function GoalsSection({ profileId }: { profileId?: string }) {
 // ─── Budget Manager Component ────────────────────────────────────────────────
 
 const BUDGET_CATEGORIES = [
-  "food", "transport", "health", "pet", "vehicle", "entertainment",
-  "shopping", "utilities", "housing", "insurance", "subscription",
-  "education", "personal", "general",
+  "education", "entertainment", "food", "general", "health", "housing",
+  "insurance", "personal", "pet", "shopping", "subscription",
+  "transport", "utilities", "vehicle",
 ];
 
 function BudgetManager() {
@@ -2063,7 +2063,7 @@ function BudgetManager() {
       )}
       {budgets.length > 0 && (
         <div className="space-y-1.5">
-          {budgets.map((b: any) => {
+          {budgets.slice().sort((a: any, b: any) => (a.category || '').localeCompare(b.category || '')).map((b: any) => {
             const actual = byCategory[b.category] || 0;
             const pct = b.amount > 0 ? (actual / b.amount) * 100 : 0;
             const over = actual > b.amount;
@@ -2114,7 +2114,7 @@ function BudgetManager() {
         return (
           <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 space-y-1">
             <p className="text-xs font-medium text-amber-500">Unbudgeted Spending: ${totalUnbudgeted.toLocaleString()}</p>
-            {unbudgeted.map(([cat, amt]) => (
+            {unbudgeted.slice().sort(([a], [b]) => a.localeCompare(b)).map(([cat, amt]) => (
               <div key={cat} className="flex justify-between text-xs text-muted-foreground">
                 <span className="capitalize">{cat}</span>
                 <span>${amt.toLocaleString()}</span>
@@ -2129,7 +2129,7 @@ function BudgetManager() {
         <div className="rounded-lg border border-border p-2 space-y-2">
           <select value={newCat} onChange={(e) => setNewCat(e.target.value)} className="w-full h-8 text-xs bg-background border border-border rounded px-2">
             <option value="">Select category...</option>
-            {availableCategories.map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
+            {availableCategories.slice().sort((a, b) => a.localeCompare(b)).map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
           </select>
           <Input placeholder="Amount" type="number" value={newAmt} onChange={(e) => setNewAmt(e.target.value)} className="h-8 text-xs" step="0.01" />
           <Input placeholder="Notes (optional)" value={newNotes} onChange={(e) => setNewNotes(e.target.value)} className="h-8 text-xs" />
@@ -2358,7 +2358,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         {recentExpenses.length > 0 && (
           <div className="space-y-0.5">
             <p className="text-xs font-medium text-muted-foreground uppercase">Recent Expenses</p>
-            {recentExpenses.slice(0, 5).map((exp: any) => (
+            {recentExpenses.slice().sort((a: any, b: any) => (a.description || '').localeCompare(b.description || '')).slice(0, 5).map((exp: any) => (
               <div key={exp.id} className="flex items-center justify-between py-1 text-xs">
                 <span className="truncate flex-1">{exp.description || "Expense"}</span>
                 <span className="font-medium tabular-nums ml-2">${exp.amount?.toLocaleString()}</span>
@@ -2403,7 +2403,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         onClose={() => setDrill(null)}
         title="Income Sources"
         total={`$${monthlyIncome.toLocaleString()}/mo`}
-        items={(incomes || []).map((i: any) => ({
+        items={(incomes || []).slice().sort((a: any, b: any) => (a.description || '').localeCompare(b.description || '')).map((i: any) => ({
           label: i.description,
           value: `$${i.amount.toLocaleString()}`,
           sub: i.frequency,

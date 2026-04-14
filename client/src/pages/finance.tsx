@@ -36,7 +36,7 @@ const categoryColors: Record<string, string> = {
   general: "hsl(var(--primary))",
 };
 
-const EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general"];
+const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "pet", "transport", "utilities", "vehicle"];
 
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
@@ -153,8 +153,8 @@ export default function FinancePage() {
     acc[e.category] = (acc[e.category] || 0) + e.amount;
     return acc;
   }, {});
-  const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }));
-  const categories = [...new Set(profileFiltered.map(e => e.category))];
+  const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name));
+  const categories = [...new Set(profileFiltered.map(e => e.category))].sort((a, b) => a.localeCompare(b));
 
   // Group loans by loan_name
   const loanGroups = loanSchedules.reduce((acc: Record<string, any[]>, entry: any) => {
@@ -395,7 +395,7 @@ export default function FinancePage() {
                   <p className="text-sm text-muted-foreground">No expenses match the selected filter.</p>
                 </div>
               )}
-              {filtered.map((expense) => (
+              {filtered.slice().sort((a, b) => a.description.localeCompare(b.description) || new Date(b.date || '').getTime() - new Date(a.date || '').getTime()).map((expense) => (
                 <div key={expense.id} className="flex items-center gap-3 py-3 group" data-testid={`expense-${expense.id}`}>
                   <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                     <ShoppingCart className="h-3.5 w-3.5 text-primary" />
@@ -444,7 +444,7 @@ export default function FinancePage() {
               <Select value={editForm.category} onValueChange={v => setEditForm(f => ({...f, category: v}))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["general","food","transport","housing","utilities","health","entertainment","shopping","subscription","insurance","education","pet","automotive","travel"].map(c => (
+                  {["automotive","education","entertainment","food","general","health","housing","insurance","pet","shopping","subscription","transport","travel","utilities"].map(c => (
                     <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>
                   ))}
                 </SelectContent>
@@ -489,7 +489,7 @@ export default function FinancePage() {
           </div>
         ) : (
           <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
-            {paychecks.map((pc: any) => (
+            {paychecks.slice().sort((a: any, b: any) => (a.source || '').localeCompare(b.source || '')).map((pc: any) => (
               <div key={pc.id} className="flex items-center gap-3 px-3 py-2 group" style={{ background: pc.confirmed ? 'hsl(142 60% 50% / 0.05)' : undefined }}>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium truncate">{pc.source}</p>
@@ -528,7 +528,7 @@ export default function FinancePage() {
             <p className="text-sm text-muted-foreground">No loan schedules found.</p>
           </div>
         ) : (
-          <>{Object.entries(loanGroups).map(([loanName, payments]: [string, any[]]) => {
+          <>{Object.entries(loanGroups).sort(([a], [b]) => a.localeCompare(b)).map(([loanName, payments]: [string, any[]]) => {
             const nextUnpaid = payments.find((p: any) => !p.paid);
             return (
               <div key={loanName} className="rounded-xl border border-border/40 overflow-hidden">

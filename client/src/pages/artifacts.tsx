@@ -212,13 +212,13 @@ export default function ArtifactsPage() {
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><Pin className="h-3 w-3" /> Pinned</p>
               <div className="grid gap-3 md:grid-cols-2">
-                {pinned.map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
+                {pinned.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
               </div>
             </div>
           )}
           {unpinned.length > 0 && (
             <div className="grid gap-3 md:grid-cols-2">
-              {unpinned.map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
+              {unpinned.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
             </div>
           )}
         </>

@@ -49,7 +49,7 @@ function PWAInstallCard() {
   return (
     <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 flex items-center gap-3 mb-4">
       <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
-        <img src="/portol-logo.png" alt="Portol" className="w-6 h-6 object-contain" />
+        <img src="/portol-logo-clean.png" alt="Portol" className="w-6 h-6 object-contain" />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-foreground">Install Portol</p>

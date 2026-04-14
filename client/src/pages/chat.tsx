@@ -662,7 +662,7 @@ function AttachmentPanel({
               Link to profiles
             </label>
             <div className="rounded-lg border border-border max-h-[200px] overflow-y-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
-              {profiles.map((profile) => {
+              {profiles.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((profile) => {
                 const isChecked = selectedProfileId.split(",").filter(Boolean).includes(profile.id);
                 return (
                   <label
@@ -800,7 +800,7 @@ function BatchAttachmentPanel({
                 <SelectItem value="none" data-testid="select-batch-profile-none">
                   Don't link to a profile
                 </SelectItem>
-                {profiles.map((profile) => (
+                {profiles.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((profile) => (
                   <SelectItem
                     key={profile.id}
                     value={profile.id}
@@ -883,7 +883,7 @@ function BatchAttachmentPanel({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No profile</SelectItem>
-                      {profiles.map((profile) => (
+                      {profiles.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((profile) => (
                         <SelectItem key={profile.id} value={profile.id}>
                           <span className="flex items-center gap-1">
                             {profile.name}
@@ -1455,7 +1455,8 @@ export default function ChatPage() {
     });
   }, [messages, chatMutation.isPending, uploadMutation.isPending, batchUploadMutation.isPending]);
 
-  // Correct image orientation using EXIF data + canvas (like the Claude app does)
+  // Process image: correct EXIF orientation + resize/compress to fit upload limits
+  // ALWAYS runs through canvas to ensure images stay under ~3MB base64 (Vercel body limit safety)
   const correctImageOrientation = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1472,7 +1473,6 @@ export default function ChatPage() {
               const marker = dataView.getUint16(offset, false);
               offset += 2;
               if (marker === 0xFFE1) { // APP1 (EXIF)
-                const length = dataView.getUint16(offset, false);
                 const exifOffset = offset + 2;
                 if (dataView.getUint32(exifOffset, false) === 0x45786966) { // "Exif"
                   const tiffOffset = exifOffset + 6;
@@ -1496,27 +1496,28 @@ export default function ChatPage() {
           }
         } catch { /* keep orientation = 1 if parsing fails */ }
 
-        // If no rotation needed, use original file directly
-        if (orientation <= 1) {
-          const base64Reader = new FileReader();
-          base64Reader.onload = () => resolve((base64Reader.result as string).split(",")[1]);
-          base64Reader.onerror = reject;
-          base64Reader.readAsDataURL(file);
-          return;
-        }
-
-        // Apply rotation via canvas
+        // ALWAYS process through canvas: applies EXIF rotation AND resizes large images
         const img = new Image();
         img.onload = () => {
+          let w = img.width, h = img.height;
+          
+          // Cap at 2048px on longest side — enough for document extraction
+          // This prevents massive Gemini/AI-generated PNGs from exceeding upload limits
+          const MAX_DIM = 2048;
+          if (w > MAX_DIM || h > MAX_DIM) {
+            const scale = MAX_DIM / Math.max(w, h);
+            w = Math.round(w * scale);
+            h = Math.round(h * scale);
+          }
+
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d')!;
-          const w = img.width, h = img.height;
           
           // Set canvas size based on rotation
           if (orientation >= 5) { canvas.width = h; canvas.height = w; }
           else { canvas.width = w; canvas.height = h; }
           
-          // Apply transform
+          // Apply EXIF transform
           switch (orientation) {
             case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
             case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
@@ -1527,10 +1528,12 @@ export default function ChatPage() {
             case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
           }
           
-          ctx.drawImage(img, 0, 0);
-          // Export as JPEG at 95% quality (high quality, minimal compression)
-          const corrected = canvas.toDataURL('image/jpeg', 0.95).split(',')[1];
-          resolve(corrected);
+          ctx.drawImage(img, 0, 0, w, h);
+          // Export as JPEG at 85% quality — good enough for document text extraction
+          // while keeping file size well under Vercel's ~4.5MB request body limit
+          const compressed = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+          console.log(`[upload] Image processed: ${img.width}x${img.height} → ${w}x${h}, base64 length: ${compressed.length} (${(compressed.length * 0.75 / 1024 / 1024).toFixed(1)}MB)`);
+          resolve(compressed);
         };
         img.onerror = reject;
         img.src = URL.createObjectURL(file);

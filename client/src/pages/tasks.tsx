@@ -520,7 +520,7 @@ export default function TasksPage() {
               {activeTasks.length === 0 ? (
                 <EmptyState icon={ListTodo} title="No active tasks" description="All tasks are completed or create a new one." />
               ) : (
-                activeTasks.map(task => (
+                activeTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(task => (
                   <SwipeableItem
                     key={task.id}
                     onSwipeLeft={async () => {
@@ -553,7 +553,7 @@ export default function TasksPage() {
               {completedTasks.length === 0 ? (
                 <EmptyState icon={CheckCircle2} title="No completed tasks" description="Complete a task to see it here." />
               ) : (
-                completedTasks.map(task => (
+                completedTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(task => (
                   <SwipeableItem
                     key={task.id}
                     leftLabel="↩ Reopen"

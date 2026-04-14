@@ -32,7 +32,7 @@ export function AppSidebar() {
       <SidebarHeader className="px-4 py-4 border-b border-border/40">
         <div className="flex items-center gap-2.5">
           <img
-            src="/portol-logo.png"
+            src="/portol-logo-clean.png"
             alt="Portol"
             className="w-8 h-8 object-contain"
             style={{ filter: 'drop-shadow(0 0 6px rgba(0,200,220,0.5))' }}

@@ -1858,8 +1858,8 @@ function EntryRow({
 
 // ── CreateTrackerDialog ────────────────────────────────────────────────────────
 
-const CATEGORIES = ["health", "fitness", "nutrition", "finance", "sleep", "habit", "custom"] as const;
-const FIELD_TYPES = ["number", "text", "boolean", "select", "duration"] as const;
+const CATEGORIES = ["custom", "finance", "fitness", "habit", "health", "nutrition", "sleep"] as const;
+const FIELD_TYPES = ["boolean", "duration", "number", "select", "text"] as const;
 
 type FieldDraft = {
   name: string;
@@ -3674,7 +3674,7 @@ export default function TrackersPage() {
 
   // Unique canonical groups for filter chips
   const allTrackerCats = useMemo(() => [...new Set((trackers || []).map(t => getCanonicalGroup(t.category)))]
-    .sort((a, b) => (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99)), [trackers]);
+    .sort((a, b) => a.localeCompare(b)), [trackers]);
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
   const profilesWithTrackers = (profiles || []).filter(p =>
@@ -3704,9 +3704,7 @@ export default function TrackersPage() {
       (acc[group] = acc[group] || []).push(t);
       return acc;
     }, {});
-    const s = Object.keys(g).sort((a, b) =>
-      (CANONICAL_GROUPS[a]?.order ?? 99) - (CANONICAL_GROUPS[b]?.order ?? 99)
-    );
+    const s = Object.keys(g).sort((a, b) => a.localeCompare(b));
     return { grouped: g, sortedCats: s };
   }, [filteredTrackers]);
 
@@ -3886,8 +3884,7 @@ export default function TrackersPage() {
           const group = p.type === "vehicle" ? "Vehicles" : p.type === "asset" ? "Assets" : p.type === "property" ? "Properties" : p.type === "loan" ? "Loans" : p.type === "investment" ? "Investments" : "Other";
           (typeGroups[group] = typeGroups[group] || []).push(p);
         }
-        const groupOrder = ["Vehicles", "Assets", "Properties", "Loans", "Investments", "Other"];
-        const sortedGroups = Object.entries(typeGroups).sort(([a], [b]) => groupOrder.indexOf(a) - groupOrder.indexOf(b));
+        const sortedGroups = Object.entries(typeGroups).sort(([a], [b]) => a.localeCompare(b));
         const typeIcons: Record<string, any> = { vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: CreditCard };
 
         return (
@@ -3907,7 +3904,7 @@ export default function TrackersPage() {
             </button>
             {!collapsedSections.has("profiles") && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                {sortedGroups.flatMap(([, items]) => items).map(child => {
+                {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
                   const fields = child.fields || {};
                   const currentVal = fields.currentValue;
@@ -3984,7 +3981,7 @@ export default function TrackersPage() {
             </button>
             {!collapsedSections.has("subscriptions") && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                {subs.map(sub => {
+                {subs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(sub => {
                   const fields = sub.fields || {};
                   const cost = fields.cost || fields.amount || fields.price;
                   const freq = fields.frequency || fields.billing || fields.billingCycle || 'monthly';
@@ -4135,7 +4132,7 @@ export default function TrackersPage() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-            {filteredDocuments.map(doc => {
+            {filteredDocuments.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
               const DOC_TYPE_HSL: Record<string, string> = {
                 medical: '0 72% 51%', insurance: '213 72% 51%', legal: '270 60% 55%',
                 financial: '142 60% 45%', identity: '38 92% 50%', warranty: '25 80% 54%',
@@ -4482,7 +4479,7 @@ export default function TrackersPage() {
                       <span className="text-[10px] text-muted-foreground">({g.trackers.length})</span>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {g.trackers.map(tracker => (
+                      {g.trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
                         <TrackerCard key={tracker.id} tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
                       ))}
                     </div>

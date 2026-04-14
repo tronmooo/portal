@@ -64,13 +64,13 @@ import { useToast } from "@/hooks/use-toast";
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const PROFILE_TYPES: ProfileType[] = [
+  "asset",
+  "investment",
+  "loan",
   "person",
   "pet",
-  "vehicle",
-  "asset",
-  "loan",
-  "investment",
   "subscription",
+  "vehicle",
 ];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -1268,7 +1268,7 @@ export default function ProfilesPage() {
               {typeGroupLabel(type)} ({grouped[type].length})
             </h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {grouped[type].map((profile) => (
+              {grouped[type].slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((profile) => (
                 <ProfileCard
                   key={profile.id}
                   profile={profile}

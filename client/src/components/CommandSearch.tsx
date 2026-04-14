@@ -321,7 +321,7 @@ export function CommandSearch() {
           <>
             {results.profiles && results.profiles.length > 0 && (
               <CommandGroup heading="Profiles">
-                {results.profiles.map((p) => (
+                {results.profiles.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((p) => (
                   <CommandItem
                     key={`profile-${p.id}`}
                     value={`profile-${p.id}-${p.name}`}
@@ -342,7 +342,7 @@ export function CommandSearch() {
 
             {results.trackers && results.trackers.length > 0 && (
               <CommandGroup heading="Trackers">
-                {results.trackers.map((t) => (
+                {results.trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((t) => (
                   <CommandItem
                     key={`tracker-${t.id}`}
                     value={`tracker-${t.id}-${t.name}`}
@@ -363,7 +363,7 @@ export function CommandSearch() {
 
             {results.tasks && results.tasks.length > 0 && (
               <CommandGroup heading="Tasks">
-                {results.tasks.map((t) => (
+                {results.tasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((t) => (
                   <CommandItem
                     key={`task-${t.id}`}
                     value={`task-${t.id}-${t.title}`}
@@ -384,7 +384,7 @@ export function CommandSearch() {
 
             {results.expenses && results.expenses.length > 0 && (
               <CommandGroup heading="Expenses">
-                {results.expenses.map((e) => (
+                {results.expenses.slice().sort((a, b) => (a.description || '').localeCompare(b.description || '')).map((e) => (
                   <CommandItem
                     key={`expense-${e.id}`}
                     value={`expense-${e.id}-${e.description}`}
@@ -405,7 +405,7 @@ export function CommandSearch() {
 
             {results.events && results.events.length > 0 && (
               <CommandGroup heading="Events">
-                {results.events.map((e) => (
+                {results.events.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((e) => (
                   <CommandItem
                     key={`event-${e.id}`}
                     value={`event-${e.id}-${e.title}`}
@@ -426,7 +426,7 @@ export function CommandSearch() {
 
             {results.documents && results.documents.length > 0 && (
               <CommandGroup heading="Documents">
-                {results.documents.map((d) => (
+                {results.documents.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((d) => (
                   <CommandItem
                     key={`doc-${d.id}`}
                     value={`doc-${d.id}-${d.name}`}
@@ -447,7 +447,7 @@ export function CommandSearch() {
 
             {results.habits && results.habits.length > 0 && (
               <CommandGroup heading="Habits">
-                {results.habits.map((h) => (
+                {results.habits.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((h) => (
                   <CommandItem
                     key={`habit-${h.id}`}
                     value={`habit-${h.id}-${h.name}`}
@@ -468,7 +468,7 @@ export function CommandSearch() {
 
             {results.journal && results.journal.length > 0 && (
               <CommandGroup heading="Journal">
-                {results.journal.map((j) => (
+                {results.journal.slice().sort((a, b) => ((a.content || a.mood || '') as string).localeCompare((b.content || b.mood || '') as string)).map((j) => (
                   <CommandItem
                     key={`journal-${j.id}`}
                     value={`journal-${j.id}-${j.content ?? j.mood ?? j.date ?? j.id}`}
@@ -491,7 +491,7 @@ export function CommandSearch() {
 
             {results.obligations && results.obligations.length > 0 && (
               <CommandGroup heading="Obligations">
-                {results.obligations.map((o) => (
+                {results.obligations.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((o) => (
                   <CommandItem
                     key={`obligation-${o.id}`}
                     value={`obligation-${o.id}-${o.name}`}
@@ -512,7 +512,7 @@ export function CommandSearch() {
 
             {results.artifacts && results.artifacts.length > 0 && (
               <CommandGroup heading="Artifacts">
-                {results.artifacts.map((a) => (
+                {results.artifacts.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((a) => (
                   <CommandItem
                     key={`artifact-${a.id}`}
                     value={`artifact-${a.id}-${a.title}`}

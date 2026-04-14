@@ -274,7 +274,7 @@ function EventFormDialog({
           <div className="space-y-1.5">
             <Label>Category</Label>
             <div className="flex flex-wrap gap-1.5">
-              {(Object.keys(CATEGORY_LABELS) as EventCategory[]).map(cat => (
+              {(Object.keys(CATEGORY_LABELS) as EventCategory[]).slice().sort((a, b) => (CATEGORY_LABELS[a as EventCategory] || '').localeCompare(CATEGORY_LABELS[b as EventCategory] || '')).map(cat => (
                 <button
                   key={cat}
                   type="button"
@@ -384,10 +384,10 @@ function EventFormDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">Does not repeat</SelectItem>
-                <SelectItem value="daily">Daily</SelectItem>
-                <SelectItem value="weekly">Weekly</SelectItem>
                 <SelectItem value="biweekly">Bi-weekly</SelectItem>
+                <SelectItem value="daily">Daily</SelectItem>
                 <SelectItem value="monthly">Monthly</SelectItem>
+                <SelectItem value="weekly">Weekly</SelectItem>
                 <SelectItem value="yearly">Yearly</SelectItem>
               </SelectContent>
             </Select>
@@ -937,10 +937,10 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       <div className="flex gap-1 flex-wrap">
         {[
           { key: "all", label: "All", activeClass: "bg-primary/20 text-primary border-primary/40" },
-          { key: "event", label: "Events", activeClass: "bg-blue-500/20 text-blue-400 border-blue-500/40" },
-          { key: "task", label: "Tasks", activeClass: "bg-purple-500/20 text-purple-400 border-purple-500/40" },
           { key: "obligation", label: "Bills", activeClass: "bg-amber-500/20 text-amber-400 border-amber-500/40" },
+          { key: "event", label: "Events", activeClass: "bg-blue-500/20 text-blue-400 border-blue-500/40" },
           { key: "habit", label: "Habits", activeClass: "bg-green-500/20 text-green-400 border-green-500/40" },
+          { key: "task", label: "Tasks", activeClass: "bg-purple-500/20 text-purple-400 border-purple-500/40" },
         ].map(f => (
           <button
             key={f.key}
