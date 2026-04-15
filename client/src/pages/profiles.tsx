@@ -757,17 +757,21 @@ function CreateProfileDialog({
   const [fields, setFields] = useState<Record<string, any>>({});
   const [tagsInput, setTagsInput] = useState("");
   const [notes, setNotes] = useState("");
+  const [dupWarning, setDupWarning] = useState<{ name: string; type: string; payload: any } | null>(null);
 
   const createMutation = useMutation({
-    mutationFn: async (payload: InsertProfile & { type_key?: string }) => {
-      // Check for duplicate name by querying current profiles
-      const existing = await apiRequest("GET", "/api/profiles").then(r => r.json()) as any[];
-      const dup = existing?.find((p: any) => p.name.toLowerCase() === payload.name.toLowerCase());
-      if (dup) {
-        const proceed = confirm(`A profile named "${dup.name}" already exists (${dup.type}). Create another?`);
-        if (!proceed) throw new Error("Cancelled");
+    mutationFn: async (payload: InsertProfile & { type_key?: string; skipDupCheck?: boolean }) => {
+      if (!payload.skipDupCheck) {
+        // Check for duplicate name by querying current profiles
+        const existing = await apiRequest("GET", "/api/profiles").then(r => r.json()) as any[];
+        const dup = existing?.find((p: any) => p.name.toLowerCase() === payload.name.toLowerCase());
+        if (dup) {
+          setDupWarning({ name: dup.name, type: dup.type, payload });
+          throw new Error("__DUP_CHECK__");
+        }
       }
-      const res = await apiRequest("POST", "/api/profiles", payload);
+      const { skipDupCheck, ...rest } = payload;
+      const res = await apiRequest("POST", "/api/profiles", rest);
       return res.json();
     },
     onSuccess: () => {
@@ -777,6 +781,7 @@ function CreateProfileDialog({
       handleClose();
     },
     onError: (err: Error) => {
+      if (err.message === "__DUP_CHECK__") return;
       toast({
         title: "Failed to create profile",
         description: err.message,
@@ -847,6 +852,7 @@ function CreateProfileDialog({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
       <DialogContent
         className="max-w-lg max-h-[90vh] flex flex-col p-0"
@@ -966,6 +972,25 @@ function CreateProfileDialog({
         )}
       </DialogContent>
     </Dialog>
+
+    {/* Duplicate profile warning */}
+    <AlertDialog open={!!dupWarning} onOpenChange={(open) => { if (!open) setDupWarning(null); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Duplicate Profile</AlertDialogTitle>
+          <AlertDialogDescription>
+            A profile named "{dupWarning?.name}" already exists ({dupWarning?.type}). Create another?
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => { if (dupWarning?.payload) { createMutation.mutate({ ...dupWarning.payload, skipDupCheck: true }); } setDupWarning(null); }}>
+            Create Anyway
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 

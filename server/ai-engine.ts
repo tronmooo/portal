@@ -958,27 +958,8 @@ Return ONLY the JSON array, nothing else.`;
         // Categorize the field
         const category = CATEGORY_MAP[key] || 'OTHER';
 
-        // Smart pre-selection: only select fields relevant to the person/profile
-        let selected = false;
-        if (category === 'PERSONAL') {
-          selected = true;
-        } else if (category === 'HEALTH') {
-          selected = true;
-        } else if (category === 'DATE' && /birth/i.test(key)) {
-          selected = true;
-        } else if (category === 'FINANCE') {
-          selected = isFinanceDoc;
-        } else if (category === 'VEHICLE') {
-          selected = isVehicleProfile;
-        } else if (category === 'DOCUMENT' || DOC_METADATA_KEYS.has(key)) {
-          selected = false;
-        } else if (category === 'DATE') {
-          // Non-birth date fields: not pre-selected (user decides via calendar event flow)
-          selected = false;
-        } else {
-          // OTHER / unrecognized: default to true so user can deselect
-          selected = true;
-        }
+        // ALL fields default to checked. User unchecks what they don't want.
+        const selected = true;
 
         extractedFields.push({ key, label, value, selected, isDate, category, suggestedEvent });
 
@@ -2061,6 +2042,94 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: ["reportType"],
     },
   },
+
+  // --- Query tools: calendar, expenses, tasks ---
+  {
+    name: "query_calendar",
+    description: "Query the unified calendar timeline for a date range. Returns events, tasks with due dates, habit schedules, and obligation due dates. Use when user asks 'am I free Friday?', 'what's on my calendar next week?', 'show my schedule for tomorrow', 'any appointments this week?'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        startDate: { type: "string", description: "Start date (YYYY-MM-DD)" },
+        endDate: { type: "string", description: "End date (YYYY-MM-DD)" },
+        type: { type: "string", enum: ["event", "task", "habit", "obligation"], description: "Optional: filter to a specific item type" },
+      },
+      required: ["startDate", "endDate"],
+    },
+  },
+  {
+    name: "query_expenses",
+    description: "Query expenses with optional filters. Use when user asks 'last 5 expenses', 'how much did I spend on food this month?', 'show my recent purchases', 'expenses from last week'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        limit: { type: "number", description: "Max number of expenses to return (default 20)" },
+        startDate: { type: "string", description: "Filter: only expenses on or after this date (YYYY-MM-DD)" },
+        endDate: { type: "string", description: "Filter: only expenses on or before this date (YYYY-MM-DD)" },
+        category: { type: "string", description: "Filter: only expenses in this category" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "query_tasks",
+    description: "Query tasks with optional filters. Use when user asks 'tasks due this week', 'completed tasks', 'show all my active tasks', 'overdue tasks'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        status: { type: "string", enum: ["active", "completed", "all"], description: "Filter by status (default 'active')" },
+        dueBefore: { type: "string", description: "Only tasks due on or before this date (YYYY-MM-DD)" },
+        dueAfter: { type: "string", description: "Only tasks due on or after this date (YYYY-MM-DD)" },
+      },
+      required: [],
+    },
+  },
+
+  // --- Analytics: spending ---
+  {
+    name: "spending_analytics",
+    description: "Compute spending analytics for a time period, grouped by category. Optionally compare with the previous period. Use when user asks 'spending this month vs last month', 'how much am I spending?', 'spending breakdown', 'where does my money go?'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        period: { type: "string", enum: ["week", "month", "quarter", "year"], description: "Time period to analyze" },
+        compareWith: { type: "string", enum: ["previous"], description: "Set to 'previous' to compare with the prior period" },
+      },
+      required: ["period"],
+    },
+  },
+
+  // --- Income logging ---
+  {
+    name: "log_income",
+    description: "Log an income entry. Use when user says 'I got paid $X', 'received $X from freelance', 'paycheck of $X', or mentions any incoming money.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        amount: { type: "number", description: "Income amount in dollars" },
+        source: { type: "string", description: "Income source (employer, client, freelance, etc.)" },
+        date: { type: "string", description: "Date received (YYYY-MM-DD). Defaults to today." },
+        category: { type: "string", description: "Category: salary, freelance, investment, gift, refund, other" },
+        notes: { type: "string", description: "Optional notes" },
+      },
+      required: ["amount", "source"],
+    },
+  },
+
+  // --- Document management ---
+  {
+    name: "manage_document",
+    description: "Rename, delete, or re-extract data from a stored document. Use when user says 'rename my document X to Y', 'delete document X', 're-extract my insurance card'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        action: { type: "string", enum: ["rename", "delete", "re_extract"], description: "Action to perform" },
+        documentId: { type: "string", description: "ID of the document" },
+        newName: { type: "string", description: "New name (required for rename action)" },
+      },
+      required: ["action", "documentId"],
+    },
+  },
 ];
 
 // ============================================================
@@ -2094,6 +2163,14 @@ CALENDAR DATA ACCURACY:
 - Tasks with a due date appear on the calendar automatically — do NOT also create an event for the same task
 - Subscriptions/obligations appear on the calendar on their due dates automatically — do NOT create events for them
 - Only create calendar events for actual scheduled occurrences (appointments, meetings, activities)
+
+QUERY & ANALYTICS TOOLS:
+- Use query_calendar to answer "am I free Friday?", "what's on my calendar next week?", or any schedule question. Provide startDate and endDate.
+- Use query_expenses to answer "last 5 expenses", "how much did I spend on food this month?". Supports limit, date range, and category filters.
+- Use query_tasks to answer "tasks due this week", "completed tasks", "overdue tasks". Supports status and due date filters.
+- Use spending_analytics to answer "spending breakdown this month", "compare this month vs last month". Set compareWith="previous" for period-over-period comparison.
+- Use log_income to record incoming money: "I got paid $5000", "received $500 from freelance". Maps to the income ledger.
+- Use manage_document to rename, delete, or re-extract documents by ID. Use when user says "rename document X", "delete that document", etc.
 
 BEHAVIOR:
 - Be concise and confirm what you did after each action.
@@ -4347,6 +4424,165 @@ async function executeTool(name: string, input: any): Promise<any> {
       catch (e: any) { return { error: "Report generation failed: " + e.message }; }
     }
 
+    // --- Query tools ---
+    case "query_calendar": {
+      const startDate = input.startDate;
+      const endDate = input.endDate;
+      if (!startDate || !endDate) return { error: "startDate and endDate are required" };
+      const items = await storage.getCalendarTimeline(startDate, endDate);
+      const filtered = input.type ? items.filter((item: any) => item.type === input.type) : items;
+      return { items: filtered, count: filtered.length, startDate, endDate };
+    }
+
+    case "query_expenses": {
+      let expenses = await storage.getExpenses();
+      if (input.startDate) {
+        expenses = expenses.filter(e => (e.date || e.createdAt) >= input.startDate);
+      }
+      if (input.endDate) {
+        expenses = expenses.filter(e => (e.date || e.createdAt) <= input.endDate + "T23:59:59");
+      }
+      if (input.category) {
+        const catLC = (input.category as string).toLowerCase();
+        expenses = expenses.filter(e => (e.category || "").toLowerCase() === catLC);
+      }
+      // Sort by date descending (most recent first)
+      expenses.sort((a, b) => {
+        const da = a.date || a.createdAt || "";
+        const db = b.date || b.createdAt || "";
+        return db.localeCompare(da);
+      });
+      const limit = input.limit || 20;
+      const limited = expenses.slice(0, limit);
+      const total = limited.reduce((s: number, e: any) => s + (e.amount || 0), 0);
+      return { expenses: limited.map(e => ({ id: e.id, amount: e.amount, description: e.description, category: e.category, date: e.date, vendor: e.vendor })), count: limited.length, totalFiltered: expenses.length, total: Math.round(total * 100) / 100 };
+    }
+
+    case "query_tasks": {
+      let tasks = await storage.getTasks();
+      const statusFilter = input.status || "active";
+      if (statusFilter === "active") {
+        tasks = tasks.filter(t => t.status !== "done");
+      } else if (statusFilter === "completed") {
+        tasks = tasks.filter(t => t.status === "done");
+      }
+      // else "all" — no filter
+      if (input.dueBefore) {
+        tasks = tasks.filter(t => t.dueDate && t.dueDate <= input.dueBefore);
+      }
+      if (input.dueAfter) {
+        tasks = tasks.filter(t => t.dueDate && t.dueDate >= input.dueAfter);
+      }
+      return { tasks: tasks.map(t => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, dueDate: t.dueDate, tags: t.tags })), count: tasks.length };
+    }
+
+    // --- Spending analytics ---
+    case "spending_analytics": {
+      const now = new Date();
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      let periodStartDate: string;
+      let periodEndDate: string = todayStr;
+      let prevStartDate: string | undefined;
+      let prevEndDate: string | undefined;
+
+      const periodMs = {
+        week: 7 * 86400000,
+        month: 30 * 86400000,
+        quarter: 90 * 86400000,
+        year: 365 * 86400000,
+      };
+      const durationMs = periodMs[input.period as keyof typeof periodMs] || periodMs.month;
+      periodStartDate = new Date(now.getTime() - durationMs).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+
+      if (input.compareWith === "previous") {
+        prevEndDate = new Date(new Date(periodStartDate).getTime() - 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        prevStartDate = new Date(new Date(periodStartDate).getTime() - durationMs).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      }
+
+      const allExpenses = await storage.getExpenses();
+      const currentExpenses = allExpenses.filter(e => {
+        const d = e.date || e.createdAt || "";
+        return d >= periodStartDate && d <= periodEndDate + "T23:59:59";
+      });
+
+      // Group by category
+      const byCategory: Record<string, number> = {};
+      let total = 0;
+      for (const e of currentExpenses) {
+        const cat = e.category || "general";
+        byCategory[cat] = (byCategory[cat] || 0) + e.amount;
+        total += e.amount;
+      }
+      const byCategoryArr = Object.entries(byCategory)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, amount]) => ({ name, amount: Math.round(amount * 100) / 100 }));
+
+      const result: any = {
+        period: input.period,
+        startDate: periodStartDate,
+        endDate: periodEndDate,
+        total: Math.round(total * 100) / 100,
+        byCategory: byCategoryArr,
+        transactionCount: currentExpenses.length,
+      };
+
+      if (prevStartDate && prevEndDate) {
+        const prevExpenses = allExpenses.filter(e => {
+          const d = e.date || e.createdAt || "";
+          return d >= prevStartDate! && d <= prevEndDate! + "T23:59:59";
+        });
+        const prevTotal = prevExpenses.reduce((s, e) => s + e.amount, 0);
+        result.previousTotal = Math.round(prevTotal * 100) / 100;
+        result.change = total - prevTotal;
+        result.changePercent = prevTotal > 0 ? Math.round(((total - prevTotal) / prevTotal) * 10000) / 100 : null;
+      }
+
+      return result;
+    }
+
+    // --- Income logging ---
+    case "log_income": {
+      if (!input.amount || !input.source) return { error: "amount and source are required" };
+      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const incomeData = {
+        description: input.source,
+        amount: input.amount,
+        category: input.category || "salary",
+        frequency: "once" as string,
+        date: input.date || todayDate,
+      };
+      const created = await storage.createIncome(incomeData);
+      return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}` };
+    }
+
+    // --- Document management ---
+    case "manage_document": {
+      const docId = input.documentId;
+      if (!docId) return { error: "documentId is required" };
+      switch (input.action) {
+        case "rename": {
+          if (!input.newName) return { error: "newName is required for rename action" };
+          const updated = await storage.updateDocument(docId, { name: input.newName });
+          if (!updated) return { error: "Document not found" };
+          return { success: true, message: `Renamed document to "${input.newName}"`, document: { id: updated.id, name: updated.name } };
+        }
+        case "delete": {
+          const deleted = await storage.deleteDocument(docId);
+          if (!deleted) return { error: "Document not found or could not be deleted" };
+          return { success: true, message: "Document deleted" };
+        }
+        case "re_extract": {
+          const doc = await storage.getDocument(docId);
+          if (!doc) return { error: "Document not found" };
+          // Mark the document for re-extraction by clearing extracted data
+          await storage.updateDocument(docId, { extractedData: null } as any);
+          return { success: true, message: `Document "${doc.name}" queued for re-extraction. Upload it again to re-extract data.` };
+        }
+        default:
+          return { error: `Unknown action: ${input.action}. Use 'rename', 'delete', or 're_extract'.` };
+      }
+    }
+
     default:
       return null;
   }
@@ -5568,6 +5804,12 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     generate_chart: "retrieve",
     generate_table: "retrieve",
     generate_report: "retrieve",
+    query_calendar: "retrieve",
+    query_expenses: "retrieve",
+    query_tasks: "retrieve",
+    spending_analytics: "retrieve",
+    log_income: "log_expense",
+    manage_document: "retrieve",
   };
   return mapping[toolName] || "retrieve";
 }

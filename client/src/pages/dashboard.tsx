@@ -1701,7 +1701,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   const openCreate = () => { resetForm(); setCreating(true); };
 
   const handleSave = () => {
-    if (!formTitle.trim() || !formTarget) return;
+    if (!formTitle.trim() || !formTarget || Number(formTarget) <= 0) return;
     const payload = { title: formTitle.trim(), type: formType, target: Number(formTarget), unit: formUnit || "units", deadline: formDeadline || undefined };
     if (editGoal) updateMutation.mutate({ id: editGoal.id, ...payload });
     else createMutation.mutate(payload);
@@ -2181,7 +2181,7 @@ function BudgetManager() {
           <Input placeholder="Amount" type="number" value={newAmt} onChange={(e) => setNewAmt(e.target.value)} className="h-8 text-xs" step="0.01" />
           <Input placeholder="Notes (optional)" value={newNotes} onChange={(e) => setNewNotes(e.target.value)} className="h-8 text-xs" />
           <div className="flex gap-2">
-            <Button size="sm" className="h-7 text-xs flex-1" disabled={!newCat || !newAmt} onClick={() => addMutation.mutate({ category: newCat, amount: parseFloat(newAmt), notes: newNotes || undefined })}>
+            <Button size="sm" className="h-7 text-xs flex-1" disabled={!newCat || !newAmt || parseFloat(newAmt) <= 0} onClick={() => addMutation.mutate({ category: newCat, amount: parseFloat(newAmt), notes: newNotes || undefined })}>
               <Plus className="h-3 w-3 mr-1" /> Add Budget
             </Button>
             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setAddOpen(false)}>Cancel</Button>

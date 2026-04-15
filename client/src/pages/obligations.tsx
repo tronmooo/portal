@@ -11,8 +11,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus, AlertCircle } from "lucide-react";
+import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus, AlertCircle, Trash2, Pencil } from "lucide-react";
 import { Link } from "wouter";
 import type { Obligation } from "@shared/schema";
 
@@ -29,6 +33,12 @@ function ObligationCard({ ob }: { ob: Obligation }) {
   const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
   const isOverdue = daysUntilDue < 0;
   const isDueSoon = daysUntilDue >= 0 && daysUntilDue <= 7;
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editAmount, setEditAmount] = useState(String(ob.amount));
+  const [editDueDate, setEditDueDate] = useState(ob.nextDueDate?.slice(0, 10) || "");
+  const [editFrequency, setEditFrequency] = useState<string>(ob.frequency);
+  const [editCategory, setEditCategory] = useState(ob.category);
 
   const payMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
@@ -42,7 +52,38 @@ function ObligationCard({ ob }: { ob: Obligation }) {
     onError: (err: Error) => toast({ title: `Failed to pay "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/obligations/${ob.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: `"${ob.name}" deleted` });
+    },
+    onError: (err: Error) => toast({ title: `Failed to delete "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const editMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/obligations/${ob.id}`, {
+      amount: parseFloat(editAmount),
+      nextDueDate: editDueDate,
+      frequency: editFrequency,
+      category: editCategory,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      setEditOpen(false);
+      toast({ title: `"${ob.name}" updated` });
+    },
+    onError: (err: Error) => toast({ title: `Failed to update "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
+  });
+
   return (
+    <>
     <Card className={`${isOverdue ? "border-red-500/50" : isDueSoon ? "border-yellow-500/30" : ""}`} data-testid={`card-obligation-${ob.id}`}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between">
@@ -88,16 +129,38 @@ function ObligationCard({ ob }: { ob: Obligation }) {
               {ob.notes && <p className="text-xs text-muted-foreground mt-1">{ob.notes}</p>}
             </div>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => payMutation.mutate()}
-            disabled={payMutation.isPending}
-            className="h-7 text-xs shrink-0"
-            data-testid={`button-pay-${ob.id}`}
-          >
-            Mark Paid
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => { setEditAmount(String(ob.amount)); setEditDueDate(ob.nextDueDate?.slice(0, 10) || ""); setEditFrequency(ob.frequency); setEditCategory(ob.category); setEditOpen(true); }}
+              className="h-7 w-7 p-0"
+              title="Edit"
+              data-testid={`button-edit-${ob.id}`}
+            >
+              <Pencil className="h-3 w-3" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="h-7 w-7 p-0 text-destructive"
+              title="Delete"
+              data-testid={`button-delete-${ob.id}`}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => payMutation.mutate()}
+              disabled={payMutation.isPending}
+              className="h-7 text-xs"
+              data-testid={`button-pay-${ob.id}`}
+            >
+              Mark Paid
+            </Button>
+          </div>
         </div>
 
         {/* Payment history */}
@@ -116,6 +179,86 @@ function ObligationCard({ ob }: { ob: Obligation }) {
         )}
       </CardContent>
     </Card>
+
+    {/* Delete Confirmation */}
+    <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete "{ob.name}"?</AlertDialogTitle>
+          <AlertDialogDescription>This bill and its payment history will be permanently deleted.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={() => { deleteMutation.mutate(); setShowDeleteConfirm(false); }}
+            disabled={deleteMutation.isPending}
+          >
+            {deleteMutation.isPending ? "Deleting..." : "Delete"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    {/* Edit Dialog */}
+    <Dialog open={editOpen} onOpenChange={setEditOpen}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-sm">Edit "{ob.name}"</DialogTitle>
+          <DialogDescription className="text-xs">Update bill details</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Amount ($)</Label>
+              <Input type="number" min="0" step="0.01" value={editAmount} onChange={e => setEditAmount(e.target.value)} data-testid="input-edit-amount" />
+            </div>
+            <div>
+              <Label className="text-xs">Frequency</Label>
+              <Select value={editFrequency} onValueChange={setEditFrequency}>
+                <SelectTrigger data-testid="select-edit-frequency"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="biweekly">Biweekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="quarterly">Quarterly</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="yearly">Yearly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Category</Label>
+              <Select value={editCategory} onValueChange={setEditCategory}>
+                <SelectTrigger data-testid="select-edit-category"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="health">Health</SelectItem>
+                  <SelectItem value="housing">Housing</SelectItem>
+                  <SelectItem value="insurance">Insurance</SelectItem>
+                  <SelectItem value="loan">Loan</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                  <SelectItem value="subscription">Subscription</SelectItem>
+                  <SelectItem value="utility">Utility</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Next Due Date</Label>
+              <Input type="date" value={editDueDate} onChange={e => setEditDueDate(e.target.value)} data-testid="input-edit-due-date" />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => setEditOpen(false)}>Cancel</Button>
+          <Button size="sm" disabled={!editAmount || parseFloat(editAmount) <= 0 || editMutation.isPending}
+            onClick={() => editMutation.mutate()} data-testid="button-save-edit-obligation">
+            {editMutation.isPending ? "Saving..." : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 
@@ -251,7 +394,7 @@ export default function ObligationsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" disabled={!newName.trim() || !newAmount || createMutation.isPending}
+            <Button size="sm" disabled={!newName.trim() || !newAmount || parseFloat(newAmount) <= 0 || createMutation.isPending}
               onClick={() => createMutation.mutate({
                 name: newName.trim(), amount: parseFloat(newAmount), frequency: newFrequency,
                 category: newCategory, nextDueDate: newDueDate, autopay: false,
@@ -293,8 +436,8 @@ export default function ObligationsPage() {
       ) : sorted.length === 0 ? (
         <div className="text-center py-12">
           <CreditCard className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-          <h3 className="text-sm font-medium mb-1">No obligations yet</h3>
-          <p className="text-xs text-muted-foreground mb-4">Track recurring bills, subscriptions, and payments.</p>
+          <h3 className="text-sm font-medium mb-1">No bills yet</h3>
+          <p className="text-xs text-muted-foreground mb-4">Add one to start tracking recurring bills, subscriptions, and payments.</p>
           <Button size="sm" onClick={() => setAddOpen(true)} data-testid="button-add-obligation-empty">
             <Plus className="w-4 h-4 mr-1" /> Add Your First Obligation
           </Button>

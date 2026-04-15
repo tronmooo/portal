@@ -298,6 +298,7 @@ export default function HabitsPage() {
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
+  const [dupWarning, setDupWarning] = useState<string | null>(null);
   const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -312,11 +313,14 @@ export default function HabitsPage() {
     ? allHabits.filter(h => (h.linkedProfiles || []).some(id => filterIds.includes(id)))
     : allHabits;
 
-  const handleCreate = () => {
+  const handleCreate = (force?: boolean) => {
     if (!newName.trim()) { toast({ title: "Name required", description: "Enter a habit name", variant: "destructive" }); return; }
-    const duplicate = habits.find(h => h.name.toLowerCase() === newName.trim().toLowerCase());
-    if (duplicate) {
-      if (!confirm(`A habit named "${duplicate.name}" already exists. Create another?`)) return;
+    if (!force) {
+      const duplicate = habits.find(h => h.name.toLowerCase() === newName.trim().toLowerCase());
+      if (duplicate) {
+        setDupWarning(duplicate.name);
+        return;
+      }
     }
     createMutation.mutate(newName.trim());
   };
@@ -382,7 +386,7 @@ export default function HabitsPage() {
             <Button
               size="sm"
               disabled={!newName.trim() || createMutation.isPending}
-              onClick={handleCreate}
+              onClick={() => handleCreate()}
               data-testid="button-save-habit"
             >
               Add
@@ -419,6 +423,24 @@ export default function HabitsPage() {
           ))}
         </div>
       )}
+
+      {/* Duplicate habit warning */}
+      <AlertDialog open={!!dupWarning} onOpenChange={(open) => { if (!open) setDupWarning(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Duplicate Habit</AlertDialogTitle>
+            <AlertDialogDescription>
+              A habit named "{dupWarning}" already exists. Create another?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setDupWarning(null); handleCreate(true); }}>
+              Create Anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -12,6 +12,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
@@ -57,6 +61,7 @@ export default function FinancePage() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "" });
   const [editSaving, setEditSaving] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
@@ -232,7 +237,7 @@ export default function FinancePage() {
                   </div>
                   <div><Label className="text-xs">Vendor (optional)</Label>
                     <Input placeholder="Store or vendor name" value={newExpense.vendor} onChange={e => setNewExpense(p => ({ ...p, vendor: e.target.value }))} data-testid="input-expense-vendor" /></div>
-                  <Button className="w-full" onClick={() => addExpenseMutation.mutate()} disabled={!newExpense.description || !newExpense.amount || addExpenseMutation.isPending} data-testid="button-save-expense">
+                  <Button className="w-full" onClick={() => addExpenseMutation.mutate()} disabled={!newExpense.description || !newExpense.amount || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending} data-testid="button-save-expense">
                     {addExpenseMutation.isPending ? "Saving..." : "Save Expense"}
                   </Button>
                 </div>
@@ -431,17 +436,7 @@ export default function FinancePage() {
                       setEditingExpense(expense);
                       setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "", date: expense.date?.slice(0, 10) || "" });
                     })} title="Edit"><Pencil className="h-3 w-3" /></Button>
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={stopProp(async () => {
-                      if (!confirm(`Delete "${expense.description}"?`)) return;
-                      try {
-                        await apiRequest("DELETE", `/api/expenses/${expense.id}`);
-                        queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter(item => item.id !== expense.id));
-                        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-                        queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                        toast({ title: `"${expense.description}" deleted` });
-                      } catch (err: any) { toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" }); }
-                    })} title="Delete"><Trash2 className="h-3 w-3" /></Button>
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={stopProp(() => setDeleteConfirmId(expense.id))} title="Delete"><Trash2 className="h-3 w-3" /></Button>
                   </div>
                 </div>
               ))}
@@ -663,6 +658,41 @@ export default function FinancePage() {
           </div>
         )}
       </div>
+
+      {/* Delete Expense Confirmation */}
+      <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Expense?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteConfirmId && (() => { const e = profileFiltered.find(x => x.id === deleteConfirmId); return e ? `"${e.description}" ($${e.amount.toFixed(2)}) will be permanently deleted.` : 'This expense will be permanently deleted.'; })()}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={async () => {
+                if (!deleteConfirmId) return;
+                const expense = profileFiltered.find(x => x.id === deleteConfirmId);
+                try {
+                  await apiRequest("DELETE", `/api/expenses/${deleteConfirmId}`);
+                  queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter(item => item.id !== deleteConfirmId));
+                  queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                  toast({ title: `"${expense?.description}" deleted` });
+                } catch (err: any) {
+                  toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" });
+                }
+                setDeleteConfirmId(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

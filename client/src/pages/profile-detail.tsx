@@ -465,6 +465,7 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
   profileId: string; fieldKey: string; fieldValue: string; allFields: Record<string, any>;
 }) {
   const [editing, setEditing] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [value, setValue] = useState(fieldValue);
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -573,12 +574,24 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
         </button>
         <button
           className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-md opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-600 hover:bg-red-500/10 active:bg-red-500/20"
-          onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${formatKey(fieldKey)}"?`)) deleteMut.mutate(); }}
+          onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); }}
           data-testid={`delete-field-${fieldKey}`}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{formatKey(fieldKey)}"?</AlertDialogTitle>
+            <AlertDialogDescription>This field will be permanently removed.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { deleteMut.mutate(); setShowDeleteConfirm(false); }}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -642,11 +655,11 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
   const [saving, setSaving] = useState(false);
   const [finding, setFinding] = useState(false);
   const [foundValue, setFoundValue] = useState<{ estimatedValue: number; confidence: string; explanation: string; range?: { low: number; high: number } } | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const { toast } = useToast();
 
   // Delete this field
   const deleteField = async () => {
-    if (!confirm(`Delete "${label}"?`)) return;
     // Optimistically remove field from cache
     queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
       if (!old?.fields) return old;
@@ -735,13 +748,25 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
           {/* Delete button — always visible on mobile */}
           {value != null && value !== "" && (
             <button
-              onClick={(e) => { e.stopPropagation(); deleteField(); }}
+              onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); }}
               className="w-9 h-9 flex items-center justify-center rounded-md opacity-50 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-500 hover:bg-red-500/10 active:bg-red-500/20"
             >
               <Trash2 className="h-3 w-3" />
             </button>
           )}
         </div>
+        <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete "{label}"?</AlertDialogTitle>
+              <AlertDialogDescription>This field will be permanently removed.</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { deleteField(); setShowDeleteConfirm(false); }}>Delete</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     );
   }
@@ -2681,7 +2706,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditingExpense(null)}>Cancel</Button>
-            <Button onClick={() => updateExpenseMutation.mutate()} disabled={updateExpenseMutation.isPending || !expDesc || !expAmount} data-testid="button-update-expense">
+            <Button onClick={() => updateExpenseMutation.mutate()} disabled={updateExpenseMutation.isPending || !expDesc || !expAmount || parseFloat(expAmount) <= 0} data-testid="button-update-expense">
               {updateExpenseMutation.isPending ? "Saving..." : "Update"}
             </Button>
           </DialogFooter>
@@ -5454,7 +5479,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
               <div className="flex items-center gap-2">
                 <Input className="h-7 text-xs flex-1" placeholder="Amount" value={payAmt} onChange={e => setPayAmt(e.target.value)} data-testid="input-payment-amount" />
                 <Input className="h-7 text-xs w-28" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} data-testid="input-payment-date" />
-                <Button size="sm" className="h-7 text-xs px-2" onClick={() => recordMutation.mutate()} disabled={recordMutation.isPending || !payAmt} data-testid="button-save-payment">
+                <Button size="sm" className="h-7 text-xs px-2" onClick={() => recordMutation.mutate()} disabled={recordMutation.isPending || !payAmt || parseFloat(payAmt) <= 0} data-testid="button-save-payment">
                   {recordMutation.isPending ? "…" : "Save"}
                 </Button>
                 <Button size="sm" variant="ghost" className="h-7 text-xs px-1" onClick={() => setShowRecord(false)}>✕</Button>
@@ -5737,7 +5762,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
             </div>
           </div>
           <DialogFooter>
-            <Button size="sm" className="h-8 text-xs" onClick={() => createPaymentMutation.mutate()} disabled={!payAmount || createPaymentMutation.isPending} data-testid="button-submit-payment">
+            <Button size="sm" className="h-8 text-xs" onClick={() => createPaymentMutation.mutate()} disabled={!payAmount || parseFloat(payAmount) <= 0 || new Date(payDate) > new Date() || createPaymentMutation.isPending} data-testid="button-submit-payment">
               {createPaymentMutation.isPending ? "Saving..." : "Add Payment"}
             </Button>
           </DialogFooter>

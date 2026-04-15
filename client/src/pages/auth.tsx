@@ -362,7 +362,7 @@ export default function AuthPage() {
                     <Label htmlFor="signup-confirm">Confirm Password</Label>
                     <Input id="signup-confirm" type="password" placeholder="Re-enter your password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required data-testid="input-signup-confirm" />
                   </div>
-                  <Button type="submit" className="w-full" disabled={loading} data-testid="button-signup">
+                  <Button type="submit" className="w-full" disabled={loading || !password || password !== confirmPassword} data-testid="button-signup">
                     {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Create Account
                   </Button>
