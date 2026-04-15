@@ -253,7 +253,8 @@ export interface TrackerEntry {
   notes?: string;
   mood?: "great" | "good" | "okay" | "bad" | "terrible";
   tags?: string[];
-  forProfile?: string; // Profile ID this entry belongs to (for per-profile filtering)
+  forProfile?: string; // Legacy: profile context for entry display
+  profileId?: string;  // Profile ID this entry belongs to (for ownership + cascade delete)
   timestamp: string;
 }
 

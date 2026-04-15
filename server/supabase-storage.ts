@@ -219,6 +219,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, values: r.entry_values || {}, computed: r.computed || {},
       notes: r.notes || undefined, mood: r.mood || undefined,
       tags: r.tags || undefined, forProfile: r.for_profile || undefined,
+      profileId: r.profile_id || undefined,
       timestamp: r.timestamp,
     };
   }
