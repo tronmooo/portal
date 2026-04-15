@@ -2402,6 +2402,15 @@ If "delete Joe's running thing" could match habit OR tracker OR event:
 3. If multiple types match → tell user: "I found a Running habit AND a Running tracker for Joe. Which one should I delete?"
 NEVER delete randomly. NEVER delete the wrong item.
 
+━━━ DELETE CONFIRMATION RULE ━━━
+BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, delete_habit, delete_obligation, delete_event, delete_tracker, delete_tracker_entry, delete_journal, delete_budget), you MUST:
+1. Tell the user EXACTLY what you're about to delete (name, type, amount if applicable)
+2. Ask "Should I delete this?" or "Are you sure?"
+3. ONLY call the delete tool AFTER the user confirms in a follow-up message
+4. If the user says "delete X" as a direct command, that counts as confirmation — proceed
+5. But if YOU are suggesting a delete (e.g., "I found duplicates, want me to clean them up?"), wait for explicit yes
+This is a HARD RULE — never silently delete anything the user didn't explicitly ask to delete.
+
 ━━━ HONESTY RULES ━━━
 - If a tool returns {error: "..."} → tell the user it FAILED. Never say "Done!" on failure.
 - If item not found → say "I couldn't find [X]" with specific name. Offer to search.
@@ -5520,7 +5529,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           if (f === "annual" || f === "yearly") return s + amt / 12;
           return s + amt;
         }, 0);
-      const thisMonthSpend = expenses.filter(e => e.date?.startsWith(new Date().toISOString().slice(0,7)))
+      const thisMonthSpend = expenses.filter(e => e.date?.startsWith(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0,7)))
         .reduce((s, e) => s + Number(e.amount || 0), 0);
       return `Financial Snapshot: Net Worth ~$${(totalAssets - totalLiabs).toLocaleString()}, Assets $${totalAssets.toLocaleString()}, Liabilities $${totalLiabs.toLocaleString()}, Monthly subscriptions $${Math.round(monthlySubs)}/mo, This month's spending $${Math.round(thisMonthSpend)}`;
     })(),
