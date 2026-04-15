@@ -442,6 +442,8 @@ function ExtractionConfirmation({
     () => (extraction.trackerEntries || []).map(() => true)
   );
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
+  const [createExpense, setCreateExpense] = useState(!!extraction.pendingFinancial?.expense);
+  const [createObligation, setCreateObligation] = useState(!!extraction.pendingFinancial?.obligation);
 
   // Fetch profiles for the dropdown
   const { data: allProfiles = [] } = useQuery<any[]>({
@@ -475,6 +477,8 @@ function ExtractionConfirmation({
       targetProfileId: selectedProfileId || extraction.targetProfile?.id,
       createCalendarEvents,
       trackerEntries: (extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
+      createExpense: createExpense ? extraction.pendingFinancial?.expense : undefined,
+      createObligation: createObligation ? extraction.pendingFinancial?.obligation : undefined,
     });
     if (success) {
       setConfirmed(true);
@@ -575,6 +579,28 @@ function ExtractionConfirmation({
               </span>
             </label>
           ))}
+        </div>
+      )}
+
+      {extraction.pendingFinancial && (
+        <div className="pt-1.5 border-t border-border/50">
+          <span className="text-xs text-muted-foreground font-medium">💰 Financial Records</span>
+          {extraction.pendingFinancial.expense && (
+            <label className="flex items-center gap-2 cursor-pointer ml-1 py-1">
+              <Checkbox checked={createExpense} onCheckedChange={() => setCreateExpense(!createExpense)} className="h-3.5 w-3.5" />
+              <span className={`text-xs ${createExpense ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
+                Create expense: ${extraction.pendingFinancial.expense.amount.toFixed(2)} — {extraction.pendingFinancial.expense.description}
+              </span>
+            </label>
+          )}
+          {extraction.pendingFinancial.obligation && (
+            <label className="flex items-center gap-2 cursor-pointer ml-1 py-1">
+              <Checkbox checked={createObligation} onCheckedChange={() => setCreateObligation(!createObligation)} className="h-3.5 w-3.5" />
+              <span className={`text-xs ${createObligation ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
+                Create recurring bill: ${extraction.pendingFinancial.obligation.amount.toFixed(2)}/mo — {extraction.pendingFinancial.obligation.name}
+              </span>
+            </label>
+          )}
         </div>
       )}
 

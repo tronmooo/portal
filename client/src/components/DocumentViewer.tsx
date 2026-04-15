@@ -636,7 +636,7 @@ export function DocumentViewerDialog({
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
             {/* Document preview — takes all available space */}
             <div className="flex-1 min-h-0 px-4 pb-2" style={{ display: 'flex', flexDirection: 'column' }}>
               {displayData ? (
@@ -654,7 +654,7 @@ export function DocumentViewerDialog({
 
             {/* Extracted data section — collapsed at bottom */}
             {extractedData && Object.keys(extractedData).length > 0 && (
-              <div className="shrink-0 border-t border-border px-4 py-2 bg-muted/10 max-h-[20vh] overflow-y-auto">
+              <div className="shrink-0 border-t border-border px-4 py-2 bg-muted/10 max-h-[40vh] overflow-y-auto">
                 <p className="text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider mb-1">Extracted Data</p>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3">
                   {Object.entries(extractedData)

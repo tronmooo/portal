@@ -663,6 +663,38 @@ export async function registerRoutes(
         }
       }
 
+      // Create expense if user confirmed
+      if (req.body.createExpense) {
+        const exp = req.body.createExpense;
+        const expense = await storage.createExpense({
+          description: exp.description,
+          amount: parseFloat(exp.amount),
+          category: exp.category || 'general',
+          vendor: exp.vendor,
+          date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          tags: [],
+          linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+        });
+        saved.push(`Created expense: $${exp.amount} ${exp.description}`);
+        // Link document to expense
+        try { await storage.linkProfileTo(expense.id, "document", extractionId); } catch {}
+      }
+
+      // Create obligation if user confirmed
+      if (req.body.createObligation) {
+        const obl = req.body.createObligation;
+        const obligation = await storage.createObligation({
+          name: obl.name,
+          amount: parseFloat(obl.amount),
+          frequency: obl.frequency || 'monthly',
+          category: obl.category || 'general',
+          nextDueDate: obl.nextDueDate,
+          autopay: false,
+          linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+        });
+        saved.push(`Created bill: $${obl.amount}/mo ${obl.name}`);
+      }
+
       res.json({
         success: true,
         message: saved.length > 0

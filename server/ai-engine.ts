@@ -993,6 +993,68 @@ Return ONLY the JSON array, nothing else.`;
     }
     // If no profile was selected, data stays unlinked — user assigns in extraction review
 
+    // Detect financial data for user confirmation
+    let pendingFinancial: { expense?: any; obligation?: any } | undefined;
+    // docType already declared above (line ~929)
+
+    // Build a flat lookup from BOTH extractedData AND extractedFields
+    // The AI puts data in different places depending on the document
+    const fieldLookup: Record<string, string> = {};
+    if (parsed.extractedData) {
+      for (const [k, v] of Object.entries(parsed.extractedData)) {
+        if (v != null) fieldLookup[k.toLowerCase()] = String(v);
+      }
+    }
+    for (const f of extractedFields) {
+      if (f.key && f.value != null) fieldLookup[f.key.toLowerCase()] = String(f.value);
+    }
+
+    // Look for amount fields (check both camelCase and lowercase)
+    const amountKeys = ['totalamountdue', 'amountdue', 'total', 'totalamount', 'amount', 'balancedue', 'currentcharges', 'totalcharges', 'totaldueamount', 'grandtotal'];
+    let amount: number | null = null;
+    for (const key of amountKeys) {
+      const val = fieldLookup[key];
+      if (val) {
+        const num = parseFloat(val.replace(/[$,\s]/g, ''));
+        if (num > 0 && !isNaN(num)) { amount = num; break; }
+      }
+    }
+
+    if (amount && amount > 0) {
+      const categoryMap: Record<string, string> = {
+        'utility': 'utilities', 'utility_bill': 'utilities', 'electric': 'utilities', 'gas': 'utilities', 'water': 'utilities',
+        'medical': 'medical', 'medical_bill': 'medical', 'health': 'medical',
+        'insurance': 'insurance', 'auto_insurance': 'insurance',
+        'invoice': 'general', 'receipt': 'general',
+        'rent': 'housing', 'mortgage': 'housing',
+        'subscription': 'subscription',
+      };
+      const category = categoryMap[docType] || 'general';
+      const vendor = fieldLookup['vendorname'] || fieldLookup['companyname'] || fieldLookup['providername'] || fieldLookup['utilitycompany'] || fieldLookup['title'] || parsed.label || '';
+      const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || '';
+      const isRecurring = ['utility', 'utility_bill', 'rent', 'mortgage', 'subscription', 'insurance'].some(t => docType.includes(t));
+
+      pendingFinancial = {
+        expense: {
+          description: `${vendor || parsed.label || fileName} - ${category}`,
+          amount,
+          category,
+          vendor: vendor || undefined,
+          date: fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        },
+      };
+
+      if (isRecurring && dueDate) {
+        pendingFinancial.obligation = {
+          name: vendor || `${category} bill`,
+          amount,
+          frequency: 'monthly',
+          category,
+          nextDueDate: dueDate,
+        };
+      }
+    }
+
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
@@ -1002,6 +1064,7 @@ Return ONLY the JSON array, nothing else.`;
       targetProfile: resolvedTargetProfile,
       trackerEntries: parsed.trackerEntries || [],
       documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
+      pendingFinancial,
     };
 
     let reply = parsed.summary || `Processed "${fileName}"`;
