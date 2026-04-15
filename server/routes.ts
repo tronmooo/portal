@@ -2313,12 +2313,31 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         }
       }
 
-      // Sort: critical first, then warning, then info
+      // Deduplicate: keep only the most severe notification per entityId
       const severityOrder: Record<string, number> = { critical: 0, warning: 1, info: 2 };
-      notifications.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+      const seenEntities = new Map<string, number>();
+      const deduped: Notification[] = [];
+      for (const notif of notifications) {
+        const dedupeKey = notif.entityId && notif.entityType
+          ? `${notif.entityType}:${notif.entityId}`
+          : notif.id;
+        const existing = seenEntities.get(dedupeKey);
+        if (existing !== undefined) {
+          // Keep the more severe one (lower order = more severe)
+          if (severityOrder[notif.severity] < severityOrder[deduped[existing].severity]) {
+            deduped[existing] = notif;
+          }
+        } else {
+          seenEntities.set(dedupeKey, deduped.length);
+          deduped.push(notif);
+        }
+      }
 
-      setCache(notifCacheKey, notifications, 2 * 60 * 1000); // 2-minute cache
-      res.json(notifications);
+      // Sort: critical first, then warning, then info
+      deduped.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+
+      setCache(notifCacheKey, deduped, 2 * 60 * 1000); // 2-minute cache
+      res.json(deduped);
     } catch (err: any) {
       log.error("[Notifications]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to compute notifications" });

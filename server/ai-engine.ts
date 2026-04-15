@@ -798,15 +798,37 @@ Return ONLY the JSON array, nothing else.`;
     }
 
     // Store the document (always save the file)
-    const document = await storage.createDocument({
-      name: parsed.label || fileName,
-      type: parsed.documentType || "other",
-      mimeType,
-      fileData: base64Data,
-      extractedData: parsed.extractedData || {},
-      linkedProfiles,
-      tags: [parsed.documentType || "uploaded"],
+    // Deduplicate: if a document with the same name already exists for the same profiles, update it instead
+    const docName = parsed.label || fileName;
+    let document: any = null;
+    const existingDocs = await storage.getDocuments();
+    const existingDoc = existingDocs.find((d: any) => {
+      if (d.name !== docName) return false;
+      // Must share at least one linked profile (or both have none)
+      if (linkedProfiles.length === 0 && d.linkedProfiles.length === 0) return true;
+      return linkedProfiles.some((pid: string) => d.linkedProfiles.includes(pid));
     });
+    if (existingDoc) {
+      // Update existing document instead of creating a duplicate
+      document = await storage.updateDocument(existingDoc.id, {
+        mimeType,
+        fileData: base64Data,
+        extractedData: parsed.extractedData || {},
+        linkedProfiles: Array.from(new Set([...existingDoc.linkedProfiles, ...linkedProfiles])),
+        tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded"])),
+      });
+      console.log(`[Upload] Updated existing document "${docName}" (${existingDoc.id}) instead of creating duplicate`);
+    } else {
+      document = await storage.createDocument({
+        name: docName,
+        type: parsed.documentType || "other",
+        mimeType,
+        fileData: base64Data,
+        extractedData: parsed.extractedData || {},
+        linkedProfiles,
+        tags: [parsed.documentType || "uploaded"],
+      });
+    }
     results.push(document);
 
     // === AUTO-PROPAGATE: Link document to parent profiles up the chain ===
@@ -903,6 +925,15 @@ Return ONLY the JSON array, nothing else.`;
               try { await storage.updateTracker(tracker.id, { linkedProfiles: [existingProfileId] } as any); } catch (e: any) { logger.warn("ai", `Fast-path tracker link failed for ${tracker.id}: ${e?.message}`); }
             }
             savedItems.push(`Created tracker: ${humanName}`);
+          } else if (existingProfileId) {
+            // Tracker exists — ensure it's linked to the target profile (not just "Me")
+            const currentLinked = tracker.linkedProfiles || [];
+            if (!currentLinked.includes(existingProfileId)) {
+              try {
+                await storage.updateTracker(tracker.id, { linkedProfiles: [...currentLinked, existingProfileId] } as any);
+                console.log(`[extraction] Linked existing tracker ${tracker.name} to profile ${existingProfileId}`);
+              } catch (e: any) { logger.warn("ai", `Tracker link update failed for ${tracker.id}: ${e?.message}`); }
+            }
           }
           const entryValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
           await storage.logEntry({ trackerId: tracker.id, values: entryValues, notes: `From document: ${parsed.label || fileName}` });
@@ -942,6 +973,9 @@ Return ONLY the JSON array, nothing else.`;
         extractedFields.push({ key, label, value, selected: true, isDate, suggestedEvent });
       }
     }
+
+    // Sort extracted fields alphabetically by label for consistent UI display
+    extractedFields.sort((a, b) => a.label.localeCompare(b.label));
 
     const pendingExtraction = {
       extractionId: document.id,
@@ -2377,7 +2411,8 @@ After completing actions, confirm EACH one with WHERE to find it:
 This helps the user trust and verify the data.
 
 Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' })} (Pacific Time).
-Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Los_Angeles' })}.
+Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Los_Angeles' })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Los_Angeles' })}.
+${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })); } return 'Reference: ' + ref.join(', '); })()}
 CRITICAL DATE RULES:
 - "tomorrow" = the day AFTER today in Pacific Time. Calculate carefully.
 - "by Friday" or "this Friday" = if today IS Friday, that means TODAY. If today is before Friday, it means the upcoming Friday of this week. NEVER push to next week.
@@ -2387,6 +2422,8 @@ CRITICAL DATE RULES:
 - ALWAYS double-check: what day of the week is today? Then count forward from there.
 - If today is Friday and the user says "by Friday", the date is TODAY's date, not tomorrow.
 - ALWAYS double-check your date math. If today is Wednesday March 26, then tomorrow is Thursday March 27 — NOT March 28.
+- When mentioning dates in your response, ALWAYS verify the day of the week is correct. Use the reference dates above and count forward/backward. For example, if the reference shows "Sat Apr 12", then Apr 19 is also a Saturday (7 days later). Do NOT guess the day name — calculate it from the known reference.
+- NEVER say "Friday, April 18" if April 18 is actually a Saturday. Getting the day name wrong destroys user trust.
 - When creating events or tasks with dates, state the resolved date explicitly in your response so the user can verify.`;
 }
 
@@ -4344,6 +4381,9 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
     }
     const primaryField = tracker.fields.find(f=>f.isPrimary)?.name || Object.keys(entries[0].values)[0] || "value";
     const data = entries.map(e => ({ date: new Date(e.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric"}), [primaryField]: typeof e.values[primaryField]==="number"?e.values[primaryField]:0 }));
+    // Don't render a chart if all data points are zero (no meaningful data)
+    const hasNonZero = data.some(d => typeof d[primaryField] === "number" && d[primaryField] !== 0);
+    if (!hasNonZero) throw new Error(`No meaningful data found for "${tracker.name}" — all values are zero.`);
     return { type: chartType||"line", title, subtitle, data, series:[{dataKey:primaryField,name:tracker.name,color:CHART_COLORS[0]}], xAxisKey:"date", yAxisLabel:`${tracker.unit||primaryField}`, showLegend:false, showGrid:true, height:260 };
   }
 
@@ -5351,7 +5391,10 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
     // CHART SAFETY NET: If the user explicitly asked for a chart/visualization but the AI
     // described it instead of calling generate_chart, force-generate the chart now.
-    if (richCharts.length === 0 && !richReport) {
+    // Skip the safety net if the AI already indicated there's no data — don't generate an empty/zero chart.
+    const replyLower = textReply.toLowerCase();
+    const aiSaysNoData = /don't have any|no .* entries|no .* data|no .* found|haven't logged|no .* recorded|no .* tracked|no tracked|not .* any .* data|not .* any .* entries|you haven't/.test(replyLower);
+    if (richCharts.length === 0 && !richReport && !aiSaysNoData) {
       const msgLower = userMessage.toLowerCase();
       const wantsPie = /pie chart|spending.*chart|chart.*spending|breakdown.*chart|spending breakdown/.test(msgLower);
       const wantsLine = /trend|over time|history|line chart|weight.*chart|chart.*weight/.test(msgLower);
@@ -5376,8 +5419,17 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             chartInput = { chartType: wantsPie ? "pie" : wantsLine ? "line" : "bar", title: "Data Overview", dataSource: "expenses" };
           }
           const chart = await buildChartSpec(chartInput);
-          richCharts.push(chart);
-          logger.info("ai", `[chart-fallback] Auto-generated ${chart.type} chart for "${userMessage.slice(0,40)}"`);
+          // Don't push charts with empty data or all-zero values
+          if (chart.data && chart.data.length > 0) {
+            const dataKeys = chart.series.map(s => s.dataKey);
+            const hasRealData = chart.data.some(row => dataKeys.some(k => typeof row[k] === "number" && row[k] !== 0));
+            if (hasRealData) {
+              richCharts.push(chart);
+              logger.info("ai", `[chart-fallback] Auto-generated ${chart.type} chart for "${userMessage.slice(0,40)}"`);
+            } else {
+              logger.info("ai", `[chart-fallback] Skipped chart with all-zero data for "${userMessage.slice(0,40)}"`);
+            }
+          }
         } catch (e: any) {
           logger.warn("ai", `[chart-fallback] Could not generate chart: ${e.message}`);
         }

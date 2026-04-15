@@ -1492,8 +1492,10 @@ export class SupabaseStorage implements IStorage {
     }
 
     for (const task of tasks) {
-      if (task.dueDate) {
-        const d = task.dueDate.slice(0, 10);
+      // Use dueDate if available, otherwise fall back to createdAt so every task appears on the calendar
+      const rawDate = task.dueDate || task.createdAt;
+      if (rawDate) {
+        const d = rawDate.slice(0, 10);
         if (d >= startDate && d <= endDate) {
           items.push({ id: `task-${task.id}`, type: "task", title: task.title, date: d, allDay: true, color: task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876", category: "task", description: task.description, completed: task.status === "done", linkedProfiles: task.linkedProfiles, sourceId: task.id, meta: { priority: task.priority, status: task.status } });
         }
@@ -2968,41 +2970,45 @@ export class SupabaseStorage implements IStorage {
   async search(query: string): Promise<any[]> {
     const q = query.toLowerCase();
     const results: any[] = [];
+    // Helper: safe lowercase includes check (handles null/undefined fields)
+    const has = (val: any) => val && typeof val === 'string' && val.toLowerCase().includes(q);
+    const tagsMatch = (tags: any) => Array.isArray(tags) && tags.some(t => has(t));
+
     const profiles = await this.getProfiles();
     for (const p of profiles) {
-      if (p.name.toLowerCase().includes(q) || p.type.includes(q) || p.tags.some(t => t.includes(q))) results.push({ ...p, _type: "profile" });
+      if (has(p.name) || has(p.type) || tagsMatch(p.tags)) results.push({ ...p, _type: "profile" });
     }
     const trackers = await this.getTrackers();
     for (const t of trackers) {
-      if (t.name.toLowerCase().includes(q) || t.category.includes(q)) results.push({ ...t, _type: "tracker" });
+      if (has(t.name) || has(t.category)) results.push({ ...t, _type: "tracker" });
     }
     const tasks = await this.getTasks();
     for (const t of tasks) {
-      if (t.title.toLowerCase().includes(q) || t.tags.some(tag => tag.includes(q))) results.push({ ...t, _type: "task" });
+      if (has(t.title) || tagsMatch(t.tags)) results.push({ ...t, _type: "task" });
     }
     const expenses = await this.getExpenses();
     for (const e of expenses) {
-      if (e.description.toLowerCase().includes(q) || e.category.includes(q) || (e.vendor && e.vendor.toLowerCase().includes(q))) results.push({ ...e, _type: "expense" });
+      if (has(e.description) || has(e.category) || has(e.vendor)) results.push({ ...e, _type: "expense" });
     }
     const habits = await this.getHabits();
     for (const h of habits) {
-      if (h.name.toLowerCase().includes(q)) results.push({ ...h, _type: "habit" });
+      if (has(h.name)) results.push({ ...h, _type: "habit" });
     }
     const obligations = await this.getObligations();
     for (const o of obligations) {
-      if (o.name.toLowerCase().includes(q) || o.category.includes(q)) results.push({ ...o, _type: "obligation" });
+      if (has(o.name) || has(o.category)) results.push({ ...o, _type: "obligation" });
     }
     const artifacts = await this.getArtifacts();
     for (const a of artifacts) {
-      if (a.title.toLowerCase().includes(q) || a.content.toLowerCase().includes(q) || a.tags.some(t => t.includes(q))) results.push({ ...a, _type: "artifact" });
+      if (has(a.title) || has(a.content) || tagsMatch(a.tags)) results.push({ ...a, _type: "artifact" });
     }
     const journal = await this.getJournalEntries();
     for (const j of journal) {
-      if (j.content.toLowerCase().includes(q) || j.tags.some(t => t.includes(q))) results.push({ ...j, _type: "journal" });
+      if (has(j.content) || tagsMatch(j.tags)) results.push({ ...j, _type: "journal" });
     }
     const memories = await this.getMemories();
     for (const m of memories) {
-      if ((m.key || "").toLowerCase().includes(q) || (m.value || "").toLowerCase().includes(q)) results.push({ ...m, _type: "memory" });
+      if (has(m.key) || has(m.value)) results.push({ ...m, _type: "memory" });
     }
 
     // Enhance with entity links — limit to first 10 results to avoid N+1 explosion

@@ -1419,7 +1419,30 @@ export class MemStorage implements IStorage {
       monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),
       weeklyEntries,
       streaks,
-      recentActivity: this.activity.slice(0, 10),
+      recentActivity: [
+        ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
+          type: 'tracker_entry',
+          description: (() => {
+            const nums = Object.entries(e.values).filter(([,v]) => typeof v === 'number') as [string, number][];
+            const strs = Object.entries(e.values).filter(([,v]) => typeof v === 'string' && v) as [string, string][];
+            if (nums.length === 0 && strs.length === 0) return `Logged ${t.name}`;
+            if (nums.length === 1) return `${t.name}: ${nums[0][1]} ${nums[0][0]}`;
+            const summary = nums.slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ');
+            return `${t.name}: ${summary}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
+          })(),
+          timestamp: e.timestamp,
+        }))),
+        ...tasks.filter(t => t.status === 'done').slice(-3).map(t => ({
+          type: 'task_completed',
+          description: `Completed: ${t.title}`,
+          timestamp: t.createdAt,
+        })),
+        ...expenses.slice(-3).map(e => ({
+          type: 'expense',
+          description: `$${e.amount} — ${e.description}`,
+          timestamp: e.date || e.createdAt,
+        })),
+      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
       totalHabits: habits.length,
       habitCompletionRate,
       totalObligations: obligations.length,

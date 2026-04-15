@@ -115,7 +115,7 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
       return (
         <BarChart data={spec.data} barCategoryGap="30%">
           {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false}/>}
-          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}} interval="preserveStartEnd" allowDuplicatedCategory={false}/>
           <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
           <Tooltip contentStyle={tts}/>
           {spec.series.map((s,i)=><Bar key={i} dataKey={s.dataKey} name={s.name} fill={s.color||CHART_PALETTE[i]} radius={[3,3,0,0] as any}/>)}
@@ -127,7 +127,7 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
       return (
         <AreaChart data={spec.data}>
           {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))"/>}
-          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}} interval="preserveStartEnd" allowDuplicatedCategory={false}/>
           <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
           <Tooltip contentStyle={tts}/>
           {spec.series.map((s,i)=><Area key={i} type="monotone" dataKey={s.dataKey} name={s.name} stroke={s.color||CHART_PALETTE[i]} fill={s.color||CHART_PALETTE[i]} fillOpacity={0.15} strokeWidth={2}/>)}
@@ -139,7 +139,7 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
     return (
       <LineChart data={spec.data}>
         {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))"/>}
-        <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
+        <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}} interval="preserveStartEnd" allowDuplicatedCategory={false}/>
         <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
         <Tooltip contentStyle={tts}/>
         {spec.series.map((s,i)=><Line key={i} type="monotone" dataKey={s.dataKey} name={s.name} stroke={s.color||CHART_PALETTE[i]} strokeWidth={2.5} dot={{r:3}} activeDot={{r:5}}/>)}
@@ -522,11 +522,19 @@ function ExtractionConfirmation({
                   <Calendar className="h-3 w-3 text-blue-500" />
                 )}
               </div>
-              <span className="text-xs-loose text-muted-foreground truncate block">
-                {typeof field.value === 'object' && field.value !== null
+              <input
+                type="text"
+                className="text-xs text-muted-foreground bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none w-full py-0.5 transition-colors"
+                value={typeof field.value === 'object' && field.value !== null
                   ? JSON.stringify(field.value).replace(/[{}"/]/g, '').replace(/,/g, ', ')
-                  : String(field.value)}
-              </span>
+                  : String(field.value ?? '')}
+                onChange={(e) => {
+                  const newFields = [...fields];
+                  newFields[idx] = { ...newFields[idx], value: e.target.value };
+                  setFields(newFields);
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
               {field.isDate && field.suggestedEvent && field.selected && (
                 <span className="text-xs text-blue-600 dark:text-blue-400">
                   Will create: {field.suggestedEvent}
@@ -1119,7 +1127,7 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
               {type && <span className="capitalize">{type}</span>}
               {editAmount && parseFloat(editAmount) > 0 && <span className="tabular-nums text-green-500">${parseFloat(editAmount).toFixed(2)}</span>}
               {editDate && <span>{editDate.slice(0, 10)}</span>}
-              {typeof profile === "string" && profile && <span className="text-primary/80">→ {profile.slice(0, 20)}</span>}
+              {typeof profile === "string" && profile && !/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(profile) && <span className="text-primary/80">→ {profile.slice(0, 20)}</span>}
             </div>
             {warnings.length > 0 && <div className="text-amber-500">⚠ {warnings.join(", ")}</div>}
           </div>
@@ -1236,9 +1244,12 @@ export default function ChatPage() {
 
   const chatMutation = useMutation({
     mutationFn: async (message: string) => {
-      // Build conversation history from last 10 messages (up to 5 pairs) for multi-step context
+      // Build conversation history for multi-step context.
+      // Exclude the LAST message — it's the one we just added to state and are sending as `message`.
+      // Without this, the AI receives the user's message twice (once in history, once as the prompt).
       const history = messages
         .filter(m => m.id !== "welcome")
+        .slice(0, -1)  // drop the last message (current user message already in `message` param)
         .slice(-10)
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
       const res = await apiRequest("POST", "/api/chat", { message, history });
@@ -1869,7 +1880,16 @@ export default function ChatPage() {
                 {/* Action badges */}
                 {msg.actions && msg.actions.length > 0 && (
                   <div className="mt-3 space-y-1.5">
-                    {msg.actions.map((action, i) => {
+                    {msg.actions.filter(a => [
+                      'log_entry', 'log_tracker_entry', 'add_tracker_entry',
+                      'log_expense', 'create_task', 'create_event',
+                      'create_habit', 'checkin_habit', 'create_obligation',
+                      'create_goal', 'create_profile', 'update_profile',
+                      'create_tracker', 'journal_entry', 'create_artifact',
+                      'complete_task', 'complete_event', 'pay_obligation',
+                      'delete_task', 'delete_habit', 'delete_tracker_entry',
+                      'update_tracker_entry', 'uncomplete_habit', 'save_memory',
+                    ].includes(a.type)).map((action, i) => {
                       const entityId = action.data?._entityId;
                       const isUndone = action.data?._undone;
                       // All create/log actions can be undone
