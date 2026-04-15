@@ -979,18 +979,36 @@ Return ONLY the JSON array, nothing else.`;
     // Sort extracted fields alphabetically by label for consistent UI display
     extractedFields.sort((a, b) => a.label.localeCompare(b.label));
 
+    // The photo's linked profile (from user selection) is the default destination.
+    // If the AI also detected a target profile, include that info too.
+    // Priority: user-selected profileId > AI-detected targetProfile
+    let resolvedTargetProfile: { name: string; id?: string; type?: string; isNew: boolean } | undefined;
+    if (existingProfileId) {
+      // User explicitly linked the photo to a profile — use that as default
+      const linkedProfile = await storage.getProfile(existingProfileId);
+      resolvedTargetProfile = {
+        name: linkedProfile?.name || parsed.targetProfile?.name || 'Unknown',
+        id: existingProfileId,
+        type: linkedProfile?.type || parsed.targetProfile?.type,
+        isNew: false,
+      };
+    } else if (parsed.targetProfile) {
+      // AI detected a target but user didn't select one — show AI suggestion
+      resolvedTargetProfile = {
+        name: parsed.targetProfile.name,
+        id: undefined,
+        type: parsed.targetProfile.type,
+        isNew: true,
+      };
+    }
+
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
       documentType: parsed.documentType || "other",
       label: parsed.label || fileName,
       extractedFields,
-      targetProfile: parsed.targetProfile ? {
-        name: parsed.targetProfile.name,
-        id: existingProfileId || undefined,
-        type: parsed.targetProfile.type,
-        isNew: !existingProfileId,
-      } : undefined,
+      targetProfile: resolvedTargetProfile,
       trackerEntries: parsed.trackerEntries || [],
       documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
     };
