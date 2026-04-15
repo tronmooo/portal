@@ -437,6 +437,10 @@ function ExtractionConfirmation({
   );
   const [confirming, setConfirming] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  // Track which tracker entries the user wants to create (all selected by default)
+  const [selectedTrackers, setSelectedTrackers] = useState<boolean[]>(
+    () => (extraction.trackerEntries || []).map(() => true)
+  );
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
 
   // Fetch profiles for the dropdown
@@ -464,7 +468,7 @@ function ExtractionConfirmation({
       confirmedFields,
       targetProfileId: selectedProfileId || extraction.targetProfile?.id,
       createCalendarEvents,
-      trackerEntries: extraction.trackerEntries || [],
+      trackerEntries: (extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
     });
     if (success) {
       setConfirmed(true);
@@ -496,7 +500,7 @@ function ExtractionConfirmation({
           data-testid="select-extraction-profile"
         >
           <option value="">Link to profile...</option>
-          {allProfiles.map((p: any) => (
+          {allProfiles.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((p: any) => (
             <option key={p.id} value={p.id}>{p.name} ({p.type})</option>
           ))}
         </select>
@@ -547,11 +551,23 @@ function ExtractionConfirmation({
 
       {extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
         <div className="pt-1.5 border-t border-border/50">
-          <span className="text-xs text-muted-foreground font-medium">Tracker entries:</span>
+          <span className="text-xs text-muted-foreground font-medium">Tracker entries (uncheck to skip):</span>
           {extraction.trackerEntries.map((entry: any, idx: number) => (
-            <div key={idx} className="text-xs-loose text-foreground ml-2">
-              {entry.trackerName}: {JSON.stringify(entry.values)}
-            </div>
+            <label key={idx} className="flex items-center gap-2 cursor-pointer ml-1 py-0.5">
+              <Checkbox
+                checked={selectedTrackers[idx] ?? true}
+                onCheckedChange={() => {
+                  const next = [...selectedTrackers];
+                  next[idx] = !next[idx];
+                  setSelectedTrackers(next);
+                }}
+                className="h-3.5 w-3.5"
+              />
+              <span className={`text-xs ${selectedTrackers[idx] ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
+                {(entry.trackerName || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}:
+                {' '}{Object.entries(entry.values || {}).map(([k, v]) => `${v}`).join(', ')} {entry.unit || ''}
+              </span>
+            </label>
           ))}
         </div>
       )}

@@ -781,14 +781,16 @@ Return ONLY the JSON array, nothing else.`;
     } else if (parsed.targetProfile?.name) {
       const profiles = await storage.getProfiles();
       const targetLower = parsed.targetProfile.name.toLowerCase().trim();
+      // Only match profiles with high confidence — exact name match or very close match
+      // Avoid matching "Dr. Alex Thomson" to "Alex Williams" (partial first-name matches)
       const existing = profiles.find((p: any) => {
         const pLower = p.name.toLowerCase().trim();
-        // Exact match or word-boundary match (avoid "John" matching "Johnson")
+        // Exact match
         if (pLower === targetLower) return true;
-        // Check if the target is a complete word within the profile name or vice versa
-        const targetRegex = new RegExp(`\\b${targetLower.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
-        const profileRegex = new RegExp(`\\b${pLower.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
-        return targetRegex.test(pLower) || profileRegex.test(targetLower);
+        // One name contains the other fully (e.g., "Jane Doe" contains "Jane Doe")
+        if (pLower.includes(targetLower) || targetLower.includes(pLower)) return true;
+        // Skip single-word partial matches (too many false positives like Alex→Alex Williams)
+        return false;
       });
       if (existing) {
         linkedProfiles = [existing.id];
