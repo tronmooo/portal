@@ -24,7 +24,7 @@ const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Z
 function HabitCard({ habit }: { habit: Habit }) {
   const { toast } = useToast();
   const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const today = now.toLocaleDateString('en-CA');
   const todayCheckins = habit.checkins.filter(c => c.date === today).length;
   const targetPerDay = (habit as any).targetPerDay || 1;
   const completedToday = todayCheckins >= targetPerDay;
@@ -158,7 +158,7 @@ function HabitCard({ habit }: { habit: Habit }) {
   const last14: { date: string; done: boolean; count: number; dayLabel: string; isToday: boolean; isSunday: boolean }[] = [];
   for (let i = 13; i >= 0; i--) {
     const dd = new Date(Date.now() - i * 86400000);
-    const ds = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
+    const ds = dd.toLocaleDateString('en-CA');
     const count = habit.checkins.filter(c => c.date === ds).length;
     last14.push({ date: ds, done: count >= targetPerDay, count, dayLabel: DAY_LABELS[dd.getDay()], isToday: i === 0, isSunday: dd.getDay() === 0 });
   }
@@ -333,7 +333,7 @@ export default function HabitsPage() {
 
   // Summary stats
   const todayD = new Date();
-  const today = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, '0')}-${String(todayD.getDate()).padStart(2, '0')}`;
+  const today = todayD.toLocaleDateString('en-CA');
   const completedToday = habits.filter(h => {
     const tpd = (h as any).targetPerDay || 1;
     return h.checkins.filter(c => c.date === today).length >= tpd;

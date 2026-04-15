@@ -40,6 +40,18 @@ function ObligationCard({ ob }: { ob: Obligation }) {
   const [editFrequency, setEditFrequency] = useState<string>(ob.frequency);
   const [editCategory, setEditCategory] = useState(ob.category);
 
+  const undoPayMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/obligations/${ob.id}`, { isPaid: false }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: `"${ob.name}" payment undone` });
+    },
+    onError: (err: Error) => toast({ title: `Failed to undo payment`, description: formatApiError(err), variant: "destructive" }),
+  });
+
   const payMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
     onSuccess: () => {
@@ -47,7 +59,11 @@ function ObligationCard({ ob }: { ob: Obligation }) {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: `"${ob.name}" marked paid`, description: `$${ob.amount.toFixed(2)} payment recorded` });
+      toast({
+        title: `"${ob.name}" marked paid`,
+        description: `$${ob.amount.toFixed(2)} payment recorded`,
+        action: <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => undoPayMutation.mutate()}>Undo</Button>,
+      });
     },
     onError: (err: Error) => toast({ title: `Failed to pay "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
   });
@@ -271,7 +287,17 @@ export default function ObligationsPage() {
   const [newFrequency, setNewFrequency] = useState("monthly");
   const [newCategory, setNewCategory] = useState("housing");
   const [newDueDate, setNewDueDate] = useState(new Date().toISOString().slice(0, 10));
-  const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  useEffect(() => {
+    const handleFocus = () => {
+      const { mode, selectedIds } = getProfileFilter();
+      setFilterMode(mode);
+      setFilterIds(selectedIds);
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 

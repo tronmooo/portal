@@ -608,7 +608,14 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       );
       return { prev };
     },
-    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); toast({ title: "Failed to create task", variant: "destructive" }); },
+    onError: (_e, _v, ctx: any) => {
+      if (ctx?.prev) {
+        queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
+      } else {
+        queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) => old?.filter((t: any) => !String(t.id).startsWith('tmp-')));
+      }
+      toast({ title: "Failed to create task", variant: "destructive" });
+    },
     onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task added" }); },
   });
 
@@ -1960,7 +1967,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                 <Check className="h-3 w-3 mr-1" /> {updateMutation.isPending ? "Completing…" : "Complete"}
               </Button>
             )}
-            <Button size="sm" className="h-7 text-xs" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending} data-testid="btn-save-goal">
+            <Button size="sm" className="h-7 text-xs" onClick={handleSave} disabled={!formTitle.trim() || !formTarget || parseFloat(formTarget) <= 0 || createMutation.isPending || updateMutation.isPending} data-testid="btn-save-goal">
               {editGoal ? "Update" : "Create"}
             </Button>
           </DialogFooter>

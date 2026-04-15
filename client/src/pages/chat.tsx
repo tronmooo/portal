@@ -2185,6 +2185,7 @@ export default function ChatPage() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask me anything..."
+                maxLength={10000}
                 className="min-h-[96px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
                 rows={3}
                 data-testid="input-chat"
@@ -2238,6 +2239,11 @@ export default function ChatPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5">
+                  {input.length > 9000 && (
+                    <span className={`text-xs tabular-nums ${input.length >= 10000 ? 'text-red-500 font-medium' : 'text-muted-foreground'}`} data-testid="chat-char-count">
+                      {input.length.toLocaleString()}/10,000
+                    </span>
+                  )}
                   {messages.length > 1 && (
                     <button
                       onClick={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}

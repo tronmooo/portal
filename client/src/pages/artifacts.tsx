@@ -8,6 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { CheckSquare, FileText, Pin, Plus, X, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 import type { Artifact } from "@shared/schema";
@@ -108,6 +112,22 @@ export default function ArtifactsPage() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [items, setItems] = useState<string[]>([""]);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  const hasUnsavedContent = title.trim() !== "" || content.trim() !== "" || items.some(i => i.trim() !== "");
+
+  const clearForm = () => {
+    setTitle(""); setContent(""); setItems([""]); setCreateType("checklist");
+  };
+
+  const handleToggleCreate = () => {
+    if (showCreate && hasUnsavedContent) {
+      setShowDiscardConfirm(true);
+    } else {
+      if (showCreate) clearForm();
+      setShowCreate(!showCreate);
+    }
+  };
 
   const { data: artifacts = [], isLoading } = useQuery<Artifact[]>({
     queryKey: ["/api/artifacts"],
@@ -152,7 +172,7 @@ export default function ArtifactsPage() {
           </div>
           <p className="text-xs text-muted-foreground">{artifacts.length} checklists & notes</p>
         </div>
-        <Button size="sm" onClick={() => { if (showCreate) { setTitle(""); setContent(""); setItems([""]); setCreateType("checklist"); } setShowCreate(!showCreate); }} data-testid="button-create-artifact">
+        <Button size="sm" onClick={handleToggleCreate} data-testid="button-create-artifact">
           {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New</>}
         </Button>
       </div>
@@ -223,6 +243,22 @@ export default function ArtifactsPage() {
           )}
         </>
       )}
+
+      {/* Discard unsaved changes confirmation */}
+      <AlertDialog open={showDiscardConfirm} onOpenChange={setShowDiscardConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>You have unsaved content in the form. This will be lost if you continue.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { clearForm(); setShowCreate(false); setShowDiscardConfirm(false); }}>
+              Discard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

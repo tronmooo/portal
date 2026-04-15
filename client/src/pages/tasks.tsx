@@ -425,6 +425,15 @@ export default function TasksPage() {
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  useEffect(() => {
+    const handleFocus = () => {
+      const { mode, selectedIds } = getProfileFilter();
+      setFilterMode(mode);
+      setFilterIds(selectedIds);
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
   const [tabFilter, setTabFilter] = useState<"all" | "open" | "completed">("all");
 
   const taskUrl = filterMode === "selected" && filterIds.length > 0

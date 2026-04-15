@@ -47,6 +47,15 @@ export default function FinancePage() {
   const { toast } = useToast();
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  useEffect(() => {
+    const handleFocus = () => {
+      const { mode, selectedIds } = getProfileFilter();
+      setFilterMode(mode);
+      setFilterIds(selectedIds);
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: obligations } = useQuery<any[]>({ queryKey: ["/api/obligations", filterMode, ...filterIds] });

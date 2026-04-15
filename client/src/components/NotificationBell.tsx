@@ -11,6 +11,7 @@ import {
   DollarSign,
   Flame,
   Trophy,
+  Target,
   X,
   CheckCheck,
   BellOff,
@@ -20,7 +21,7 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface Notification {
   id: string;
-  type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone";
+  type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone" | "goal_at_risk" | "goal_completed";
   severity: "critical" | "warning" | "info";
   title: string;
   message: string;
@@ -63,6 +64,9 @@ function getIcon(type: Notification["type"]) {
       return Flame;
     case "streak_milestone":
       return Trophy;
+    case "goal_at_risk":
+    case "goal_completed":
+      return Target;
     default:
       return Bell;
   }
@@ -180,8 +184,16 @@ export function NotificationBell() {
           setLocation("/dashboard/finance");
           break;
         case "habit_at_risk":
-        case "streak_milestone":
           setLocation("/habits");
+          break;
+        case "streak_milestone":
+        case "goal_at_risk":
+        case "goal_completed":
+          setLocation("/dashboard");
+          setTimeout(() => {
+            const goalsSection = document.querySelector('[data-testid="section-goals"]');
+            if (goalsSection) goalsSection.scrollIntoView({ behavior: 'smooth' });
+          }, 300);
           break;
         case "document_expiring":
           setLocation("/linked");
