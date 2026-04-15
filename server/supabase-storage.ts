@@ -619,8 +619,18 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(id);
     if (!profile) return false;
 
-    // ── Cascade delete: remove all linked entities ──
-    // For each entity: if sole owner → delete entirely; if shared → remove this profile from linkedProfiles
+    // ── RECURSIVE: Delete all child profiles first (vehicles, assets, subscriptions, etc.) ──
+    // Each child profile deletion triggers its own cascade, so their data goes away too.
+    const allProfiles = await this.getProfiles();
+    const childProfiles = allProfiles.filter(p => 
+      p.parentProfileId === id || p.fields?._parentProfileId === id
+    );
+    for (const child of childProfiles) {
+      console.log(`[deleteProfile] Cascade-deleting child profile: ${child.name} (${child.type}, id:${child.id})`);
+      await this.deleteProfile(child.id);
+    }
+
+    // ── Cascade delete: remove ALL linked entities — no exceptions ──
     const errors: string[] = [];
 
     try { // 1. Delete ALL trackers linked to this profile — completely
