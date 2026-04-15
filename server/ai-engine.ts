@@ -4980,7 +4980,7 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
 
       // 1. Explicit profile name match (from forProfile parameter) — highest priority
       if (explicitProfileName) {
-        const explicit = explicitProfileName.toLowerCase().trim();
+        const explicit = explicitProfileName!.toLowerCase().trim();
         // Exact match → 100 points
         if (name === explicit) {
           score += 100;
@@ -5068,8 +5068,8 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
     // If no profile matched at all, link to self (so the item shows up in YOUR profile)
     if (matchedNonSelfIds.length === 0 && selfProfile) {
       try {
-        await storage.linkProfileTo(selfProfile.id, entityType, entityId);
-        await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
+        await storage.linkProfileTo(selfProfile!.id, entityType, entityId);
+        await updateEntityLinkedProfiles(entityType, entityId, selfProfile!.id);
       } catch (e: any) { logger.warn("ai", `Self-link failed for ${entityType} ${entityId}: ${e?.message}`); }
     }
 
@@ -5093,8 +5093,8 @@ async function autoLinkToProfiles(entityType: string, entityId: string, text: st
         const shouldLinkToSelf = entityType === "expense" || !explicitProfileName;
         if (shouldLinkToSelf) {
           try {
-            await storage.linkProfileTo(selfProfile.id, entityType, entityId);
-            await updateEntityLinkedProfiles(entityType, entityId, selfProfile.id);
+            await storage.linkProfileTo(selfProfile!.id, entityType, entityId);
+            await updateEntityLinkedProfiles(entityType, entityId, selfProfile!.id);
           } catch (e: any) { logger.warn("ai", `Self-link (shouldLinkToSelf) failed for ${entityType} ${entityId}: ${e?.message}`); }
         }
       }

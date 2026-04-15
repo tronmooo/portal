@@ -2155,7 +2155,7 @@ function DeleteTrackerDialog({
       onOpenChange(false);
       toast({ title: "Tracker deleted", description: `${trackerName} has been removed` });
     },
-    onError: (err: Error, _v: any, ctx: any) => {
+    onError: (err: Error, _v: void, ctx: any) => {
       if (ctx?.prev) queryClient.setQueryData(["/api/trackers"], ctx.prev);
       toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },
@@ -3375,7 +3375,7 @@ function TrackerDetailDialog({
       toast({ title: "Tracker deleted" });
       onClose();
     },
-    onError: (err: Error, _v: any, ctx: any) => {
+    onError: (err: Error, _v: void, ctx: any) => {
       if (ctx?.prev) qc.setQueryData(["/api/trackers"], ctx.prev);
       toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },

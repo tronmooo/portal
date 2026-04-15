@@ -429,6 +429,8 @@ function ExtractionConfirmation({
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
     trackerEntries: any[];
+    createExpense?: any;
+    createObligation?: any;
   }) => Promise<boolean>;
   onSkip: () => void;
 }) {

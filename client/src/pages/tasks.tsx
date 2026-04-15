@@ -306,7 +306,7 @@ function TaskItem({
         <CardContent className="p-4 flex items-start gap-3">
           <Checkbox
             checked={task.status === "done"}
-            onCheckedChange={stopProp(() => toggleMutation.mutate())}
+            onCheckedChange={() => toggleMutation.mutate()}
             disabled={toggleMutation.isPending}
             className={`mt-0.5 ${toggleMutation.isPending ? "opacity-50 animate-pulse" : ""}`}
             data-testid={`checkbox-task-${task.id}`}

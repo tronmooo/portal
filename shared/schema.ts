@@ -99,6 +99,7 @@ export interface ChatMessage {
     targetProfile?: { name: string; id?: string; type?: string; isNew?: boolean };
     trackerEntries?: Array<{ trackerName: string; values: Record<string, any> }>;
     documentPreview?: { id: string; name: string; mimeType: string; data: string };
+    pendingFinancial?: any;
   };
   results?: Array<Record<string, any>>;
   // Rich visual output — inline charts, tables, reports
@@ -444,6 +445,7 @@ export interface JournalEntry {
   energy?: number; // 1-5
   gratitude?: string[];
   highlights?: string[];
+  linkedProfiles?: string[];
   createdAt: string;
 }
 

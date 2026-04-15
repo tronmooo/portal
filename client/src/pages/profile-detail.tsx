@@ -4978,6 +4978,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
 // ============================================================
 
 function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const { toast } = useToast();
   const f = profile.fields || {};
   const endDate = f.warrantyEndDate || f.warranty;
   const isActive = endDate ? new Date(endDate) > new Date() : false;
@@ -5061,6 +5062,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
 }
 
 function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const { toast } = useToast();
   const f = profile.fields || {};
   const rewardsFields = [
     { key: "rewardsType", label: "Rewards Type" },
