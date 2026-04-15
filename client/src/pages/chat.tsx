@@ -454,7 +454,13 @@ function ExtractionConfirmation({
 
   const handleConfirm = async () => {
     setConfirming(true);
-    const confirmedFields = fields.filter((f) => f.selected && !f.isDate && f.key).map((f) => ({ key: f.key, value: f.value }));
+    // Include selected non-date fields AND date fields that are personal info (birthday, DOB)
+    const PERSONAL_DATE_KEYS = ['dateOfBirth', 'dob', 'birthday', 'birthDate'];
+    const confirmedFields = fields.filter((f) => f.selected && f.key && (!f.isDate || PERSONAL_DATE_KEYS.includes(f.key))).map((f) => {
+      // Normalize dateOfBirth/dob → also save as 'birthday' for profile display
+      const key = f.key === 'dob' ? 'dateOfBirth' : f.key;
+      return { key, value: f.value };
+    });
     const createCalendarEvents = fields
       .filter((f) => f.selected && f.isDate && f.suggestedEvent && f.key && f.value)
       .map((f) => ({

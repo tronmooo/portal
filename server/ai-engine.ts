@@ -907,7 +907,32 @@ Return ONLY the JSON array, nothing else.`;
     // Dates are presented in the extraction review UI for user confirmation.
 
     // Build extraction fields list for the pending extraction UI
-    const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; suggestedEvent?: string}> = [];
+    // -- Category mapping for smart field categorization --
+    const CATEGORY_MAP: Record<string, string> = {};
+    const personalKeys = ['firstName', 'lastName', 'name', 'patientName', 'dateOfBirth', 'dob', 'birthday', 'sex', 'gender', 'height', 'weight', 'address', 'city', 'state', 'zip', 'country', 'ssn', 'passportNumber', 'nationality', 'maritalStatus', 'bloodType', 'allergies', 'emergencyContact', 'phone', 'email', 'relationship'];
+    const healthKeys = ['diagnosis', 'medications', 'providerName', 'facilityName', 'doctorName', 'interpretation', 'conclusion', 'bloodPressure', 'heartRate', 'temperature', 'oxygenSaturation', 'glucose', 'cholesterol', 'bmi', 'testResults'];
+    const financeKeys = ['totalAmount', 'amountDue', 'amountPaid', 'balance', 'premium', 'monthlyPayment', 'subtotal', 'tax', 'interestRate', 'principalBalance', 'payoffAmount', 'accountNumber', 'policyNumber'];
+    const vehicleKeys = ['make', 'model', 'year', 'vin', 'licensePlate', 'mileage', 'registrationNumber', 'engineType', 'fuelType', 'color'];
+    const dateKeys = ['expirationDate', 'issueDate', 'dueDate', 'renewalDate', 'reportDate'];
+    const documentKeys = ['documentTitle', 'reportTitle', 'fileName', 'barcode', 'signatureType', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'organizationName', 'facilityAddress'];
+    for (const k of personalKeys) CATEGORY_MAP[k] = 'PERSONAL';
+    for (const k of healthKeys) CATEGORY_MAP[k] = 'HEALTH';
+    for (const k of financeKeys) CATEGORY_MAP[k] = 'FINANCE';
+    for (const k of vehicleKeys) CATEGORY_MAP[k] = 'VEHICLE';
+    for (const k of dateKeys) CATEGORY_MAP[k] = 'DATE';
+    for (const k of documentKeys) CATEGORY_MAP[k] = 'DOCUMENT';
+
+    // Document-metadata fields that should NOT be selected by default
+    const DOC_METADATA_KEYS = new Set(['fileName', 'barcode', 'signatureType', 'organizationName', 'documentTitle', 'reportTitle', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'facilityAddress']);
+
+    // Determine context for smart pre-selection
+    const docType = (parsed.documentType || 'other').toLowerCase();
+    const isFinanceDoc = /bill|invoice|statement|receipt|payment|insurance|loan|mortgage|tax/i.test(docType);
+    const linkedProfileObj = existingProfileId ? await storage.getProfile(existingProfileId) : null;
+    const profileType = linkedProfileObj?.type || '';
+    const isVehicleProfile = profileType === 'vehicle';
+
+    const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string; suggestedEvent?: string}> = [];
 
     if (parsed.extractedData) {
       const DATE_PATTERNS = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/;
@@ -929,7 +954,43 @@ Return ONLY the JSON array, nothing else.`;
           else suggestedEvent = `📅 ${label}: ${strVal}`;
         }
         DATE_PATTERNS.lastIndex = 0; // reset regex state
-        extractedFields.push({ key, label, value, selected: true, isDate, suggestedEvent });
+
+        // Categorize the field
+        const category = CATEGORY_MAP[key] || 'OTHER';
+
+        // Smart pre-selection: only select fields relevant to the person/profile
+        let selected = false;
+        if (category === 'PERSONAL') {
+          selected = true;
+        } else if (category === 'HEALTH') {
+          selected = true;
+        } else if (category === 'DATE' && /birth/i.test(key)) {
+          selected = true;
+        } else if (category === 'FINANCE') {
+          selected = isFinanceDoc;
+        } else if (category === 'VEHICLE') {
+          selected = isVehicleProfile;
+        } else if (category === 'DOCUMENT' || DOC_METADATA_KEYS.has(key)) {
+          selected = false;
+        } else if (category === 'DATE') {
+          // Non-birth date fields: not pre-selected (user decides via calendar event flow)
+          selected = false;
+        } else {
+          // OTHER / unrecognized: default to true so user can deselect
+          selected = true;
+        }
+
+        extractedFields.push({ key, label, value, selected, isDate, category, suggestedEvent });
+
+        // Field key normalization: if key is dob or dateOfBirth, also add a birthday alias field
+        if ((key === 'dob' || key === 'dateOfBirth') && value) {
+          const birthdayLabel = 'birthday';
+          const alreadyHasBirthday = parsed.extractedData.hasOwnProperty('birthday');
+          if (!alreadyHasBirthday) {
+            parsed.extractedData['birthday'] = value;
+            extractedFields.push({ key: 'birthday', label: 'Birthday', value, selected: true, isDate: true, category: 'PERSONAL', suggestedEvent: undefined });
+          }
+        }
       }
     }
 
@@ -940,7 +1001,8 @@ Return ONLY the JSON array, nothing else.`;
     // NO AI matching — the user manually selects where data goes.
     let resolvedTargetProfile: { name: string; id?: string; type?: string; isNew: boolean } | undefined;
     if (existingProfileId) {
-      const linkedProfile = await storage.getProfile(existingProfileId);
+      // Reuse linkedProfileObj if already fetched above, otherwise fetch
+      const linkedProfile = linkedProfileObj || await storage.getProfile(existingProfileId);
       resolvedTargetProfile = {
         name: linkedProfile?.name || 'Unknown',
         id: existingProfileId,

@@ -512,28 +512,50 @@ export async function registerRoutes(
 
       // Step 1: Classify each field and route to the correct destination
       if (confirmedFields && confirmedFields.length > 0) {
-        // Field classification rules
-        const PERSONAL_FIELDS = new Set(['firstName', 'lastName', 'middleName', 'name', 'dateOfBirth', 'sex', 'height', 'weight', 'address', 'city', 'state', 'zip', 'stateAddr', 'country', 'donor', 'safeDriver', 'licenseNumber', 'class', 'endorsements', 'restrictions', 'eyeColor', 'hairColor', 'ssn', 'passportNumber', 'nationality', 'maritalStatus', 'bloodType', 'allergies', 'emergencyContact']);
-        const FINANCE_FIELDS = new Set(['totalAmount', 'totalAmountDue', 'totalDue', 'amountDue', 'amountPaid', 'balance', 'premium', 'monthlyPayment', 'subtotal', 'tax', 'minimumPayment', 'interestRate', 'principalBalance', 'payoffAmount']);
-        const DATE_FIELDS = new Set(['expirationDate', 'issueDate', 'dueDate', 'paymentDueDate', 'renewalDate', 'registrationExpiration', 'warrantyExpiration', 'policyExpiration', 'followUpDate', 'nextAppointmentDate', 'vaccineDueDate', 'coverageEnd', 'validThrough']);
-        const HEALTH_FIELDS = new Set(['bloodPressure', 'heartRate', 'temperature', 'oxygenSaturation', 'glucose', 'cholesterol', 'bmi', 'diagnosis', 'medications', 'providerName', 'facilityName', 'doctorName']);
-        const VEHICLE_FIELDS = new Set(['make', 'model', 'year', 'vin', 'licensePlate', 'mileage', 'serviceType', 'registrationNumber', 'engineType', 'fuelType', 'color']);
+        // Document-metadata fields that should NOT be saved to profiles
+        const DOC_ONLY_FIELDS = new Set(['fileName', 'barcode', 'signatureType', 'documentTitle', 'reportTitle', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'facilityAddress']);
 
         const profileFields: Record<string, any> = {};
 
         for (const field of confirmedFields) {
           const key = field.key;
           const val = unwrap(field.value);
-          // All fields go to profile.fields
-          profileFields[key] = val;
+
+          // Skip document-metadata fields — they belong on the document, not the profile
+          if (DOC_ONLY_FIELDS.has(key)) continue;
+
+          // Normalize keys: dateOfBirth/dob → save as both dateOfBirth AND birthday
+          if (key === 'dateOfBirth' || key === 'dob') {
+            profileFields['dateOfBirth'] = val;
+            profileFields['birthday'] = val;
+          } else if (key === 'patientName') {
+            // patientName → save as 'name' only if profile doesn't already have one
+            // (checked below when we have the profile object)
+            profileFields['_patientName'] = val;
+          } else {
+            profileFields[key] = val;
+          }
         }
 
         // Save to the resolved profile
         if (resolvedProfileId && Object.keys(profileFields).length > 0) {
           const profile = await storage.getProfile(resolvedProfileId);
           if (profile) {
+            const existingFields = profile.fields || {};
+
+            // Handle patientName → name normalization
+            if (profileFields['_patientName']) {
+              const patientNameVal = profileFields['_patientName'];
+              delete profileFields['_patientName'];
+              if (!existingFields['name'] && !profile.name) {
+                profileFields['name'] = patientNameVal;
+              }
+              // Always store patientName as well for reference
+              profileFields['patientName'] = patientNameVal;
+            }
+
             await storage.updateProfile(resolvedProfileId, {
-              fields: { ...(profile.fields || {}), ...profileFields },
+              fields: { ...existingFields, ...profileFields },
             });
             saved.push(`Saved ${Object.keys(profileFields).length} fields to ${profile.name}`);
             log.info(`[confirm-extraction] Routed ${Object.keys(profileFields).length} fields to profile ${profile.name}`);
