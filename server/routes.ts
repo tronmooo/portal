@@ -621,6 +621,14 @@ export async function registerRoutes(
                 } catch { /* non-critical */ }
               }
               saved.push(`Created tracker: ${humanName}`);
+            } else if (resolvedProfileId) {
+              // Tracker already exists — ensure it's linked to the target profile
+              const currentLinked = tracker.linkedProfiles || [];
+              if (!currentLinked.includes(resolvedProfileId)) {
+                try {
+                  await storage.updateTracker(tracker.id, { linkedProfiles: [...currentLinked, resolvedProfileId] } as Partial<Tracker>);
+                } catch { /* non-critical */ }
+              }
             }
             // Log the entry with proper values object
             const entryValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };

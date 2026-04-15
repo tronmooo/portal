@@ -904,46 +904,12 @@ Return ONLY the JSON array, nothing else.`;
     // Extracted dates are presented in the pending extraction UI for user review.
     // Users confirm which dates should become calendar events via the review flow.
 
-    // 2. Auto-create trackers from extracted health/lab data
+    // 2. Tracker entries from extracted health/lab data
+    // DO NOT auto-create trackers here — defer to confirm-extraction endpoint.
+    // The user must review and select which trackers to create via the extraction UI.
+    // Only note what was detected for the pending extraction display.
     if (parsed.trackerEntries && parsed.trackerEntries.length > 0) {
-      for (const entry of parsed.trackerEntries) {
-        try {
-          const allTrackers = await storage.getTrackers();
-          const humanName = (entry.trackerName || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
-          let tracker = allTrackers.find(
-            (t: any) => t.name.toLowerCase().replace(/[_\s]/g, "") === (entry.trackerName || "").toLowerCase().replace(/[_\s]/g, "")
-          );
-          if (!tracker) {
-            const fieldKeys = Object.keys(entry.values || {});
-            tracker = await storage.createTracker({
-              name: humanName,
-              unit: entry.unit || "",
-              category: entry.category || "health",
-              fields: fieldKeys.length > 0
-                ? fieldKeys.map((k: string, i: number) => ({ name: k, type: "number" as const, unit: entry.unit || "", isPrimary: i === 0, options: [] }))
-                : [{ name: "value", type: "number" as const, unit: entry.unit || "", isPrimary: true, options: [] }],
-            });
-            if (existingProfileId && tracker) {
-              try { await storage.updateTracker(tracker.id, { linkedProfiles: [existingProfileId] } as any); } catch (e: any) { logger.warn("ai", `Fast-path tracker link failed for ${tracker.id}: ${e?.message}`); }
-            }
-            savedItems.push(`Created tracker: ${humanName}`);
-          } else if (existingProfileId) {
-            // Tracker exists — ensure it's linked to the target profile (not just "Me")
-            const currentLinked = tracker.linkedProfiles || [];
-            if (!currentLinked.includes(existingProfileId)) {
-              try {
-                await storage.updateTracker(tracker.id, { linkedProfiles: [...currentLinked, existingProfileId] } as any);
-                console.log(`[extraction] Linked existing tracker ${tracker.name} to profile ${existingProfileId}`);
-              } catch (e: any) { logger.warn("ai", `Tracker link update failed for ${tracker.id}: ${e?.message}`); }
-            }
-          }
-          const entryValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
-          await storage.logEntry({ trackerId: tracker.id, values: entryValues, notes: `From document: ${parsed.label || fileName}` });
-          savedItems.push(`Logged ${humanName}: ${Object.values(entryValues).join(", ")} ${entry.unit || ""}`);
-        } catch (err: any) {
-          console.error("Auto-create tracker failed:", err.message);
-        }
-      }
+      savedItems.push(`Detected ${parsed.trackerEntries.length} lab values (review below to confirm)`);
     }
 
     // Calendar events from extracted dates are NO LONGER auto-created.
