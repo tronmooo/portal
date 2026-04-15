@@ -741,13 +741,127 @@ export class MemStorage implements IStorage {
   async deleteProfile(id: string): Promise<boolean> {
     const profile = this.profiles.get(id);
     if (!profile) return false;
-    // Remove this profile from any linked documents
-    for (const docId of profile.documents) {
-      const doc = this.documents.get(docId);
-      if (doc) {
-        doc.linkedProfiles = doc.linkedProfiles.filter(pid => pid !== id);
+
+    // Cascade delete: for each entity type, if sole owner → delete; if shared → remove profile ID from linkedProfiles
+
+    // 1. Trackers (and their entries)
+    for (const [tid, tracker] of this.trackers) {
+      if (tracker.linkedProfiles.includes(id)) {
+        if (tracker.linkedProfiles.length <= 1) {
+          this.trackers.delete(tid);
+        } else {
+          tracker.linkedProfiles = tracker.linkedProfiles.filter(pid => pid !== id);
+        }
       }
     }
+
+    // 2. Expenses
+    for (const [eid, expense] of this.expenses) {
+      if (expense.linkedProfiles.includes(id)) {
+        if (expense.linkedProfiles.length <= 1) {
+          this.expenses.delete(eid);
+        } else {
+          expense.linkedProfiles = expense.linkedProfiles.filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 3. Tasks
+    for (const [tid, task] of this.tasks) {
+      if (task.linkedProfiles.includes(id)) {
+        if (task.linkedProfiles.length <= 1) {
+          this.tasks.delete(tid);
+        } else {
+          task.linkedProfiles = task.linkedProfiles.filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 4. Habits (and their check-ins are embedded)
+    for (const [hid, habit] of this.habits) {
+      if ((habit.linkedProfiles || []).includes(id)) {
+        if ((habit.linkedProfiles || []).length <= 1) {
+          this.habits.delete(hid);
+        } else {
+          habit.linkedProfiles = (habit.linkedProfiles || []).filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 5. Obligations
+    for (const [oid, ob] of this.obligations) {
+      if (ob.linkedProfiles.includes(id)) {
+        if (ob.linkedProfiles.length <= 1) {
+          this.obligations.delete(oid);
+        } else {
+          ob.linkedProfiles = ob.linkedProfiles.filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 6. Events
+    for (const [eid, ev] of this.events) {
+      if (ev.linkedProfiles.includes(id)) {
+        if (ev.linkedProfiles.length <= 1) {
+          this.events.delete(eid);
+        } else {
+          ev.linkedProfiles = ev.linkedProfiles.filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 7. Documents
+    for (const [did, doc] of this.documents) {
+      if ((doc.linkedProfiles || []).includes(id)) {
+        if ((doc.linkedProfiles || []).length <= 1) {
+          this.documents.delete(did);
+        } else {
+          doc.linkedProfiles = (doc.linkedProfiles || []).filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 8. Artifacts
+    for (const [aid, art] of this.artifacts) {
+      if ((art.linkedProfiles || []).includes(id)) {
+        if ((art.linkedProfiles || []).length <= 1) {
+          this.artifacts.delete(aid);
+        } else {
+          art.linkedProfiles = (art.linkedProfiles || []).filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 9. Goals
+    for (const [gid, goal] of this.goals) {
+      if ((goal.linkedProfiles || []).includes(id)) {
+        if ((goal.linkedProfiles || []).length <= 1) {
+          this.goals.delete(gid);
+        } else {
+          goal.linkedProfiles = (goal.linkedProfiles || []).filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 10. Journal entries
+    for (const [jid, entry] of this.journal) {
+      if ((entry.linkedProfiles || []).includes(id)) {
+        if ((entry.linkedProfiles || []).length <= 1) {
+          this.journal.delete(jid);
+        } else {
+          entry.linkedProfiles = (entry.linkedProfiles || []).filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 11. Entity links
+    for (const [elid, link] of this.entityLinks) {
+      if ((link.sourceType === "profile" && link.sourceId === id) ||
+          (link.targetType === "profile" && link.targetId === id)) {
+        this.entityLinks.delete(elid);
+      }
+    }
+
     return this.profiles.delete(id);
   }
 

@@ -4488,14 +4488,20 @@ export default function TrackersPage() {
           const personGroups: Record<string, { name: string; type: string; trackers: typeof allTrackersList }> = {};
           const selfProfile = (profiles || []).find(p => p.type === 'self');
           const selfId = selfProfile?.id || '';
+          // When a profile filter is active, only group under filtered profile IDs
+          const activeFilterIds = (filterMode === "selected" && filterIds.length > 0) ? new Set(filterIds) : null;
           for (const t of allTrackersList) {
             const lp = t.linkedProfiles || [];
             if (lp.length === 0) {
               const key = selfId || '__me__';
-              if (!personGroups[key]) personGroups[key] = { name: selfProfile?.name || 'Me', type: 'self', trackers: [] };
-              personGroups[key].trackers.push(t);
+              if (!activeFilterIds || activeFilterIds.has(key)) {
+                if (!personGroups[key]) personGroups[key] = { name: selfProfile?.name || 'Me', type: 'self', trackers: [] };
+                personGroups[key].trackers.push(t);
+              }
             } else {
               for (const pid of lp) {
+                // Skip person groups that don't match the active filter
+                if (activeFilterIds && !activeFilterIds.has(pid)) continue;
                 const prof = (profiles || []).find(p => p.id === pid);
                 if (!personGroups[pid]) personGroups[pid] = { name: prof?.name || 'Unknown', type: prof?.type || 'person', trackers: [] };
                 personGroups[pid].trackers.push(t);

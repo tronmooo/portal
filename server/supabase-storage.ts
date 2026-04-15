@@ -618,77 +618,64 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(id);
     if (!profile) return false;
 
-    // ── Cascade delete: remove all linked entities (each step wrapped in try-catch to prevent partial failure) ──
-    const profileNameLower = profile.name.toLowerCase();
+    // ── Cascade delete: remove all linked entities ──
+    // For each entity: if sole owner → delete entirely; if shared → remove this profile from linkedProfiles
     const errors: string[] = [];
 
-    try { // 1. Delete linked obligations (only by explicit profile link, not by name matching)
-      const allObligations = await this.getObligations();
-      for (const ob of allObligations) {
-        if (ob.linkedProfiles.includes(id)) {
-          await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("obligations"); }
-
-    try { // 2. Delete/unlink events (only by explicit profile link, not by name matching)
-      const allEvents = await this.getEvents();
-      for (const ev of allEvents) {
-        if (ev.linkedProfiles.includes(id)) {
-          if (ev.linkedProfiles.length <= 1) {
-            await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
+    try { // 1. Delete/unlink trackers (and their entries if sole owner)
+      const allTrackers = await this.getTrackers();
+      for (const tracker of allTrackers) {
+        if (tracker.linkedProfiles.includes(id)) {
+          if (tracker.linkedProfiles.length <= 1) {
+            // Sole owner — delete entries, junction rows, then tracker
+            await this.supabase.from("tracker_entries").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
+            await this.supabase.from("trackers").delete().eq("id", tracker.id).eq("user_id", this.userId);
           } else {
-            await this.supabase.from("events").update({ linked_profiles: ev.linkedProfiles.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
+            // Shared — remove this profile from linkedProfiles and junction table
+            await this.supabase.from("trackers").update({ linked_profiles: tracker.linkedProfiles.filter(pid => pid !== id) }).eq("id", tracker.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("profile_id", id).eq("user_id", this.userId);
           }
         }
       }
-    } catch (e) { errors.push("events"); }
+    } catch (e) { errors.push("trackers"); }
 
-    try { // 3. Delete/unlink expenses
+    try { // 2. Delete/unlink expenses
       const allExpenses = await this.getExpenses();
       for (const exp of allExpenses) {
         if (exp.linkedProfiles.includes(id)) {
           if (exp.linkedProfiles.length <= 1) {
+            await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("user_id", this.userId);
             await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
           } else {
             await this.supabase.from("expenses").update({ linked_profiles: exp.linkedProfiles.filter(pid => pid !== id) }).eq("id", exp.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("profile_id", id).eq("user_id", this.userId);
           }
         }
       }
     } catch (e) { errors.push("expenses"); }
 
-    try { // 4. Unlink tasks
+    try { // 3. Delete/unlink tasks
       const allTasks = await this.getTasks();
       for (const task of allTasks) {
         if (task.linkedProfiles.includes(id)) {
-          await this.supabase.from("tasks").update({ linked_profiles: task.linkedProfiles.filter(pid => pid !== id) }).eq("id", task.id).eq("user_id", this.userId);
+          if (task.linkedProfiles.length <= 1) {
+            await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("user_id", this.userId);
+            await this.supabase.from("tasks").delete().eq("id", task.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("tasks").update({ linked_profiles: task.linkedProfiles.filter(pid => pid !== id) }).eq("id", task.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("profile_id", id).eq("user_id", this.userId);
+          }
         }
       }
     } catch (e) { errors.push("tasks"); }
 
-    try { // 5. Unlink trackers
-      const allTrackers = await this.getTrackers();
-      for (const tracker of allTrackers) {
-        if (tracker.linkedProfiles.includes(id)) {
-          await this.supabase.from("trackers").update({ linked_profiles: tracker.linkedProfiles.filter(pid => pid !== id) }).eq("id", tracker.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("trackers"); }
-
-    try { // 6. Unlink documents
-      for (const docId of profile.documents) {
-        const doc = await this.getDocument(docId);
-        if (doc) {
-          await this.supabase.from("documents").update({ linked_profiles: doc.linkedProfiles.filter(pid => pid !== id) }).eq("id", docId).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("documents"); }
-
-    try { // 7. Delete/unlink habits
+    try { // 4. Delete/unlink habits (and their check-ins if sole owner)
       const allHabits = await this.getHabits();
       for (const habit of allHabits) {
         if ((habit.linkedProfiles || []).includes(id)) {
           if ((habit.linkedProfiles || []).length <= 1) {
+            await this.supabase.from("habit_checkins").delete().eq("habit_id", habit.id).eq("user_id", this.userId);
             await this.supabase.from("habits").delete().eq("id", habit.id).eq("user_id", this.userId);
           } else {
             await this.supabase.from("habits").update({ linked_profiles: (habit.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", habit.id).eq("user_id", this.userId);
@@ -697,14 +684,61 @@ export class SupabaseStorage implements IStorage {
       }
     } catch (e) { errors.push("habits"); }
 
+    try { // 5. Delete/unlink obligations
+      const allObligations = await this.getObligations();
+      for (const ob of allObligations) {
+        if (ob.linkedProfiles.includes(id)) {
+          if (ob.linkedProfiles.length <= 1) {
+            await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("user_id", this.userId);
+            await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("obligations").update({ linked_profiles: ob.linkedProfiles.filter(pid => pid !== id) }).eq("id", ob.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("profile_id", id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("obligations"); }
+
+    try { // 6. Delete/unlink events
+      const allEvents = await this.getEvents();
+      for (const ev of allEvents) {
+        if (ev.linkedProfiles.includes(id)) {
+          if (ev.linkedProfiles.length <= 1) {
+            await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("user_id", this.userId);
+            await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("events").update({ linked_profiles: ev.linkedProfiles.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("profile_id", id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("events"); }
+
+    try { // 7. Delete/unlink documents
+      const allDocuments = await this.getDocuments();
+      for (const doc of allDocuments) {
+        if ((doc.linkedProfiles || []).includes(id)) {
+          if ((doc.linkedProfiles || []).length <= 1) {
+            await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("user_id", this.userId);
+            await this.supabase.from("documents").delete().eq("id", doc.id).eq("user_id", this.userId);
+          } else {
+            await this.supabase.from("documents").update({ linked_profiles: (doc.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", doc.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("profile_id", id).eq("user_id", this.userId);
+          }
+        }
+      }
+    } catch (e) { errors.push("documents"); }
+
     try { // 8. Delete/unlink artifacts
       const allArtifacts = await this.getArtifacts();
       for (const art of allArtifacts) {
         if ((art.linkedProfiles || []).includes(id)) {
           if ((art.linkedProfiles || []).length <= 1) {
+            await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("user_id", this.userId);
             await this.supabase.from("artifacts").delete().eq("id", art.id).eq("user_id", this.userId);
           } else {
             await this.supabase.from("artifacts").update({ linked_profiles: (art.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", art.id).eq("user_id", this.userId);
+            await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("profile_id", id).eq("user_id", this.userId);
           }
         }
       }
@@ -737,7 +771,7 @@ export class SupabaseStorage implements IStorage {
       }
     } catch (e) { errors.push("journal"); }
 
-    try { // 11. Delete entity_links
+    try { // 11. Delete entity_links junction table rows referencing this profile
       await this.supabase.from("entity_links").delete()
         .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
         .eq("user_id", this.userId);
@@ -747,7 +781,7 @@ export class SupabaseStorage implements IStorage {
       console.warn(`[deleteProfile] Cascade delete partial failures for profile ${id}: ${errors.join(", ")}`);
     }
 
-    // 8. Delete the profile itself
+    // Finally, delete the profile itself
     const { error } = await this.supabase.from("profiles").delete().eq("id", id).eq("user_id", this.userId);
     if (error) {
       console.warn(`[deleteProfile] Failed to delete profile ${id}:`, error.message);
