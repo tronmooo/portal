@@ -4577,6 +4577,11 @@ async function resolveForProfile(forProfile: string | undefined, text: string): 
 }
 
 async function autoLinkToProfiles(entityType: string, entityId: string, text: string, explicitProfileName?: string): Promise<void> {
+  // DISABLED: The user has explicitly requested NO AI auto-linking.
+  // All profile linking must be done manually by the user.
+  // Data goes where the user puts it, period.
+  return;
+
   // HARD BLOCK: Profile-exclusive types are NEVER auto-linked.
   // They get their profile set exactly once at creation time.
   // This function should never be called for them, but guard anyway.
