@@ -89,6 +89,38 @@ function StatCard({ icon: Icon, label, value, href, accent }: { icon: any; label
   );
 }
 
+function NotificationToggle({ prefKey, label, description, icon }: { prefKey: string; label: string; description: string; icon: React.ReactNode }) {
+  const { toast } = useToast();
+  const { data: pref } = useQuery<{ value: string | null }>({
+    queryKey: [`/api/preferences/${prefKey}`],
+    queryFn: () => apiRequest("GET", `/api/preferences/${prefKey}`).then(r => r.json()),
+  });
+
+  const enabled = pref?.value !== "false";
+
+  async function toggle(checked: boolean) {
+    try {
+      await apiRequest("PUT", `/api/preferences/${prefKey}`, { value: String(checked) });
+      queryClient.invalidateQueries({ queryKey: [`/api/preferences/${prefKey}`] });
+    } catch (err: any) {
+      toast({ title: "Failed to update setting", description: err.message, variant: "destructive" });
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        {icon}
+        <div>
+          <Label className="text-sm font-medium">{label}</Label>
+          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+        </div>
+      </div>
+      <Switch checked={enabled} onCheckedChange={toggle} data-testid={`switch-${prefKey}`} />
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   useEffect(() => { document.title = "Settings — Portol"; }, []);
   const { user, signOut } = useAuth();
@@ -499,6 +531,32 @@ export default function SettingsPage() {
                 onCheckedChange={(checked) => setAiPreference("ai_smart_routing", String(checked))}
               />
             </div>
+          </CardContent>
+        </Card>
+
+        {/* ─── Notifications ─── */}
+        <Card data-testid="card-notifications">
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Bell className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-base">Notifications</CardTitle>
+            </div>
+            <CardDescription>Control how Portol notifies you.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <NotificationToggle
+              prefKey="notifications_enabled"
+              label="Enable Notifications"
+              description="Receive in-app notifications for reminders and updates"
+              icon={<Bell className="h-4 w-4 text-muted-foreground" />}
+            />
+            <Separator />
+            <NotificationToggle
+              prefKey="email_notifications"
+              label="Email Notifications"
+              description="Receive email alerts for important events"
+              icon={<BellOff className="h-4 w-4 text-muted-foreground" />}
+            />
           </CardContent>
         </Card>
 
