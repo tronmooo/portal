@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
-import { getUserToday } from "../shared/timezone";
+import { getUserToday, parseLocalDate } from "../shared/timezone";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -1471,7 +1471,7 @@ export class SupabaseStorage implements IStorage {
         items.push({ id: `event-${ev.id}-${baseDate}`, type: "event", title: ev.title, date: baseDate, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
       }
       if (ev.recurrence !== "none") {
-        const base = new Date(ev.date);
+        const base = parseLocalDate(ev.date.slice(0, 10));
         for (let i = 1; i <= 45; i++) {
           const next = new Date(base);
           switch (ev.recurrence) {
@@ -1481,7 +1481,7 @@ export class SupabaseStorage implements IStorage {
             case "monthly": next.setMonth(next.getMonth() + i); break;
             case "yearly": next.setFullYear(next.getFullYear() + i); break;
           }
-          const nextStr = next.toISOString().slice(0, 10);
+          const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
           if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
           if (nextStr >= startDate) {
@@ -1508,7 +1508,7 @@ export class SupabaseStorage implements IStorage {
       }
       // Generate future occurrences based on frequency
       if (ob.frequency !== "once") {
-        const base = new Date(ob.nextDueDate);
+        const base = parseLocalDate(ob.nextDueDate.slice(0, 10));
         for (let i = 1; i <= 24; i++) {
           const next = new Date(base);
           switch (ob.frequency) {
@@ -1518,7 +1518,7 @@ export class SupabaseStorage implements IStorage {
             case "quarterly": next.setMonth(next.getMonth() + i * 3); break;
             case "yearly": next.setFullYear(next.getFullYear() + i); break;
           }
-          const nextStr = next.toISOString().slice(0, 10);
+          const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
           if (nextStr >= startDate) {
             items.push({ id: `obligation-${ob.id}-${nextStr}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: nextStr, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
@@ -1530,10 +1530,10 @@ export class SupabaseStorage implements IStorage {
     // ── Add habits as repeating calendar items ──
     for (const habit of habits) {
       // Show daily habits on each day in the range, weekly habits on their target days
-      const start = new Date(startDate + "T12:00:00");
-      const end = new Date(endDate + "T12:00:00");
+      const start = parseLocalDate(startDate);
+      const end = parseLocalDate(endDate);
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const dateStr = d.toISOString().slice(0, 10);
+        const dateStr = d.toLocaleDateString('en-CA');
         const dayOfWeek = d.getDay();
         const showOnDay = habit.frequency === "daily" ||
           (habit.frequency === "weekly" && (habit.targetDays?.includes(dayOfWeek) ?? dayOfWeek === 1)) ||

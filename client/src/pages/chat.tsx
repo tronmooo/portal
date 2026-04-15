@@ -1032,6 +1032,9 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
       result.title = editName; result.name = editName; result.description = editName;
       result.amount = parseFloat(editAmount) || result.amount;
       result.date = editDate || result.date;
+      queryClient.invalidateQueries({ queryKey: [`/api/${endpoint}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Updated" });
       setEditing(false);
     } catch { toast({ title: "Failed to update", variant: "destructive" }); }
@@ -1044,6 +1047,8 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
     try {
       await apiRequest("DELETE", `/api/${endpoint}/${entityId}`);
       onDeleted();
+      // Optimistically remove from cache
+      queryClient.setQueryData([`/api/${endpoint}`], (old: any[]) => old?.filter(item => item.id !== entityId));
       toast({ title: "Removed" });
       // Invalidate outside try so we don't catch its errors
     } catch (err: any) {
@@ -1421,6 +1426,7 @@ export default function ChatPage() {
       const result = await res.json();
       if (result.success) {
         invalidateAll();
+        toast({ title: "Extraction confirmed", description: "Data has been saved." });
         // Remove pendingExtraction from the message
         setMessages((prev) =>
           prev.map((m) =>
@@ -1431,9 +1437,11 @@ export default function ChatPage() {
         );
         return true;
       }
+      toast({ title: "Extraction failed", description: "The server could not save the data.", variant: "destructive" });
       return false;
     } catch (err) {
       console.error("Confirm extraction failed:", err);
+      toast({ title: "Extraction failed", description: "Something went wrong — please try again.", variant: "destructive" });
       return false;
     }
   };
@@ -1967,6 +1975,8 @@ export default function ChatPage() {
                                     ...m,
                                     actions: m.actions ? [...m.actions] : m.actions
                                   })));
+                                  // Optimistically remove from cache
+                                  queryClient.setQueryData([`/api/${ep}`], (old: any[]) => old?.filter(item => item.id !== entityId));
                                   queryClient.invalidateQueries();
                                   toast({
                                     title: `Deleted: ${entityTitle || actionLabel(action.type)}`,

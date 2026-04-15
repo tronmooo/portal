@@ -1028,22 +1028,31 @@ export class MemStorage implements IStorage {
       }
     }
 
-    // 4. Habits — show as daily markers for dates they're checked in
+    // 4. Habits — show on each applicable day in the range (daily, weekly, custom)
     for (const habit of this.habits.values()) {
-      for (const checkin of habit.checkins) {
-        const d = checkin.date;
-        if (d >= startDate && d <= endDate) {
+      const start = parseLocalDate(startDate);
+      const end = parseLocalDate(endDate);
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toLocaleDateString('en-CA');
+        const dayOfWeek = d.getDay();
+        const showOnDay = habit.frequency === "daily" ||
+          (habit.frequency === "weekly" && (habit.targetDays?.includes(dayOfWeek) ?? dayOfWeek === 1)) ||
+          (habit.frequency === "custom" && habit.targetDays?.includes(dayOfWeek));
+        if (showOnDay) {
+          const checkedToday = habit.checkins.filter(c => c.date === dateStr).length;
+          const target = habit.targetPerDay || 1;
+          const isDone = checkedToday >= target;
           items.push({
-            id: `habit-${habit.id}-${d}`,
+            id: `habit-${habit.id}-${dateStr}`,
             type: "habit",
-            title: habit.name,
-            date: d,
+            title: habit.name + (target > 1 ? ` (${checkedToday}/${target})` : ""),
+            date: dateStr,
             allDay: true,
-            color: habit.color || "#4F98A3",
-            completed: true,
-            linkedProfiles: [],
+            color: isDone ? "#10B981" : (habit.color || "#8B5CF6"),
+            completed: isDone,
+            linkedProfiles: habit.linkedProfiles || [],
             sourceId: habit.id,
-            meta: { streak: habit.currentStreak, icon: habit.icon },
+            meta: { streak: habit.currentStreak, icon: habit.icon, frequency: habit.frequency },
           });
         }
       }

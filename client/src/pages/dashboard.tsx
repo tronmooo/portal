@@ -608,7 +608,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       );
       return { prev };
     },
-    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
+    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); toast({ title: "Failed to create task", variant: "destructive" }); },
     onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task added" }); },
   });
 
@@ -621,8 +621,8 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       );
       return { prev };
     },
-    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
+    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); toast({ title: "Failed to update task", variant: "destructive" }); },
+    onSettled: (_d, _e, variables) => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: variables.status === 'done' ? "Task completed" : "Task updated" }); },
   });
 
   const deleteMutation = useMutation({
@@ -632,17 +632,17 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) => (old || []).filter((t: any) => t.id !== id));
       return { prev };
     },
-    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
+    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); toast({ title: "Failed to delete task", variant: "destructive" }); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task deleted" }); },
   });
 
   const todayStr = new Date().toLocaleDateString('en-CA');
   const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); })();
-  const pending = tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done'));
-  const done = tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 5);
-  const todayTasks = pending.filter((t: any) => !t.dueDate || t.dueDate <= todayStr);
-  const tomorrowTasks = pending.filter((t: any) => t.dueDate === tomorrowStr);
-  const upcomingTasks = pending.filter((t: any) => t.dueDate && t.dueDate > tomorrowStr);
+  const pending = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
+  const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 5), [tasks]);
+  const todayTasks = useMemo(() => pending.filter((t: any) => !t.dueDate || t.dueDate <= todayStr), [pending, todayStr]);
+  const tomorrowTasks = useMemo(() => pending.filter((t: any) => t.dueDate === tomorrowStr), [pending, tomorrowStr]);
+  const upcomingTasks = useMemo(() => pending.filter((t: any) => t.dueDate && t.dueDate > tomorrowStr), [pending, tomorrowStr]);
 
   // Priority color lines — exact Any.do style
   const PLINE: Record<string, string> = { high: '#E53935', medium: '#FFA726', low: '#42A5F5' };
@@ -827,24 +827,29 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
     },
     onError: (_e: any, _v: any, ctx: any) => {
       if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      toast({ title: "Failed to check in habit", variant: "destructive" });
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Habit checked in" });
     },
   });
 
-  const active = habits.filter((h: any) => !h.archivedAt);
+  const active = useMemo(() => habits.filter((h: any) => !h.archivedAt), [habits]);
   const VIVID = ['#6C5CE7','#E84393','#E55353','#F6A623','#2ECC71','#3498DB','#E67E22','#9B59B6','#1ABC9C','#E74C3C'];
 
   // Group by category if available, else default group
-  const grouped: Record<string, any[]> = {};
-  active.forEach((h: any) => {
-    const cat = (h as any).category || h.group || 'Daily';
-    if (!grouped[cat]) grouped[cat] = [];
-    grouped[cat].push(h);
-  });
+  const grouped = useMemo(() => {
+    const g: Record<string, any[]> = {};
+    active.forEach((h: any) => {
+      const cat = (h as any).category || h.group || 'Daily';
+      if (!g[cat]) g[cat] = [];
+      g[cat].push(h);
+    });
+    return g;
+  }, [active]);
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingHabit(false); setNewHabitName(''); } }}>
@@ -1327,7 +1332,7 @@ function HealthSection({ data }: { data: any[] }) {
   const [, navigate] = useLocation();
   const [selectedTracker, setSelectedTracker] = useState<any>(null);
 
-  const filteredData = (data || []).filter((item: any) => !/test/i.test(item.name)).sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 4);
+  const filteredData = useMemo(() => (data || []).filter((item: any) => !/test/i.test(item.name)).sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 4), [data]);
 
   if (!data || data.length === 0) return (
     <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" testId="section-health">
@@ -1438,6 +1443,12 @@ function ObligationsSection({ data }: { data: any[] }) {
   const deleteMutation = useMutation({
     mutationFn: ({ id, name }: { id: string; name?: string }) => apiRequest("DELETE", `/api/obligations/${id}`),
     onSuccess: (_data, variables) => {
+      queryClient.setQueryData(["/api/obligations"], (old: any[]) =>
+        old?.filter((item: any) => item.id !== variables.id) || []
+      );
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((item: any) => item.id !== variables.id) : old
+      );
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
@@ -1448,11 +1459,11 @@ function ObligationsSection({ data }: { data: any[] }) {
   });
 
   // Group bills by timeframe
-  const overdueBills = (data || []).filter((b: any) => b.daysUntil < 0);
-  const thisWeekBills = (data || []).filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
-  const thisMonthBills = (data || []).filter((b: any) => b.daysUntil > 7 && b.daysUntil <= 30);
+  const overdueBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil < 0), [data]);
+  const thisWeekBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7), [data]);
+  const thisMonthBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil > 7 && b.daysUntil <= 30), [data]);
 
-  const monthlyTotal = (data || []).reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
+  const monthlyTotal = useMemo(() => (data || []).reduce((sum: number, b: any) => sum + (b.amount || 0), 0), [data]);
 
   if (!data || data.length === 0) return (
     <CollapsibleSection accent="43 75% 50%" icon={CreditCard} label="Bills & Subscriptions" testId="section-obligations">
@@ -1666,6 +1677,12 @@ function GoalsSection({ profileId }: { profileId?: string }) {
   });
   const deleteMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/goals"] });
+      const prev = queryClient.getQueryData(["/api/goals", profileId || "all"]);
+      queryClient.setQueryData(["/api/goals", profileId || "all"], (old: any[]) => (old || []).filter((g: any) => g.id !== id));
+      return { prev };
+    },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -1673,7 +1690,10 @@ function GoalsSection({ profileId }: { profileId?: string }) {
       setEditGoal(null);
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
-    onError: (_err: Error, variables) => toast({ title: `Failed to delete "${variables.title || "goal"}"`, variant: "destructive" }),
+    onError: (_err: Error, variables, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/goals", profileId || "all"], ctx.prev);
+      toast({ title: `Failed to delete "${variables.title || "goal"}"`, variant: "destructive" });
+    },
   });
 
   const resetForm = () => { setFormTitle(""); setFormTarget(""); setFormUnit(""); setFormDeadline(""); setFormType("custom"); };
@@ -1689,8 +1709,8 @@ function GoalsSection({ profileId }: { profileId?: string }) {
 
   const [actionGoal, setActionGoal] = useState<GoalItem | null>(null);
   const [progressInput, setProgressInput] = useState("");
-  const activeGoals = goals.filter(g => normalizeFilter(g.status) === normalizeFilter("active"));
-  const completedGoals = goals.filter(g => normalizeFilter(g.status) === normalizeFilter("completed"));
+  const activeGoals = useMemo(() => goals.filter(g => normalizeFilter(g.status) === normalizeFilter("active")), [goals]);
+  const completedGoals = useMemo(() => goals.filter(g => normalizeFilter(g.status) === normalizeFilter("completed")), [goals]);
 
   if (isLoading) return <CollapsibleSection accent="188 70% 48%" icon={Target} label="Goals" testId="section-goals"><div className="h-16 bg-muted animate-pulse rounded-lg" /></CollapsibleSection>;
   if (goalsError) return <CollapsibleSection accent="188 70% 48%" icon={Target} label="Goals" testId="section-goals"><p className="text-destructive text-sm p-4">Failed to load goals. Please refresh.</p></CollapsibleSection>;
@@ -1954,6 +1974,7 @@ const BUDGET_CATEGORIES = [
 ];
 
 function BudgetManager() {
+  const { toast } = useToast();
   const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7));
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -1972,29 +1993,49 @@ function BudgetManager() {
   });
 
   const budgets = budgetRes?.budgets || [];
-  const allExpenses = Array.isArray(expensesData) ? expensesData : (expensesData?.items || []);
-  const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(month));
-  const byCategory: Record<string, number> = {};
-  monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
+  const allExpenses = useMemo(() => Array.isArray(expensesData) ? expensesData : (expensesData?.items || []), [expensesData]);
+  const monthExpenses = useMemo(() => allExpenses.filter((e: any) => e.date?.startsWith(month)), [allExpenses, month]);
+  const byCategory = useMemo(() => {
+    const cats: Record<string, number> = {};
+    monthExpenses.forEach((e: any) => { cats[e.category || "general"] = (cats[e.category || "general"] || 0) + e.amount; });
+    return cats;
+  }, [monthExpenses]);
 
-  const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);
-  const totalSpent = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
+  const totalBudget = useMemo(() => budgets.reduce((s: number, b: any) => s + b.amount, 0), [budgets]);
+  const totalSpent = useMemo(() => monthExpenses.reduce((s: number, e: any) => s + e.amount, 0), [monthExpenses]);
 
   const addMutation = useMutation({
     mutationFn: (data: {category: string; amount: number; notes?: string}) =>
       apiRequest("POST", "/api/budgets", { month, ...data }).then(r => r.json()),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setAddOpen(false); setNewCat(""); setNewAmt(""); setNewNotes(""); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setAddOpen(false); setNewCat(""); setNewAmt(""); setNewNotes(""); toast({ title: "Budget added" }); },
+    onError: () => toast({ title: "Failed to add budget", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/budgets/${id}?month=${month}`),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/budgets", month] });
+      const prev = queryClient.getQueryData(["/api/budgets", month]);
+      queryClient.setQueryData(["/api/budgets", month], (old: any) =>
+        old ? { ...old, budgets: (old.budgets || []).filter((b: any) => b.id !== id) } : old
+      );
+      return { prev };
+    },
+    onSuccess: () => {
+      refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Budget deleted" });
+    },
+    onError: (_e, _v, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/budgets", month], ctx.prev);
+      toast({ title: "Failed to delete budget", variant: "destructive" });
+    },
   });
 
   const updateMutation = useMutation({
     mutationFn: (data: {id: string; amount: number}) =>
       apiRequest("PATCH", `/api/budgets/${data.id}?month=${month}`, { amount: data.amount }),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setEditId(null); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setEditId(null); toast({ title: "Budget updated" }); },
+    onError: () => toast({ title: "Failed to update budget", variant: "destructive" }),
   });
 
   const copyMutation = useMutation({
@@ -2004,7 +2045,8 @@ function BudgetManager() {
       const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
       return apiRequest("POST", "/api/budgets/copy", { fromMonth: prevMonth, toMonth: month }).then(r => r.json());
     },
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Budget copied from last month" }); },
+    onError: () => toast({ title: "Failed to copy budget", variant: "destructive" }),
   });
 
   const prevMonth = () => {
@@ -2209,7 +2251,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   });
 
   const monthlySpend = stats?.monthlySpend || 0;
-  const monthlyIncome = (incomes || []).reduce((s, i) => s + (i.amount || 0), 0);
+  const monthlyIncome = useMemo(() => (incomes || []).reduce((s, i) => s + (i.amount || 0), 0), [incomes]);
   const cashFlow = monthlyIncome - monthlySpend;
   const totalAssetValue = data?.totalAssetValue || 0;
   const totalLiabilities = data?.totalLiabilities || 0;
@@ -2219,16 +2261,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   // Build drill-down data — use profile-filtered monthlyExpenseRecords from enhanced API
   const now = new Date();
   const monthExpenses: any[] = data?.monthlyExpenseRecords || [];
-  const byCategory: Record<string, number> = {};
-  monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
-  const assetProfiles = (allProfiles || []).filter((p: any) => {
+  const byCategory = useMemo(() => {
+    const cats: Record<string, number> = {};
+    monthExpenses.forEach((e: any) => { cats[e.category || "general"] = (cats[e.category || "general"] || 0) + e.amount; });
+    return cats;
+  }, [monthExpenses]);
+  const assetProfiles = useMemo(() => (allProfiles || []).filter((p: any) => {
     if (!(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue)) return false;
     // Apply the same profile filter as everything else
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const pParent = p.fields?._parentProfileId || p.parentProfileId;
     if (pParent && filterIds.includes(pParent)) return true;
     return false;
-  });
+  }), [allProfiles, filterMode, filterIds]);
 
   if (!data && !stats) {
     return (
@@ -2564,10 +2609,10 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
     expense: "/dashboard/finance",
   };
 
-  const validActivities = (activities || []).filter(item => {
+  const validActivities = useMemo(() => (activities || []).filter(item => {
     const desc = item.description?.trim();
     return desc && desc.length > 0;
-  }).slice(0, 5);
+  }).slice(0, 5), [activities]);
 
   if (validActivities.length === 0) return (
     <CollapsibleSection icon={Activity} label="Recent Activity" testId="section-activity">
@@ -2643,7 +2688,7 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
 ];
 // Layout rule: LEFT = [Today, Health] RIGHT = [Action Required, Goals]
 // FULL = [Finance, Bills, Activity]
-// This eliminates dead zones — both columns now have similarly-sized sections
+// Uses CSS columns (masonry) layout — sections flow naturally and fill space without dead zones
 
 const LAYOUT_VERSION = 4; // Bump: Finance/Bills/Activity moved to full-width to eliminate column dead zones
 
@@ -2858,6 +2903,8 @@ export default function DashboardPage() {
       apiRequest("PUT", "/api/preferences/dashboard_layout", { value: serializeLayout(layout) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/preferences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Layout saved" });
     },
     onError: () => toast({ title: "Failed to save layout", variant: "destructive" }),
@@ -3020,13 +3067,21 @@ export default function DashboardPage() {
             ))}
 
             {(leftSections.length > 0 || rightSections.length > 0) && (
-              <div className="grid md:grid-cols-2 gap-3 mt-1">
-                <div className="space-y-3">
-                  {leftSections.map(s => <div key={s.id}>{renderSection(s.id)}</div>)}
-                </div>
-                <div className="space-y-3">
-                  {rightSections.map(s => <div key={s.id}>{renderSection(s.id)}</div>)}
-                </div>
+              <div className="md:columns-2 gap-3 mt-1">
+                {/* Interleave left and right sections for balanced masonry flow */}
+                {(() => {
+                  const interleaved: typeof leftSections = [];
+                  const maxLen = Math.max(leftSections.length, rightSections.length);
+                  for (let i = 0; i < maxLen; i++) {
+                    if (i < leftSections.length) interleaved.push(leftSections[i]);
+                    if (i < rightSections.length) interleaved.push(rightSections[i]);
+                  }
+                  return interleaved.map(s => (
+                    <div key={s.id} className="mb-3" style={{ breakInside: 'avoid' }}>
+                      {renderSection(s.id)}
+                    </div>
+                  ));
+                })()}
               </div>
             )}
 

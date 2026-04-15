@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { Button } from "@/components/ui/button";
@@ -102,31 +102,31 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
     }
   }, [profiles]);
 
-  const typeFiltered = (profiles || []).filter(p => {
-    if (profileTypes && profileTypes.length > 0) {
-      return profileTypes.some(t => normalizeFilter(t) === normalizeFilter(p.type));
-    }
-    // Only show primary profile types — not assets, vehicles, subscriptions, etc.
-    return ["person", "self", "pet"].some(t => normalizeFilter(t) === normalizeFilter(p.type));
-  });
+  const sorted = useMemo(() => {
+    const typeFiltered = (profiles || []).filter(p => {
+      if (profileTypes && profileTypes.length > 0) {
+        return profileTypes.some(t => normalizeFilter(t) === normalizeFilter(p.type));
+      }
+      // Only show primary profile types — not assets, vehicles, subscriptions, etc.
+      return ["person", "self", "pet"].some(t => normalizeFilter(t) === normalizeFilter(p.type));
+    });
 
-  // Deduplicate by name+type — keep the one with the most linked data
-  const deduped = new Map<string, any>();
-  for (const p of typeFiltered) {
-    const key = `${p.type}::${p.name}`;
-    const existing = deduped.get(key);
-    if (!existing) {
-      deduped.set(key, p);
-    } else {
-      // Keep the profile with more linked data (documents, expenses, tasks, etc.)
-      const score = (prof: any) =>
-        (prof.documents?.length || 0) + (prof.expenses?.length || 0) + (prof.tasks?.length || 0);
-      if (score(p) > score(existing)) deduped.set(key, p);
+    // Deduplicate by name+type — keep the one with the most linked data
+    const deduped = new Map<string, any>();
+    for (const p of typeFiltered) {
+      const key = `${p.type}::${p.name}`;
+      const existing = deduped.get(key);
+      if (!existing) {
+        deduped.set(key, p);
+      } else {
+        // Keep the profile with more linked data (documents, expenses, tasks, etc.)
+        const score = (prof: any) =>
+          (prof.documents?.length || 0) + (prof.expenses?.length || 0) + (prof.tasks?.length || 0);
+        if (score(p) > score(existing)) deduped.set(key, p);
+      }
     }
-  }
-  const filteredProfiles = Array.from(deduped.values());
-
-  const sorted = [...filteredProfiles].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return Array.from(deduped.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [profiles, profileTypes]);
 
   const isEveryone = filter.mode === "everyone";
   const label = getFilterLabel();

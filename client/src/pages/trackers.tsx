@@ -2140,6 +2140,12 @@ function DeleteTrackerDialog({
     mutationFn: async () => {
       await apiRequest("DELETE", `/api/trackers/${trackerId}`);
     },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      const prev = queryClient.getQueryData<any[]>(["/api/trackers"]);
+      queryClient.setQueryData<any[]>(["/api/trackers"], (old) => old?.filter((t: any) => t.id !== trackerId));
+      return { prev };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -2147,7 +2153,8 @@ function DeleteTrackerDialog({
       onOpenChange(false);
       toast({ title: "Tracker deleted", description: `${trackerName} has been removed` });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/trackers"], ctx.prev);
       toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -3187,7 +3194,9 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
     mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       const name = formTitle;
       setCreating(false); resetForm();
       toast({ title: `"${name}" goal created`, description: formTarget ? `Target: ${formTarget} ${formUnit}` : undefined });
@@ -3198,7 +3207,9 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
     mutationFn: ({ id, title, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, { title, ...data }).then(r => r.json()),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       setEditGoal(null); resetForm();
       toast({ title: `"${variables.title || "Goal"}" updated` });
     },
@@ -3206,13 +3217,24 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
   });
   const deleteMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/goals"] });
+      const prev = queryClient.getQueryData<any[]>(["/api/goals"]);
+      queryClient.setQueryData<any[]>(["/api/goals"], (old) => old?.filter((g: any) => g.id !== variables.id));
+      return { prev };
+    },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       setEditGoal(null);
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
-    onError: (e: Error) => toast({ title: "Failed to delete goal", description: formatApiError(e), variant: "destructive" }),
+    onError: (e: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/goals"], ctx.prev);
+      toast({ title: "Failed to delete goal", description: formatApiError(e), variant: "destructive" });
+    },
   });
 
   const resetForm = () => { setFormTitle(""); setFormTarget(""); setFormUnit(tracker.unit || ""); setFormDeadline(""); };
@@ -3318,6 +3340,14 @@ function TrackerDetailDialog({
       if (!tracker) return;
       await apiRequest("DELETE", `/api/trackers/${tracker.id}`);
     },
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ["/api/trackers"] });
+      const prev = qc.getQueryData<any[]>(["/api/trackers"]);
+      if (tracker) {
+        qc.setQueryData<any[]>(["/api/trackers"], (old) => old?.filter((t: any) => t.id !== tracker.id));
+      }
+      return { prev };
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/trackers"] });
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -3325,7 +3355,8 @@ function TrackerDetailDialog({
       toast({ title: "Tracker deleted" });
       onClose();
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) qc.setQueryData(["/api/trackers"], ctx.prev);
       toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -3637,6 +3668,12 @@ export default function TrackersPage() {
     mutationFn: async (docId: string) => {
       await apiRequest("DELETE", `/api/documents/${docId}`);
     },
+    onMutate: async (docId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
+      const prev = queryClient.getQueryData<any[]>(["/api/documents"]);
+      queryClient.setQueryData<any[]>(["/api/documents"], (old) => old?.filter((d: any) => d.id !== docId));
+      return { prev };
+    },
     onSuccess: () => {
       toast({ title: "Document deleted" });
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
@@ -3645,19 +3682,20 @@ export default function TrackersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/documents"], ctx.prev);
       toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
     },
   });
 
   // Profile-filtered documents (before type filter, so type pills don't disappear)
-  const profileFilteredDocs = allDocuments.filter(d => {
+  const profileFilteredDocs = useMemo(() => allDocuments.filter(d => {
     if (filterMode === "selected" && filterIds.length > 0) {
       const linkedIds = d.linkedProfiles || [];
       return linkedIds.some(id => filterIds.includes(id));
     }
     return true;
-  });
+  }), [allDocuments, filterMode, filterIds]);
 
   // Unique doc types for filter chips — derived from profile-filtered docs (NOT type-filtered)
   const docTypes = useMemo(() => [...new Set(profileFilteredDocs.map(d => d.type).filter(Boolean))].sort(), [profileFilteredDocs]);
@@ -3677,14 +3715,16 @@ export default function TrackersPage() {
     .sort((a, b) => a.localeCompare(b)), [trackers]);
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
-  const profilesWithTrackers = (profiles || []).filter(p =>
-    ["self", "person", "pet"].includes(p.type)
-  );
-  const sortedFilterProfiles = [...profilesWithTrackers].sort((a, b) => {
-    if (a.type === "self") return -1;
-    if (b.type === "self") return 1;
-    return a.name.localeCompare(b.name);
-  });
+  const sortedFilterProfiles = useMemo(() => {
+    const profilesWithTrackers = (profiles || []).filter(p =>
+      ["self", "person", "pet"].includes(p.type)
+    );
+    return [...profilesWithTrackers].sort((a, b) => {
+      if (a.type === "self") return -1;
+      if (b.type === "self") return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [profiles]);
 
   // Apply profile filter — memoized
   const filteredTrackers = useMemo(() => (trackers || []).filter(t => {

@@ -42,7 +42,7 @@ import { ToastAction } from "@/components/ui/toast";
 import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task } from "@shared/schema";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -298,9 +298,13 @@ function TaskItem({
               <EditableTitle
                 value={task.title}
                 onSave={async (newTitle) => {
-                  await apiRequest("PATCH", `/api/tasks/${task.id}`, { title: newTitle });
-                  invalidateTaskQueries();
-                  toast({ title: `Renamed to "${newTitle}"` });
+                  try {
+                    await apiRequest("PATCH", `/api/tasks/${task.id}`, { title: newTitle });
+                    invalidateTaskQueries();
+                    toast({ title: `Renamed to "${newTitle}"` });
+                  } catch (err: any) {
+                    toast({ title: "Failed to rename task", description: formatApiError(err), variant: "destructive" });
+                  }
                 }}
               />
             </div>
@@ -416,6 +420,7 @@ function SwipeableItem({ children, onSwipeLeft, onSwipeRight, leftLabel = '✓ D
 
 export default function TasksPage() {
   useEffect(() => { document.title = "Tasks — Portol"; }, []);
+  const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
@@ -429,6 +434,15 @@ export default function TasksPage() {
     queryKey: ["/api/tasks", filterMode, filterIds],
     queryFn: () => apiRequest("GET", taskUrl).then(r => r.json()),
   });
+
+  // Apply profile filter client-side (must be before early returns — Rules of Hooks)
+  const profileFilteredTasks = useMemo(() => (tasks || []).filter(t => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    const linked = t.linkedProfiles || [];
+    return linked.some(id => filterIds.includes(id));
+  }), [tasks, filterMode, filterIds]);
+  const activeTasks = useMemo(() => profileFilteredTasks.filter(t => t.status !== "done"), [profileFilteredTasks]);
+  const completedTasks = useMemo(() => profileFilteredTasks.filter(t => t.status === "done"), [profileFilteredTasks]);
 
   if (isLoading) {
     return (
@@ -448,14 +462,7 @@ export default function TasksPage() {
     </div>
   );
 
-  // Apply profile filter client-side
-  const profileFilteredTasks = (tasks || []).filter(t => {
-    if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const linked = t.linkedProfiles || [];
-    return linked.some(id => filterIds.includes(id));
-  });
-  const activeTasks = profileFilteredTasks.filter(t => t.status !== "done");
-  const completedTasks = profileFilteredTasks.filter(t => t.status === "done");
+  // profileFilteredTasks, activeTasks, completedTasks are memoized above (before early returns)
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-tasks">
@@ -527,7 +534,10 @@ export default function TasksPage() {
                       try {
                         await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "done" });
                         invalidateTaskQueries();
-                      } catch {}
+                        toast({ title: `"${task.title}" completed` });
+                      } catch (err: any) {
+                        toast({ title: `Failed to complete "${task.title}"`, description: formatApiError(err), variant: "destructive" });
+                      }
                     }}
                     onSwipeRight={async () => {
                       try {
@@ -536,7 +546,10 @@ export default function TasksPage() {
                         const dateStr = tomorrow.toISOString().slice(0, 10);
                         await apiRequest("PATCH", `/api/tasks/${task.id}`, { dueDate: dateStr });
                         invalidateTaskQueries();
-                      } catch {}
+                        toast({ title: `"${task.title}" snoozed to tomorrow` });
+                      } catch (err: any) {
+                        toast({ title: `Failed to snooze "${task.title}"`, description: formatApiError(err), variant: "destructive" });
+                      }
                     }}
                   >
                     <TaskItem task={task} onEdit={setEditTask} />
@@ -562,7 +575,10 @@ export default function TasksPage() {
                       try {
                         await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "todo" });
                         invalidateTaskQueries();
-                      } catch {}
+                        toast({ title: `"${task.title}" reopened` });
+                      } catch (err: any) {
+                        toast({ title: `Failed to reopen "${task.title}"`, description: formatApiError(err), variant: "destructive" });
+                      }
                     }}
                   >
                     <TaskItem task={task} onEdit={setEditTask} />

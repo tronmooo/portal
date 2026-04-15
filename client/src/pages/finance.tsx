@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -93,14 +93,23 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Paycheck confirmed" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to confirm paycheck", description: formatApiError(err), variant: "destructive" });
     },
   });
   const deletePaycheckMut = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/paychecks/${id}`); },
-    onSuccess: () => {
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/paychecks/${id}`); return id; },
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData(["/api/paychecks"], (old: any[]) => old?.filter(item => item.id !== id));
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Paycheck deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to delete paycheck", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -112,6 +121,10 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Loan payment marked as paid" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to mark payment", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -140,28 +153,28 @@ export default function FinancePage() {
 
   // ── Derived data (after hooks + early returns) ──
   // Apply profile filter client-side
-  const profileFiltered = (expenses || []).filter(e => {
+  const profileFiltered = useMemo(() => (expenses || []).filter(e => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const linked = e.linkedProfiles || [];
     return linked.some(id => filterIds.includes(id));
-  });
-  const filtered = filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => normalizeFilter(e.category) === normalizeFilter(filterCategory));
-  const total = filtered.reduce((s, e) => s + e.amount, 0);
+  }), [expenses, filterMode, filterIds]);
+  const filtered = useMemo(() => filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => normalizeFilter(e.category) === normalizeFilter(filterCategory)), [profileFiltered, filterCategory]);
+  const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
 
   // Group by category
-  const byCategory = filtered.reduce((acc: Record<string, number>, e) => {
+  const byCategory = useMemo(() => filtered.reduce((acc: Record<string, number>, e) => {
     acc[e.category] = (acc[e.category] || 0) + e.amount;
     return acc;
-  }, {});
-  const chartData = Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name));
-  const categories = [...new Set(profileFiltered.map(e => e.category))].sort((a, b) => a.localeCompare(b));
+  }, {}), [filtered]);
+  const chartData = useMemo(() => Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name)), [byCategory]);
+  const categories = useMemo(() => [...new Set(profileFiltered.map(e => e.category))].sort((a, b) => a.localeCompare(b)), [profileFiltered]);
 
   // Group loans by loan_name
-  const loanGroups = loanSchedules.reduce((acc: Record<string, any[]>, entry: any) => {
+  const loanGroups = useMemo(() => loanSchedules.reduce((acc: Record<string, any[]>, entry: any) => {
     const name = entry.loan_name || "Unknown";
     (acc[name] = acc[name] || []).push(entry);
     return acc;
-  }, {});
+  }, {}), [loanSchedules]);
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
@@ -419,6 +432,7 @@ export default function FinancePage() {
                       if (!confirm(`Delete "${expense.description}"?`)) return;
                       try {
                         await apiRequest("DELETE", `/api/expenses/${expense.id}`);
+                        queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter(item => item.id !== expense.id));
                         queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                         queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });

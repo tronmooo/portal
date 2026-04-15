@@ -468,6 +468,9 @@ function EventDetailDialog({
       }
     },
     onSuccess: () => {
+      // Optimistically remove from the relevant cache
+      const entityKey = item.type === "event" ? "/api/events" : item.type === "task" ? "/api/tasks" : "/api/obligations";
+      queryClient.setQueryData([entityKey], (old: any[]) => old?.filter(e => e.id !== item.sourceId));
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
@@ -656,7 +659,10 @@ function DayAgenda({
   items: CalendarTimelineItem[];
   onItemClick: (item: CalendarTimelineItem) => void;
 }) {
-  const dayItems = items.filter(i => i.date === date);
+  // Normalize both sides to YYYY-MM-DD for comparison to avoid
+  // mismatches from timestamp suffixes (e.g. "2026-04-14" vs "2026-04-14T00:00:00Z")
+  const normalizedDate = date?.slice(0, 10);
+  const dayItems = items.filter(i => i.date?.slice(0, 10) === normalizedDate);
   
   if (dayItems.length === 0) {
     return (
@@ -765,6 +771,8 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       toast({ title: "Calendar Synced", description: data.message });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setLastSynced(new Date());
     } catch {
       toast({ title: "Sync Failed", description: "Could not connect to Google Calendar.", variant: "destructive" });
@@ -818,8 +826,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         const isOrphan = effectiveHasSelf && linked.length === 0;
         if (!matchesProfile && !isOrphan) continue;
       }
-      if (!map[item.date]) map[item.date] = [];
-      map[item.date].push(item);
+      // Normalize date key to YYYY-MM-DD to handle any timestamp suffixes
+      const dateKey = item.date?.slice(0, 10);
+      if (!dateKey) continue;
+      if (!map[dateKey]) map[dateKey] = [];
+      map[dateKey].push(item);
     }
     return map;
   }, [timelineItems, filterType, effectiveFilterMode, effectiveFilterIds, effectiveHasSelf]);

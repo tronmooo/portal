@@ -195,7 +195,9 @@ export default function SettingsPage() {
       if (result.error) throw new Error(result.error);
       setLastCsvImport(new Date().toLocaleString());
       toast({ title: "Bank CSV imported", description: `${result.imported} expenses created, ${result.skipped} skipped.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     } catch (err: any) {
       toast({ title: "CSV import failed", description: err.message, variant: "destructive" });
     } finally {

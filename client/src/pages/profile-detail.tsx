@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -499,6 +499,8 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
     onSettled: () => {
       // Background refetch to sync with server
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
 
@@ -546,6 +548,8 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Field removed" });
     },
     onError: () => {
@@ -591,6 +595,8 @@ function SubscriptionQuickActions({ profileId, status, onChanged, onEdit }: { pr
       toast({ title: `Subscription ${newStatus}` });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to update status", description: formatApiError(err), variant: "destructive" }),
@@ -641,14 +647,23 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
   // Delete this field
   const deleteField = async () => {
     if (!confirm(`Delete "${label}"?`)) return;
+    // Optimistically remove field from cache
+    queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+      if (!old?.fields) return old;
+      const { [fieldKey]: _, ...rest } = old.fields;
+      return { ...old, fields: rest };
+    });
     try {
       const rest = { ...(allFields || {}) };
       delete rest[fieldKey];
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: rest });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onSaved();
       toast({ title: `"${label}" removed` });
     } catch {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       toast({ title: "Failed to delete", variant: "destructive" });
     }
   };
@@ -661,6 +676,8 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
         fields: { [fieldKey]: draft },
       });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onSaved();
       setEditing(false);
       setFoundValue(null);
@@ -971,6 +988,8 @@ function InfoTab({
     onSuccess: () => {
       toast({ title: "Field added" });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       setAddingField(false);
       setNewFieldKey("");
       setNewFieldValue("");
@@ -1045,7 +1064,12 @@ function InfoTab({
     ([k, v]) => !groupedKeys.has(k) && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
   );
 
-  const handleSaved = () => {};
+  const handleSaved = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+  };
 
   return (
     <div className="space-y-3">
@@ -1367,16 +1391,16 @@ function DocumentsTab({
   const [linkTarget, setLinkTarget] = useState<string>("profile"); // "profile" or a child profile ID
 
   // Get unique doc types for filter
-  const docTypes = [...new Set(documents.map(d => d.type))].sort();
+  const docTypes = useMemo(() => [...new Set(documents.map(d => d.type))].sort(), [documents]);
   // Filter documents
-  const filteredDocs = documents.filter(d => {
+  const filteredDocs = useMemo(() => documents.filter(d => {
     if (docTypeFilter !== "all" && normalizeFilter(d.type) !== normalizeFilter(docTypeFilter)) return false;
     if (docSearch) {
       const q = docSearch.toLowerCase();
       return d.name.toLowerCase().includes(q) || d.type.toLowerCase().includes(q) || (d.tags || []).some(t => t.toLowerCase().includes(q));
     }
     return true;
-  });
+  }), [documents, docTypeFilter, docSearch]);
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -1408,6 +1432,10 @@ function DocumentsTab({
     onSuccess: () => {
       const childName = childProfiles?.find(c => c.id === linkTarget)?.name;
       toast({ title: "Document uploaded", description: childName ? `Linked to ${childName}` : "Linked to this profile." });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onUploaded();
     },
     onError: (err: Error) => {
@@ -1419,7 +1447,17 @@ function DocumentsTab({
     mutationFn: async (docId: string) => {
       await apiRequest("DELETE", `/api/documents/${docId}`);
     },
-    onSuccess: () => {
+    onSuccess: (_data, docId) => {
+      queryClient.setQueryData(["/api/documents"], (old: any[]) =>
+        old?.filter((d: any) => d.id !== docId) || []
+      );
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.documents) return old;
+        return { ...old, documents: old.documents.filter((d: any) => d.id !== docId) };
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Document deleted" });
       setDeletingDocId(null);
       onUploaded();
@@ -1874,6 +1912,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       setExpDate(new Date().toISOString().slice(0, 10));
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" }),
@@ -1892,6 +1932,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       setEditingExpense(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to update expense", description: formatApiError(err), variant: "destructive" }),
@@ -1904,10 +1946,19 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       return { desc };
     },
     onSuccess: (_data, variables) => {
+      queryClient.setQueryData(["/api/expenses"], (old: any[]) =>
+        old?.filter((e: any) => e.id !== variables.id) || []
+      );
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.relatedExpenses) return old;
+        return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== variables.id) };
+      });
       toast({ title: `"${variables.desc || "Expense"}" deleted` });
       setDeleteExpenseId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -2717,11 +2768,26 @@ function TrackerCard_Profile({
     mutationFn: async (entryId: string) => {
       await apiRequest("DELETE", `/api/trackers/${tracker.id}/entries/${entryId}`);
     },
-    onSuccess: () => {
+    onSuccess: (_data, entryId) => {
+      queryClient.setQueriesData({ queryKey: ["/api/trackers"] }, (old: any) =>
+        Array.isArray(old) ? old.map((t: any) => t.id === tracker.id
+          ? { ...t, entries: (t.entries || []).filter((e: any) => e.id !== entryId) }
+          : t
+        ) : old
+      );
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.trackers) return old;
+        return { ...old, trackers: old.trackers.map((t: any) => t.id === tracker.id
+          ? { ...t, entries: (t.entries || []).filter((e: any) => e.id !== entryId) }
+          : t
+        )};
+      });
       toast({ title: "Entry deleted" });
       setDeleteEntryId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -2921,6 +2987,8 @@ function TrackersTab({
       setNewTrackerName(""); setNewTrackerUnit(""); setNewTrackerCategory("custom"); setNewFieldName("value"); setNewFieldType("number");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -2935,6 +3003,8 @@ function TrackersTab({
       setShowLinkTracker(false);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -2944,11 +3014,17 @@ function TrackersTab({
     mutationFn: async (trackerId: string) => {
       await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "tracker", entityId: trackerId });
     },
-    onSuccess: () => {
+    onSuccess: (_data, trackerId) => {
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.trackers) return old;
+        return { ...old, trackers: old.trackers.filter((t: any) => t.id !== trackerId) };
+      });
       toast({ title: "Tracker unlinked" });
       setUnlinkTrackerId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -2958,11 +3034,23 @@ function TrackersTab({
     mutationFn: async (trackerId: string) => {
       await apiRequest("DELETE", `/api/trackers/${trackerId}`);
     },
-    onSuccess: () => {
+    onSuccess: (_data, trackerId) => {
+      queryClient.setQueryData(["/api/trackers"], (old: any[]) =>
+        old?.filter((t: any) => t.id !== trackerId) || []
+      );
+      queryClient.setQueriesData({ queryKey: ["/api/trackers"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((t: any) => t.id !== trackerId) : old
+      );
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.trackers) return old;
+        return { ...old, trackers: old.trackers.filter((t: any) => t.id !== trackerId) };
+      });
       toast({ title: "Tracker deleted" });
       setDeleteTrackerId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" }),
@@ -2985,6 +3073,8 @@ function TrackersTab({
       setEntryValue(""); setEntryNotes("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" }),
@@ -3211,6 +3301,8 @@ function QuickHealthButton({ profileId, name, unit, field, category, fieldType =
       toast({ title: `${name} tracker created` });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onCreated();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -3320,6 +3412,8 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       setLogOpen(null); setLogValue("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -3763,6 +3857,8 @@ function TasksTab({
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
       onChanged();
     },
@@ -3790,6 +3886,8 @@ function TasksTab({
       setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to create task", description: formatApiError(err), variant: "destructive" }),
@@ -3802,10 +3900,19 @@ function TasksTab({
       return { title };
     },
     onSuccess: (_data, variables) => {
+      queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((t: any) => t.id !== variables.id) : old
+      );
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.tasks) return old;
+        return { ...old, tasks: old.tasks.filter((t: any) => t.id !== variables.id) };
+      });
       toast({ title: `"${variables.title || "Task"}" deleted` });
       setDeleteTaskId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
@@ -4068,6 +4175,10 @@ function EditProfileDialog({
     },
     onSuccess: () => {
       toast({ title: `"${name}" updated` });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onSaved();
       onClose();
     },
@@ -4431,6 +4542,8 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
       setEditing(false);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
@@ -4438,7 +4551,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
     mutationFn: async () => {
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields: { originalAmount: null, loanBalance: null, interestRate: null, termMonths: null, monthlyPayment: null, lender: null, loanStartDate: null } });
     },
-    onSuccess: () => { toast({ title: "Loan data cleared" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/profiles"] }); },
+    onSuccess: () => { toast({ title: "Loan data cleared" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/profiles"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
@@ -4852,11 +4965,21 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
       const res = await apiRequest("POST", "/api/expenses", { description: claimDesc || "Warranty Claim", amount: Number(claimAmt), date: claimDate, category: "warranty_claim", linkedProfiles: [profileId] });
       return res.json();
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); setShowAdd(false); setClaimDesc(""); setClaimAmt(""); onChanged(); },
+    onSuccess: () => { toast({ title: "Claim added" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setShowAdd(false); setClaimDesc(""); setClaimAmt(""); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed to add claim", description: formatApiError(err), variant: "destructive" }),
   });
   const deleteClaimMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.relatedExpenses) return old;
+        return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
+      });
+      toast({ title: "Claim deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to delete claim", description: formatApiError(err), variant: "destructive" }),
   });
   const warrantyFields = [
     { key: "warrantyEndDate", label: "Warranty Until" },
@@ -4931,11 +5054,21 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
       const res = await apiRequest("POST", "/api/expenses", { description: redDesc || "Rewards Redemption", amount: Number(redPts), date: redDate, category: "rewards_redemption", linkedProfiles: [profileId] });
       return res.json();
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); setShowAdd(false); setRedDesc(""); setRedPts(""); onChanged(); },
+    onSuccess: () => { toast({ title: "Redemption added" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setShowAdd(false); setRedDesc(""); setRedPts(""); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed to add redemption", description: formatApiError(err), variant: "destructive" }),
   });
   const deleteRedemptionMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.relatedExpenses) return old;
+        return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
+      });
+      toast({ title: "Redemption deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to delete redemption", description: formatApiError(err), variant: "destructive" }),
   });
   return (
     <div className="space-y-3" data-testid="rewards-tab">
@@ -5036,6 +5169,7 @@ function AccessTab({ profile, profileId, onChanged }: { profile: any; profileId:
 }
 
 function CredentialsList({ profileId, fields, onChanged }: { profileId: string; fields: any; onChanged: () => void }) {
+  const { toast } = useToast();
   const credentials: { label: string; username: string; url: string }[] = (() => { try { return Array.isArray(fields.credentials) ? fields.credentials : JSON.parse(fields.credentials || "[]"); } catch { return []; } })();
   const [showAdd, setShowAdd] = useState(false);
   const [cLabel, setCLabel] = useState("");
@@ -5043,7 +5177,8 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
   const [cUrl, setCUrl] = useState("");
   const saveMutation = useMutation({
     mutationFn: async (updatedCreds: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { ...fields, credentials: updatedCreds } }); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); onChanged(); },
+    onSuccess: () => { toast({ title: "Credentials updated" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed to save credentials", description: formatApiError(err), variant: "destructive" }),
   });
   const handleAdd = () => { saveMutation.mutate([...credentials, { label: cLabel, username: cUser, url: cUrl }]); setShowAdd(false); setCLabel(""); setCUser(""); setCUrl(""); };
   const handleDelete = (idx: number) => { saveMutation.mutate(credentials.filter((_, i) => i !== idx)); };
@@ -5175,6 +5310,7 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
 }
 
 function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; fields: any; onChanged: () => void }) {
+  const { toast } = useToast();
   const appraisals: { date: string; value: string; source: string }[] = (() => { try { return Array.isArray(fields.appraisals) ? fields.appraisals : JSON.parse(fields.appraisals || "[]"); } catch { return []; } })();
   const [showAdd, setShowAdd] = useState(false);
   const [aDate, setADate] = useState(new Date().toISOString().slice(0, 10));
@@ -5182,7 +5318,8 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
   const [aSource, setASource] = useState("");
   const saveMutation = useMutation({
     mutationFn: async (updated: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { ...fields, appraisals: updated } }); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); onChanged(); },
+    onSuccess: () => { toast({ title: "Appraisal updated" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed to save appraisal", description: formatApiError(err), variant: "destructive" }),
   });
   const handleAdd = () => { saveMutation.mutate([...appraisals, { date: aDate, value: aValue, source: aSource }]); setShowAdd(false); setAValue(""); setASource(""); };
   const handleDelete = (idx: number) => { saveMutation.mutate(appraisals.filter((_, i) => i !== idx)); };
@@ -5276,6 +5413,9 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
     onSuccess: () => {
       toast({ title: "Payment recorded" });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
       setShowRecord(false);
       setPayAmt("");
@@ -5284,7 +5424,16 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
   });
   const deletePayMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.relatedExpenses) return old;
+        return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
+      });
+      toast({ title: "Payment deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to delete payment", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -5441,6 +5590,8 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       setPayDesc(""); setPayAmount(""); setPayDate(new Date().toISOString().slice(0, 10));
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to add payment", description: formatApiError(err), variant: "destructive" }),
@@ -5461,13 +5612,24 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to sync", description: formatApiError(err), variant: "destructive" }),
   });
   const deleteSubPayMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); onChanged(); },
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.relatedExpenses) return old;
+        return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
+      });
+      toast({ title: "Payment deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to delete payment", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -5741,7 +5903,7 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
       if (ctx?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prev);
       toast({ title: "Failed to save notes", variant: "destructive" });
     },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); },
   });
 
   const uploadMutation = useMutation({
@@ -5755,6 +5917,9 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
     onSuccess: () => {
       toast({ title: "Document uploaded" });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" }),
@@ -5880,6 +6045,8 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
       toast({ title: "Notes saved for this profile" });
       setIsEditing(false);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to save notes", description: formatApiError(err), variant: "destructive" }),
@@ -5964,6 +6131,8 @@ export default function ProfileDetailPage() {
       toast({ title: "Profile picture updated" });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
     onError: (err: Error) => toast({ title: "Failed to update picture", description: formatApiError(err), variant: "destructive" }),
   });
@@ -5998,6 +6167,9 @@ export default function ProfileDetailPage() {
       await apiRequest("DELETE", `/api/profiles/${id}`);
     },
     onSuccess: () => {
+      queryClient.setQueryData(["/api/profiles"], (old: any[]) =>
+        old?.filter((p: any) => p.id !== id) || []
+      );
       toast({ title: `Profile deleted`, description: "All linked data has been removed" });
       // Cascade: profile delete also removes linked obligations, events, expenses, etc.
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
@@ -6007,6 +6179,8 @@ export default function ProfileDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       navigate("/profiles");
     },
     onError: (err: Error) => {
@@ -6018,6 +6192,8 @@ export default function ProfileDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
     queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
     queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
   }
 
   // ── Owner dropdown (asset / vehicle / loan / subscription etc.) ───────────────

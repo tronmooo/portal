@@ -69,16 +69,38 @@ function HabitCard({ habit }: { habit: Habit }) {
 
   const restoreMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("PATCH", `/api/habits/${habit.id}/restore`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); toast({ title: `"${habit.name}" restored` }); },
-  });
-
-  const deleteMutation = useMutation<any,Error,void>({
-    mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: `"${habit.name}" restored` });
+    },
+    onError: (err: Error) => {
+      toast({ title: `Failed to restore "${habit.name}"`, description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation<any,Error,void>({
+    mutationFn: () => apiRequest("DELETE", `/api/habits/${habit.id}`),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).filter((h: any) => h.id !== habit.id)
+      );
+      return { prev };
+    },
+    onSuccess: () => {
       toast({ title: `"${habit.name}" deleted`, action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction> });
+    },
+    onError: (err: Error, _v: unknown, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: `Failed to delete "${habit.name}"`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
   });
 

@@ -1,5 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -55,12 +55,16 @@ function ObligationCard({ ob }: { ob: Obligation }) {
                 <EditableTitle
                   value={ob.name}
                   onSave={async (newName) => {
-                    await apiRequest("PATCH", `/api/obligations/${ob.id}`, { name: newName });
-                    queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-                    toast({ title: `Renamed to "${newName}"` });
+                    try {
+                      await apiRequest("PATCH", `/api/obligations/${ob.id}`, { name: newName });
+                      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+                      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+                      toast({ title: `Renamed to "${newName}"` });
+                    } catch (err: any) {
+                      toast({ title: "Failed to rename", description: formatApiError(err), variant: "destructive" });
+                    }
                   }}
                 />
               </h3>
@@ -134,9 +138,9 @@ export default function ObligationsPage() {
   });
 
   // Client-side profile filter
-  const obligations = filterMode === "selected" && filterIds.length > 0
+  const obligations = useMemo(() => filterMode === "selected" && filterIds.length > 0
     ? allObligations.filter(o => o.linkedProfiles.some(id => filterIds.includes(id)))
-    : allObligations;
+    : allObligations, [allObligations, filterMode, filterIds]);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/obligations", data),
@@ -153,8 +157,8 @@ export default function ObligationsPage() {
     onError: (err: Error) => toast({ title: "Failed to create bill", description: formatApiError(err), variant: "destructive" }),
   });
 
-  const sorted = [...obligations].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  const monthlyTotal = obligations.reduce((s, o) => {
+  const sorted = useMemo(() => [...obligations].sort((a, b) => (a.name || '').localeCompare(b.name || '')), [obligations]);
+  const monthlyTotal = useMemo(() => obligations.reduce((s, o) => {
     switch (o.frequency) {
       case "weekly": return s + o.amount * 4.33;
       case "biweekly": return s + o.amount * 2.17;
@@ -163,13 +167,13 @@ export default function ObligationsPage() {
       case "yearly": return s + o.amount / 12;
       default: return s;
     }
-  }, 0);
+  }, 0), [obligations]);
 
   const now = new Date();
-  const upcomingCount = obligations.filter(o => {
+  const upcomingCount = useMemo(() => obligations.filter(o => {
     const d = new Date(o.nextDueDate);
     return d >= now && d <= new Date(now.getTime() + 7 * 86400000);
-  }).length;
+  }).length, [obligations]);
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24">
