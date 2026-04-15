@@ -511,7 +511,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
       if (weightTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
       const weightTracker = weightTrackers[0] || trackers.find(t => t.name.toLowerCase() === "weight");
       if (weightTracker) {
-        const entry = await storage.logEntry({ trackerId: weightTracker.id, values: { weight } });
+        const weightProfiles = await storage.getProfiles();
+        const weightSelfId = weightProfiles.find(p => p.type === "self")?.id;
+        const entry = await storage.logEntry({ trackerId: weightTracker.id, values: { weight }, profileId: weightSelfId });
         actions.push({ type: "log_entry", category: "health", data: { trackerName: "weight", weight } });
         if (entry) results.push(entry);
         const bmi = entry?.computed?.bmi;
@@ -532,7 +534,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     if (bpTracker) {
       const values: Record<string, any> = { systolic: sys, diastolic: dia };
       if (pulse) values.pulse = pulse;
-      const entry = await storage.logEntry({ trackerId: bpTracker.id, values });
+      const bpProfiles = await storage.getProfiles();
+      const bpSelfId = bpProfiles.find(p => p.type === "self")?.id;
+      const entry = await storage.logEntry({ trackerId: bpTracker.id, values, profileId: bpSelfId });
       actions.push({ type: "log_entry", category: "health", data: { trackerName: "blood pressure", ...values } });
       if (entry) results.push(entry);
       const cat = entry?.computed?.bloodPressureCategory || "";
@@ -549,7 +553,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     if (sleepTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
     const sleepTracker = sleepTrackers[0] || trackers.find(t => t.name.toLowerCase() === "sleep");
     if (sleepTracker) {
-      const entry = await storage.logEntry({ trackerId: sleepTracker.id, values: { hours } });
+      const sleepProfiles = await storage.getProfiles();
+      const sleepSelfId = sleepProfiles.find(p => p.type === "self")?.id;
+      const entry = await storage.logEntry({ trackerId: sleepTracker.id, values: { hours }, profileId: sleepSelfId });
       actions.push({ type: "log_entry", category: "health", data: { trackerName: "sleep", hours } });
       if (entry) results.push(entry);
       const quality = entry?.computed?.sleepQuality || "";
@@ -567,7 +573,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     if (runTracker) {
       const values: Record<string, any> = { distance };
       if (duration) values.duration = duration;
-      const entry = await storage.logEntry({ trackerId: runTracker.id, values });
+      const runProfiles = await storage.getProfiles();
+      const runSelfId = runProfiles.find(p => p.type === "self")?.id;
+      const entry = await storage.logEntry({ trackerId: runTracker.id, values, profileId: runSelfId });
       actions.push({ type: "log_entry", category: "fitness", data: { trackerName: "running", ...values } });
       if (entry) results.push(entry);
       const c = entry?.computed;
@@ -3030,7 +3038,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
           return recentDup;
         }
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId });
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId, profileId: targetProfileId });
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, entryValues);
@@ -3081,7 +3089,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       } as any);
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId });
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId, profileId: targetProfileId });
       return entry;
     }
 
@@ -3882,10 +3890,18 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "update_tracker_entry": {
       const trackers = await storage.getTrackers();
       let trackerPool2 = trackers;
+      let uteProfileId: string | undefined;
+      const uteProfs = await storage.getProfiles();
       if (input.forProfile) {
-        const profs = await storage.getProfiles();
-        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
-        if (prof) trackerPool2 = trackers.filter(t => (t.linkedProfiles || []).includes(prof.id));
+        const prof = uteProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        if (prof) {
+          trackerPool2 = trackers.filter(t => (t.linkedProfiles || []).includes(prof.id));
+          uteProfileId = prof.id;
+        }
+      }
+      if (!uteProfileId) {
+        const selfProf = uteProfs.find(p => p.type === "self");
+        if (selfProf) uteProfileId = selfProf.id;
       }
       const uteResult = safeMatchEntity(trackerPool2, input.trackerName || "", t => t.name);
       if (!uteResult.match) return { error: uteResult.error || "Tracker not found", candidates: uteResult.candidates };
@@ -3897,7 +3913,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       if (!uEntry) return { error: `No entry found at index ${uIdx}` };
       // Delete old entry and re-log with new values (storage doesn't have updateTrackerEntry)
       await storage.deleteTrackerEntry(uTracker.id, uEntry.id);
-      const newEntry = await storage.logEntry({ trackerId: uTracker.id, values: { ...uEntry.values, ...input.values }, notes: uEntry.notes });
+      const newEntry = await storage.logEntry({ trackerId: uTracker.id, values: { ...uEntry.values, ...input.values }, notes: uEntry.notes, profileId: uteProfileId });
       return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: input.values, newEntry };
     }
 

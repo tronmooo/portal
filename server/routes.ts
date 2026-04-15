@@ -636,6 +636,7 @@ export async function registerRoutes(
               trackerId: tracker.id,
               values: entryValues,
               notes: `From document extraction`,
+              profileId: resolvedProfileId,
             });
             saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
           } catch (tErr: any) {
