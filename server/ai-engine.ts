@@ -3316,7 +3316,7 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
     case "get_cashflow": {
       const cf = await storage.getCashflow(input.month);
-      return { result: { month: input.month || new Date().toISOString().slice(0, 7), weeks: cf } };
+      return { result: { month: input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7), weeks: cf } };
     }
 
     case "create_expense": {
@@ -3553,7 +3553,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         amount: parseFloat(input.amount) || 0,
         frequency: input.frequency || "monthly",
         category: input.category || "general",
-        nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
+        nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
         autopay: input.autopay ?? false,
       });
 

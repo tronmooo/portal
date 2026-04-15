@@ -1394,7 +1394,7 @@ export default function ChatPage() {
       const extractionMsgs: ChatMessage[] = data.results
         .filter((r) => r.pendingExtraction?.extractedFields?.length > 0)
         .map((r, idx) => ({
-          id: `${Date.now()}-extraction-${idx}`,
+          id: `${crypto.randomUUID()}-extraction-${idx}`,
           role: "assistant" as const,
           content: `Review extracted data for "${r.fileName}":`,
           timestamp: new Date().toISOString(),
