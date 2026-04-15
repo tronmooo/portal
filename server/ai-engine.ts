@@ -778,26 +778,9 @@ Return ONLY the JSON array, nothing else.`;
         linkedProfiles = validIds;
         existingProfileId = validIds[0];
       }
-    } else if (parsed.targetProfile?.name) {
-      const profiles = await storage.getProfiles();
-      const targetLower = parsed.targetProfile.name.toLowerCase().trim();
-      // Only match profiles with high confidence — exact name match or very close match
-      // Avoid matching "Dr. Alex Thomson" to "Alex Williams" (partial first-name matches)
-      const existing = profiles.find((p: any) => {
-        const pLower = p.name.toLowerCase().trim();
-        // Exact match
-        if (pLower === targetLower) return true;
-        // One name contains the other fully (e.g., "Jane Doe" contains "Jane Doe")
-        if (pLower.includes(targetLower) || targetLower.includes(pLower)) return true;
-        // Skip single-word partial matches (too many false positives like Alex→Alex Williams)
-        return false;
-      });
-      if (existing) {
-        linkedProfiles = [existing.id];
-        existingProfileId = existing.id;
-      }
-      // Do NOT create new profiles automatically — defer to confirmation
     }
+    // NO AI profile matching. The user explicitly selects where data goes via the upload UI.
+    // If no profileId was provided, data stays unlinked until the user assigns it in the extraction review.
 
     // Store the document (always save the file)
     // Deduplicate: if a document with the same name already exists for the same profiles, update it instead
@@ -945,28 +928,19 @@ Return ONLY the JSON array, nothing else.`;
     // Sort extracted fields alphabetically by label for consistent UI display
     extractedFields.sort((a, b) => a.label.localeCompare(b.label));
 
-    // The photo's linked profile (from user selection) is the default destination.
-    // If the AI also detected a target profile, include that info too.
-    // Priority: user-selected profileId > AI-detected targetProfile
+    // The photo's linked profile (from user selection) is the ONLY destination.
+    // NO AI matching — the user manually selects where data goes.
     let resolvedTargetProfile: { name: string; id?: string; type?: string; isNew: boolean } | undefined;
     if (existingProfileId) {
-      // User explicitly linked the photo to a profile — use that as default
       const linkedProfile = await storage.getProfile(existingProfileId);
       resolvedTargetProfile = {
-        name: linkedProfile?.name || parsed.targetProfile?.name || 'Unknown',
+        name: linkedProfile?.name || 'Unknown',
         id: existingProfileId,
-        type: linkedProfile?.type || parsed.targetProfile?.type,
+        type: linkedProfile?.type,
         isNew: false,
       };
-    } else if (parsed.targetProfile) {
-      // AI detected a target but user didn't select one — show AI suggestion
-      resolvedTargetProfile = {
-        name: parsed.targetProfile.name,
-        id: undefined,
-        type: parsed.targetProfile.type,
-        isNew: true,
-      };
     }
+    // If no profile was selected, data stays unlinked — user assigns in extraction review
 
     const pendingExtraction = {
       extractionId: document.id,

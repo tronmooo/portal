@@ -622,19 +622,32 @@ export class SupabaseStorage implements IStorage {
     // For each entity: if sole owner → delete entirely; if shared → remove this profile from linkedProfiles
     const errors: string[] = [];
 
-    try { // 1. Delete/unlink trackers (and their entries if sole owner)
+    try { // 1. Delete/unlink trackers (and their entries if sole owner or named after profile)
       const allTrackers = await this.getTrackers();
+      const profileNameLower = (profile.name || "").toLowerCase();
       for (const tracker of allTrackers) {
-        if (tracker.linkedProfiles.includes(id)) {
-          if (tracker.linkedProfiles.length <= 1) {
-            // Sole owner — delete entries, junction rows, then tracker
-            await this.supabase.from("tracker_entries").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
-            await this.supabase.from("trackers").delete().eq("id", tracker.id).eq("user_id", this.userId);
-          } else {
-            // Shared — remove this profile from linkedProfiles and junction table
-            await this.supabase.from("trackers").update({ linked_profiles: tracker.linkedProfiles.filter(pid => pid !== id) }).eq("id", tracker.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("profile_id", id).eq("user_id", this.userId);
+        if (!tracker.linkedProfiles.includes(id)) continue;
+        // Check if tracker name contains the profile's name (e.g., "Pain Tracker - Jane Doe")
+        const trackerNamedAfterProfile = profileNameLower && tracker.name.toLowerCase().includes(profileNameLower);
+        if (tracker.linkedProfiles.length <= 1 || trackerNamedAfterProfile) {
+          // Sole owner OR named after profile — delete everything
+          await this.supabase.from("tracker_entries").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
+          await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
+          await this.supabase.from("trackers").delete().eq("id", tracker.id).eq("user_id", this.userId);
+        } else {
+          // Shared tracker — remove profile link AND delete entries from documents linked to this profile
+          await this.supabase.from("trackers").update({ linked_profiles: tracker.linkedProfiles.filter(pid => pid !== id) }).eq("id", tracker.id).eq("user_id", this.userId);
+          await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("profile_id", id).eq("user_id", this.userId);
+          // Also delete entries that came from document extraction for this profile
+          // These have notes like "From document: ..." or "From document extraction"
+          const { data: entries } = await this.supabase.from("tracker_entries")
+            .select("id, notes")
+            .eq("tracker_id", tracker.id)
+            .eq("user_id", this.userId)
+            .or("notes.ilike.%from document%,notes.ilike.%document extraction%");
+          if (entries && entries.length > 0) {
+            const entryIds = entries.map((e: any) => e.id);
+            await this.supabase.from("tracker_entries").delete().in("id", entryIds).eq("user_id", this.userId);
           }
         }
       }
