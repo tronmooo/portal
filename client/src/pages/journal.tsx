@@ -11,9 +11,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle } from "lucide-react";
 import { Link } from "wouter";
-import type { JournalEntry, MoodLevel } from "@shared/schema";
+import type { JournalEntry, MoodLevel, Profile } from "@shared/schema";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -162,6 +163,18 @@ export default function JournalPage() {
   const [grateful3, setGrateful3] = useState("");
   const [makeAmazing, setMakeAmazing] = useState("");
   const [affirmation, setAffirmation] = useState("");
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
+
+  const { data: profiles = [] } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const selfProfile = profiles.find(p => p.type === "self");
+  // Default to self profile once loaded
+  useEffect(() => {
+    if (selfProfile && !selectedProfileId) setSelectedProfileId(selfProfile.id);
+  }, [selfProfile]);
+
   const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -172,8 +185,12 @@ export default function JournalPage() {
   });
 
   // Client-side profile filter (journal entries have linkedProfiles)
+  // Entries with empty linkedProfiles show for ALL profiles (backward compat)
   const entries = filterMode === "selected" && filterIds.length > 0
-    ? allEntries.filter(e => (e as any).linkedProfiles?.length > 0 ? (e as any).linkedProfiles.some((id: string) => filterIds.includes(id)) : false)
+    ? allEntries.filter(e => {
+        const lp = (e as any).linkedProfiles || [];
+        return lp.length === 0 || lp.some((id: string) => filterIds.includes(id));
+      })
     : allEntries;
 
   const handleSaveJournal = () => {
@@ -186,7 +203,10 @@ export default function JournalPage() {
     if (makeAmazing.trim()) parts.push(`HOW I CAN MAKE TODAY AMAZING:\n${makeAmazing}`);
     if (affirmation.trim()) parts.push(`DAILY AFFIRMATION:\n${affirmation}`);
     const content = parts.join('\n\n');
-    createMutation.mutate({ mood, content, energy });
+    createMutation.mutate({
+      mood, content, energy,
+      ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
+    });
   };
 
   const createMutation = useMutation({
@@ -214,6 +234,7 @@ export default function JournalPage() {
       setMood(null); setEnergy(3);
       setGrateful1(""); setGrateful2(""); setGrateful3("");
       setMakeAmazing(""); setAffirmation("");
+      setSelectedProfileId(selfProfile?.id || "");
       setShowCreate(false);
       toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
     },
@@ -382,6 +403,25 @@ export default function JournalPage() {
                 ))}
                 <span className="text-sm text-muted-foreground ml-2 font-medium">{ENERGY_LABELS[energy]}</span>
               </div>
+            </div>
+          </Card>
+
+          {/* Profile selector */}
+          <Card className="overflow-hidden">
+            <div className="px-4 pt-4 pb-4">
+              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Profile</p>
+              <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
+                <SelectTrigger className="w-full h-9 text-sm" data-testid="select-journal-profile">
+                  <SelectValue placeholder="Select profile" />
+                </SelectTrigger>
+                <SelectContent>
+                  {profiles.filter(p => ["self", "person", "pet"].includes(p.type)).map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.type === "self" ? "Me" : p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </Card>
 

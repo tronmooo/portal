@@ -3337,6 +3337,24 @@ function TrackerDetailDialog({
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
+  const [isRenaming, setIsRenaming] = useState(false);
+
+  const renameMutation = useMutation({
+    mutationFn: async ({ name }: { name: string }) => {
+      if (!tracker) return;
+      await apiRequest("PATCH", `/api/trackers/${tracker.id}`, { name });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/trackers"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Tracker renamed" });
+      setIsRenaming(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to rename tracker", description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
   const deleteTrackerMut = useMutation({
     mutationFn: async () => {
       if (!tracker) return;
@@ -3376,7 +3394,15 @@ function TrackerDetailDialog({
           <div className="px-5 pt-5 pb-3 pr-12 border-b shrink-0">
             <div className="flex items-center justify-between">
               <div className="min-w-0">
-                <DialogTitle className="text-base font-semibold truncate">{cleanTrackerName(tracker.name, allProfiles, tracker.linkedProfiles)}</DialogTitle>
+                <DialogTitle className="text-base font-semibold truncate">
+                  <EditableTitle
+                    value={cleanTrackerName(tracker.name, allProfiles, tracker.linkedProfiles)}
+                    onSave={(newName) => renameMutation.mutateAsync({ name: newName })}
+                    editing={isRenaming}
+                    onEditingChange={setIsRenaming}
+                    className="text-base font-semibold"
+                  />
+                </DialogTitle>
                 <DialogDescription className="text-xs mt-0.5">
                   {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
                   {tracker.unit ? ` · ${tracker.unit}` : ""}
@@ -3394,6 +3420,9 @@ function TrackerDetailDialog({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setIsRenaming(true)} data-testid="button-rename-tracker-detail">
+                      <Pencil className="w-3.5 h-3.5 mr-2" /> Rename
+                    </DropdownMenuItem>
                     <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteTrackerOpen(true)} data-testid="button-delete-tracker-detail">
                       <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete Tracker
                     </DropdownMenuItem>

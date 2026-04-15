@@ -13,9 +13,10 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { ToastAction } from "@/components/ui/toast";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
-import type { Habit } from "@shared/schema";
+import type { Habit, Profile } from "@shared/schema";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -298,7 +299,18 @@ export default function HabitsPage() {
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const [dupWarning, setDupWarning] = useState<string | null>(null);
+
+  const { data: profiles = [] } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const selfProfile = profiles.find(p => p.type === "self");
+  // Default to self profile once loaded
+  useEffect(() => {
+    if (selfProfile && !selectedProfileId) setSelectedProfileId(selfProfile.id);
+  }, [selfProfile]);
   const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -309,8 +321,12 @@ export default function HabitsPage() {
   });
 
   // Client-side profile filter
+  // Habits with empty linkedProfiles (null or []) show for ALL profiles (backward compat)
   const habits = filterMode === "selected" && filterIds.length > 0
-    ? allHabits.filter(h => (h.linkedProfiles || []).some(id => filterIds.includes(id)))
+    ? allHabits.filter(h => {
+        const lp = h.linkedProfiles || [];
+        return lp.length === 0 || lp.some(id => filterIds.includes(id));
+      })
     : allHabits;
 
   const handleCreate = (force?: boolean) => {
@@ -326,8 +342,12 @@ export default function HabitsPage() {
   };
 
   const createMutation = useMutation({
-    mutationFn: (name: string) => apiRequest("POST", "/api/habits", { name, frequency: "daily" }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); setNewName(""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
+    mutationFn: (name: string) => apiRequest("POST", "/api/habits", {
+      name,
+      frequency: "daily",
+      ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
+    }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); setNewName(""); setSelectedProfileId(selfProfile?.id || ""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
@@ -382,7 +402,20 @@ export default function HabitsPage() {
               onChange={e => setNewName(e.target.value)}
               onKeyDown={e => e.key === "Enter" && handleCreate()}
               data-testid="input-habit-name"
+              className="flex-1"
             />
+            <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
+              <SelectTrigger className="w-[120px] h-9 text-xs" data-testid="select-habit-profile">
+                <SelectValue placeholder="Profile" />
+              </SelectTrigger>
+              <SelectContent>
+                {profiles.filter(p => ["self", "person", "pet"].includes(p.type)).map(p => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.type === "self" ? "Me" : p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button
               size="sm"
               disabled={!newName.trim() || createMutation.isPending}

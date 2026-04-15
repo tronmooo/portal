@@ -10,6 +10,8 @@ interface EditableTitleProps {
   maxLength?: number;
   placeholder?: string;
   disabled?: boolean;
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
 }
 
 export default function EditableTitle({
@@ -20,8 +22,15 @@ export default function EditableTitle({
   maxLength = 100,
   placeholder = "Untitled",
   disabled = false,
+  editing: externalEditing,
+  onEditingChange,
 }: EditableTitleProps) {
-  const [editing, setEditing] = useState(false);
+  const [internalEditing, setInternalEditing] = useState(false);
+  const editing = externalEditing !== undefined ? externalEditing : internalEditing;
+  const setEditing = (v: boolean) => {
+    setInternalEditing(v);
+    onEditingChange?.(v);
+  };
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);

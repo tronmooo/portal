@@ -1811,7 +1811,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const parsed = insertHabitSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    const newHabit = await storage.createHabit(parsed.data);
+    let newHabit = await storage.createHabit(parsed.data);
+    // Apply linkedProfiles if provided (not part of insert schema)
+    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0) {
+      const updated = await storage.updateHabit(newHabit.id, { linkedProfiles: req.body.linkedProfiles });
+      if (updated) newHabit = updated;
+    }
     const uid_h3 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`);
     res.status(201).json(newHabit);
@@ -1987,7 +1992,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     req.body.content = sanitize(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    const newEntry = await storage.createJournalEntry(parsed.data);
+    let newEntry = await storage.createJournalEntry(parsed.data);
+    // Apply linkedProfiles if provided (not part of insert schema)
+    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0) {
+      const updated = await storage.updateJournalEntry(newEntry.id, { linkedProfiles: req.body.linkedProfiles } as any);
+      if (updated) newEntry = updated as any;
+    }
     const uid_j1 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`stats:${uid_j1}`);
     res.status(201).json(newEntry);
