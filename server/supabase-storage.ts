@@ -623,142 +623,100 @@ export class SupabaseStorage implements IStorage {
     // For each entity: if sole owner → delete entirely; if shared → remove this profile from linkedProfiles
     const errors: string[] = [];
 
-    try { // 1. Delete/unlink trackers (and their entries)
-      // Clean approach: delete all tracker entries belonging to this profile
-      await this.supabase.from("tracker_entries").delete().eq("profile_id", id).eq("user_id", this.userId);
-
-      // Unlink/delete trackers themselves
+    try { // 1. Delete ALL trackers linked to this profile — completely
+      // When a profile is deleted, ALL its trackers are deleted entirely.
+      // No "shared" concept — if you delete Jane Doe, her Hemoglobin tracker goes away.
+      // Delete entries by profile_id (new entries) AND by tracker_id (catches old entries without profile_id)
       const allTrackers = await this.getTrackers();
-      const profileNameLower = (profile.name || "").toLowerCase();
       for (const tracker of allTrackers) {
         if (!tracker.linkedProfiles.includes(id)) continue;
-        const trackerNamedAfterProfile = profileNameLower && tracker.name.toLowerCase().includes(profileNameLower);
-        if (tracker.linkedProfiles.length <= 1 || trackerNamedAfterProfile) {
-          // Sole owner OR named after profile — delete tracker entirely
-          await this.supabase.from("tracker_entries").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
-          await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
-          await this.supabase.from("trackers").delete().eq("id", tracker.id).eq("user_id", this.userId);
-        } else {
-          // Shared tracker — just remove the profile link
-          await this.supabase.from("trackers").update({ linked_profiles: tracker.linkedProfiles.filter(pid => pid !== id) }).eq("id", tracker.id).eq("user_id", this.userId);
-          await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("profile_id", id).eq("user_id", this.userId);
-        }
+        // Delete ALL entries for this tracker (not just ones with profile_id)
+        await this.supabase.from("tracker_entries").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
+        await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
+        await this.supabase.from("trackers").delete().eq("id", tracker.id).eq("user_id", this.userId);
       }
+      // Also catch any orphaned entries with this profile_id on trackers not directly linked
+      await this.supabase.from("tracker_entries").delete().eq("profile_id", id).eq("user_id", this.userId);
     } catch (e) { errors.push("trackers"); }
 
-    try { // 2. Delete/unlink expenses
+    // DELETE EVERYTHING linked to this profile — no "shared" exceptions.
+    // If you delete Jane Doe, every expense, task, habit, event, document linked to Jane is gone.
+
+    try { // 2. Delete expenses
       const allExpenses = await this.getExpenses();
       for (const exp of allExpenses) {
         if (exp.linkedProfiles.includes(id)) {
-          if (exp.linkedProfiles.length <= 1) {
-            await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("user_id", this.userId);
-            await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("expenses").update({ linked_profiles: exp.linkedProfiles.filter(pid => pid !== id) }).eq("id", exp.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("profile_id", id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("user_id", this.userId);
+          await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("expenses"); }
 
-    try { // 3. Delete/unlink tasks
+    try { // 3. Delete tasks
       const allTasks = await this.getTasks();
       for (const task of allTasks) {
         if (task.linkedProfiles.includes(id)) {
-          if (task.linkedProfiles.length <= 1) {
-            await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("user_id", this.userId);
-            await this.supabase.from("tasks").delete().eq("id", task.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("tasks").update({ linked_profiles: task.linkedProfiles.filter(pid => pid !== id) }).eq("id", task.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("profile_id", id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("user_id", this.userId);
+          await this.supabase.from("tasks").delete().eq("id", task.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("tasks"); }
 
-    try { // 4. Delete/unlink habits (and their check-ins if sole owner)
+    try { // 4. Delete habits + check-ins
       const allHabits = await this.getHabits();
       for (const habit of allHabits) {
         if ((habit.linkedProfiles || []).includes(id)) {
-          if ((habit.linkedProfiles || []).length <= 1) {
-            await this.supabase.from("habit_checkins").delete().eq("habit_id", habit.id).eq("user_id", this.userId);
-            await this.supabase.from("habits").delete().eq("id", habit.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("habits").update({ linked_profiles: (habit.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", habit.id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("habit_checkins").delete().eq("habit_id", habit.id).eq("user_id", this.userId);
+          await this.supabase.from("habits").delete().eq("id", habit.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("habits"); }
 
-    try { // 5. Delete/unlink obligations
+    try { // 5. Delete obligations
       const allObligations = await this.getObligations();
       for (const ob of allObligations) {
         if (ob.linkedProfiles.includes(id)) {
-          if (ob.linkedProfiles.length <= 1) {
-            await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("user_id", this.userId);
-            await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("obligations").update({ linked_profiles: ob.linkedProfiles.filter(pid => pid !== id) }).eq("id", ob.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("profile_id", id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("user_id", this.userId);
+          await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("obligations"); }
 
-    try { // 6. Delete/unlink events
+    try { // 6. Delete events
       const allEvents = await this.getEvents();
       for (const ev of allEvents) {
         if (ev.linkedProfiles.includes(id)) {
-          if (ev.linkedProfiles.length <= 1) {
-            await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("user_id", this.userId);
-            await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("events").update({ linked_profiles: ev.linkedProfiles.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("profile_id", id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("user_id", this.userId);
+          await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("events"); }
 
-    try { // 7. Delete/unlink documents
+    try { // 7. Delete documents
       const allDocuments = await this.getDocuments();
       for (const doc of allDocuments) {
         if ((doc.linkedProfiles || []).includes(id)) {
-          if ((doc.linkedProfiles || []).length <= 1) {
-            await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("user_id", this.userId);
-            await this.supabase.from("documents").delete().eq("id", doc.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("documents").update({ linked_profiles: (doc.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", doc.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("profile_id", id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("user_id", this.userId);
+          await this.supabase.from("documents").delete().eq("id", doc.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("documents"); }
 
-    try { // 8. Delete/unlink artifacts
+    try { // 8. Delete artifacts
       const allArtifacts = await this.getArtifacts();
       for (const art of allArtifacts) {
         if ((art.linkedProfiles || []).includes(id)) {
-          if ((art.linkedProfiles || []).length <= 1) {
-            await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("user_id", this.userId);
-            await this.supabase.from("artifacts").delete().eq("id", art.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("artifacts").update({ linked_profiles: (art.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", art.id).eq("user_id", this.userId);
-            await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("profile_id", id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("user_id", this.userId);
+          await this.supabase.from("artifacts").delete().eq("id", art.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("artifacts"); }
 
-    try { // 9. Delete/unlink goals
+    try { // 9. Delete goals
       const allGoals = await this.getGoals();
       for (const goal of allGoals) {
         if ((goal.linkedProfiles || []).includes(id)) {
-          if ((goal.linkedProfiles || []).length <= 1) {
-            await this.supabase.from("goals").delete().eq("id", goal.id).eq("user_id", this.userId);
-          } else {
-            await this.supabase.from("goals").update({ linked_profiles: (goal.linkedProfiles || []).filter(pid => pid !== id) }).eq("id", goal.id).eq("user_id", this.userId);
-          }
+          await this.supabase.from("goals").delete().eq("id", goal.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("goals"); }
