@@ -12,7 +12,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle } from "lucide-react";
+import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle, Pencil } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel, Profile } from "@shared/schema";
 import { useState, useEffect } from "react";
@@ -31,7 +31,7 @@ const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; 
 
 const ENERGY_LABELS = ["", "Exhausted", "Low", "Normal", "High", "Energized"];
 
-function JournalCard({ entry }: { entry: JournalEntry }) {
+function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: JournalEntry) => void }) {
   const { toast } = useToast();
   const mood = MOOD_CONFIG[entry.mood] || MOOD_CONFIG.neutral;
   const MoodIcon = mood.icon;
@@ -82,6 +82,16 @@ function JournalCard({ entry }: { entry: JournalEntry }) {
                 <Zap className="h-2.5 w-2.5 mr-0.5" />{ENERGY_LABELS[entry.energy]}
               </Badge>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
+              aria-label="Edit journal entry"
+              onClick={() => onEdit(entry)}
+              data-testid={`button-edit-journal-${entry.id}`}
+            >
+              <Pencil className="h-3 w-3" />
+            </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button
@@ -156,6 +166,7 @@ export default function JournalPage() {
   useEffect(() => { document.title = "Journal — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
   const [mood, setMood] = useState<MoodLevel | null>(null);
   const [energy, setEnergy] = useState(3);
   const [grateful1, setGrateful1] = useState("");
@@ -193,6 +204,39 @@ export default function JournalPage() {
       })
     : allEntries;
 
+  const resetForm = () => {
+    setMood(null); setEnergy(3);
+    setGrateful1(""); setGrateful2(""); setGrateful3("");
+    setMakeAmazing(""); setAffirmation("");
+    setSelectedProfileId(selfProfile?.id || "");
+    setEditingEntry(null);
+  };
+
+  const handleEditEntry = (entry: JournalEntry) => {
+    // Parse content back into form fields
+    setEditingEntry(entry);
+    setMood(entry.mood);
+    setEnergy(entry.energy || 3);
+    const content = entry.content || "";
+    // Try to parse structured content
+    const gratMatch = content.match(/I AM GRATEFUL FOR:\n([\s\S]*?)(?=\n\n|$)/);
+    const amazingMatch = content.match(/HOW I CAN MAKE TODAY AMAZING:\n([\s\S]*?)(?=\n\n|$)/);
+    const affirmMatch = content.match(/DAILY AFFIRMATION:\n([\s\S]*?)(?=\n\n|$)/);
+    if (gratMatch) {
+      const lines = gratMatch[1].split('\n').map(l => l.replace(/^[•\-]\s*/, '').trim()).filter(Boolean);
+      setGrateful1(lines[0] || ""); setGrateful2(lines[1] || ""); setGrateful3(lines[2] || "");
+    } else {
+      setGrateful1(""); setGrateful2(""); setGrateful3("");
+    }
+    setMakeAmazing(amazingMatch ? amazingMatch[1].trim() : "");
+    setAffirmation(affirmMatch ? affirmMatch[1].trim() : "");
+    // If content doesn't match structured format, put it all in makeAmazing
+    if (!gratMatch && !amazingMatch && !affirmMatch && content.trim()) {
+      setMakeAmazing(content);
+    }
+    setShowCreate(true);
+  };
+
   const handleSaveJournal = () => {
     if (!mood) { toast({ title: "Select a mood", description: "Choose how you're feeling", variant: "destructive" }); return; }
     const hasContent = grateful1.trim() || grateful2.trim() || grateful3.trim() || makeAmazing.trim() || affirmation.trim();
@@ -203,11 +247,32 @@ export default function JournalPage() {
     if (makeAmazing.trim()) parts.push(`HOW I CAN MAKE TODAY AMAZING:\n${makeAmazing}`);
     if (affirmation.trim()) parts.push(`DAILY AFFIRMATION:\n${affirmation}`);
     const content = parts.join('\n\n');
-    createMutation.mutate({
-      mood, content, energy,
-      ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
-    });
+    if (editingEntry) {
+      editMutation.mutate({ mood, content, energy });
+    } else {
+      createMutation.mutate({
+        mood, content, energy,
+        ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
+      });
+    }
   };
+
+  const editMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PATCH", `/api/journal/${editingEntry!.id}`, data),
+    onSuccess: () => {
+      resetForm();
+      setShowCreate(false);
+      toast({ title: "Journal entry updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to update journal entry", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/journal", data),
@@ -231,10 +296,7 @@ export default function JournalPage() {
       return { prev };
     },
     onSuccess: () => {
-      setMood(null); setEnergy(3);
-      setGrateful1(""); setGrateful2(""); setGrateful3("");
-      setMakeAmazing(""); setAffirmation("");
-      setSelectedProfileId(selfProfile?.id || "");
+      resetForm();
       setShowCreate(false);
       toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
     },
@@ -273,7 +335,7 @@ export default function JournalPage() {
           </div>
           <p className="text-xs text-muted-foreground">{entries.length} entries</p>
         </div>
-        <Button size="sm" onClick={() => { if (showCreate) { setMood(null); setEnergy(3); setGrateful1(""); setGrateful2(""); setGrateful3(""); setMakeAmazing(""); setAffirmation(""); } setShowCreate(!showCreate); }} data-testid="button-new-journal">
+        <Button size="sm" onClick={() => { if (showCreate) { resetForm(); } setShowCreate(!showCreate); }} data-testid="button-new-journal">
           {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New Entry</>}
         </Button>
       </div>
@@ -300,7 +362,7 @@ export default function JournalPage() {
         <div className="space-y-3">
           {/* Date header */}
           <div className="text-center py-1">
-            <p className="text-[11px] font-bold tracking-[0.2em] text-muted-foreground uppercase">5 Minute Morning Journal</p>
+            <p className="text-[11px] font-bold tracking-[0.2em] text-muted-foreground uppercase">{editingEntry ? "Edit Journal Entry" : "5 Minute Morning Journal"}</p>
             <p className="text-xs text-muted-foreground mt-0.5">
               {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
             </p>
@@ -427,12 +489,12 @@ export default function JournalPage() {
 
           {/* Save */}
           <Button
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || editMutation.isPending}
             onClick={handleSaveJournal}
             className="w-full h-11 text-sm font-semibold"
             data-testid="button-save-journal"
           >
-            {createMutation.isPending ? "Saving..." : "Save Morning Entry"}
+            {(createMutation.isPending || editMutation.isPending) ? "Saving..." : editingEntry ? "Update Entry" : "Save Morning Entry"}
           </Button>
         </div>
       )}
@@ -454,7 +516,7 @@ export default function JournalPage() {
       ) : (
         <div className="grid gap-4">
           {entries.map(entry => (
-            <JournalCard key={entry.id} entry={entry} />
+            <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} />
           ))}
         </div>
       )}

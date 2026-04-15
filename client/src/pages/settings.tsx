@@ -346,6 +346,17 @@ export default function SettingsPage() {
             <Separator />
 
             {/* Change Password */}
+            {(user as any)?.app_metadata?.provider === "google" ? (
+              <div className="space-y-2">
+                <div>
+                  <Label className="text-sm font-medium text-muted-foreground">Change Password</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Password managed by Google</p>
+                </div>
+                <Badge variant="outline" className="text-xs">
+                  <Globe className="h-2.5 w-2.5 mr-1" /> Google SSO — password changes are handled through your Google account
+                </Badge>
+              </div>
+            ) : (
             <div className="space-y-2">
               <div>
                 <Label className="text-sm font-medium">Change Password</Label>
@@ -417,6 +428,7 @@ export default function SettingsPage() {
                 </Button>
               )}
             </div>
+            )}
 
             <Separator />
 

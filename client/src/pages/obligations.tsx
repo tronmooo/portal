@@ -418,6 +418,12 @@ export default function ObligationsPage() {
               </div>
             </div>
           </div>
+          {newDueDate && new Date(newDueDate + "T00:00:00") < new Date(new Date().toLocaleDateString('en-CA') + "T00:00:00") && (
+            <div className="flex items-center gap-2 rounded-md bg-yellow-500/10 border border-yellow-500/30 px-3 py-2">
+              <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 shrink-0" />
+              <p className="text-xs text-yellow-700 dark:text-yellow-400">The due date is in the past. You can still create this bill.</p>
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
             <Button size="sm" disabled={!newName.trim() || !newAmount || parseFloat(newAmount) <= 0 || createMutation.isPending}

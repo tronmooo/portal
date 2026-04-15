@@ -117,6 +117,20 @@ function HabitCard({ habit }: { habit: Habit }) {
     },
   });
 
+  // Change frequency
+  const frequencyMutation = useMutation<any, Error, string>({
+    mutationFn: (newFrequency: string) =>
+      apiRequest("PATCH", `/api/habits/${habit.id}`, { frequency: newFrequency }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: `Frequency updated to ${frequencyMutation.variables}` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to update frequency", description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
   const restoreMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("PATCH", `/api/habits/${habit.id}/restore`),
     onSuccess: () => {
@@ -245,9 +259,19 @@ function HabitCard({ habit }: { habit: Habit }) {
                 </button>
               );
             })}
-            <span className="text-[11px] font-semibold text-white/80 ml-1">
-              {completedToday ? '✓ Done' : todayCheckins > 0 ? `${todayCheckins}/${targetPerDay}` : habit.frequency}
-            </span>
+            <Select
+              value={habit.frequency}
+              onValueChange={(v) => frequencyMutation.mutate(v)}
+            >
+              <SelectTrigger className="h-5 w-auto min-w-0 border-0 bg-white/15 text-white/80 text-[11px] font-semibold px-1.5 py-0 gap-0.5 hover:bg-white/25 focus:ring-0 focus:ring-offset-0 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-white/60" data-testid={`select-freq-${habit.id}`}>
+                <span>{completedToday ? '✓ Done' : todayCheckins > 0 ? `${todayCheckins}/${targetPerDay}` : habit.frequency}</span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="daily">Daily</SelectItem>
+                <SelectItem value="weekly">Weekly</SelectItem>
+                <SelectItem value="monthly">Monthly</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* 7-day dots */}

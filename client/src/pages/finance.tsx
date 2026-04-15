@@ -67,10 +67,17 @@ export default function FinancePage() {
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
+  const [expenseProfileId, setExpenseProfileId] = useState<string>("");
+  const selfProfile = (profiles || []).find((p: any) => p.type === "self");
+  useEffect(() => {
+    if (selfProfile && !expenseProfileId) setExpenseProfileId(selfProfile.id);
+  }, [selfProfile]);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [addPaycheckOpen, setAddPaycheckOpen] = useState(false);
+  const [newPaycheck, setNewPaycheck] = useState({ source: "", amount: "", expectedDate: "" });
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
@@ -81,6 +88,7 @@ export default function FinancePage() {
         vendor: newExpense.vendor || undefined,
         date: new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
         tags: [],
+        ...(expenseProfileId ? { linkedProfiles: [expenseProfileId] } : {}),
       });
     },
     onSuccess: () => {
@@ -99,6 +107,27 @@ export default function FinancePage() {
   // ── ALL hooks MUST be above early returns (React Rules of Hooks) ──
   // Paychecks
   const { data: paychecks = [] } = useQuery<any[]>({ queryKey: ["/api/paychecks"] });
+  const addPaycheckMut = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/paychecks", {
+        source: newPaycheck.source.trim(),
+        amount: parseFloat(newPaycheck.amount),
+        expected_date: newPaycheck.expectedDate,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      toast({ title: "Paycheck added", description: `${newPaycheck.source} — $${parseFloat(newPaycheck.amount).toFixed(2)}` });
+      setAddPaycheckOpen(false);
+      setNewPaycheck({ source: "", amount: "", expectedDate: "" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to add paycheck", description: formatApiError(err), variant: "destructive" });
+    },
+  });
   const confirmPaycheckMut = useMutation({
     mutationFn: async ({ id, actual_amount }: { id: string; actual_amount?: number }) => {
       await apiRequest("PATCH", `/api/paychecks/${id}/confirm`, { actual_amount });
@@ -246,6 +275,15 @@ export default function FinancePage() {
                   </div>
                   <div><Label className="text-xs">Vendor (optional)</Label>
                     <Input placeholder="Store or vendor name" value={newExpense.vendor} onChange={e => setNewExpense(p => ({ ...p, vendor: e.target.value }))} data-testid="input-expense-vendor" /></div>
+                  <div><Label className="text-xs">Profile</Label>
+                    <Select value={expenseProfileId} onValueChange={setExpenseProfileId}>
+                      <SelectTrigger data-testid="select-expense-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
+                      <SelectContent>
+                        {(profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)).map((p: any) => (
+                          <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select></div>
                   <Button className="w-full" onClick={() => addExpenseMutation.mutate()} disabled={!newExpense.description || !newExpense.amount || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending} data-testid="button-save-expense">
                     {addExpenseMutation.isPending ? "Saving..." : "Save Expense"}
                   </Button>
@@ -501,9 +539,14 @@ export default function FinancePage() {
 
       {/* ── Paychecks Section ── */}
       <div className="space-y-2">
-        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-          <Wallet className="h-3.5 w-3.5" /> Expected Paychecks ({paychecks.length})
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <Wallet className="h-3.5 w-3.5" /> Expected Paychecks ({paychecks.length})
+          </h2>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddPaycheckOpen(true)} data-testid="button-add-paycheck">
+            <Plus className="h-3 w-3 mr-1" /> Add Paycheck
+          </Button>
+        </div>
         {paychecks.length === 0 ? (
           <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
             <p className="text-sm text-muted-foreground">No paychecks scheduled.</p>
@@ -538,6 +581,28 @@ export default function FinancePage() {
           </div>
         )}
       </div>
+
+      {/* Add Paycheck Dialog */}
+      <Dialog open={addPaycheckOpen} onOpenChange={(open) => { if (!open) setNewPaycheck({ source: "", amount: "", expectedDate: "" }); setAddPaycheckOpen(open); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Paycheck</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div><Label className="text-xs">Source Name <span className="text-destructive">*</span></Label>
+              <Input placeholder="e.g. Employer, Freelance" value={newPaycheck.source} onChange={e => setNewPaycheck(p => ({ ...p, source: e.target.value }))} data-testid="input-paycheck-source" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Expected Amount ($) <span className="text-destructive">*</span></Label>
+                <Input type="number" step="0.01" placeholder="0.00" value={newPaycheck.amount} onChange={e => setNewPaycheck(p => ({ ...p, amount: e.target.value }))} data-testid="input-paycheck-amount" /></div>
+              <div><Label className="text-xs">Expected Date <span className="text-destructive">*</span></Label>
+                <Input type="date" value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
+            </div>
+            <Button className="w-full" onClick={() => addPaycheckMut.mutate()} disabled={!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate || addPaycheckMut.isPending} data-testid="button-save-paycheck">
+              {addPaycheckMut.isPending ? "Saving..." : "Add Paycheck"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Loan Amortization Section ── */}
       <div className="space-y-2">

@@ -41,7 +41,7 @@ import {
 import { ToastAction } from "@/components/ui/toast";
 import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
-import type { Task } from "@shared/schema";
+import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -78,6 +78,16 @@ function TaskDialog({
   const [priority, setPriority] = useState<string>(task?.priority ?? "medium");
   const [dueDate, setDueDate] = useState(task?.dueDate?.slice(0, 10) ?? "");
   const [tagsInput, setTagsInput] = useState((task?.tags ?? []).join(", "));
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
+
+  const { data: profiles = [] } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const selfProfile = profiles.find(p => p.type === "self");
+  useEffect(() => {
+    if (selfProfile && !selectedProfileId) setSelectedProfileId(selfProfile.id);
+  }, [selfProfile]);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -87,6 +97,7 @@ function TaskDialog({
         priority,
         dueDate: dueDate || undefined,
         tags: tagsInput.split(",").map(t => t.trim()).filter(Boolean),
+        ...(selectedProfileId && !isEdit ? { linkedProfiles: [selectedProfileId] } : {}),
       };
       if (isEdit) {
         const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, body);
@@ -173,6 +184,21 @@ function TaskDialog({
               data-testid="input-task-tags"
             />
           </div>
+          {!isEdit && (
+            <div className="space-y-1">
+              <Label>Profile</Label>
+              <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
+                <SelectTrigger data-testid="select-task-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
+                <SelectContent>
+                  {profiles.filter(p => ["self", "person", "pet"].includes(p.type)).map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.type === "self" ? "Me" : p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <DialogFooter className="pt-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={mutation.isPending} data-testid="button-submit-task">
