@@ -1747,11 +1747,16 @@ function GoalsSection({ profileId }: { profileId?: string }) {
                   data-testid={`goal-card-${g.id}`}>
                   {/* Tap to mark complete */}
                   <button
-                    className="h-5 w-5 rounded-full border-2 border-primary/40 flex items-center justify-center shrink-0 hover:bg-green-500/20 hover:border-green-500 active:scale-90 transition-all"
+                    className="h-5 w-5 rounded-full border-2 border-primary/40 flex items-center justify-center shrink-0 hover:bg-green-500/20 hover:border-green-500 active:scale-90 transition-all disabled:opacity-50 disabled:pointer-events-none"
                     onClick={() => updateMutation.mutate({ id: g.id, status: "completed" })}
+                    disabled={updateMutation.isPending}
                     title="Mark complete"
                   >
-                    <Check className="h-2.5 w-2.5 text-transparent group-hover:text-green-500" />
+                    {updateMutation.isPending ? (
+                      <span className="h-2.5 w-2.5 border border-primary/40 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Check className="h-2.5 w-2.5 text-transparent group-hover:text-green-500" />
+                    )}
                   </button>
                   {/* Goal info — tap to open actions */}
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActionGoal(g)}>

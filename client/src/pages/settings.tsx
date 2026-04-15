@@ -110,6 +110,9 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [, navigate] = useLocation();
 
   // Fetch stats for data summary
   const { data: stats } = useQuery<any>({
@@ -127,6 +130,38 @@ export default function SettingsPage() {
     queryKey: ["/api/documents"],
     queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
   });
+
+  // Fetch AI preferences
+  const { data: prefChatModel } = useQuery<{ value: string | null }>({
+    queryKey: ["/api/preferences/ai_chat_model"],
+    queryFn: () => apiRequest("GET", "/api/preferences/ai_chat_model").then(r => r.json()),
+  });
+  const { data: prefFastPath } = useQuery<{ value: string | null }>({
+    queryKey: ["/api/preferences/ai_fast_path"],
+    queryFn: () => apiRequest("GET", "/api/preferences/ai_fast_path").then(r => r.json()),
+  });
+  const { data: prefAutoExpense } = useQuery<{ value: string | null }>({
+    queryKey: ["/api/preferences/ai_auto_expense"],
+    queryFn: () => apiRequest("GET", "/api/preferences/ai_auto_expense").then(r => r.json()),
+  });
+  const { data: prefSmartRouting } = useQuery<{ value: string | null }>({
+    queryKey: ["/api/preferences/ai_smart_routing"],
+    queryFn: () => apiRequest("GET", "/api/preferences/ai_smart_routing").then(r => r.json()),
+  });
+
+  const aiChatModel = prefChatModel?.value || "claude-sonnet-4-5-20250929";
+  const aiFastPath = prefFastPath?.value !== "false";
+  const aiAutoExpense = prefAutoExpense?.value !== "false";
+  const aiSmartRouting = prefSmartRouting?.value !== "false";
+
+  async function setAiPreference(key: string, value: string) {
+    try {
+      await apiRequest("PUT", `/api/preferences/${key}`, { value });
+      queryClient.invalidateQueries({ queryKey: [`/api/preferences/${key}`] });
+    } catch (err: any) {
+      toast({ title: "Failed to update setting", description: err.message, variant: "destructive" });
+    }
+  }
 
   async function handleExport() {
     setExporting(true);
@@ -404,9 +439,22 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium">Chat Model</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">AI model used for chat responses</p>
               </div>
-              <Badge variant="outline" className="text-xs">
-                <Zap className="h-3 w-3 mr-1" /> Claude Haiku 4.5
-              </Badge>
+              <Select
+                value={aiChatModel}
+                onValueChange={(value) => setAiPreference("ai_chat_model", value)}
+              >
+                <SelectTrigger className="w-[200px] h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="claude-sonnet-4-5-20250929">
+                    <span className="flex items-center gap-1.5"><Zap className="h-3 w-3" /> Sonnet 4.5 (powerful)</span>
+                  </SelectItem>
+                  <SelectItem value="claude-haiku-4-5-20251001">
+                    <span className="flex items-center gap-1.5"><Zap className="h-3 w-3" /> Haiku 4.5 (faster)</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
@@ -415,32 +463,41 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted-foreground mt-0.5">Vision model for document scanning</p>
               </div>
               <Badge variant="outline" className="text-xs">
-                <Eye className="h-3 w-3 mr-1" /> Claude Sonnet 4.6
+                <Eye className="h-3 w-3 mr-1" /> Claude Sonnet 4.5
               </Badge>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
-              <div>
+              <div className="flex-1 mr-4">
                 <Label className="text-sm font-medium">Fast-Path Commands</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Instant logging (weight, BP, mood) bypasses AI for speed</p>
               </div>
-              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
+              <Switch
+                checked={aiFastPath}
+                onCheckedChange={(checked) => setAiPreference("ai_fast_path", String(checked))}
+              />
             </div>
             <Separator />
             <div className="flex items-center justify-between">
-              <div>
+              <div className="flex-1 mr-4">
                 <Label className="text-sm font-medium">Auto-Expense from Documents</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Automatically create expenses when scanning receipts</p>
               </div>
-              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
+              <Switch
+                checked={aiAutoExpense}
+                onCheckedChange={(checked) => setAiPreference("ai_auto_expense", String(checked))}
+              />
             </div>
             <Separator />
             <div className="flex items-center justify-between">
-              <div>
+              <div className="flex-1 mr-4">
                 <Label className="text-sm font-medium">Smart Data Routing</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">AI routes extracted data to correct profile, calendar, and trackers</p>
               </div>
-              <Badge className="text-xs bg-green-500/10 text-green-600 border-green-500/20">Enabled</Badge>
+              <Switch
+                checked={aiSmartRouting}
+                onCheckedChange={(checked) => setAiPreference("ai_smart_routing", String(checked))}
+              />
             </div>
           </CardContent>
         </Card>
@@ -692,21 +749,52 @@ export default function SettingsPage() {
       </AlertDialog>
 
       {/* Delete data confirmation */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <AlertDialog open={showDeleteDialog} onOpenChange={(open) => { setShowDeleteDialog(open); if (!open) setDeleteConfirmText(""); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="text-destructive">Delete All Data</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete all your profiles, trackers, expenses, documents, tasks, goals, and every other piece of data in Portol. This action cannot be undone. Export a backup first if you want to keep your data.
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                <p>This will permanently delete <strong>ALL</strong> your data. This cannot be undone.</p>
+                <p className="text-xs">All expenses, tasks, habits, trackers, obligations, events, documents, journal entries, goals, artifacts, memories, paychecks, cashflow, and loan schedules will be permanently removed. Your profile will be preserved.</p>
+                <p className="text-xs font-medium">Type <span className="font-mono bg-muted px-1.5 py-0.5 rounded">DELETE</span> below to confirm:</p>
+                <Input
+                  value={deleteConfirmText}
+                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  placeholder="Type DELETE to confirm"
+                  className="h-9 font-mono text-sm"
+                  data-testid="input-delete-confirm"
+                  autoComplete="off"
+                />
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => { toast({ title: "Not implemented yet", description: "Contact support to delete your account data." }); setShowDeleteDialog(false); }}
+              disabled={deleteConfirmText !== "DELETE" || deleting}
+              onClick={async (e) => {
+                e.preventDefault();
+                if (deleteConfirmText !== "DELETE") return;
+                setDeleting(true);
+                try {
+                  const res = await apiRequest("DELETE", "/api/data/all", { confirmation: "DELETE" });
+                  const result = await res.json();
+                  if (result.error) throw new Error(result.error);
+                  toast({ title: "All data deleted", description: "Your data has been permanently removed." });
+                  queryClient.clear();
+                  setShowDeleteDialog(false);
+                  setDeleteConfirmText("");
+                  navigate("/dashboard");
+                } catch (err: any) {
+                  toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+                } finally {
+                  setDeleting(false);
+                }
+              }}
             >
-              I understand, delete everything
+              {deleting ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Deleting...</> : "I understand, delete everything"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -93,6 +93,8 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       toast({ title: "Paycheck confirmed" });
     },
     onError: (err: Error) => {
@@ -121,6 +123,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       toast({ title: "Loan payment marked as paid" });
     },
     onError: (err: Error) => {
@@ -132,26 +135,7 @@ export default function FinancePage() {
   const cfMonth = new Date().toISOString().slice(0, 7);
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
 
-  // ── Early returns (after ALL hooks) ──
-  if (isLoading) {
-    return (
-      <div className="p-4 space-y-3">
-        <div className="h-8 w-48 rounded skeleton-shimmer" />
-        <div className="h-20 rounded skeleton-shimmer" />
-        <div className="h-20 rounded skeleton-shimmer" />
-      </div>
-    );
-  }
-
-  if (error) return (
-    <div className="p-4 text-center">
-      <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
-      <p className="text-sm text-destructive">Failed to load data</p>
-      <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
-    </div>
-  );
-
-  // ── Derived data (after hooks + early returns) ──
+  // ── ALL useMemo hooks MUST be before early returns (React Rules of Hooks) ──
   // Apply profile filter client-side
   const profileFiltered = useMemo(() => (expenses || []).filter(e => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
@@ -175,6 +159,25 @@ export default function FinancePage() {
     (acc[name] = acc[name] || []).push(entry);
     return acc;
   }, {}), [loanSchedules]);
+
+  // ── Early returns (after ALL hooks including useMemo) ──
+  if (isLoading) {
+    return (
+      <div className="p-4 space-y-3">
+        <div className="h-8 w-48 rounded skeleton-shimmer" />
+        <div className="h-20 rounded skeleton-shimmer" />
+        <div className="h-20 rounded skeleton-shimmer" />
+      </div>
+    );
+  }
+
+  if (error) return (
+    <div className="p-4 text-center">
+      <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+      <p className="text-sm text-destructive">Failed to load data</p>
+      <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
+    </div>
+  );
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">

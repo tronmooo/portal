@@ -3215,6 +3215,46 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
+  // DELETE ALL USER DATA
+  // ============================================================
+  async deleteAllUserData(): Promise<{ deleted: Record<string, number> }> {
+    const deleted: Record<string, number> = {};
+    const uid = this.userId;
+
+    // Order matters: delete junction/child tables first, then parent tables
+    const tables = [
+      // Junction tables
+      "profile_expenses", "profile_tasks", "profile_events", "profile_documents",
+      "profile_obligations", "profile_trackers",
+      // Child tables
+      "tracker_entries", "habit_checkins", "obligation_payments", "domain_entries",
+      "entity_links", "audit_log",
+      // Standalone data tables
+      "expenses", "tasks", "events", "documents", "trackers", "habits",
+      "obligations", "artifacts", "journal_entries", "memories", "goals",
+      "domains", "incomes", "paychecks", "loan_amortization", "cashflow_projections",
+      // Preferences (clears settings but not profile)
+      "preferences",
+    ];
+
+    for (const table of tables) {
+      try {
+        const { count, error } = await this.supabase
+          .from(table)
+          .delete({ count: "exact" })
+          .eq("user_id", uid);
+        if (!error) {
+          deleted[table] = count || 0;
+        }
+      } catch {
+        // Table may not exist — skip silently
+      }
+    }
+
+    return { deleted };
+  }
+
+  // ============================================================
   // SEED DATA
   // ============================================================
   async seedIfEmpty(): Promise<void> {

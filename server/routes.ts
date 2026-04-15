@@ -2677,29 +2677,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
   }));
 
-  // ---- Budgets (uses preferences internally) ----
-  app.get("/api/budgets", asyncHandler(async (_req, res) => {
-    try {
-      const raw = await storage.getPreference("budgets");
-      if (!raw) return res.json({});
-      res.json(JSON.parse(raw));
-    } catch {
-      res.json({});
-    }
-  }));
-
-  app.put("/api/budgets", asyncHandler(async (req, res) => {
-    try {
-      const { budgets } = req.body;
-      if (!budgets || typeof budgets !== "object") {
-        return res.status(400).json({ error: "budgets object required" });
-      }
-      await storage.setPreference("budgets", JSON.stringify(budgets));
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: "Failed to save budgets" });
-    }
-  }));
+  // ---- Budgets (duplicate GET removed — canonical handler is above near line 1363) ----
+  // TODO: PUT /api/budgets (preferences-based) removed — no client callers found.
+  //       The canonical budget CRUD lives above (GET/POST/PATCH/DELETE /api/budgets).
 
   // ---- Spending Analytics ----
   app.get("/api/analytics/spending", asyncHandler(async (req, res) => {
@@ -3300,6 +3280,22 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       .range(offset, offset + limit - 1);
     if (error) { console.error("[api]", error.message); return res.status(500).json({ error: "Failed to load data" }); }
     res.json(data || []);
+  }));
+
+  // ---- Delete All User Data ----
+  app.delete("/api/data/all", asyncHandler(async (req, res) => {
+    try {
+      const { confirmation } = req.body || {};
+      if (confirmation !== "DELETE") {
+        return res.status(400).json({ error: "You must send confirmation: 'DELETE' to proceed." });
+      }
+      const result = await storage.deleteAllUserData();
+      clearAllCache();
+      res.json({ success: true, deleted: result.deleted });
+    } catch (err: any) {
+      console.error("[api] Delete all data failed:", err.message);
+      res.status(500).json({ error: "Failed to delete all data" });
+    }
   }));
 
   // ---- Preferences ----

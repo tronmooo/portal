@@ -5215,6 +5215,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
   const systemPrompt = buildSystemPrompt(context);
 
+  // Read user's preferred chat model from preferences
+  let preferredModel: string | null = null;
+  try {
+    preferredModel = await storage.getPreference("ai_chat_model");
+  } catch { /* ignore — use default */ }
+  const chatModel = preferredModel || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5-20250929";
+
   try {
     // Build the tool_use conversation loop — prepend up to 5 history pairs for multi-step context
     let messages: Anthropic.Messages.MessageParam[] = [];
@@ -5248,7 +5255,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           response = await getClient().messages.create({
-            model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5-20250929",
+            model: chatModel,
             max_tokens: 4096,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,

@@ -193,6 +193,9 @@ export interface IStorage {
   // Cashflow Projections
   getCashflow(month?: string): Promise<any[]>;
   upsertCashflow(entry: { month: string; week: number; projected_income?: number; projected_expenses?: number; actual_income?: number; actual_expenses?: number }): Promise<any>;
+
+  // Bulk delete all user data (preserves profiles)
+  deleteAllUserData(): Promise<{ deleted: Record<string, number> }>;
 }
 
 // ---- Human-readable tracker value formatting ----
@@ -1796,6 +1799,28 @@ export class MemStorage implements IStorage {
   // Cashflow stubs
   async getCashflow(_month?: string) { return []; }
   async upsertCashflow(entry: any) { return entry; }
+
+  // Bulk delete all user data (in-memory)
+  async deleteAllUserData(): Promise<{ deleted: Record<string, number> }> {
+    const deleted: Record<string, number> = {};
+    deleted.expenses = this.expenses.size; this.expenses.clear();
+    deleted.tasks = this.tasks.size; this.tasks.clear();
+    deleted.habits = this.habits.size; this.habits.clear();
+    deleted.trackers = this.trackers.size; this.trackers.clear();
+    deleted.obligations = this.obligations.size; this.obligations.clear();
+    deleted.events = this.events.size; this.events.clear();
+    deleted.documents = this.documents.size; this.documents.clear();
+    deleted.journal = this.journal.size; this.journal.clear();
+    deleted.goals = this.goals.size; this.goals.clear();
+    deleted.artifacts = this.artifacts.size; this.artifacts.clear();
+    deleted.memories = this.memories.size; this.memories.clear();
+    deleted.incomes = this.incomes.size; this.incomes.clear();
+    deleted.domains = this.domains.size; this.domains.clear();
+    deleted.domainEntries = this.domainEntries.size; this.domainEntries.clear();
+    deleted.entityLinks = this.entityLinks.size; this.entityLinks.clear();
+    this.preferences.clear();
+    return { deleted };
+  }
 }
 
 // Storage factory — uses Supabase if env vars are set, otherwise falls back to SQLite

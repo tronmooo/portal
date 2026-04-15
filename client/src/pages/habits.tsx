@@ -34,6 +34,11 @@ function HabitCard({ habit }: { habit: Habit }) {
   const accentColor = (habit.color && habit.color !== '#4F98A3') ? habit.color : VIVID_PALETTE[habit.id.charCodeAt(0) % VIVID_PALETTE.length];
 
 
+  // Today's checkins sorted by timestamp (oldest first) so dot indices match checkin order
+  const todayCheckinEntries = habit.checkins
+    .filter(c => c.date === today)
+    .sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+
   const checkinMutation = useMutation<any, Error, void>({
     mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
     onMutate: async () => {
@@ -64,6 +69,50 @@ function HabitCard({ habit }: { habit: Habit }) {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
+  });
+
+  // Undo a check-in by deleting the checkin entry
+  const uncheckinMutation = useMutation<any, Error, string>({
+    mutationFn: (checkinId: string) =>
+      apiRequest("DELETE", `/api/habits/${habit.id}/checkin/${checkinId}`),
+    onMutate: async (checkinId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === habit.id
+          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.id !== checkinId), currentStreak: Math.max(0, (h.currentStreak || 0) - 1) }
+          : h
+        )
+      );
+      return { prev };
+    },
+    onSuccess: () => {
+      toast({ title: `${habit.name} check-in undone` });
+    },
+    onError: (err: Error, _v: unknown, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: `Failed to undo ${habit.name}`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
+  });
+
+  // Rename habit
+  const renameMutation = useMutation<any, Error, string>({
+    mutationFn: (newName: string) =>
+      apiRequest("PATCH", `/api/habits/${habit.id}`, { name: newName }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      toast({ title: "Habit renamed" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to rename", description: formatApiError(err), variant: "destructive" });
     },
   });
 
@@ -139,9 +188,12 @@ function HabitCard({ habit }: { habit: Habit }) {
         {/* Name + dots */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-sm leading-tight truncate text-white">
-              {habit.name}
-            </span>
+            <EditableTitle
+              value={habit.name}
+              onSave={(newName) => renameMutation.mutateAsync(newName)}
+              className="font-bold text-sm leading-tight truncate text-white"
+              inputClassName="text-white border-white/40"
+            />
             {habit.currentStreak > 0 && (
               <span className="text-[11px] font-bold text-white/90 shrink-0">
                 🔥{habit.currentStreak}
@@ -149,18 +201,31 @@ function HabitCard({ habit }: { habit: Habit }) {
             )}
           </div>
 
-          {/* Progress dots — white circles, tap each to fill */}
+          {/* Progress dots — white circles, tap to fill or tap filled to undo */}
           <div className="flex items-center gap-2 mt-2">
             {Array.from({ length: Math.min(targetPerDay, 10) }).map((_, idx) => {
               const filled = idx < todayCheckins;
+              const isBusy = checkinMutation.isPending || uncheckinMutation.isPending;
               return (
                 <button
                   key={idx}
-                  onClick={stopProp(() => !filled && !checkinMutation.isPending && checkinMutation.mutate())}
-                  disabled={filled || checkinMutation.isPending}
+                  onClick={stopProp(() => {
+                    if (isBusy) return;
+                    if (filled) {
+                      // Undo: remove the checkin corresponding to this dot
+                      const checkinToRemove = todayCheckinEntries[idx];
+                      if (checkinToRemove && checkinToRemove.id && !checkinToRemove.id.startsWith('temp-')) {
+                        uncheckinMutation.mutate(checkinToRemove.id);
+                      }
+                    } else if (idx === todayCheckins) {
+                      // Fill: only the next empty dot is fillable
+                      checkinMutation.mutate();
+                    }
+                  })}
                   data-testid={`button-seg-${habit.id}-${idx}`}
-                  className="relative active:scale-90 disabled:cursor-default touch-manipulation transition-all duration-200"
-                  style={{ width: 26, height: 26, minWidth: 26 }}
+                  className="relative active:scale-90 touch-manipulation transition-all duration-200"
+                  style={{ width: 26, height: 26, minWidth: 26, cursor: (filled || idx === todayCheckins) ? 'pointer' : 'default' }}
+                  title={filled ? 'Tap to undo' : (idx === todayCheckins ? 'Tap to check in' : '')}
                 >
                   <div
                     className="w-full h-full rounded-full border-2 flex items-center justify-center transition-all duration-150"

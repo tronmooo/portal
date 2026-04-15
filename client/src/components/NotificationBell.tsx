@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -94,10 +94,48 @@ function getSeverityStyles(severity: Notification["severity"]) {
   }
 }
 
+// Persist dismissed IDs to the preferences API so they survive page reloads
+const DISMISSED_PREF_KEY = "dismissed_notifications";
+
+async function loadDismissedIds(): Promise<string[]> {
+  try {
+    const res = await fetch(`/api/preferences/${DISMISSED_PREF_KEY}`);
+    if (!res.ok) return [];
+    const json = await res.json();
+    if (!json.value) return [];
+    const parsed = JSON.parse(json.value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveDismissedIds(ids: string[]): Promise<void> {
+  try {
+    await fetch(`/api/preferences/${DISMISSED_PREF_KEY}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: JSON.stringify(ids) }),
+    });
+  } catch {
+    // Silently fail — local state is still correct
+  }
+}
+
 export function NotificationBell() {
   const [, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const dismissedLoaded = useRef(false);
+
+  // Load persisted dismissed IDs on mount
+  useEffect(() => {
+    if (dismissedLoaded.current) return;
+    dismissedLoaded.current = true;
+    loadDismissedIds().then(ids => {
+      if (ids.length > 0) setDismissedIds(new Set(ids));
+    });
+  }, []);
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
@@ -112,34 +150,44 @@ export function NotificationBell() {
   const totalCount = visibleNotifications.length;
 
   const handleDismissAll = useCallback(() => {
-    setDismissedIds(new Set(notifications.map(n => n.id)));
+    const allIds = notifications.map(n => n.id);
+    setDismissedIds(prev => {
+      const merged = new Set([...Array.from(prev), ...allIds]);
+      saveDismissedIds(Array.from(merged));
+      return merged;
+    });
   }, [notifications]);
 
   const handleDismiss = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setDismissedIds(prev => { const next = new Set(Array.from(prev)); next.add(id); return next; });
+    setDismissedIds(prev => {
+      const next = new Set(Array.from(prev));
+      next.add(id);
+      saveDismissedIds(Array.from(next));
+      return next;
+    });
   }, []);
 
   const handleNotificationClick = useCallback(
     (notification: Notification) => {
-      if (!notification.entityId) return;
-      switch (notification.entityType) {
-        case "document":
-          setLocation(`/documents/${notification.entityId}`);
+      // Deep-link based on notification type/entity
+      switch (notification.type) {
+        case "task_overdue":
+        case "task_due_today":
+          setLocation("/tasks");
           break;
-        case "profile":
-          setLocation(`/profiles/${notification.entityId}`);
+        case "bill_due":
+          setLocation("/dashboard/finance");
           break;
-        case "task":
-          setLocation(`/dashboard`);
+        case "habit_at_risk":
+        case "streak_milestone":
+          setLocation("/habits");
           break;
-        case "obligation":
-          setLocation(`/dashboard`);
-          break;
-        case "habit":
-          setLocation(`/dashboard`);
+        case "document_expiring":
+          setLocation("/linked");
           break;
         default:
+          setLocation("/dashboard");
           break;
       }
       setOpen(false);

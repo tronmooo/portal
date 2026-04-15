@@ -1600,6 +1600,7 @@ function DocumentsTab({
                           onSave={async (newName) => {
                             await apiRequest("PATCH", `/api/documents/${doc.id}`, { name: newName });
                             queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
                             toast({ title: `Renamed to "${newName}"` });
                           }}
                         />
