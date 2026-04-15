@@ -613,13 +613,9 @@ export async function registerRoutes(
                       options: [],
                     }))
                   : [{ name: "value", type: "number" as const, unit: entry.unit || "", isPrimary: true, options: [] }],
-              });
-              // Link tracker to profile if specified
-              if (resolvedProfileId && tracker) {
-                try {
-                  await storage.updateTracker(tracker.id, { linkedProfiles: [resolvedProfileId] } as Partial<Tracker>);
-                } catch { /* non-critical */ }
-              }
+                // Pass linkedProfiles directly so createTracker doesn't default to "Me"
+                linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+              } as any);
               saved.push(`Created tracker: ${humanName}`);
             } else if (resolvedProfileId) {
               // Tracker already exists — ensure it's linked to the target profile
