@@ -1215,10 +1215,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getTrackers());
     if (!hit) setCache(ck, items, 5 * 60 * 1000);
-    const profileIdsParam = req.query.profileIds as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter((t: any) => (t.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
+    const fp = req.query.profileId as string | undefined;
+    const fps = req.query.profileIds as string | undefined;
+    const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    if (filterProfileIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      const selfIds = allProfiles.filter(p => p.type === "self").map(p => p.id);
+      const hasSelf = filterProfileIds.some(id => selfIds.includes(id));
+      items = items.filter((t: any) => {
+        const lp = t.linkedProfiles || [];
+        return lp.some((pid: string) => filterProfileIds.includes(pid)) || (hasSelf && lp.length === 0);
+      });
     }
     res.json(paginate(items, req, res));
   }));
@@ -1232,9 +1239,19 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       return res.status(400).json({ error: "Tracker name is required" });
     }
     req.body.name = sanitize(req.body.name);
-    // Duplicate tracker name detection
+    // Duplicate tracker name detection — scope to the profile(s) this tracker will link to.
+    // Different profiles can have same-named trackers (e.g. each person's "Weight").
     const existing = await storage.getTrackers();
-    const dup = existing.find(t => t.name.toLowerCase() === req.body.name.toLowerCase());
+    const incomingLp: string[] = Array.isArray(req.body.linkedProfiles) ? req.body.linkedProfiles : [];
+    const nameLower = req.body.name.toLowerCase();
+    const dup = existing.find(t => {
+      if (t.name.toLowerCase() !== nameLower) return false;
+      const tLp = t.linkedProfiles || [];
+      // If either side is global (empty linkedProfiles) treat the name as reserved.
+      if (incomingLp.length === 0 || tLp.length === 0) return true;
+      // Otherwise only clash if they share at least one linked profile.
+      return tLp.some((pid: string) => incomingLp.includes(pid));
+    });
     if (dup) {
       return res.status(409).json({ error: `A tracker named "${dup.name}" already exists`, existingId: dup.id });
     }
@@ -1370,8 +1387,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(paginate(items, req, res));
   }));
   app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
-    const tasks = await storage.getTasks();
-    const task = tasks.find(t => t.id === req.params.id);
+    const task = await storage.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: "Task not found" });
     res.json(task);
   }));
@@ -1597,10 +1613,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getEvents());
     if (!hit) setCache(ck, items, 3 * 60 * 1000);
-    const profileIdsParam = req.query.profileIds as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter((e: any) => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
+    const fp = req.query.profileId as string | undefined;
+    const fps = req.query.profileIds as string | undefined;
+    const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    if (filterProfileIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      const selfIds = allProfiles.filter(p => p.type === "self").map(p => p.id);
+      const hasSelf = filterProfileIds.some(id => selfIds.includes(id));
+      items = items.filter((e: any) => {
+        const lp = e.linkedProfiles || [];
+        return lp.some((pid: string) => filterProfileIds.includes(pid)) || (hasSelf && lp.length === 0);
+      });
     }
     res.json(paginate(items, req, res));
   }));
@@ -1656,7 +1679,23 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Documents ----
-  app.get("/api/documents", asyncHandler(async (req, res) => { const items = await storage.getDocuments(); res.json(paginate(items, req, res)); }));
+  app.get("/api/documents", asyncHandler(async (req, res) => {
+    let items = await storage.getDocuments();
+    // Support both ?profileId=x (single) and ?profileIds=x,y (multi)
+    const fp = req.query.profileId as string | undefined;
+    const fps = req.query.profileIds as string | undefined;
+    const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    if (filterProfileIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      const selfIds = allProfiles.filter(p => p.type === "self").map(p => p.id);
+      const hasSelf = filterProfileIds.some(id => selfIds.includes(id));
+      items = items.filter((d: any) => {
+        const lp = d.linkedProfiles || [];
+        return lp.some((id: string) => filterProfileIds.includes(id)) || (hasSelf && lp.length === 0);
+      });
+    }
+    res.json(paginate(items, req, res));
+  }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
@@ -1933,10 +1972,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Artifacts ----
   app.get("/api/artifacts", asyncHandler(async (req, res) => {
     let items = await storage.getArtifacts();
-    const profileIdsParam = req.query.profileIds as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter(a => (a.linkedProfiles || []).some(pid => ids.includes(pid)));
+    const fp = req.query.profileId as string | undefined;
+    const fps = req.query.profileIds as string | undefined;
+    const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    if (filterProfileIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      const selfIds = allProfiles.filter(p => p.type === "self").map(p => p.id);
+      const hasSelf = filterProfileIds.some(id => selfIds.includes(id));
+      items = items.filter(a => {
+        const lp = a.linkedProfiles || [];
+        return lp.some((pid: string) => filterProfileIds.includes(pid)) || (hasSelf && lp.length === 0);
+      });
     }
     res.json(paginate(items, req, res));
   }));
@@ -3313,9 +3359,12 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     const fp = req.query.profileId as string | undefined;
     const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
     if (filterProfileIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      const selfIds = allProfiles.filter(p => p.type === "self").map(p => p.id);
+      const hasSelf = filterProfileIds.some(id => selfIds.includes(id));
       incomes = incomes.filter((i: any) => {
         const lp = i.linkedProfiles || [];
-        return lp.length === 0 || lp.some((id: string) => filterProfileIds.includes(id));
+        return lp.some((id: string) => filterProfileIds.includes(id)) || (hasSelf && lp.length === 0);
       });
     }
     res.json(incomes);
