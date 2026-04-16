@@ -10,7 +10,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { MessageSquare, LayoutDashboard, Link2, Users, Settings, Calendar, Circle } from "lucide-react";
+import { MessageSquare, LayoutDashboard, Link2, Archive, Settings, Calendar, Circle } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 const NAV_ITEMS = [
@@ -18,7 +18,7 @@ const NAV_ITEMS = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
   { label: "Linked",    href: "/linked",    icon: Link2,          accent: "155 60% 44%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
-  { label: "Profiles",  href: "/profiles",  icon: Users,          accent: "310 45% 58%" },
+  { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
 ];
 
 export function AppSidebar() {

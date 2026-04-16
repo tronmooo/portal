@@ -1,264 +1,384 @@
-import { useEffect } from "react";
-import { EmptyState } from "@/components/EmptyState";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { EmptyState } from "@/components/EmptyState";
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { CheckSquare, FileText, Pin, Plus, X, ArrowLeft } from "lucide-react";
-import { Link } from "wouter";
+  Archive, FileText, BookOpen, Brain, Camera, File, Heart,
+  Shield, CreditCard, Scale, Folder, Search, X,
+} from "lucide-react";
 import type { Artifact } from "@shared/schema";
-import { useState } from "react";
-import { useToast } from "@/hooks/use-toast";
+import type { JournalEntry } from "@shared/schema";
+import type { Document } from "@shared/schema";
+import type { Profile } from "@shared/schema";
 
-function ChecklistCard({ artifact }: { artifact: Artifact }) {
-  const { toast } = useToast();
-  const total = artifact.items.length;
-  const done = artifact.items.filter(i => i.checked).length;
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+// ─── Unified artifact type ──────────────────────────────────
+interface UnifiedArtifact {
+  id: string;
+  title: string;
+  type: "document" | "note" | "ai_report" | "scan";
+  typeLabel: string;
+  date: string;
+  preview: string;
+  profileName: string;
+  source: any;
+}
 
-  const toggleMutation = useMutation({
-    mutationFn: (itemId: string) => apiRequest("POST", `/api/artifacts/${artifact.id}/toggle/${itemId}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] }); },
-    onError: () => toast({ title: "Failed to toggle item", variant: "destructive" }),
+// ─── Filter tabs ─────────────────────────────────────────────
+type FilterTab = "all" | "documents" | "notes" | "ai_reports" | "scans";
+
+const FILTER_TABS: { key: FilterTab; label: string; icon: React.ElementType }[] = [
+  { key: "all",        label: "All",        icon: Archive },
+  { key: "documents",  label: "Documents",  icon: FileText },
+  { key: "notes",      label: "Notes",      icon: BookOpen },
+  { key: "ai_reports", label: "AI Reports", icon: Brain },
+  { key: "scans",      label: "Scans",      icon: Camera },
+];
+
+// ─── Document sub-type grouping ─────────────────────────────
+const DOC_TYPE_GROUPS: Record<string, { label: string; icon: React.ElementType }> = {
+  drivers_license: { label: "Identity", icon: Shield },
+  passport:        { label: "Identity", icon: Shield },
+  identity:        { label: "Identity", icon: Shield },
+  medical_report:  { label: "Medical",  icon: Heart },
+  medical:         { label: "Medical",  icon: Heart },
+  lab_report:      { label: "Medical",  icon: Heart },
+  insurance:       { label: "Insurance", icon: Shield },
+  receipt:         { label: "Financial", icon: CreditCard },
+  financial:       { label: "Financial", icon: CreditCard },
+  legal:           { label: "Legal",     icon: Scale },
+  other:           { label: "Other",     icon: Folder },
+};
+
+function getDocGroup(docType: string) {
+  return DOC_TYPE_GROUPS[docType] || DOC_TYPE_GROUPS.other;
+}
+
+// ─── Type icons ──────────────────────────────────────────────
+function typeIcon(type: UnifiedArtifact["type"]) {
+  switch (type) {
+    case "document": return <FileText className="h-4 w-4 text-blue-500" />;
+    case "note":     return <BookOpen className="h-4 w-4 text-amber-500" />;
+    case "ai_report": return <Brain className="h-4 w-4 text-purple-500" />;
+    case "scan":     return <Camera className="h-4 w-4 text-emerald-500" />;
+    default:         return <File className="h-4 w-4 text-muted-foreground" />;
+  }
+}
+
+function typeIconBg(type: UnifiedArtifact["type"]) {
+  switch (type) {
+    case "document": return "bg-blue-500/10";
+    case "note":     return "bg-amber-500/10";
+    case "ai_report": return "bg-purple-500/10";
+    case "scan":     return "bg-emerald-500/10";
+    default:         return "bg-muted/50";
+  }
+}
+
+// ─── Date formatting ─────────────────────────────────────────
+function formatDate(dateStr: string) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
+}
+
+// ─── Mood emoji helper ───────────────────────────────────────
+const MOOD_EMOJI: Record<string, string> = {
+  amazing: "🤩", great: "😊", good: "🙂", okay: "😐",
+  neutral: "😶", bad: "😞", awful: "😢", terrible: "😫",
+};
+
+// ─── Artifact card ───────────────────────────────────────────
+function ArtifactCard({ item }: { item: UnifiedArtifact }) {
+  const handleClick = () => {
+    if (item.type === "document") {
+      window.location.hash = `#/documents/${item.id}`;
+    } else if (item.type === "note") {
+      window.location.hash = "#/dashboard/journal";
+    }
+    // AI reports: could open a detail view in the future
+  };
+
+  return (
+    <div
+      className="p-3 rounded-lg border border-border/50 bg-card hover:bg-accent/5 cursor-pointer transition-colors"
+      onClick={handleClick}
+      data-testid={`artifact-card-${item.id}`}
+    >
+      <div className="flex items-start gap-3">
+        <div className={`p-2 rounded-md shrink-0 ${typeIconBg(item.type)}`}>
+          {typeIcon(item.type)}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="text-sm font-medium truncate">{item.title}</h4>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {item.typeLabel} · {formatDate(item.date)}
+          </p>
+          {item.preview && (
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{item.preview}</p>
+          )}
+        </div>
+        {item.profileName && (
+          <Badge variant="outline" className="text-xs shrink-0 ml-1">
+            {item.profileName}
+          </Badge>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Document group section ──────────────────────────────────
+function DocumentGroup({ label, icon: Icon, items }: { label: string; icon: React.ElementType; items: UnifiedArtifact[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 px-1">
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{label}</span>
+        <span className="text-xs text-muted-foreground">({items.length})</span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map(item => <ArtifactCard key={`${item.type}-${item.id}`} item={item} />)}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main page ───────────────────────────────────────────────
+export default function ArtifactsPage() {
+  useEffect(() => { document.title = "Artifacts — Portol"; }, []);
+
+  const [search, setSearch] = useState("");
+  const [activeTab, setActiveTab] = useState<FilterTab>("all");
+
+  // Fetch all three data sources in parallel
+  const { data: documents = [], isLoading: docsLoading } = useQuery<Document[]>({
+    queryKey: ["/api/documents"],
+    queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
   });
 
-  return (
-    <Card className="relative" data-testid={`card-artifact-${artifact.id}`}>
-      {artifact.pinned && (
-        <Pin className="absolute top-2 right-2 h-3 w-3 text-primary" />
-      )}
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <CheckSquare className="h-4 w-4 text-primary" />
-          <CardTitle className="text-sm font-medium">{artifact.title}</CardTitle>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-          </div>
-          <span className="text-xs text-muted-foreground">{done}/{total}</span>
-        </div>
-      </CardHeader>
-      <CardContent className="pb-3">
-        <div className="space-y-1.5">
-          {artifact.items.map(item => (
-            <div key={item.id} className="flex items-center gap-2">
-              <Checkbox
-                checked={item.checked}
-                onCheckedChange={() => toggleMutation.mutate(item.id)}
-                className="h-3.5 w-3.5"
-                data-testid={`checkbox-${item.id}`}
-              />
-              <span className={`text-xs ${item.checked ? "line-through text-muted-foreground" : ""}`}>
-                {item.text}
-              </span>
-            </div>
-          ))}
-        </div>
-        {artifact.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {artifact.tags.map((t, i) => (
-              <span key={i} className="text-xs text-muted-foreground">#{t}</span>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+  const { data: journal = [], isLoading: journalLoading } = useQuery<JournalEntry[]>({
+    queryKey: ["/api/journal"],
+    queryFn: () => apiRequest("GET", "/api/journal").then(r => r.json()),
+  });
 
-function NoteCard({ artifact }: { artifact: Artifact }) {
-  return (
-    <Card className="relative" data-testid={`card-artifact-${artifact.id}`}>
-      {artifact.pinned && (
-        <Pin className="absolute top-2 right-2 h-3 w-3 text-primary" />
-      )}
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-primary" />
-          <CardTitle className="text-sm font-medium">{artifact.title}</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent className="pb-3">
-        <p className="text-xs text-foreground/80 whitespace-pre-wrap line-clamp-6">{artifact.content}</p>
-        {artifact.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {artifact.tags.map((t, i) => (
-              <span key={i} className="text-xs text-muted-foreground">#{t}</span>
-            ))}
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground mt-2">
-          Updated {new Date(artifact.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
-export default function ArtifactsPage() {
-  useEffect(() => { document.title = "Documents — Portol"; }, []);
-  const { toast } = useToast();
-  const [showCreate, setShowCreate] = useState(false);
-  const [createType, setCreateType] = useState<"checklist" | "note">("checklist");
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [items, setItems] = useState<string[]>([""]);
-  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
-
-  const hasUnsavedContent = title.trim() !== "" || content.trim() !== "" || items.some(i => i.trim() !== "");
-
-  const clearForm = () => {
-    setTitle(""); setContent(""); setItems([""]); setCreateType("checklist");
-  };
-
-  const handleToggleCreate = () => {
-    if (showCreate && hasUnsavedContent) {
-      setShowDiscardConfirm(true);
-    } else {
-      if (showCreate) clearForm();
-      setShowCreate(!showCreate);
-    }
-  };
-
-  const { data: artifacts = [], isLoading } = useQuery<Artifact[]>({
+  const { data: artifacts = [], isLoading: artifactsLoading } = useQuery<Artifact[]>({
     queryKey: ["/api/artifacts"],
     queryFn: () => apiRequest("GET", "/api/artifacts").then(r => r.json()),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/artifacts", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
-      setTitle(""); setContent(""); setItems([""]); setShowCreate(false);
-    },
-    onError: () => toast({ title: "Failed to create artifact", variant: "destructive" }),
+  // Fetch profiles for name resolution
+  const { data: profiles = [] } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
-  const pinned = artifacts.filter(a => a.pinned);
-  const unpinned = artifacts.filter(a => !a.pinned);
+  const profileMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    profiles.forEach(p => { map[p.id] = p.name; });
+    return map;
+  }, [profiles]);
 
-  const handleCreate = () => {
-    if (!title.trim()) return;
-    if (createType === "checklist") {
-      createMutation.mutate({
-        type: "checklist", title: title.trim(),
-        items: items.filter(i => i.trim()).map(text => ({ text: text.trim(), checked: false })),
-      });
-    } else {
-      createMutation.mutate({ type: "note", title: title.trim(), content });
-    }
+  // Helper to resolve first linked profile name
+  const resolveProfile = (linkedProfiles?: string[]) => {
+    if (!linkedProfiles || linkedProfiles.length === 0) return "";
+    return profileMap[linkedProfiles[0]] || "";
   };
+
+  // Merge all into unified list
+  const allItems = useMemo(() => {
+    const items: UnifiedArtifact[] = [
+      ...documents
+        .filter(d => !d.deletedAt)
+        .map(d => ({
+          id: d.id,
+          title: d.title || d.name,
+          type: (d.mimeType?.startsWith("image/") ? "scan" : "document") as UnifiedArtifact["type"],
+          typeLabel: d.mimeType?.startsWith("image/")
+            ? "Scan"
+            : (getDocGroup(d.type).label || "Document"),
+          date: d.createdAt,
+          preview: d.extractedData
+            ? Object.entries(d.extractedData).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join(" · ").slice(0, 100)
+            : "",
+          profileName: resolveProfile(d.linkedProfiles),
+          source: d,
+        })),
+      ...journal.map(j => ({
+        id: j.id,
+        title: j.mood
+          ? `${MOOD_EMOJI[j.mood] || ""} ${j.mood.charAt(0).toUpperCase() + j.mood.slice(1)} · ${formatDate(j.date)}`
+          : formatDate(j.date),
+        type: "note" as const,
+        typeLabel: "Journal Entry",
+        date: j.date || j.createdAt,
+        preview: j.content?.slice(0, 100) || "",
+        profileName: resolveProfile(j.linkedProfiles),
+        source: j,
+      })),
+      ...artifacts.map(a => ({
+        id: a.id,
+        title: a.title,
+        type: "ai_report" as const,
+        typeLabel: a.type === "checklist" ? "Checklist" : "AI Note",
+        date: a.createdAt,
+        preview: a.content?.slice(0, 100) || (a.items?.length > 0 ? a.items.map(i => i.text).join(", ").slice(0, 100) : ""),
+        profileName: resolveProfile(a.linkedProfiles),
+        source: a,
+      })),
+    ];
+    return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [documents, journal, artifacts, profileMap]);
+
+  // Apply tab filter
+  const tabFiltered = useMemo(() => {
+    switch (activeTab) {
+      case "documents": return allItems.filter(i => i.type === "document");
+      case "notes":     return allItems.filter(i => i.type === "note");
+      case "ai_reports": return allItems.filter(i => i.type === "ai_report");
+      case "scans":     return allItems.filter(i => i.type === "scan");
+      default:          return allItems;
+    }
+  }, [allItems, activeTab]);
+
+  // Apply search filter
+  const filtered = useMemo(() => {
+    if (!search.trim()) return tabFiltered;
+    const q = search.toLowerCase();
+    return tabFiltered.filter(i =>
+      i.title.toLowerCase().includes(q) ||
+      i.typeLabel.toLowerCase().includes(q) ||
+      i.preview.toLowerCase().includes(q) ||
+      i.profileName.toLowerCase().includes(q)
+    );
+  }, [tabFiltered, search]);
+
+  const isLoading = docsLoading || journalLoading || artifactsLoading;
+
+  // Group documents by type when Documents tab is active
+  const documentGroups = useMemo(() => {
+    if (activeTab !== "documents") return null;
+    const groups: Record<string, UnifiedArtifact[]> = {};
+    const order = ["Identity", "Medical", "Insurance", "Financial", "Legal", "Other"];
+    for (const item of filtered) {
+      const src = item.source as Document;
+      const group = getDocGroup(src.type || "other");
+      if (!groups[group.label]) groups[group.label] = [];
+      groups[group.label].push(item);
+    }
+    return order.filter(l => groups[l]?.length > 0).map(l => ({
+      label: l,
+      icon: Object.values(DOC_TYPE_GROUPS).find(g => g.label === l)?.icon || Folder,
+      items: groups[l],
+    }));
+  }, [filtered, activeTab]);
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3 mb-4">
-            <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
-                <ArrowLeft className="w-4 h-4" />
-              </button>
-            </Link>
-            <h1 className="text-lg font-semibold">Documents</h1>
-          </div>
-          <p className="text-xs text-muted-foreground">{artifacts.length} checklists & notes</p>
-        </div>
-        <Button size="sm" onClick={handleToggleCreate} data-testid="button-create-artifact">
-          {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New</>}
-        </Button>
+      {/* Header */}
+      <div>
+        <h1 className="text-lg font-semibold">Artifacts</h1>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {allItems.length} items · Documents, notes & AI reports in one place
+        </p>
       </div>
 
-      {/* Create form */}
-      {showCreate && (
-        <Card className="p-4 space-y-3">
-          <div className="flex gap-2">
-            <Button size="sm" variant={createType === "checklist" ? "default" : "outline"} onClick={() => setCreateType("checklist")} className="text-xs">
-              <CheckSquare className="h-3 w-3 mr-1" /> Checklist
-            </Button>
-            <Button size="sm" variant={createType === "note" ? "default" : "outline"} onClick={() => setCreateType("note")} className="text-xs">
-              <FileText className="h-3 w-3 mr-1" /> Note
-            </Button>
-          </div>
-          <Input placeholder="Title..." value={title} onChange={e => setTitle(e.target.value)} data-testid="input-artifact-title" />
-          {createType === "checklist" ? (
-            <div className="space-y-1.5">
-              {items.map((item, i) => (
-                <div key={i} className="flex gap-2">
-                  <Input
-                    placeholder={`Item ${i + 1}...`}
-                    value={item}
-                    onChange={e => { const n = [...items]; n[i] = e.target.value; setItems(n); }}
-                    onKeyDown={e => { if (e.key === "Enter" && item.trim()) setItems([...items, ""]); }}
-                    data-testid={`input-item-${i}`}
-                  />
-                  {items.length > 1 && (
-                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 shrink-0" onClick={() => setItems(items.filter((_, j) => j !== i))}>
-                      <X className="h-3 w-3" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-              <Button size="sm" variant="ghost" onClick={() => setItems([...items, ""])} className="text-xs">
-                <Plus className="h-3 w-3 mr-1" /> Add item
-              </Button>
-            </div>
-          ) : (
-            <Textarea placeholder="Note content..." value={content} onChange={e => setContent(e.target.value)} rows={4} data-testid="input-artifact-content" />
-          )}
-          <Button size="sm" disabled={!title.trim() || createMutation.isPending} onClick={handleCreate} className="w-full" data-testid="button-save-artifact">
-            Create {createType === "checklist" ? "Checklist" : "Note"}
-          </Button>
-        </Card>
-      )}
+      {/* Search bar */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Search artifacts..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="pl-9 h-9"
+          data-testid="input-artifacts-search"
+        />
+        {search && (
+          <button
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted"
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+          >
+            <X className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
+        )}
+      </div>
 
+      {/* Filter pills */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide">
+        {FILTER_TABS.map(tab => {
+          const isActive = activeTab === tab.key;
+          const Icon = tab.icon;
+          const count = tab.key === "all"
+            ? allItems.length
+            : allItems.filter(i =>
+                tab.key === "documents" ? i.type === "document" :
+                tab.key === "notes" ? i.type === "note" :
+                tab.key === "ai_reports" ? i.type === "ai_report" :
+                tab.key === "scans" ? i.type === "scan" : true
+              ).length;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                isActive
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted/60 text-muted-foreground hover:bg-muted"
+              }`}
+              data-testid={`filter-${tab.key}`}
+            >
+              <Icon className="h-3 w-3" />
+              {tab.label}
+              <span className={`text-xs ${isActive ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Content */}
       {isLoading ? (
         <div className="space-y-3">
-          {[1, 2, 3].map(i => <div key={i} className="h-28 rounded-lg bg-muted animate-pulse" />)}
+          {[1, 2, 3, 4, 5].map(i => (
+            <div key={i} className="h-20 rounded-lg bg-muted animate-pulse" />
+          ))}
         </div>
-      ) : artifacts.length === 0 ? (
-        <EmptyState icon={FileText} title="No documents yet" description="Create a checklist or note to get started." />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={search ? Search : Archive}
+          title={search ? "No results found" : "No artifacts yet"}
+          description={
+            search
+              ? `Nothing matches "${search}". Try a different search term.`
+              : "Upload documents, write journal entries, or chat with AI to generate reports."
+          }
+        />
+      ) : activeTab === "documents" && documentGroups ? (
+        // Documents tab: grouped by type
+        <div className="space-y-5">
+          {documentGroups.map(g => (
+            <DocumentGroup key={g.label} label={g.label} icon={g.icon} items={g.items} />
+          ))}
+        </div>
       ) : (
-        <>
-          {pinned.length > 0 && (
-            <div className="space-y-3">
-              <p className="text-xs text-muted-foreground flex items-center gap-1"><Pin className="h-3 w-3" /> Pinned</p>
-              <div className="grid gap-3 md:grid-cols-2">
-                {pinned.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
-              </div>
-            </div>
-          )}
-          {unpinned.length > 0 && (
-            <div className="grid gap-3 md:grid-cols-2">
-              {unpinned.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(a => a.type === "checklist" ? <ChecklistCard key={a.id} artifact={a} /> : <NoteCard key={a.id} artifact={a} />)}
-            </div>
-          )}
-        </>
+        // All other tabs: flat grid sorted by date
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map(item => (
+            <ArtifactCard key={`${item.type}-${item.id}`} item={item} />
+          ))}
+        </div>
       )}
-
-      {/* Discard unsaved changes confirmation */}
-      <AlertDialog open={showDiscardConfirm} onOpenChange={setShowDiscardConfirm}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
-            <AlertDialogDescription>You have unsaved content in the form. This will be lost if you continue.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { clearForm(); setShowCreate(false); setShowDiscardConfirm(false); }}>
-              Discard
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

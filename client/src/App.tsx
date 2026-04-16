@@ -15,7 +15,7 @@ import { initErrorReporter } from "@/lib/errorReporter";
 initErrorReporter();
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
+import { Sun, Moon, Settings, Calendar, Lock, LogOut, Users } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -81,6 +81,7 @@ _trackImport();
 _profImport();
 _settImport();
 _calImport();
+_artImport();
 _finImport();
 _habImport();
 _jourImport();
@@ -272,7 +273,7 @@ function SwipeNav() {
   const startTime = useRef<number>(0);
   const didMove = useRef(false);
 
-  const TAB_ORDER = ['/', '/dashboard', '/linked', '/calendar', '/profiles'];
+  const TAB_ORDER = ['/', '/dashboard', '/linked', '/calendar', '/artifacts'];
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
     // Don't intercept if touch started on an interactive element
@@ -418,6 +419,7 @@ function AppRouter() {
         <Route path="/reset-password" component={ResetPasswordPage} />
         <Route path="/privacy" component={PrivacyPage} />
         <Route path="/terms" component={TermsPage} />
+        <Route path="/artifacts" component={ArtifactsPage} />
         <Route path="/dashboard/documents" component={ArtifactsPage} />
         <Route path="/dashboard/finance" component={FinancePage} />
         <Route path="/dashboard/habits" component={HabitsPage} />
@@ -480,6 +482,9 @@ function App() {
                       {/* Search trigger — centre-right in header */}
                       <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
+                        <Button variant="ghost" size="icon" onClick={() => window.location.hash = "#/profiles"} className="h-8 w-8" title="Profiles" aria-label="Open profiles" data-testid="button-profiles-header">
+                          <Users className="h-4 w-4" />
+                        </Button>
                         <NotificationBell />
                         {/* Calendar + Settings are in the sidebar on desktop — removed redundant header icons (fix #28) */}
                         <ProfileButton />
