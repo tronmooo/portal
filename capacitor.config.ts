@@ -18,13 +18,19 @@ const config: CapacitorConfig = {
     ],
   },
   ios: {
-    contentInset: 'automatic',
+    contentInset: 'always',
     preferredContentMode: 'mobile',
     scheme: 'Portol',
     backgroundColor: '#0a0a0a',
     // Allow inline media playback
     allowsLinkPreview: false,
     scrollEnabled: true,
+    // Permission descriptions for App Store
+    infoPlist: {
+      NSMicrophoneUsageDescription: 'Portol uses the microphone for voice commands in the chat.',
+      NSCameraUsageDescription: 'Portol uses the camera to scan documents and receipts.',
+      NSPhotoLibraryUsageDescription: 'Portol accesses your photos to upload documents.',
+    },
   },
   plugins: {
     SplashScreen: {

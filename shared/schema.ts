@@ -94,6 +94,7 @@ export interface ChatMessage {
       value: any;
       selected: boolean;
       isDate: boolean;
+      category?: string;
       suggestedEvent?: string;
     }>;
     targetProfile?: { name: string; id?: string; type?: string; isNew?: boolean };

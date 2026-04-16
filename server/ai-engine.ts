@@ -2193,6 +2193,63 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: ["action", "documentId"],
     },
   },
+
+  // --- CRUD: Budgets (create & update) ---
+  {
+    name: "create_budget",
+    description: "Create a new monthly budget for a spending category. Use when the user wants to add a budget they don't already have. For updating an existing budget amount, use update_budget instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        category: { type: "string", description: "Budget category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general" },
+        amount: { type: "number", description: "Monthly budget amount in dollars" },
+        month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
+      },
+      required: ["category", "amount"],
+    },
+  },
+  {
+    name: "update_budget",
+    description: "Update an existing budget's amount or category. Use when the user wants to change a budget they already have.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        budgetId: { type: "string", description: "The ID of the budget to update. Find this via get_budget_summary first." },
+        amount: { type: "number", description: "New budget amount in dollars" },
+        category: { type: "string", description: "New category name" },
+        month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
+      },
+      required: ["budgetId"],
+    },
+  },
+
+  // --- Upload document (UI-only) ---
+  {
+    name: "upload_document",
+    description: "Help the user upload a document. This cannot be done programmatically — the user must use the attachment button in the chat UI.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        fileName: { type: "string", description: "Name of the file the user wants to upload" },
+        profileId: { type: "string", description: "Optional profile to associate the document with" },
+        notes: { type: "string", description: "Optional notes about the document" },
+      },
+      required: [],
+    },
+  },
+
+  // --- Refresh AI summary ---
+  {
+    name: "refresh_ai_summary",
+    description: "Refresh the AI-generated summary for the user's dashboard or a specific profile. Returns a current financial snapshot and health data overview.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        profileId: { type: "string", description: "Optional profile ID to get summary for. If omitted, returns overall dashboard summary." },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ============================================================
@@ -2794,6 +2851,22 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
     }
     case "journal_entry": {
       if (!normalized.content?.trim() && !normalized.mood) errors.push("Journal entry needs content or mood");
+      break;
+    }
+    case "create_budget": {
+      if (!normalized.category?.trim()) errors.push("Budget category is required");
+      const budgetAmt = Number(normalized.amount);
+      if (!budgetAmt || budgetAmt <= 0) errors.push(`Invalid budget amount: ${normalized.amount}`);
+      else normalized.amount = Math.round(budgetAmt * 100) / 100;
+      break;
+    }
+    case "update_budget": {
+      if (!normalized.budgetId?.trim()) errors.push("Budget ID is required");
+      if (normalized.amount !== undefined) {
+        const ubAmt = Number(normalized.amount);
+        if (isNaN(ubAmt) || ubAmt < 0) errors.push(`Invalid budget amount: ${normalized.amount}`);
+        else normalized.amount = Math.round(ubAmt * 100) / 100;
+      }
       break;
     }
     // Read-only tools and updates don't need strict validation
@@ -4653,6 +4726,78 @@ async function executeTool(name: string, input: any): Promise<any> {
         default:
           return { error: `Unknown action: ${input.action}. Use 'rename', 'delete', or 're_extract'.` };
       }
+    }
+
+    case "create_budget": {
+      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const budget = await storage.addBudget(month, input.category, Number(input.amount));
+      return { ...budget, month, message: `Budget created: $${input.amount} for ${input.category} in ${month}`, actions: [{ type: "create", category: "budget", data: { ...budget, month } }] };
+    }
+
+    case "update_budget": {
+      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const updates: Record<string, any> = {};
+      if (input.amount !== undefined) updates.amount = Number(input.amount);
+      if (input.category) updates.category = input.category;
+      const ok = await storage.updateBudget(month, input.budgetId, updates);
+      if (!ok) return { error: `Budget not found with ID "${input.budgetId}" in ${month}. Use get_budget_summary to find the correct budget ID.` };
+      return { success: true, budgetId: input.budgetId, month, ...updates, message: `Budget updated successfully`, actions: [{ type: "update", category: "budget", data: { id: input.budgetId, month, ...updates } }] };
+    }
+
+    case "upload_document": {
+      return {
+        message: "To upload a document, use the \uD83D\uDCCE button at the bottom of the chat and select your file. I'll automatically extract and organize the data once you upload it.",
+        hint: "attachment_button",
+        fileName: input.fileName || null,
+        profileId: input.profileId || null,
+        notes: input.notes || null,
+      };
+    }
+
+    case "refresh_ai_summary": {
+      const profiles = await storage.getProfiles();
+      const expenses = await storage.getExpenses();
+      const budgetMonth = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const budgets = await storage.getBudgets(budgetMonth);
+      const tasks = await storage.getTasks();
+      const trackers = await storage.getTrackers();
+
+      // Build financial snapshot
+      const thisMonthExpenses = expenses.filter(e => (e.date || "").startsWith(budgetMonth));
+      const totalSpent = thisMonthExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+      const totalBudgeted = budgets.reduce((sum, b) => sum + (b.amount || 0), 0);
+
+      // Profile-specific data if requested
+      let profileData: any = null;
+      if (input.profileId) {
+        const profile = profiles.find(p => p.id === input.profileId || p.name.toLowerCase().includes(safeLC(input.profileId)));
+        if (profile) {
+          const profileExpenses = thisMonthExpenses.filter(e => e.linkedProfiles?.includes(profile.id));
+          const profileTrackers = trackers.filter(t => t.linkedProfiles?.includes(profile.id));
+          profileData = {
+            profile: { id: profile.id, name: profile.name, type: profile.type },
+            expenses: { count: profileExpenses.length, total: profileExpenses.reduce((s, e) => s + (e.amount || 0), 0) },
+            trackers: profileTrackers.map(t => ({ name: t.name, entriesCount: t.entries?.length || 0 })),
+          };
+        }
+      }
+
+      return {
+        message: "Refreshing your summary...",
+        snapshot: {
+          month: budgetMonth,
+          totalSpent: Math.round(totalSpent * 100) / 100,
+          totalBudgeted: Math.round(totalBudgeted * 100) / 100,
+          remaining: Math.round((totalBudgeted - totalSpent) * 100) / 100,
+          expenseCount: thisMonthExpenses.length,
+          activeTasks: tasks.filter(t => t.status !== "done").length,
+          completedTasks: tasks.filter(t => t.status === "done").length,
+          profileCount: profiles.length,
+          trackerCount: trackers.length,
+          budgetCategories: budgets.map(b => ({ category: b.category, budgeted: b.amount })),
+        },
+        profileData,
+      };
     }
 
     default:

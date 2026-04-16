@@ -517,6 +517,31 @@ export async function registerRoutes(
 
         const profileFields: Record<string, any> = {};
 
+        // Smart type coercion: convert string values to appropriate JS types
+        function coerceValue(key: string, val: any): any {
+          if (val === null || val === undefined || val === '') return val;
+          const s = String(val).trim();
+
+          // Boolean detection
+          if (s === 'true' || s === 'True' || s === 'TRUE') return true;
+          if (s === 'false' || s === 'False' || s === 'FALSE') return false;
+
+          // Currency: strip $, commas, then parse as number
+          const currencyMatch = s.match(/^\$?([\d,]+\.?\d*)$/);
+          if (currencyMatch) {
+            const num = parseFloat(currencyMatch[1].replace(/,/g, ''));
+            if (!isNaN(num)) return num;
+          }
+
+          // Pure number (no currency symbol)
+          if (/^-?\d+(\.\d+)?$/.test(s)) {
+            return parseFloat(s);
+          }
+
+          // Keep strings as strings
+          return s;
+        }
+
         for (const field of confirmedFields) {
           const key = field.key;
           const val = unwrap(field.value);
@@ -526,14 +551,14 @@ export async function registerRoutes(
 
           // Normalize keys: dateOfBirth/dob → save as both dateOfBirth AND birthday
           if (key === 'dateOfBirth' || key === 'dob') {
-            profileFields['dateOfBirth'] = val;
-            profileFields['birthday'] = val;
+            profileFields['dateOfBirth'] = coerceValue(key, val);
+            profileFields['birthday'] = coerceValue(key, val);
           } else if (key === 'patientName') {
             // patientName → save as 'name' only if profile doesn't already have one
             // (checked below when we have the profile object)
-            profileFields['_patientName'] = val;
+            profileFields['_patientName'] = coerceValue(key, val);
           } else {
-            profileFields[key] = val;
+            profileFields[key] = coerceValue(key, val);
           }
         }
 

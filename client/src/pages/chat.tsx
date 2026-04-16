@@ -458,10 +458,8 @@ function ExtractionConfirmation({
 
   const handleConfirm = async () => {
     setConfirming(true);
-    // Include selected non-date fields AND date fields that are personal info (birthday, DOB)
-    const PERSONAL_DATE_KEYS = ['dateOfBirth', 'dob', 'birthday', 'birthDate'];
-    const confirmedFields = fields.filter((f) => f.selected && f.key && (!f.isDate || PERSONAL_DATE_KEYS.includes(f.key))).map((f) => {
-      // Normalize dateOfBirth/dob → also save as 'birthday' for profile display
+    // Include ALL selected fields (date fields now save to profile AND optionally create calendar events)
+    const confirmedFields = fields.filter((f) => f.selected && f.key).map((f) => {
       const key = f.key === 'dob' ? 'dateOfBirth' : f.key;
       return { key, value: f.value };
     });
@@ -538,19 +536,46 @@ function ExtractionConfirmation({
                   <Calendar className="h-3 w-3 text-blue-500" />
                 )}
               </div>
-              <input
-                type="text"
-                className="text-xs text-muted-foreground bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none w-full py-0.5 transition-colors"
-                value={typeof field.value === 'object' && field.value !== null
+              {/* Type-specific input rendering */}
+              {(() => {
+                const strVal = typeof field.value === 'object' && field.value !== null
                   ? JSON.stringify(field.value).replace(/[{}"/]/g, '').replace(/,/g, ', ')
-                  : String(field.value ?? '')}
-                onChange={(e) => {
-                  const newFields = [...fields];
-                  newFields[idx] = { ...newFields[idx], value: e.target.value };
-                  setFields(newFields);
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
+                  : String(field.value ?? '');
+                const isDateField = field.category === 'DATE' || field.isDate;
+                const isBoolField = strVal === 'true' || strVal === 'false' || strVal === 'True' || strVal === 'False';
+                const isNumField = !isDateField && !isBoolField && /^-?\$?[\d,]+(\.[\d]+)?$/.test(strVal.trim());
+
+                if (isBoolField) {
+                  return (
+                    <div className="flex items-center gap-1.5 py-0.5" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={strVal === 'true' || strVal === 'True'}
+                        onCheckedChange={(checked) => {
+                          const newFields = [...fields];
+                          newFields[idx] = { ...newFields[idx], value: String(!!checked) };
+                          setFields(newFields);
+                        }}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="text-xs text-muted-foreground">{strVal === 'true' || strVal === 'True' ? 'Yes' : 'No'}</span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <input
+                    type={isDateField ? 'date' : isNumField ? 'number' : 'text'}
+                    className="text-xs text-muted-foreground bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none w-full py-0.5 transition-colors"
+                    value={strVal}
+                    onChange={(e) => {
+                      const newFields = [...fields];
+                      newFields[idx] = { ...newFields[idx], value: e.target.value };
+                      setFields(newFields);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                );
+              })()}
               {field.isDate && field.suggestedEvent && field.selected && (
                 <span className="text-xs text-blue-600 dark:text-blue-400">
                   Will create: {field.suggestedEvent}
@@ -1207,13 +1232,42 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
   );
 }
 
-function useSpeechInput(onResult: (text: string) => void) {
+function useSpeechInput(onResult: (text: string) => void, onError?: (title: string, description?: string) => void) {
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
-  const start = useCallback(() => {
+  const start = useCallback(async () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+    if (!SpeechRecognition) {
+      onError?.("Voice input not supported", "Use Chrome or Safari for voice input.");
+      return;
+    }
+
+    // If running in Capacitor, request native mic permission
+    if ((window as any).Capacitor?.isNativePlatform()) {
+      try {
+        // Dynamic import with variable to prevent Rollup from resolving at build time
+        const modPath = '@capacitor-community/microphone';
+        const mod = await (Function('p', 'return import(p)'))(modPath);
+        const permission = await mod.Microphone.requestPermission();
+        if (permission.microphone !== 'granted') {
+          onError?.("Microphone permission required", "Enable microphone access in your device settings.");
+          return;
+        }
+      } catch { /* Capacitor plugin not installed, fallback to web */ }
+    }
+
+    // Check browser microphone permission
+    if (navigator.permissions) {
+      try {
+        const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        if (result.state === 'denied') {
+          onError?.("Microphone access denied", "Enable microphone in your browser settings.");
+          return;
+        }
+      } catch { /* permissions API not supported for microphone in this browser */ }
+    }
+
     const rec = new SpeechRecognition();
     rec.continuous = false;
     rec.interimResults = false;
@@ -1228,7 +1282,7 @@ function useSpeechInput(onResult: (text: string) => void) {
     recognitionRef.current = rec;
     rec.start();
     setListening(true);
-  }, [onResult]);
+  }, [onResult, onError]);
 
   const stop = useCallback(() => {
     recognitionRef.current?.stop();
@@ -1266,7 +1320,10 @@ export default function ChatPage() {
       if (prefill) { setInput(prefill); sessionStorage.removeItem('portol_chat_prefill'); }
     } catch {}
   }, []);
-  const speech = useSpeechInput((text) => setInput(prev => prev ? prev + ' ' + text : text));
+  const speech = useSpeechInput(
+    (text) => setInput(prev => prev ? prev + ' ' + text : text),
+    (title, description) => toast({ title, description, variant: 'destructive' }),
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -2251,22 +2308,22 @@ export default function ChatPage() {
                   >
                     <Search className="h-4 w-4" />
                   </button>
-                  {speech.supported && (
-                    <button
-                      onClick={() => speech.listening ? speech.stop() : speech.start()}
-                      title={speech.listening ? 'Stop' : 'Voice input'}
-                      data-testid="button-voice-input"
-                      className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
-                        speech.listening
-                          ? 'text-red-500 bg-red-500/10'
+                  <button
+                    onClick={() => speech.listening ? speech.stop() : speech.start()}
+                    title={!speech.supported ? 'Voice input not supported in this browser. Use Chrome or Safari.' : speech.listening ? 'Stop' : 'Voice input'}
+                    data-testid="button-voice-input"
+                    className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
+                      speech.listening
+                        ? 'text-red-500 bg-red-500/10'
+                        : !speech.supported
+                          ? 'text-muted-foreground/40 cursor-not-allowed'
                           : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
-                      }`}
-                    >
-                      {speech.listening
-                        ? <span className="w-3.5 h-3.5 rounded-sm bg-red-500 animate-pulse" />
-                        : <Mic className="h-4 w-4" />}
-                    </button>
-                  )}
+                    }`}
+                  >
+                    {speech.listening
+                      ? <span className="w-3.5 h-3.5 rounded-sm bg-red-500 animate-pulse" />
+                      : <Mic className="h-4 w-4" />}
+                  </button>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {input.length > 9000 && (
