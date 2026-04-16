@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { stopProp } from "@/lib/event-utils";
+import { ArtifactPanel } from "@/components/ArtifactPanel";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +38,7 @@ import {
   Moon,
   Heart,
   BarChart2,
+  BarChart3,
   CheckCircle,
   PiggyBank,
   Brain,
@@ -1369,6 +1371,7 @@ export default function ChatPage() {
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [activeArtifact, setActiveArtifact] = useState<any>(null);
 
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
@@ -1418,6 +1421,7 @@ export default function ChatPage() {
         charts: data.charts,
         tables: data.tables,
         report: data.report,
+        artifact: data.artifact,
       };
       setMessages((prev: any) => [...prev, assistantMsg]);
       invalidateAll();
@@ -1892,7 +1896,9 @@ export default function ChatPage() {
   const isBatch = attachments.length > 1;
 
   return (
-    <div className="flex flex-col h-full overflow-x-hidden" data-testid="page-chat">
+    <div className="flex h-full overflow-x-hidden" data-testid="page-chat">
+      {/* Chat area */}
+      <div className={`flex-1 flex flex-col ${activeArtifact ? 'w-1/2' : 'w-full'} transition-all`}>
       {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
@@ -2019,6 +2025,18 @@ export default function ChatPage() {
 
                 {/* Inline report */}
                 {(msg as any).report && <ChatReport spec={(msg as any).report as ReportSpec2} />}
+
+                {/* Artifact preview card */}
+                {(msg as any).artifact && (
+                  <div className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer" onClick={() => setActiveArtifact((msg as any).artifact)}>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-primary/5">
+                      <BarChart3 className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-medium">{(msg as any).artifact.title}</span>
+                      <Badge variant="outline" className="text-xs ml-auto">{(msg as any).artifact.type}</Badge>
+                    </div>
+                    <div className="px-3 py-2 text-xs text-muted-foreground">Click to view artifact</div>
+                  </div>
+                )}
 
                 {/* Extraction confirmation UI */}
                 {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
@@ -2414,6 +2432,14 @@ export default function ChatPage() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+      </div>
+
+      {/* Artifact panel */}
+      {activeArtifact && (
+        <div className="w-1/2 border-l border-border">
+          <ArtifactPanel artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />
         </div>
       )}
     </div>

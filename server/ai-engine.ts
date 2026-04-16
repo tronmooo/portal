@@ -2267,7 +2267,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
 // SYSTEM PROMPT (simplified — no JSON format instructions)
 // ============================================================
 
-function buildSystemPrompt(context: string): string {
+function buildSystemPrompt(context: string, selfProfileId?: string): string {
   return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
 EXISTING DATA (this is fresh from the database — use it for every answer):
@@ -2683,7 +2683,55 @@ CRITICAL DATE RULES:
 - ALWAYS double-check your date math. If today is Wednesday March 26, then tomorrow is Thursday March 27 — NOT March 28.
 - When mentioning dates in your response, ALWAYS verify the day of the week is correct. Use the reference dates above and count forward/backward. For example, if the reference shows "Sat Apr 12", then Apr 19 is also a Saturday (7 days later). Do NOT guess the day name — calculate it from the known reference.
 - NEVER say "Friday, April 18" if April 18 is actually a Saturday. Getting the day name wrong destroys user trust.
-- When creating events or tasks with dates, state the resolved date explicitly in your response so the user can verify.`;
+- When creating events or tasks with dates, state the resolved date explicitly in your response so the user can verify.
+
+===================================================================
+## ARTIFACT SYSTEM
+
+You have two modes of response:
+1. CONVERSATIONAL — a normal chat reply
+2. ARTIFACT — a structured, renderable output displayed in a dedicated panel
+
+When an artifact is warranted, emit exactly one <portol_artifact> block in your reply.
+
+### WHEN TO CREATE AN ARTIFACT
+Create an artifact when the response is:
+- A visualization of data (chart, dashboard, summary view)
+- A structured plan (workout, meal plan, budget, goal breakdown)
+- A multi-section document (monthly review, health summary, financial snapshot)
+- An interactive tool (calculator, form, checklist)
+- Long-form content over ~15 lines the user will reference later
+
+Do NOT create an artifact for simple answers, confirmations, or short responses.
+
+### ARTIFACT FORMAT
+<portol_artifact>
+{
+  "id": "art_xxxxxxxxxxxx",
+  "version": 1,
+  "update_type": "create",
+  "type": "<chart|structured_plan|summary_report|kpi_cards|calculator|quick_entry_form|checklist>",
+  "title": "Short title",
+  "profile_id": "${selfProfileId || ''}",
+  "data": { ... type-specific payload ... }
+}
+</portol_artifact>
+
+### REGISTERED TYPES
+- chart: { chartType, source: { kind, ref, range, groupBy }, series, annotations, insight }
+- summary_report: { period, sections: [{ heading, icon, stats, narrative }], highlights, recommendations }
+- kpi_cards: { cards: [{ label, value, unit, trend, delta_pct }] }
+- checklist: { intro, items: [{ text, priority, due }], convert_to_tasks }
+- structured_plan: { planKind, duration, overview, sections, actions }
+- calculator: { calcKind, inputs, outputs_schema, narrative }
+- quick_entry_form: { target: { kind, ref }, fields, submit_label }
+
+### DATA RULES
+- NEVER invent IDs
+- NEVER output data for another profile
+- NEVER fabricate trends or numbers
+- Currency values are raw numbers (no $ symbols)
+- Dates are ISO 8601`;
 }
 
 // ============================================================
@@ -5451,6 +5499,36 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
 }
 
 // ============================================================
+// ARTIFACT PARSER — extract <portol_artifact> blocks from AI response
+// ============================================================
+
+const ARTIFACT_REGEX = /<portol_artifact>([\s\S]*?)<\/portol_artifact>/;
+
+function parseArtifactFromResponse(text: string, profileId: string): { chatText: string; artifact: any | null } {
+  const match = text.match(ARTIFACT_REGEX);
+  if (!match) return { chatText: text, artifact: null };
+
+  const chatText = text.replace(ARTIFACT_REGEX, '').trim();
+  try {
+    const artifact = JSON.parse(match[1].trim());
+    // Validate required fields
+    if (!artifact.id || !artifact.type || !artifact.title || !artifact.data) {
+      console.warn('[artifact] Missing required fields:', Object.keys(artifact));
+      return { chatText, artifact: null };
+    }
+    // Enforce profile isolation
+    if (artifact.profile_id && artifact.profile_id !== profileId) {
+      console.warn('[artifact] Profile mismatch, correcting');
+      artifact.profile_id = profileId;
+    }
+    return { chatText, artifact };
+  } catch (err) {
+    console.error('[artifact] Parse failed:', err);
+    return { chatText: text.replace(ARTIFACT_REGEX, '').trim(), artifact: null };
+  }
+}
+
+// ============================================================
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
@@ -5463,6 +5541,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   charts?: ChartSpec[];
   tables?: TableSpec[];
   report?: ReportSpec;
+  artifact?: any;
 }> {
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -5718,7 +5797,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     })(),
   ].filter(Boolean).join("\n");
 
-  const systemPrompt = buildSystemPrompt(context);
+  const selfProfileId = profiles.find((p: any) => p.type === "self")?.id || '';
+  const systemPrompt = buildSystemPrompt(context, selfProfileId);
 
   // Read user's preferred chat model from preferences
   let preferredModel: string | null = null;
@@ -5993,8 +6073,28 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       }
     }
 
+    // Parse artifact from AI response text
+    const replyForArtifact = textReply || "I'm not sure how to help with that. Try asking me to track something, create a task, log an expense, or manage your data.";
+    const { chatText: finalReply, artifact } = parseArtifactFromResponse(replyForArtifact, selfProfileId);
+
+    // If artifact found, persist it to chat_artifacts table
+    if (artifact) {
+      try {
+        await (storage as any).supabase.from('chat_artifacts').upsert({
+          id: artifact.id,
+          user_id: (storage as any).userId,
+          profile_id: artifact.profile_id || selfProfileId,
+          type: artifact.type,
+          title: artifact.title,
+          data: artifact.data,
+          version: artifact.version || 1,
+          update_type: artifact.update_type || 'create',
+        });
+      } catch (e) { console.error('[artifact] Save failed:', e); }
+    }
+
     return {
-      reply: textReply || "I'm not sure how to help with that. Try asking me to track something, create a task, log an expense, or manage your data.",
+      reply: finalReply,
       actions: allActions,
       results: allResults,
       documentPreview,
@@ -6002,6 +6102,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       charts: richCharts.length > 0 ? richCharts : undefined,
       tables: richTables.length > 0 ? richTables : undefined,
       report: richReport,
+      artifact: artifact || undefined,
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);

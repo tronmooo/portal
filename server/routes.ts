@@ -3722,6 +3722,31 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     }
   }));
 
+  // ---- Chat Artifacts ----
+  app.get("/api/chat-artifacts", asyncHandler(async (req, res) => {
+    const profileId = req.query.profileId as string | undefined;
+    const { data, error } = await (storage as any).supabase
+      .from('chat_artifacts')
+      .select('*')
+      .eq('user_id', (storage as any).userId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    let results = data || [];
+    if (profileId) {
+      results = results.filter((a: any) => a.profile_id === profileId);
+    }
+    res.json(results);
+  }));
+
+  app.delete("/api/chat-artifacts/:id", asyncHandler(async (req, res) => {
+    await (storage as any).supabase
+      .from('chat_artifacts')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', (storage as any).userId);
+    res.json({ success: true });
+  }));
+
   // Global async error handler — catches unhandled promise rejections from route handlers
   app.use((err: any, _req: any, res: any, _next: any) => {
     console.error(`[API Error]`, err?.message || err);
