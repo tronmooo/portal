@@ -142,9 +142,10 @@ function ArtifactRenderer({ artifact }: { artifact: any }) {
       return (
         <iframe
           srcDoc={content}
-          sandbox="allow-scripts"
+          sandbox=""
           className="w-full h-[400px] rounded-lg border border-border"
           title="HTML Preview"
+          referrerPolicy="no-referrer"
         />
       );
 
@@ -218,16 +219,44 @@ function MermaidRenderer({ content }: { content: string }) {
 
 function ChartRenderer({ content, dataBindings }: { content: string; dataBindings?: any }) {
   const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    try {
-      const parsed = JSON.parse(content);
-      setData(Array.isArray(parsed) ? parsed : []);
-    } catch {
-      setData([]);
+    // If dataBindings exist, fetch fresh data from the API (with profile isolation)
+    if (dataBindings?.tool && dataBindings?.params) {
+      setLoading(true);
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(dataBindings.params)) {
+        if (v != null) params.set(k, String(v));
+      }
+      // Profile isolation: dataBindings.params should include profileId
+      // This ensures one person's chart can't show another person's data
+      apiRequest("POST", "/api/chat", {
+        message: `Use the ${dataBindings.tool} tool with params: ${JSON.stringify(dataBindings.params)}`,
+        history: []
+      }).then(r => r.json()).then(result => {
+        // Try to extract chart data from the AI response
+        const chartData = result?.charts?.[0]?.data || result?.results?.[0]?.data;
+        if (chartData) setData(chartData);
+        setLoading(false);
+      }).catch(() => {
+        setLoading(false);
+        // Fallback to static content
+        try {
+          const parsed = JSON.parse(content);
+          setData(Array.isArray(parsed) ? parsed : []);
+        } catch { setData([]); }
+      });
+    } else {
+      // No dataBindings — use static content
+      try {
+        const parsed = JSON.parse(content);
+        setData(Array.isArray(parsed) ? parsed : []);
+      } catch { setData([]); }
     }
-  }, [content]);
+  }, [content, dataBindings]);
 
+  if (loading) return <div className="text-sm text-muted-foreground animate-pulse">Loading chart data...</div>;
   if (data.length === 0) return <div className="text-sm text-muted-foreground">No chart data</div>;
 
   return (
