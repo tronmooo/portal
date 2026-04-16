@@ -1570,13 +1570,22 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Artifacts ---
   {
     name: "create_artifact",
-    description: "Create a checklist or note.",
+    description: "Create a rich artifact — markdown doc, code snippet, chart, diagram, checklist, or note. Use this when the user asks for reports, analysis, code, visualizations, or structured content.",
     input_schema: {
       type: "object" as const,
       properties: {
-        type: { type: "string", enum: ["checklist", "note"], description: "Artifact type" },
-        title: { type: "string", description: "Title" },
-        content: { type: "string", description: "Content (for notes)" },
+        title: { type: "string", description: "Title of the artifact" },
+        content: { type: "string", description: "The content. For markdown: full markdown text. For code: the code. For html: full HTML. For svg: SVG markup. For mermaid: mermaid diagram syntax. For chart: JSON array of data points. For checklist: one item per line." },
+        type: { type: "string", enum: ["checklist", "note", "markdown", "code", "html", "svg", "mermaid", "chart"], description: "Type of artifact to create" },
+        language: { type: "string", description: "Programming language for code artifacts (python, javascript, sql, typescript, etc.)" },
+        dataBindings: { 
+          type: "object", 
+          description: "For charts/dynamic artifacts: query to run for fresh data",
+          properties: {
+            tool: { type: "string", description: "Tool name to call (e.g. spending_analytics, query_expenses)" },
+            params: { type: "object", description: "Parameters for the tool call" }
+          }
+        },
         items: {
           type: "array",
           items: {
@@ -1586,10 +1595,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
               checked: { type: "boolean" },
             },
           },
-          description: "Checklist items",
+          description: "Checklist items (for checklist type only)",
         },
+        tags: { type: "array", items: { type: "string" } },
+        linkedProfiles: { type: "array", items: { type: "string" }, description: "Profile IDs to link this artifact to" },
       },
-      required: ["type", "title"],
+      required: ["title", "content", "type"],
     },
   },
 
@@ -1857,7 +1868,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "delete_artifact",
-    description: "Delete an artifact (note, checklist, etc.) by title.",
+    description: "Delete an artifact (note, checklist, markdown, code, chart, diagram, etc.) by title.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1873,7 +1884,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Current title of the artifact (partial match)" },
-        changes: { type: "object", description: "Fields to update: title, content, items (for checklists)" },
+        changes: { type: "object", description: "Fields to update: title, content, items (for checklists), language (for code), dataBindings (for charts)" },
       },
       required: ["title", "changes"],
     },
@@ -2291,6 +2302,18 @@ QUERY & ANALYTICS TOOLS:
 - Use spending_analytics to answer "spending breakdown this month", "compare this month vs last month". Set compareWith="previous" for period-over-period comparison.
 - Use log_income to record incoming money: "I got paid $5000", "received $500 from freelance". Maps to the income ledger.
 - Use manage_document to rename, delete, or re-extract documents by ID. Use when user says "rename document X", "delete that document", etc.
+
+ARTIFACT TYPES — use the right one:
+- "markdown" — for reports, summaries, analysis documents (supports headers, lists, tables, bold/italic)
+- "code" — for code snippets (always include language: "python"/"javascript"/"sql"/etc.)
+- "chart" — for data visualizations. Include dataBindings so the chart stays fresh with live data.
+  Example: { tool: "spending_analytics", params: { period: "month" } }
+- "mermaid" — for flowcharts, sequence diagrams, org charts. Use mermaid syntax.
+- "svg" — for vector graphics, logos, icons
+- "html" — for interactive mini-pages (use sparingly, sandboxed)
+- "checklist" — for todo lists, action items (one item per line)
+- "note" — for simple plain text notes
+When the user asks for a report or analysis, prefer "markdown" with rich formatting. When they ask for code, use "code" with the correct language. When they want a chart or visualization, use "chart" with dataBindings for live refresh.
 
 BEHAVIOR:
 - Be concise and confirm what you did after each action.
@@ -3841,15 +3864,21 @@ async function executeTool(name: string, input: any): Promise<any> {
       return entry;
     }
 
-    case "create_artifact":
-      return storage.createArtifact({
-        type: input.type || "note",
+    case "create_artifact": {
+      const artifact = await storage.createArtifact({
         title: input.title,
         content: input.content || "",
-        items: input.items || [],
-        tags: [],
+        type: input.type || "note",
+        tags: input.tags || [],
         pinned: false,
+        items: input.items || [],
+        linkedProfiles: input.linkedProfiles || [],
+        language: input.language,
+        dataBindings: input.dataBindings,
+        chartData: input.type === "chart" && input.content ? (() => { try { return JSON.parse(input.content); } catch { return undefined; } })() : undefined,
       });
+      return { result: artifact };
+    }
 
     case "save_memory":
       return storage.saveMemory({

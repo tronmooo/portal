@@ -308,10 +308,15 @@ export class SupabaseStorage implements IStorage {
   }
 
   private rowToArtifact(r: any): Artifact {
+    const metadata = r.metadata || {};
     return {
       id: r.id, type: r.type, title: r.title, content: r.content || "",
       items: r.items || [], tags: r.tags || [], linkedProfiles: r.linked_profiles || [],
-      pinned: r.pinned || false, createdAt: r.created_at, updatedAt: r.updated_at,
+      pinned: r.pinned || false,
+      language: metadata.language,
+      dataBindings: metadata.dataBindings,
+      chartData: metadata.chartData,
+      createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
 
@@ -2231,10 +2236,16 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
+    // Build metadata for new artifact fields (language, dataBindings, chartData)
+    const metadata: Record<string, any> = {};
+    if ((data as any).language) metadata.language = (data as any).language;
+    if ((data as any).dataBindings) metadata.dataBindings = (data as any).dataBindings;
+    if ((data as any).chartData) metadata.chartData = (data as any).chartData;
     const { error } = await this.supabase.from("artifacts").insert({
       id, user_id: this.userId, type: data.type, title: data.title,
       content: data.content || "", items, tags: data.tags || [],
       linked_profiles: linkedProfiles, pinned: data.pinned || false,
+      metadata: Object.keys(metadata).length > 0 ? metadata : {},
       created_at: now, updated_at: now,
     });
     if (error) throw error;
@@ -2247,10 +2258,17 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     const merged = { ...existing, ...data };
     const now = new Date().toISOString();
+    // Build metadata from merged fields
+    const metadata: Record<string, any> = {};
+    if (merged.language) metadata.language = merged.language;
+    if (merged.dataBindings) metadata.dataBindings = merged.dataBindings;
+    if (merged.chartData) metadata.chartData = merged.chartData;
     const { error } = await this.supabase.from("artifacts").update({
       type: merged.type, title: merged.title, content: merged.content,
       items: merged.items, tags: merged.tags, linked_profiles: merged.linkedProfiles,
-      pinned: merged.pinned, updated_at: now,
+      pinned: merged.pinned,
+      metadata: Object.keys(metadata).length > 0 ? metadata : {},
+      updated_at: now,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     return this.getArtifact(id);

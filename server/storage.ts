@@ -1335,7 +1335,15 @@ export class MemStorage implements IStorage {
     const items: ChecklistItem[] = (data.items || []).map((item, i) => ({
       id: randomUUID(), text: item.text, checked: item.checked ?? false, order: i,
     }));
-    const artifact: Artifact = { id: randomUUID(), ...data, items, tags: data.tags || [], linkedProfiles: [], pinned: data.pinned ?? false, createdAt: now, updatedAt: now };
+    const artifact: Artifact = {
+      id: randomUUID(), ...data, items,
+      tags: data.tags || [], linkedProfiles: data.linkedProfiles || [],
+      pinned: data.pinned ?? false,
+      language: (data as any).language,
+      dataBindings: (data as any).dataBindings,
+      chartData: (data as any).chartData,
+      createdAt: now, updatedAt: now,
+    };
     this.artifacts.set(artifact.id, artifact);
     this.logActivity("artifact", `Created ${artifact.type}: ${artifact.title}`);
     return artifact;

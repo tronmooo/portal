@@ -319,6 +319,8 @@ function actionIcon(type: string) {
     case "create_obligation":
     case "pay_obligation":
       return <DollarSign className="h-3 w-3" />;
+    case "create_artifact":
+      return <FileText className="h-3 w-3" />;
     default:
       return <Sparkles className="h-3 w-3" />;
   }
@@ -347,10 +349,51 @@ const ACTION_LABELS: Record<string, string> = {
   pay_obligation: "Pay Bill",
   save_memory: "Remember",
   retrieve: "Retrieve",
+  create_artifact: "Create Artifact",
 };
 
 function actionLabel(type: string) {
   return ACTION_LABELS[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ── Inline artifact preview in chat messages ─────────────────────────────────
+function ArtifactPreview({ data }: { data: any }) {
+  if (!data) return null;
+  const { type, content, items, language } = data;
+
+  // Checklist items (structured)
+  if (type === "checklist" && items?.length > 0) {
+    return (
+      <div className="space-y-1">
+        {items.slice(0, 5).map((item: any, i: number) => (
+          <div key={i} className="flex items-center gap-2 text-xs">
+            <input type="checkbox" className="rounded" readOnly defaultChecked={item.checked} />
+            <span>{item.text}</span>
+          </div>
+        ))}
+        {items.length > 5 && <span className="text-xs text-muted-foreground">+{items.length - 5} more...</span>}
+      </div>
+    );
+  }
+
+  if (type === "code" && content) {
+    return (
+      <pre className="text-xs font-mono bg-zinc-900 text-zinc-300 p-2 rounded overflow-hidden whitespace-pre-wrap">
+        <code>{content.slice(0, 500)}</code>
+      </pre>
+    );
+  }
+
+  if (type === "markdown" && content) {
+    return <div className="text-xs text-muted-foreground whitespace-pre-wrap">{content.slice(0, 300)}</div>;
+  }
+
+  // Default: show text content preview
+  if (content) {
+    return <div className="text-xs text-muted-foreground whitespace-pre-wrap">{content.slice(0, 300)}</div>;
+  }
+
+  return <div className="text-xs text-muted-foreground italic">No preview available</div>;
 }
 
 // ── Inline document previews in chat messages ─────────────────────────────────
@@ -2044,80 +2087,98 @@ export default function ChatPage() {
                         : action.data?.amount
                           ? `$${Number(action.data.amount).toFixed(2)}`
                           : '';
+                      const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
                       return (
-                        <div
-                          key={i}
-                          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
-                            isUndone
-                              ? "border-red-500/20 bg-red-500/5 opacity-60"
-                              : "border-green-500/25 bg-green-500/6"
-                          }`}
-                          data-testid={`action-card-${action.type}-${i}`}
-                        >
-                          {/* Status icon */}
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
-                            isUndone ? "bg-red-500/15" : "bg-green-500/15"
-                          }`}>
-                            {isUndone
-                              ? <X className="h-3.5 w-3.5 text-red-500" />
-                              : <Check className="h-3.5 w-3.5 text-green-600" />}
-                          </div>
-                          {/* Content */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className={`text-xs font-semibold ${
-                                isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
-                              }`}>
-                                {entityTitle || actionLabel(action.type).toUpperCase()}
-                              </p>
-                              {/* WHO badge — always show */}
-                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
-                                whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
-                              }`}>
-                                {whoFor.toUpperCase()}
-                              </span>
-                              {isTrackerEntry && trackerName && (
-                                <span className="text-[9px] text-muted-foreground/60 font-medium">
-                                  via {trackerName}
-                                </span>
-                              )}
+                        <div key={i} data-testid={`action-card-${action.type}-${i}`}>
+                          <div
+                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                              isUndone
+                                ? "border-red-500/20 bg-red-500/5 opacity-60"
+                                : "border-green-500/25 bg-green-500/6"
+                            } ${isArtifact ? 'rounded-b-none border-b-0' : ''}`}
+                          >
+                            {/* Status icon */}
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                              isUndone ? "bg-red-500/15" : "bg-green-500/15"
+                            }`}>
+                              {isUndone
+                                ? <X className="h-3.5 w-3.5 text-red-500" />
+                                : <Check className="h-3.5 w-3.5 text-green-600" />}
                             </div>
-                            <p className="text-[10px] text-muted-foreground mt-0.5">
-                              {entityDetails || actionLabel(action.type)}
-                              {isUndone && ' · DELETED'}
-                            </p>
+                            {/* Content */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className={`text-xs font-semibold ${
+                                  isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
+                                }`}>
+                                  {entityTitle || actionLabel(action.type).toUpperCase()}
+                                </p>
+                                {/* WHO badge — always show */}
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                                  whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
+                                }`}>
+                                  {whoFor.toUpperCase()}
+                                </span>
+                                {isTrackerEntry && trackerName && (
+                                  <span className="text-[9px] text-muted-foreground/60 font-medium">
+                                    via {trackerName}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">
+                                {entityDetails || actionLabel(action.type)}
+                                {isUndone && ' · DELETED'}
+                              </p>
+                            </div>
+                            {/* Undo button */}
+                            {canUndo && (
+                              <button
+                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
+                                title="Delete this entry"
+                                data-testid={`button-undo-${action.type}-${i}`}
+                                onClick={stopProp(async () => {
+                                  const ep = undoEndpoints[action.type];
+                                  if (!ep || !entityId) return;
+                                  try {
+                                    await apiRequest("DELETE", `/api/${ep}/${entityId}`);
+                                    action.data = { ...action.data, _undone: true };
+                                    // Force re-render by creating new array
+                                    setMessages(prev => prev.map(m => ({
+                                      ...m,
+                                      actions: m.actions ? [...m.actions] : m.actions
+                                    })));
+                                    // Optimistically remove from cache
+                                    queryClient.setQueryData([`/api/${ep}`], (old: any[]) => old?.filter(item => item.id !== entityId));
+                                    queryClient.invalidateQueries();
+                                    toast({
+                                      title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
+                                      description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
+                                    });
+                                  } catch {
+                                    toast({ title: "Delete failed — try again", variant: "destructive" });
+                                  }
+                                })}
+                              >
+                                × Delete
+                              </button>
+                            )}
                           </div>
-                          {/* Undo button */}
-                          {canUndo && (
-                            <button
-                              className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
-                              title="Delete this entry"
-                              data-testid={`button-undo-${action.type}-${i}`}
-                              onClick={stopProp(async () => {
-                                const ep = undoEndpoints[action.type];
-                                if (!ep || !entityId) return;
-                                try {
-                                  await apiRequest("DELETE", `/api/${ep}/${entityId}`);
-                                  action.data = { ...action.data, _undone: true };
-                                  // Force re-render by creating new array
-                                  setMessages(prev => prev.map(m => ({
-                                    ...m,
-                                    actions: m.actions ? [...m.actions] : m.actions
-                                  })));
-                                  // Optimistically remove from cache
-                                  queryClient.setQueryData([`/api/${ep}`], (old: any[]) => old?.filter(item => item.id !== entityId));
-                                  queryClient.invalidateQueries();
-                                  toast({
-                                    title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
-                                    description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
-                                  });
-                                } catch {
-                                  toast({ title: "Delete failed — try again", variant: "destructive" });
-                                }
-                              })}
-                            >
-                              × Delete
-                            </button>
+                          {/* Inline artifact preview */}
+                          {isArtifact && (
+                            <div className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden">
+                              <div className="p-3 max-h-[200px] overflow-hidden relative bg-card">
+                                <ArtifactPreview data={action.data} />
+                                <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-card to-transparent" />
+                              </div>
+                              <div className="px-3 py-1.5 bg-muted/30 border-t border-border/30">
+                                <button
+                                  className="text-xs text-primary hover:text-primary/80 font-medium transition-colors"
+                                  onClick={() => { window.location.hash = '#/artifacts'; }}
+                                >
+                                  Open in Artifacts →
+                                </button>
+                              </div>
+                            </div>
                           )}
                         </div>
                       );

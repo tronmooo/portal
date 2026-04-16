@@ -2680,7 +2680,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // Import artifacts
       if (data.artifacts && Array.isArray(data.artifacts)) {
         for (const a of data.artifacts) {
-          await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned }));
+          await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned, linkedProfiles: a.linkedProfiles || [], language: a.language, dataBindings: a.dataBindings, chartData: a.chartData }));
         }
       }
       // Import journal entries

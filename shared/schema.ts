@@ -395,17 +395,25 @@ export type InsertObligation = z.input<typeof insertObligationSchema>;
 // ARTIFACTS — checklists and notes
 // ============================================================
 
-export type ArtifactType = "checklist" | "note";
+export type ArtifactType = 
+  | "checklist" | "note"
+  | "markdown" | "code" | "html" | "react" | "svg" | "mermaid" | "chart";
 
 export interface Artifact {
   id: string;
   type: ArtifactType;
   title: string;
-  content: string; // For notes: the body text
+  content: string; // For notes: the body text. For code: the code. For chart: JSON data.
   items: ChecklistItem[]; // For checklists
   tags: string[];
   linkedProfiles: string[];
   pinned: boolean;
+  language?: string;        // For code artifacts: "python" | "javascript" | "sql" | "typescript" etc.
+  dataBindings?: {          // For chart/dynamic artifacts
+    tool: string;           // e.g. "spending_analytics"  
+    params: Record<string, any>;  // e.g. { period: "month", profileId: "abc" }
+  };
+  chartData?: any[];        // Pre-computed chart data (fallback if dataBindings query fails)
   createdAt: string;
   updatedAt: string;
 }
@@ -418,7 +426,7 @@ export interface ChecklistItem {
 }
 
 export const insertArtifactSchema = z.object({
-  type: z.enum(["checklist", "note"]),
+  type: z.enum(["checklist", "note", "markdown", "code", "html", "react", "svg", "mermaid", "chart"]),
   title: z.string().min(1),
   content: z.string().default(""),
   items: z.array(z.object({
@@ -427,6 +435,13 @@ export const insertArtifactSchema = z.object({
   })).default([]),
   tags: z.array(z.string()).optional().default([]),
   pinned: z.boolean().default(false),
+  linkedProfiles: z.array(z.string()).optional().default([]),
+  language: z.string().optional(),
+  dataBindings: z.object({
+    tool: z.string(),
+    params: z.record(z.any()).default({}),
+  }).optional(),
+  chartData: z.array(z.any()).optional(),
 });
 
 export type InsertArtifact = z.infer<typeof insertArtifactSchema>;

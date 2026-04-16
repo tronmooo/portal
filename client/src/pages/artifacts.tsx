@@ -1,13 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/EmptyState";
 import {
+  Dialog, DialogContent, DialogTitle,
+} from "@/components/ui/dialog";
+import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { getProfileFilter } from "@/lib/profileFilter";
+import {
   Archive, FileText, BookOpen, Brain, Camera, File, Heart,
-  Shield, CreditCard, Scale, Folder, Search, X,
+  Shield, CreditCard, Scale, Folder, Search, X, Copy, Check as CheckIcon,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import DOMPurify from "dompurify";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+} from "recharts";
 import type { Artifact } from "@shared/schema";
 import type { JournalEntry } from "@shared/schema";
 import type { Document } from "@shared/schema";
@@ -96,15 +108,150 @@ const MOOD_EMOJI: Record<string, string> = {
   neutral: "😶", bad: "😞", awful: "😢", terrible: "😫",
 };
 
+// ─── Artifact Renderers ──────────────────────────────────────
+function ArtifactRenderer({ artifact }: { artifact: any }) {
+  if (!artifact) return null;
+  const { type, content, language, dataBindings, items } = artifact;
+
+  // Handle checklist items array (from Artifact.items)
+  if (type === "checklist" && items?.length > 0) {
+    return (
+      <div className="space-y-1">
+        {items.map((item: any, i: number) => (
+          <label key={item.id || i} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" className="rounded" defaultChecked={item.checked} />
+            <span>{item.text}</span>
+          </label>
+        ))}
+      </div>
+    );
+  }
+
+  switch (type) {
+    case "markdown":
+      return (
+        <div className="prose prose-sm dark:prose-invert max-w-none">
+          <ReactMarkdown>{content || ""}</ReactMarkdown>
+        </div>
+      );
+
+    case "code":
+      return <CodeRenderer content={content || ""} language={language} />;
+
+    case "html":
+      return (
+        <iframe
+          srcDoc={content}
+          sandbox="allow-scripts"
+          className="w-full h-[400px] rounded-lg border border-border"
+          title="HTML Preview"
+        />
+      );
+
+    case "svg": {
+      const sanitized = DOMPurify.sanitize(content || "", { USE_PROFILES: { svg: true } });
+      return <div className="flex justify-center p-4" dangerouslySetInnerHTML={{ __html: sanitized }} />;
+    }
+
+    case "mermaid":
+      return <MermaidRenderer content={content || ""} />;
+
+    case "chart":
+      return <ChartRenderer content={content || ""} dataBindings={dataBindings} />;
+
+    case "checklist":
+      return (
+        <div className="space-y-1">
+          {(content || "").split("\n").filter(Boolean).map((item: string, i: number) => (
+            <label key={i} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="rounded" defaultChecked={item.startsWith("[x]")} />
+              <span>{item.replace(/^\[[ x]\]\s*/, "")}</span>
+            </label>
+          ))}
+        </div>
+      );
+
+    default: // note
+      return <div className="text-sm whitespace-pre-wrap">{content || ""}</div>;
+  }
+}
+
+function CodeRenderer({ content, language }: { content: string; language?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800 text-xs text-zinc-400">
+        <span>{language || "code"}</span>
+        <button onClick={handleCopy} className="flex items-center gap-1 hover:text-white transition-colors">
+          {copied ? <><CheckIcon className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
+        </button>
+      </div>
+      <SyntaxHighlighter language={language || "javascript"} style={oneDark} customStyle={{ margin: 0, borderRadius: 0 }}>
+        {content}
+      </SyntaxHighlighter>
+    </div>
+  );
+}
+
+function MermaidRenderer({ content }: { content: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    import("mermaid").then((m) => {
+      if (cancelled) return;
+      m.default.initialize({ startOnLoad: false, theme: "dark" });
+      m.default.render("mermaid-" + Date.now(), content).then(({ svg }) => {
+        if (ref.current && !cancelled) ref.current.innerHTML = svg;
+      }).catch((e) => { if (!cancelled) setError(String(e)); });
+    }).catch((e) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
+  }, [content]);
+  if (error) return <div className="text-sm text-destructive">Mermaid error: {error}</div>;
+  return <div ref={ref} className="flex justify-center" />;
+}
+
+function ChartRenderer({ content, dataBindings }: { content: string; dataBindings?: any }) {
+  const [data, setData] = useState<any[]>([]);
+
+  useEffect(() => {
+    try {
+      const parsed = JSON.parse(content);
+      setData(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setData([]);
+    }
+  }, [content]);
+
+  if (data.length === 0) return <div className="text-sm text-muted-foreground">No chart data</div>;
+
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <BarChart data={data}>
+        <XAxis dataKey="name" />
+        <YAxis />
+        <Tooltip />
+        <Bar dataKey="value" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 // ─── Artifact card ───────────────────────────────────────────
-function ArtifactCard({ item }: { item: UnifiedArtifact }) {
+function ArtifactCard({ item, onSelect }: { item: UnifiedArtifact; onSelect?: (item: UnifiedArtifact) => void }) {
   const handleClick = () => {
-    if (item.type === "document") {
+    if (item.type === "ai_report") {
+      onSelect?.(item);
+    } else if (item.type === "document") {
       window.location.hash = `#/documents/${item.id}`;
     } else if (item.type === "note") {
       window.location.hash = "#/dashboard/journal";
     }
-    // AI reports: could open a detail view in the future
   };
 
   return (
@@ -137,7 +284,7 @@ function ArtifactCard({ item }: { item: UnifiedArtifact }) {
 }
 
 // ─── Document group section ──────────────────────────────────
-function DocumentGroup({ label, icon: Icon, items }: { label: string; icon: React.ElementType; items: UnifiedArtifact[] }) {
+function DocumentGroup({ label, icon: Icon, items, onSelect }: { label: string; icon: React.ElementType; items: UnifiedArtifact[]; onSelect?: (item: UnifiedArtifact) => void }) {
   if (items.length === 0) return null;
   return (
     <div className="space-y-2">
@@ -147,7 +294,7 @@ function DocumentGroup({ label, icon: Icon, items }: { label: string; icon: Reac
         <span className="text-xs text-muted-foreground">({items.length})</span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map(item => <ArtifactCard key={`${item.type}-${item.id}`} item={item} />)}
+        {items.map(item => <ArtifactCard key={`${item.type}-${item.id}`} item={item} onSelect={onSelect} />)}
       </div>
     </div>
   );
@@ -159,6 +306,11 @@ export default function ArtifactsPage() {
 
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
+  const [selectedArtifact, setSelectedArtifact] = useState<UnifiedArtifact | null>(null);
+
+  // Profile filter state
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
 
   // Fetch all three data sources in parallel
   const { data: documents = [], isLoading: docsLoading } = useQuery<Document[]>({
@@ -239,16 +391,25 @@ export default function ArtifactsPage() {
     return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [documents, journal, artifacts, profileMap]);
 
+  // Apply profile filter
+  const profileFiltered = useMemo(() => {
+    if (filterMode === "everyone" || filterIds.length === 0) return allItems;
+    return allItems.filter(item => {
+      const linked = item.source?.linkedProfiles || [];
+      return linked.some((id: string) => filterIds.includes(id));
+    });
+  }, [allItems, filterMode, filterIds]);
+
   // Apply tab filter
   const tabFiltered = useMemo(() => {
     switch (activeTab) {
-      case "documents": return allItems.filter(i => i.type === "document");
-      case "notes":     return allItems.filter(i => i.type === "note");
-      case "ai_reports": return allItems.filter(i => i.type === "ai_report");
-      case "scans":     return allItems.filter(i => i.type === "scan");
-      default:          return allItems;
+      case "documents": return profileFiltered.filter(i => i.type === "document");
+      case "notes":     return profileFiltered.filter(i => i.type === "note");
+      case "ai_reports": return profileFiltered.filter(i => i.type === "ai_report");
+      case "scans":     return profileFiltered.filter(i => i.type === "scan");
+      default:          return profileFiltered;
     }
-  }, [allItems, activeTab]);
+  }, [profileFiltered, activeTab]);
 
   // Apply search filter
   const filtered = useMemo(() => {
@@ -285,11 +446,17 @@ export default function ArtifactsPage() {
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24">
       {/* Header */}
-      <div>
-        <h1 className="text-lg font-semibold">Artifacts</h1>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {allItems.length} items · Documents, notes & AI reports in one place
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold">Artifacts</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {profileFiltered.length} items · Documents, notes & AI reports in one place
+          </p>
+        </div>
+        <MultiProfileFilter
+          onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+          compact
+        />
       </div>
 
       {/* Search bar */}
@@ -319,8 +486,8 @@ export default function ArtifactsPage() {
           const isActive = activeTab === tab.key;
           const Icon = tab.icon;
           const count = tab.key === "all"
-            ? allItems.length
-            : allItems.filter(i =>
+            ? profileFiltered.length
+            : profileFiltered.filter(i =>
                 tab.key === "documents" ? i.type === "document" :
                 tab.key === "notes" ? i.type === "note" :
                 tab.key === "ai_reports" ? i.type === "ai_report" :
@@ -368,17 +535,36 @@ export default function ArtifactsPage() {
         // Documents tab: grouped by type
         <div className="space-y-5">
           {documentGroups.map(g => (
-            <DocumentGroup key={g.label} label={g.label} icon={g.icon} items={g.items} />
+            <DocumentGroup key={g.label} label={g.label} icon={g.icon} items={g.items} onSelect={setSelectedArtifact} />
           ))}
         </div>
       ) : (
         // All other tabs: flat grid sorted by date
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map(item => (
-            <ArtifactCard key={`${item.type}-${item.id}`} item={item} />
+            <ArtifactCard key={`${item.type}-${item.id}`} item={item} onSelect={setSelectedArtifact} />
           ))}
         </div>
       )}
+
+      {/* Artifact detail dialog */}
+      <Dialog open={!!selectedArtifact} onOpenChange={() => setSelectedArtifact(null)}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogTitle>{selectedArtifact?.title}</DialogTitle>
+          {selectedArtifact?.source && (
+            <div className="mt-2">
+              <div className="flex items-center gap-2 mb-4">
+                <Badge variant="outline" className="text-xs">{selectedArtifact.source.type}</Badge>
+                {selectedArtifact.profileName && (
+                  <Badge variant="secondary" className="text-xs">{selectedArtifact.profileName}</Badge>
+                )}
+                <span className="text-xs text-muted-foreground">{formatDate(selectedArtifact.date)}</span>
+              </div>
+              <ArtifactRenderer artifact={selectedArtifact.source} />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
