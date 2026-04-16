@@ -1481,6 +1481,8 @@ export default function ChatPage() {
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
     trackerEntries: any[];
+    createExpense?: any;
+    createObligation?: any;
   }): Promise<boolean> => {
     try {
       const res = await apiRequest("POST", "/api/chat/confirm-extraction", data);

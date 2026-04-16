@@ -275,6 +275,24 @@ function getCanonicalGroup(category: string): string {
   return CANONICAL_GROUP_MAP[category?.toLowerCase()] || "Other";
 }
 
+// Emoji icon for each canonical category group
+const CATEGORY_GROUP_EMOJI: Record<string, string> = {
+  "Health": "🏥",
+  "Fitness": "🏋️",
+  "Medication": "💊",
+  "Nutrition": "🍎",
+  "Mental & Wellness": "🧠",
+  "Finance": "💰",
+  "Habits & Routines": "🔥",
+  "Productivity": "🎯",
+  "Lifestyle": "🌿",
+  "Other": "📊",
+};
+
+function categoryGroupEmoji(group: string): string {
+  return CATEGORY_GROUP_EMOJI[group] || "📊";
+}
+
 // ── DocInlinePreview ───────────────────────────────────────────────────
 // Fetches file data with auth then renders inline (img/PDF/etc)
 function DocInlinePreview({ docId, mimeType, name, onOpen }: {
@@ -4201,45 +4219,83 @@ export default function TrackersPage() {
             <p className="text-sm text-muted-foreground">{allDocuments.length === 0 ? "No documents yet" : "No documents match your search"}</p>
             <p className="text-xs text-muted-foreground mt-1">Upload files or ask Portol to save documents</p>
           </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-            {filteredDocuments.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
-              const DOC_TYPE_HSL: Record<string, string> = {
-                medical: '0 72% 51%', insurance: '213 72% 51%', legal: '270 60% 55%',
-                financial: '142 60% 45%', identity: '38 92% 50%', warranty: '25 80% 54%',
-                receipt: '160 60% 45%', drivers_license: '38 92% 50%',
-              };
-              const accentHsl = DOC_TYPE_HSL[doc.type] || '25 80% 54%';
-              const ac = `hsl(${accentHsl})`;
-              const linkedNames = (doc.linkedProfiles || []).map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
-              const createdDate = new Date(doc.createdAt);
-              const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
-              const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
-              return (
-                <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)}>
-                  <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-                    <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
-                    <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>
-                  </div>
-                  <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-                    <span className="text-base font-black text-foreground capitalize">{doc.type?.replace(/_/g, ' ') || 'Document'}</span>
-                    <KpiLine label="Format" value={mimeShort} />
-                    <KpiLine label="Added" value={createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} />
-                    {linkedNames.length > 0 && <KpiLine label="Owner" value={linkedNames.join(', ')} />}
-                    {daysSince <= 7 && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
-                  </div>
-                  <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
-                    <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
-                    <div className="flex gap-1">
-                      <button onClick={stopProp(() => handleShareDoc(doc))} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>
-                      <button onClick={stopProp(() => setDocDeleteConfirmId(doc.id))} className="text-muted-foreground/60 hover:text-destructive"><X className="h-3 w-3" /></button>
+        ) : (() => {
+          const DOC_TYPE_HSL: Record<string, string> = {
+            medical: '0 72% 51%', insurance: '213 72% 51%', legal: '270 60% 55%',
+            financial: '142 60% 45%', identity: '38 92% 50%', warranty: '25 80% 54%',
+            receipt: '160 60% 45%', drivers_license: '38 92% 50%',
+          };
+          const DOC_TYPE_EMOJI: Record<string, string> = {
+            medical: '🏥', insurance: '🛡️', legal: '⚖️', financial: '💰',
+            identity: '🆔', warranty: '🛠️', receipt: '🧾', drivers_license: '🚗',
+          };
+          const DOC_TYPE_ORDER: Record<string, number> = {
+            identity: 0, medical: 1, insurance: 2, legal: 3, financial: 4,
+            warranty: 5, receipt: 6, drivers_license: 7,
+          };
+          // Group documents by type
+          const docsByType: Record<string, typeof filteredDocuments> = {};
+          for (const doc of filteredDocuments) {
+            const t = doc.type || 'other';
+            (docsByType[t] = docsByType[t] || []).push(doc);
+          }
+          const sortedDocTypes = Object.keys(docsByType).sort((a, b) => {
+            const oa = DOC_TYPE_ORDER[a] ?? 99;
+            const ob = DOC_TYPE_ORDER[b] ?? 99;
+            return oa - ob || a.localeCompare(b);
+          });
+          // If only one type group, skip the sub-headers
+          const showTypeHeaders = sortedDocTypes.length > 1;
+          return (
+            <div className="space-y-2">
+              {sortedDocTypes.map(docType => {
+                const docs = docsByType[docType];
+                const accentHslForType = DOC_TYPE_HSL[docType] || '25 80% 54%';
+                return (
+                  <div key={docType}>
+                    {showTypeHeaders && (
+                      <h4 className="text-xs font-semibold uppercase tracking-wider mt-3 mb-1.5 flex items-center gap-1.5" style={{ color: `hsl(${accentHslForType})` }}>
+                        <span>{DOC_TYPE_EMOJI[docType] || '📄'}</span> {docType.replace(/_/g, ' ')} <span className="text-muted-foreground font-normal">({docs.length})</span>
+                      </h4>
+                    )}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {docs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
+                        const accentHsl = DOC_TYPE_HSL[doc.type] || '25 80% 54%';
+                        const ac = `hsl(${accentHsl})`;
+                        const linkedNames = (doc.linkedProfiles || []).map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
+                        const createdDate = new Date(doc.createdAt);
+                        const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
+                        const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
+                        return (
+                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)}>
+                            <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+                              <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
+                              <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>
+                            </div>
+                            <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
+                              <span className="text-base font-black text-foreground capitalize">{doc.type?.replace(/_/g, ' ') || 'Document'}</span>
+                              <KpiLine label="Format" value={mimeShort} />
+                              <KpiLine label="Added" value={createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} />
+                              {linkedNames.length > 0 && <KpiLine label="Owner" value={linkedNames.join(', ')} />}
+                              {daysSince <= 7 && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
+                            </div>
+                            <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                              <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
+                              <div className="flex gap-1">
+                                <button onClick={stopProp(() => handleShareDoc(doc))} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>
+                                <button onClick={stopProp(() => setDocDeleteConfirmId(doc.id))} className="text-muted-foreground/60 hover:text-destructive"><X className="h-3 w-3" /></button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        ))}
+                );
+              })}
+            </div>
+          );
+        })())}
       </div>}
 
       {/* Trackers Section */}
@@ -4548,6 +4604,18 @@ export default function TrackersPage() {
               {sortedKeys.map(pk => {
                 const g = personGroups[pk];
                 const icon = g.type === 'self' ? '👤' : g.type === 'pet' ? '🐾' : '👥';
+                // Group trackers by canonical category within each person
+                const trackersByCategory: Record<string, typeof g.trackers> = {};
+                for (const t of g.trackers) {
+                  const cat = getCanonicalGroup(t.category);
+                  (trackersByCategory[cat] = trackersByCategory[cat] || []).push(t);
+                }
+                // Sort category groups by CANONICAL_GROUPS.order
+                const sortedCatKeys = Object.keys(trackersByCategory).sort((a, b) => {
+                  const oa = CANONICAL_GROUPS[a]?.order ?? 99;
+                  const ob = CANONICAL_GROUPS[b]?.order ?? 99;
+                  return oa - ob || a.localeCompare(b);
+                });
                 return (
                   <div key={pk}>
                     <div className="flex items-center gap-2 mb-2 px-0.5">
@@ -4555,11 +4623,23 @@ export default function TrackersPage() {
                       <span className="text-xs font-bold text-foreground">{g.type === 'self' ? 'Me' : g.name}</span>
                       <span className="text-[10px] text-muted-foreground">({g.trackers.length})</span>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {g.trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
-                        <TrackerCard key={tracker.id} tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
-                      ))}
-                    </div>
+                    {sortedCatKeys.map(catName => {
+                      const catTrackers = trackersByCategory[catName];
+                      const gDef = CANONICAL_GROUPS[catName];
+                      const gAccent = gDef?.accent || "240 20% 60%";
+                      return (
+                        <div key={catName} className="mb-2.5">
+                          <h4 className="text-xs font-semibold uppercase tracking-wider mt-3 mb-1.5 flex items-center gap-1.5" style={{ color: `hsl(${gAccent})` }}>
+                            <span>{categoryGroupEmoji(catName)}</span> {catName} <span className="text-muted-foreground font-normal">({catTrackers.length})</span>
+                          </h4>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                            {catTrackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
+                              <TrackerCard key={tracker.id} tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}

@@ -617,8 +617,12 @@ export async function registerRoutes(
             // Find or create the tracker
             const trackers = await storage.getTrackers();
             const humanName = (entry.trackerName || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+            const normName = (entry.trackerName || "").toLowerCase().replace(/[_\s]/g, "");
             let tracker = trackers.find(
-              (t: any) => t.name.toLowerCase().replace(/[_\s]/g, "") === (entry.trackerName || "").toLowerCase().replace(/[_\s]/g, "")
+              (t: any) => t.name.toLowerCase().replace(/[_\s]/g, "") === normName
+                && (resolvedProfileId
+                    ? (t.linkedProfiles || []).some((pid: string) => pid === resolvedProfileId)
+                    : true)
             );
             if (!tracker) {
               const fieldKeys = Object.keys(entry.values || {});
@@ -1232,15 +1236,22 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       return res.status(400).json({ error: "Tracker name is required" });
     }
     req.body.name = sanitize(req.body.name);
-    // Duplicate tracker name detection
+    // Duplicate tracker name detection — only block if same name AND same profile
+    const requestedProfiles = req.body.linkedProfiles || [];
     const existing = await storage.getTrackers();
-    const dup = existing.find(t => t.name.toLowerCase() === req.body.name.toLowerCase());
+    const dup = existing.find(t => {
+      if (t.name.toLowerCase() !== req.body.name.toLowerCase()) return false;
+      if (requestedProfiles.length === 0) return true; // no profile = global dup
+      return requestedProfiles.some((pid: string) => (t.linkedProfiles || []).includes(pid));
+    });
     if (dup) {
-      return res.status(409).json({ error: `A tracker named "${dup.name}" already exists`, existingId: dup.id });
+      return res.status(409).json({ error: `A tracker named "${dup.name}" already exists for this profile`, existingId: dup.id });
     }
     const parsed = insertTrackerSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(await storage.createTracker(parsed.data));
+    // Pass linkedProfiles through to createTracker (schema strips it, so add it back)
+    const trackerData = { ...parsed.data, linkedProfiles: requestedProfiles } as any;
+    res.status(201).json(await storage.createTracker(trackerData));
   }));
   app.patch("/api/trackers/:id", asyncHandler(async (req, res) => {
     if (req.body.name !== undefined) {
@@ -1539,7 +1550,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
-    res.json(await storage.getPaychecks());
+    let items = await storage.getPaychecks();
+    const profileId = req.query.profileId as string | undefined;
+    if (profileId) {
+      items = items.filter((item: any) =>
+        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
+      );
+    }
+    res.json(items);
   }));
 
   app.post("/api/paychecks", asyncHandler(async (req, res) => {
@@ -1561,11 +1579,19 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Loan Amortization ----
   app.get("/api/loans/schedule", asyncHandler(async (req, res) => {
     const loanId = req.query.loanId as string;
+    const profileId = req.query.profileId as string | undefined;
+    let items: any[];
     if (loanId) {
-      res.json(await storage.getLoanSchedule(loanId));
+      items = await storage.getLoanSchedule(loanId);
     } else {
-      res.json(await storage.getAllLoanSchedules());
+      items = await storage.getAllLoanSchedules();
     }
+    if (profileId) {
+      items = items.filter((item: any) =>
+        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
+      );
+    }
+    res.json(items);
   }));
 
   app.post("/api/loans/schedule", asyncHandler(async (req, res) => {
@@ -1581,7 +1607,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Cashflow ----
   app.get("/api/cashflow", asyncHandler(async (req, res) => {
     const month = req.query.month as string;
-    res.json(await storage.getCashflow(month));
+    const profileId = req.query.profileId as string | undefined;
+    let items = await storage.getCashflow(month);
+    if (profileId) {
+      items = items.filter((item: any) =>
+        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
+      );
+    }
+    res.json(items);
   }));
 
   app.post("/api/cashflow", asyncHandler(async (req, res) => {
@@ -2027,8 +2060,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Memory ----
-  app.get("/api/memories", asyncHandler(async (_req, res) => {
-    try { res.json(await storage.getMemories()); }
+  app.get("/api/memories", asyncHandler(async (req, res) => {
+    try {
+      let items: any[] = await storage.getMemories();
+      const profileId = req.query.profileId as string | undefined;
+      if (profileId) {
+        items = items.filter((item: any) =>
+          (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
+        );
+      }
+      res.json(items);
+    }
     catch { res.status(500).json({ error: "Failed to load memories" }); }
   }));
   app.post("/api/memories", asyncHandler(async (req, res) => {
@@ -2063,7 +2105,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Domains ----
-  app.get("/api/domains", asyncHandler(async (req, res) => { const items = await storage.getDomains(); res.json(paginate(items, req, res)); }));
+  app.get("/api/domains", asyncHandler(async (req, res) => {
+    let items: any[] = await storage.getDomains();
+    const profileId = req.query.profileId as string | undefined;
+    if (profileId) {
+      items = items.filter((item: any) =>
+        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
+      );
+    }
+    res.json(paginate(items, req, res));
+  }));
   app.post("/api/domains", asyncHandler(async (req, res) => {
     const parsed = insertDomainSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
