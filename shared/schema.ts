@@ -101,6 +101,9 @@ export interface ChatMessage {
     documentPreview?: { id: string; name: string; mimeType: string; data: string };
   };
   results?: Array<Record<string, any>>;
+  charts?: ChartSpec[];
+  tables?: TableSpec[];
+  report?: ReportSpec;
 }
 
 // ============================================================
@@ -808,4 +811,70 @@ export interface DashboardStats {
   currentMood?: MoodLevel;
   totalArtifacts: number;
   totalMemories: number;
+}
+
+// ============================================================
+// AI RICH CONTENT — Charts, Tables, Reports rendered in chat
+// ============================================================
+
+export type ChartType = "line" | "bar" | "area" | "pie" | "scatter" | "composed" | "radar";
+
+export interface ChartSeries {
+  dataKey: string;
+  name: string;
+  color?: string;
+  type?: "line" | "bar" | "area";
+  stackId?: string;
+}
+
+export interface ChartSpec {
+  type: ChartType;
+  title: string;
+  subtitle?: string;
+  data: Array<Record<string, any>>;
+  series: ChartSeries[];
+  xAxisKey: string;
+  xAxisLabel?: string;
+  yAxisLabel?: string;
+  showLegend?: boolean;
+  showGrid?: boolean;
+  height?: number;
+  nameKey?: string;
+  valueKey?: string;
+}
+
+export interface TableColumn {
+  key: string;
+  label: string;
+  align?: "left" | "center" | "right";
+  format?: "currency" | "date" | "number" | "percent";
+}
+
+export interface TableSpec {
+  title: string;
+  columns: TableColumn[];
+  rows: Array<Record<string, any>>;
+  summary?: Record<string, any>;
+}
+
+export interface ReportMetric {
+  label: string;
+  value: string | number;
+  change?: string;
+  changeType?: "positive" | "negative" | "neutral";
+}
+
+export interface ReportSection {
+  heading: string;
+  content?: string;
+  chart?: ChartSpec;
+  table?: TableSpec;
+  metric?: ReportMetric;
+}
+
+export interface ReportSpec {
+  title: string;
+  subtitle?: string;
+  sections: ReportSection[];
+  generatedAt: string;
 }

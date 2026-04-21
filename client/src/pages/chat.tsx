@@ -36,8 +36,16 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
+import type { ChatMessage, ParsedAction, Profile, ChartSpec, TableSpec, ReportSpec } from "@shared/schema";
 import DocumentViewer, { ShareButton } from "@/components/DocumentViewer";
+import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from "@/components/ui/chart";
+import type { ChartConfig } from "@/components/ui/chart";
+import { CHART_COLOR_ARRAY } from "@/lib/chart-colors";
+import {
+  LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
+  ScatterChart, Scatter, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from "recharts";
 
 const SUGGESTIONS = [
   "I ate a chicken sandwich and ran 2 miles",
@@ -692,6 +700,247 @@ function BatchAttachmentPanel({
   );
 }
 
+// ── Rich Content Components ──────────────────────────────────────────────────
+
+const FALLBACK_COLORS = [
+  "hsl(220, 70%, 55%)", "hsl(150, 60%, 45%)", "hsl(30, 80%, 55%)",
+  "hsl(280, 60%, 55%)", "hsl(0, 70%, 55%)", "hsl(190, 70%, 45%)",
+  "hsl(50, 80%, 50%)", "hsl(330, 60%, 55%)",
+];
+
+function getSeriesColor(index: number, explicit?: string): string {
+  if (explicit) return explicit;
+  const arr = CHART_COLOR_ARRAY as readonly string[];
+  return arr[index % arr.length] || FALLBACK_COLORS[index % FALLBACK_COLORS.length];
+}
+
+function ChatChart({ spec }: { spec: ChartSpec }) {
+  const { type, title, subtitle, data, series, xAxisKey, xAxisLabel, yAxisLabel, showLegend, showGrid, nameKey, valueKey } = spec;
+  if (!data || data.length === 0) return null;
+
+  const height = spec.height || 260;
+  const config: ChartConfig = {};
+  (series || []).forEach((s, i) => {
+    config[s.dataKey] = { label: s.name, color: getSeriesColor(i, s.color) };
+  });
+  if (type === "pie" && nameKey && valueKey) {
+    data.forEach((d, i) => {
+      const key = String(d[nameKey]);
+      config[key] = { label: key, color: getSeriesColor(i) };
+    });
+  }
+
+  const renderChart = () => {
+    switch (type) {
+      case "line":
+        return (
+          <LineChart data={data}>
+            {showGrid !== false && <CartesianGrid strokeDasharray="3 3" />}
+            <XAxis dataKey={xAxisKey} label={xAxisLabel ? { value: xAxisLabel, position: "insideBottom", offset: -5 } : undefined} tick={{ fontSize: 11 }} />
+            <YAxis label={yAxisLabel ? { value: yAxisLabel, angle: -90, position: "insideLeft" } : undefined} tick={{ fontSize: 11 }} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            {showLegend !== false && series.length > 1 && <ChartLegend content={<ChartLegendContent />} />}
+            {series.map((s, i) => (
+              <Line key={s.dataKey} type="monotone" dataKey={s.dataKey} name={s.name} stroke={getSeriesColor(i, s.color)} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+            ))}
+          </LineChart>
+        );
+      case "bar":
+        return (
+          <BarChart data={data}>
+            {showGrid !== false && <CartesianGrid strokeDasharray="3 3" />}
+            <XAxis dataKey={xAxisKey} tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            {showLegend !== false && series.length > 1 && <ChartLegend content={<ChartLegendContent />} />}
+            {series.map((s, i) => (
+              <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={getSeriesColor(i, s.color)} radius={[4, 4, 0, 0]} stackId={s.stackId} />
+            ))}
+          </BarChart>
+        );
+      case "area":
+        return (
+          <AreaChart data={data}>
+            {showGrid !== false && <CartesianGrid strokeDasharray="3 3" />}
+            <XAxis dataKey={xAxisKey} tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            {showLegend !== false && series.length > 1 && <ChartLegend content={<ChartLegendContent />} />}
+            {series.map((s, i) => (
+              <Area key={s.dataKey} type="monotone" dataKey={s.dataKey} name={s.name} fill={getSeriesColor(i, s.color)} stroke={getSeriesColor(i, s.color)} fillOpacity={0.3} />
+            ))}
+          </AreaChart>
+        );
+      case "pie": {
+        const nk = nameKey || "name";
+        const vk = valueKey || "value";
+        return (
+          <PieChart>
+            <Pie data={data} dataKey={vk} nameKey={nk} cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={{ strokeWidth: 1 }}>
+              {data.map((_, i) => (
+                <Cell key={i} fill={getSeriesColor(i)} />
+              ))}
+            </Pie>
+            <ChartTooltip content={<ChartTooltipContent />} />
+            {showLegend !== false && <ChartLegend content={<ChartLegendContent />} />}
+          </PieChart>
+        );
+      }
+      case "scatter":
+        return (
+          <ScatterChart>
+            {showGrid !== false && <CartesianGrid strokeDasharray="3 3" />}
+            <XAxis dataKey={xAxisKey} name={xAxisLabel || xAxisKey} tick={{ fontSize: 11 }} />
+            <YAxis dataKey={series[0]?.dataKey} name={yAxisLabel || series[0]?.name} tick={{ fontSize: 11 }} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            <Scatter data={data} fill={getSeriesColor(0, series[0]?.color)} />
+          </ScatterChart>
+        );
+      case "radar": {
+        const radarKey = series[0]?.dataKey || "value";
+        return (
+          <RadarChart data={data} cx="50%" cy="50%" outerRadius={80}>
+            <PolarGrid />
+            <PolarAngleAxis dataKey={xAxisKey || "label"} tick={{ fontSize: 11 }} />
+            <PolarRadiusAxis tick={{ fontSize: 10 }} />
+            {series.map((s, i) => (
+              <Radar key={s.dataKey} dataKey={s.dataKey} name={s.name} stroke={getSeriesColor(i, s.color)} fill={getSeriesColor(i, s.color)} fillOpacity={0.3} />
+            ))}
+            {showLegend !== false && series.length > 1 && <ChartLegend content={<ChartLegendContent />} />}
+          </RadarChart>
+        );
+      }
+      case "composed":
+        return (
+          <ComposedChart data={data}>
+            {showGrid !== false && <CartesianGrid strokeDasharray="3 3" />}
+            <XAxis dataKey={xAxisKey} tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            {showLegend !== false && <ChartLegend content={<ChartLegendContent />} />}
+            {series.map((s, i) => {
+              const color = getSeriesColor(i, s.color);
+              if (s.type === "area") return <Area key={s.dataKey} type="monotone" dataKey={s.dataKey} name={s.name} fill={color} stroke={color} fillOpacity={0.3} />;
+              if (s.type === "line") return <Line key={s.dataKey} type="monotone" dataKey={s.dataKey} name={s.name} stroke={color} strokeWidth={2} dot={false} />;
+              return <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={color} radius={[4, 4, 0, 0]} />;
+            })}
+          </ComposedChart>
+        );
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-border/60 bg-background/50 p-3">
+      <div className="mb-2">
+        <h4 className="text-sm font-semibold">{title}</h4>
+        {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
+      </div>
+      <ChartContainer config={config} className="h-[260px] w-full">
+        {renderChart()!}
+      </ChartContainer>
+    </div>
+  );
+}
+
+function ChatTable({ spec }: { spec: TableSpec }) {
+  const { title, columns, rows, summary } = spec;
+  if (!rows || rows.length === 0) return null;
+
+  const formatValue = (value: any, format?: string) => {
+    if (value == null || value === "") return "—";
+    switch (format) {
+      case "currency": return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      case "date": return new Date(value).toLocaleDateString();
+      case "number": return Number(value).toLocaleString();
+      case "percent": return `${Number(value).toFixed(1)}%`;
+      default: return String(value);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-border/60 bg-background/50 overflow-hidden">
+      <div className="px-3 py-2 border-b border-border/40">
+        <h4 className="text-sm font-semibold">{title}</h4>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border/40 bg-muted/30">
+              {columns.map((col) => (
+                <th key={col.key} className={`px-3 py-2 font-medium text-muted-foreground ${col.align === "right" ? "text-right" : col.align === "center" ? "text-center" : "text-left"}`}>
+                  {col.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 20).map((row, ri) => (
+              <tr key={ri} className="border-b border-border/20 hover:bg-muted/20">
+                {columns.map((col) => (
+                  <td key={col.key} className={`px-3 py-1.5 ${col.align === "right" ? "text-right" : col.align === "center" ? "text-center" : "text-left"}`}>
+                    {formatValue(row[col.key], col.format)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {summary && (
+              <tr className="border-t border-border/60 bg-muted/30 font-medium">
+                {columns.map((col, ci) => (
+                  <td key={col.key} className={`px-3 py-2 ${col.align === "right" ? "text-right" : col.align === "center" ? "text-center" : "text-left"}`}>
+                    {ci === 0 && !summary[col.key] ? "Total" : formatValue(summary[col.key], col.format)}
+                  </td>
+                ))}
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {rows.length > 20 && (
+        <div className="px-3 py-1.5 text-xs text-muted-foreground border-t border-border/40">
+          Showing 20 of {rows.length} rows
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatReport({ spec }: { spec: ReportSpec }) {
+  const { title, subtitle, sections } = spec;
+  if (!sections || sections.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-border/60 bg-background/50 overflow-hidden">
+      <div className="px-4 py-3 border-b border-border/40 bg-muted/20">
+        <h3 className="text-sm font-bold">{title}</h3>
+        {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
+      </div>
+      <div className="divide-y divide-border/30">
+        {sections.map((section, si) => (
+          <div key={si} className="px-4 py-3">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{section.heading}</h4>
+            {section.metric && (
+              <div className="flex items-baseline gap-2 mb-2">
+                <span className="text-2xl font-bold">{section.metric.value}</span>
+                <span className="text-xs text-muted-foreground">{section.metric.label}</span>
+                {section.metric.change && (
+                  <span className={`text-xs font-medium ${section.metric.changeType === "positive" ? "text-green-500" : section.metric.changeType === "negative" ? "text-red-500" : "text-muted-foreground"}`}>
+                    {section.metric.change}
+                  </span>
+                )}
+              </div>
+            )}
+            {section.content && <p className="text-sm text-foreground/80 whitespace-pre-wrap mb-2">{section.content}</p>}
+            {section.chart && <ChatChart spec={section.chart as ChartSpec} />}
+            {section.table && <ChatTable spec={section.table as TableSpec} />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main chat page ────────────────────────────────────────────────────────────
 // Module-level chat history cache — persists across navigation without localStorage
 function SlowResponseHint() {
@@ -956,6 +1205,9 @@ export default function ChatPage() {
         results: data.results,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
+        charts: data.charts,
+        tables: data.tables,
+        report: data.report,
       };
       setMessages((prev) => [...prev, assistantMsg]);
       invalidateAll();
@@ -1428,6 +1680,15 @@ export default function ChatPage() {
                 <div className="text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 text-foreground">
                   {msg.content}
                 </div>
+
+                {/* Rich content: charts, tables, reports */}
+                {msg.charts && msg.charts.length > 0 && msg.charts.map((chart, ci) => (
+                  <ChatChart key={`chart-${ci}`} spec={chart} />
+                ))}
+                {msg.tables && msg.tables.length > 0 && msg.tables.map((table, ti) => (
+                  <ChatTable key={`table-${ti}`} spec={table} />
+                ))}
+                {msg.report && <ChatReport spec={msg.report} />}
 
                 {/* Document previews - inline with zoom & share */}
                 <ChatDocumentPreviews

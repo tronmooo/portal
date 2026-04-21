@@ -1790,6 +1790,135 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       required: ["profileName"],
     },
   },
+
+  // --- Rich Content Generation: Charts, Tables, Reports ---
+  {
+    name: "generate_chart",
+    description: `Generate a chart visualization from user data. Use when the user asks to "show", "chart", "graph", "plot", "visualize", or "trend" their data. Supports line, bar, area, pie, scatter, composed, and radar charts. You MUST query the relevant data first (using search/get_summary/get_profile_data), then call this tool with the processed data array. The chart will be rendered inline in the chat.
+
+Examples:
+- "Show my spending this month" → query expenses, aggregate by category, generate pie chart
+- "Graph my weight trend" → query weight tracker entries, generate line chart
+- "Compare this month vs last month spending" → query expenses for both months, generate grouped bar chart
+- "Plot my mood over time" → query journal entries, generate line chart with mood scores
+- "Show my habit completion rates" → query habits, generate bar chart with completion %`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        type: { type: "string", enum: ["line", "bar", "area", "pie", "scatter", "composed", "radar"], description: "Chart type" },
+        title: { type: "string", description: "Chart title" },
+        subtitle: { type: "string", description: "Optional subtitle" },
+        data: {
+          type: "array",
+          description: "Array of data points. Each object has keys for xAxis + each series. Example: [{month: 'Jan', food: 200, transport: 50}, {month: 'Feb', food: 180, transport: 65}]",
+          items: { type: "object" },
+        },
+        series: {
+          type: "array",
+          description: "Array of series to plot. Each has dataKey (matching a key in data), name (display label), and optional color (hex). For composed charts, include type ('line'|'bar'|'area') per series.",
+          items: {
+            type: "object",
+            properties: {
+              dataKey: { type: "string" },
+              name: { type: "string" },
+              color: { type: "string" },
+              type: { type: "string", enum: ["line", "bar", "area"] },
+              stackId: { type: "string" },
+            },
+            required: ["dataKey", "name"],
+          },
+        },
+        xAxisKey: { type: "string", description: "Key in data objects for x-axis values" },
+        xAxisLabel: { type: "string", description: "X-axis label" },
+        yAxisLabel: { type: "string", description: "Y-axis label" },
+        showLegend: { type: "boolean", description: "Show chart legend (default true for multi-series)" },
+        showGrid: { type: "boolean", description: "Show grid lines (default true)" },
+        nameKey: { type: "string", description: "For pie charts: key for slice names" },
+        valueKey: { type: "string", description: "For pie charts: key for slice values" },
+      },
+      required: ["type", "title", "data"],
+    },
+  },
+  {
+    name: "generate_table",
+    description: `Generate a formatted data table to display in chat. Use when the user asks to "list", "show all", "table", or wants structured data in a readable format. Query the data first, then call this tool.
+
+Examples:
+- "List all my expenses over $100" → query expenses, filter, generate table
+- "Show my upcoming bills" → query obligations, generate table with due dates
+- "What tasks are overdue?" → query tasks, filter by due date, generate table`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Table title" },
+        columns: {
+          type: "array",
+          description: "Column definitions. Each has key (data field), label (header text), optional align and format.",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string" },
+              label: { type: "string" },
+              align: { type: "string", enum: ["left", "center", "right"] },
+              format: { type: "string", enum: ["currency", "date", "number", "percent"] },
+            },
+            required: ["key", "label"],
+          },
+        },
+        rows: {
+          type: "array",
+          description: "Array of row objects. Keys must match column keys.",
+          items: { type: "object" },
+        },
+        summary: {
+          type: "object",
+          description: "Optional summary/total row. Keys match column keys.",
+        },
+      },
+      required: ["title", "columns", "rows"],
+    },
+  },
+  {
+    name: "generate_report",
+    description: `Generate a comprehensive report with multiple sections, each containing text, charts, tables, or metric cards. Use for complex analysis requests like "give me a financial report", "health summary", "weekly digest", "life scorecard".
+
+Examples:
+- "Give me a financial report" → sections with spending chart, budget table, top expenses, net savings metric
+- "Health report" → sections with weight trend chart, exercise summary, nutrition breakdown, BP readings
+- "How am I doing overall?" → life scorecard with metrics for finance, health, productivity, habits`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Report title" },
+        subtitle: { type: "string", description: "Optional subtitle" },
+        sections: {
+          type: "array",
+          description: "Report sections. Each can have heading, content (text), chart (ChartSpec), table (TableSpec), or metric (single value with label).",
+          items: {
+            type: "object",
+            properties: {
+              heading: { type: "string", description: "Section heading" },
+              content: { type: "string", description: "Text content (markdown)" },
+              chart: { type: "object", description: "Optional chart spec (same schema as generate_chart)" },
+              table: { type: "object", description: "Optional table spec (same schema as generate_table)" },
+              metric: {
+                type: "object",
+                properties: {
+                  label: { type: "string" },
+                  value: { type: "string", description: "The metric value as string or number" },
+                  change: { type: "string", description: "Change indicator like '+12%' or '-$50'" },
+                  changeType: { type: "string", enum: ["positive", "negative", "neutral"] },
+                },
+                required: ["label", "value"],
+              },
+            },
+            required: ["heading"],
+          },
+        },
+      },
+      required: ["title", "sections"],
+    },
+  },
 ];
 
 // ============================================================
@@ -2018,6 +2147,30 @@ For document extractions, dates are automatically detected and presented to the 
 
 CHAT-FIRST PHILOSOPHY:
 You are the universal interface to ALL data in Portol. Every piece of data — documents, events, finances, health, profiles — is accessible through you. When users ask questions about their data, search proactively. When they mention documents, retrieve them. When they mention dates, route them to the calendar. You are the single point of intelligence for the user's entire life data.
+
+RICH CONTENT GENERATION — Charts, Tables, Reports:
+You can generate interactive charts, data tables, and full reports that render inline in the chat. Use these tools when the user asks to visualize, compare, or analyze their data.
+
+CHART GENERATION RULES:
+1. ALWAYS query the actual data first (using search, get_summary, get_profile_data) BEFORE calling generate_chart. The chart data array must contain REAL data from the database.
+2. Choose the right chart type: line for trends over time, bar for comparisons, pie for breakdowns/proportions, area for cumulative data, scatter for correlations, composed for overlaying different chart types, radar for multi-dimensional scoring.
+3. Always provide meaningful series names and axis labels.
+4. For time-based charts, sort data chronologically. Use readable date labels (e.g., "Jan", "Feb" or "Mon", "Tue").
+5. For pie charts, use nameKey and valueKey instead of series. Limit to ~8 slices max — group small items into "Other".
+6. For comparison charts (this month vs last month), use grouped bars with 2 series.
+7. If there's no data to chart, DON'T generate an empty chart — instead tell the user they need more data.
+
+TABLE GENERATION RULES:
+1. Use tables for structured lists (expenses, tasks, bills, etc.).
+2. Include a summary row with totals when showing financial data.
+3. Use the format field for proper display: "currency" for money, "date" for dates, "percent" for percentages.
+4. Limit to ~20 rows. If more data exists, show top items and mention the total count.
+
+REPORT GENERATION RULES:
+1. Reports combine text, metrics, charts, and tables into a comprehensive analysis.
+2. Use metric sections for key numbers (total spending, habit completion rate, etc.).
+3. Include changeType ("positive"/"negative"/"neutral") to show if a metric is good or bad.
+4. Put the most important insights first.
 
 RESPONSE FORMAT:
 After completing actions, confirm EACH one with WHERE to find it:
@@ -3728,6 +3881,50 @@ async function executeTool(name: string, input: any): Promise<any> {
       };
     }
 
+    case "generate_chart": {
+      const chartSpec = {
+        type: input.type || "bar",
+        title: input.title || "Chart",
+        subtitle: input.subtitle,
+        data: input.data || [],
+        series: input.series || [],
+        xAxisKey: input.xAxisKey || "label",
+        xAxisLabel: input.xAxisLabel,
+        yAxisLabel: input.yAxisLabel,
+        showLegend: input.showLegend !== false,
+        showGrid: input.showGrid !== false,
+        nameKey: input.nameKey,
+        valueKey: input.valueKey,
+      };
+      return { __richType: "chart", spec: chartSpec };
+    }
+
+    case "generate_table": {
+      const tableSpec = {
+        title: input.title || "Table",
+        columns: input.columns || [],
+        rows: input.rows || [],
+        summary: input.summary,
+      };
+      return { __richType: "table", spec: tableSpec };
+    }
+
+    case "generate_report": {
+      const reportSpec = {
+        title: input.title || "Report",
+        subtitle: input.subtitle,
+        sections: (input.sections || []).map((s: any) => ({
+          heading: s.heading || "",
+          content: s.content,
+          chart: s.chart,
+          table: s.table,
+          metric: s.metric,
+        })),
+        generatedAt: new Date().toISOString(),
+      };
+      return { __richType: "report", spec: reportSpec };
+    }
+
     default:
       return null;
   }
@@ -4162,6 +4359,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   results: any[];
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   documentPreviews?: Array<{ id: string; name: string; mimeType: string; data: string }>;
+  charts?: any[];
+  tables?: any[];
+  report?: any;
 }> {
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -4373,6 +4573,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     messages.push({ role: "user", content: userMessage });
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
+    const allCharts: any[] = [];
+    const allTables: any[] = [];
+    let reportSpec: any = undefined;
     let textReply = "";
     let documentPreview: { id: string; name: string; mimeType: string; data: string } | undefined;
     const documentPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
@@ -4465,7 +4668,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const result = await executeTool(toolUse.name, validation.normalized);
           
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "generate_chart", "generate_table", "generate_report"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -4485,7 +4688,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "generate_chart", "generate_table", "generate_report"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -4502,6 +4705,15 @@ export async function processMessage(userMessage: string, conversationHistory?: 
             const preview = { id: result.documentPreview.id, name: result.documentPreview.name, mimeType: result.documentPreview.mimeType, data: result.documentPreview.data };
             documentPreviews.push(preview);
             if (!documentPreview) documentPreview = preview;
+          }
+
+          // Handle rich content tools — collect charts, tables, reports
+          if (result?.__richType === "chart") {
+            allCharts.push(result.spec);
+          } else if (result?.__richType === "table") {
+            allTables.push(result.spec);
+          } else if (result?.__richType === "report") {
+            reportSpec = result.spec;
           }
 
           // If result is null/undefined OR contains an error field, report failure to AI so it doesn't claim success
@@ -4551,6 +4763,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       results: allResults,
       documentPreview,
       documentPreviews: documentPreviews.length > 0 ? documentPreviews : undefined,
+      charts: allCharts.length > 0 ? allCharts : undefined,
+      tables: allTables.length > 0 ? allTables : undefined,
+      report: reportSpec || undefined,
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);
