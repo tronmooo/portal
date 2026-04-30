@@ -3393,10 +3393,35 @@ async function executeTool(name: string, input: any): Promise<any> {
           logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
           return recentDup;
         }
+        // Detect any AI-supplied fields that don't exist on the tracker so we
+        // can surface them in the chat reply instead of silently dropping them.
+        const knownFieldNames = new Set((tracker.fields || []).map((f: any) => String(f.name).toLowerCase()));
+        const COMMON_TRACKER_ALIASES: Record<string, string> = {
+          steps: "value", count: "value", amount: "value", total: "value", score: "value", reading: "value", number: "value",
+          time: "duration", minutes: "duration", hours: "duration", length: "duration",
+          miles: "distance", km: "distance", meters: "distance",
+          lbs: "weight", kg: "weight", mass: "weight",
+        };
+        const unknownFields: string[] = [];
+        for (const k of Object.keys(entryValues)) {
+          if (k === "_notes") continue;
+          const lc = k.toLowerCase();
+          if (knownFieldNames.has(lc)) continue;
+          const aliasTarget = COMMON_TRACKER_ALIASES[lc];
+          if (aliasTarget && knownFieldNames.has(aliasTarget)) continue;
+          unknownFields.push(k);
+        }
         const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId, profileId: targetProfileId });
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, entryValues);
+        // Attach a non-persistent hint so the chat reply builder can warn the user
+        // (e.g., "saved — note: 'quality' isn't a Sleep field").
+        if (entry && unknownFields.length > 0) {
+          (entry as any).__unknownFields = unknownFields;
+          (entry as any).__trackerName = tracker.name;
+          (entry as any).__knownFields = [...knownFieldNames];
+        }
         return entry;
       }
       // Auto-create tracker if not found — infer category from name
@@ -6075,7 +6100,29 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
     // Parse artifact from AI response text
     const replyForArtifact = textReply || "I'm not sure how to help with that. Try asking me to track something, create a task, log an expense, or manage your data.";
-    const { chatText: finalReply, artifact } = parseArtifactFromResponse(replyForArtifact, selfProfileId);
+    const { chatText: rawFinalReply, artifact } = parseArtifactFromResponse(replyForArtifact, selfProfileId);
+
+    // Surface unknown-field warnings from log_tracker_entry so users know their
+    // "quality: tired" was saved but isn't a defined field on the Sleep tracker.
+    let finalReply = rawFinalReply;
+    const unknownFieldWarnings: string[] = [];
+    for (const r of (allResults || [])) {
+      if (r && (r as any).__unknownFields && (r as any).__unknownFields.length > 0) {
+        const tName = (r as any).__trackerName || "tracker";
+        const unk = (r as any).__unknownFields as string[];
+        const known = ((r as any).__knownFields as string[]) || [];
+        unknownFieldWarnings.push(
+          `Heads up: ${unk.map(f => `"${f}"`).join(", ")} ${unk.length === 1 ? "isn't a" : "aren't"} field${unk.length === 1 ? "" : "s"} on the ${tName} tracker${known.length ? ` (it has: ${known.join(", ")})` : ""}. The value${unk.length === 1 ? " was" : "s were"} saved but won't show in the standard chart.`
+        );
+        // Don't leak the internal markers back to the client
+        delete (r as any).__unknownFields;
+        delete (r as any).__trackerName;
+        delete (r as any).__knownFields;
+      }
+    }
+    if (unknownFieldWarnings.length > 0) {
+      finalReply = `${finalReply}\n\n${unknownFieldWarnings.join("\n")}`;
+    }
 
     // If artifact found, persist it to chat_artifacts table
     if (artifact) {

@@ -897,14 +897,26 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    // Sync entity's linked_profiles JSONB
+    // Sync entity's linked_profiles JSONB.
+    // Race-safer pattern: re-read AFTER the junction-table upsert above, then
+    // also union with the full junction set so we don't lose a sibling write
+    // that happened between two concurrent linkProfileTo calls. Junction is
+    // the source of truth, so we mirror it.
     if (entityTable) {
-      const { data: entityRow } = await this.supabase
-        .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single();
+      const [entityResult, junctionAll] = await Promise.all([
+        this.supabase.from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single(),
+        jt
+          ? this.supabase.from(jt.table).select("profile_id").eq(jt.entityCol, entityId).eq("user_id", this.userId)
+          : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const entityRow = entityResult.data;
       if (entityRow) {
         const current: string[] = entityRow.linked_profiles || [];
-        if (!current.includes(profileId)) {
-          await this.supabase.from(entityTable).update({ linked_profiles: [...current, profileId] })
+        const fromJunction: string[] = (junctionAll.data || []).map((j: any) => j.profile_id);
+        const merged = [...new Set([...current, ...fromJunction, profileId])];
+        // Only write if the set actually changed (saves a roundtrip in the common no-op case)
+        if (merged.length !== current.length || merged.some((p, i) => p !== current[i])) {
+          await this.supabase.from(entityTable).update({ linked_profiles: merged })
             .eq("id", entityId).eq("user_id", this.userId);
         }
       }
@@ -1095,10 +1107,19 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getTracker(id: string): Promise<Tracker | undefined> {
-    const { data, error } = await this.supabase.from("trackers").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const [{ data, error }, entriesResult, junctionResult] = await Promise.all([
+      this.supabase.from("trackers").select("*").eq("id", id).eq("user_id", this.userId).single(),
+      this.supabase.from("tracker_entries").select("*").eq("tracker_id", id).eq("user_id", this.userId).order("timestamp", { ascending: true }),
+      this.supabase.from("profile_trackers").select("profile_id").eq("tracker_id", id).eq("user_id", this.userId),
+    ]);
     if (error || !data) return undefined;
-    const { data: entries } = await this.supabase.from("tracker_entries").select("*").eq("tracker_id", id).eq("user_id", this.userId).order("timestamp", { ascending: true });
-    return this.rowToTracker(data, (entries || []).map(e => this.rowToTrackerEntry(e)));
+    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
+    const jsonbProfiles: string[] = data.linked_profiles || [];
+    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+    return this.rowToTracker(
+      { ...data, linked_profiles: mergedProfiles },
+      (entriesResult.data || []).map(e => this.rowToTrackerEntry(e)),
+    );
   }
 
   async createTracker(data: InsertTracker): Promise<Tracker> {
@@ -1192,7 +1213,18 @@ export class SupabaseStorage implements IStorage {
       values = normalizedValues;
     }
 
-    // Dedup check: reject entries with same values logged within 5 minutes
+    // Dedup check: reject entries with same values logged within 5 minutes.
+    // Use a key-sorted canonical form so {a:1,b:2} and {b:2,a:1} dedup the same way.
+    // Only deduplicates accidental double-fires (e.g. retried HTTP request) —
+    // intentional re-logs of the same value within 5 min are the trade-off.
+    const canonicalize = (obj: any): string => {
+      if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return JSON.stringify(obj);
+      const sortedKeys = Object.keys(obj).sort();
+      const out: Record<string, any> = {};
+      for (const k of sortedKeys) out[k] = obj[k];
+      return JSON.stringify(out);
+    };
+    const newCanonical = canonicalize(values);
     const recentEntries = await this.supabase
       .from("tracker_entries")
       .select("id, entry_values, timestamp")
@@ -1202,15 +1234,9 @@ export class SupabaseStorage implements IStorage {
       .order("timestamp", { ascending: false })
       .limit(5);
     if (recentEntries.data) {
-      const isDup = recentEntries.data.some(e =>
-        JSON.stringify(e.entry_values) === JSON.stringify(values)
-      );
-      if (isDup) {
-        // Return the existing entry instead of creating a duplicate
-        const existing = recentEntries.data.find(e =>
-          JSON.stringify(e.entry_values) === JSON.stringify(values)
-        );
-        return existing ? this.rowToTrackerEntry(existing) : undefined;
+      const existing = recentEntries.data.find(e => canonicalize(e.entry_values) === newCanonical);
+      if (existing) {
+        return this.rowToTrackerEntry(existing);
       }
     }
 
@@ -1269,9 +1295,17 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getTask(id: string): Promise<Task | undefined> {
-    const { data, error } = await this.supabase.from("tasks").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
+    const [{ data, error }, junctionResult] = await Promise.all([
+      this.supabase.from("tasks").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single(),
+      this.supabase.from("profile_tasks").select("profile_id").eq("task_id", id).eq("user_id", this.userId),
+    ]);
     if (error || !data) return undefined;
-    return this.rowToTask(data);
+    // Merge junction-table profiles with JSONB column — junction is the source of truth
+    // for list views, so single-item fetch must agree to avoid stale edit modals.
+    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
+    const jsonbProfiles: string[] = data.linked_profiles || [];
+    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+    return this.rowToTask({ ...data, linked_profiles: mergedProfiles });
   }
 
   async createTask(data: InsertTask): Promise<Task> {
@@ -1347,9 +1381,15 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getExpense(id: string): Promise<Expense | undefined> {
-    const { data, error } = await this.supabase.from("expenses").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
+    const [{ data, error }, junctionResult] = await Promise.all([
+      this.supabase.from("expenses").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single(),
+      this.supabase.from("profile_expenses").select("profile_id").eq("expense_id", id).eq("user_id", this.userId),
+    ]);
     if (error || !data) return undefined;
-    return this.rowToExpense(data);
+    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
+    const jsonbProfiles: string[] = data.linked_profiles || [];
+    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+    return this.rowToExpense({ ...data, linked_profiles: mergedProfiles });
   }
 
   async createExpense(data: InsertExpense): Promise<Expense> {
@@ -1471,9 +1511,15 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getEvent(id: string): Promise<CalendarEvent | undefined> {
-    const { data, error } = await this.supabase.from("events").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const [{ data, error }, junctionResult] = await Promise.all([
+      this.supabase.from("events").select("*").eq("id", id).eq("user_id", this.userId).single(),
+      this.supabase.from("profile_events").select("profile_id").eq("event_id", id).eq("user_id", this.userId),
+    ]);
     if (error || !data) return undefined;
-    return this.rowToEvent(data);
+    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
+    const jsonbProfiles: string[] = data.linked_profiles || [];
+    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
+    return this.rowToEvent({ ...data, linked_profiles: mergedProfiles });
   }
 
   async createEvent(data: InsertEvent): Promise<CalendarEvent> {
