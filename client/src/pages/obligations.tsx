@@ -349,10 +349,8 @@ export default function ObligationsPage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3 mb-4">
-            <Link href="/dashboard">
-              <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
-                <ArrowLeft className="w-4 h-4" />
-              </button>
+            <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
+              <ArrowLeft className="w-4 h-4" />
             </Link>
 {filterMode === "selected" && filterLabel && (
             <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-full">{filterLabel}</span>

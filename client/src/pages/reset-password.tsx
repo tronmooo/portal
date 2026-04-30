@@ -77,10 +77,8 @@ export default function ResetPasswordPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-md space-y-6">
         <div className="flex items-center gap-3 mb-4">
-          <Link href="/">
-            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back">
-              <ArrowLeft className="w-4 h-4" />
-            </button>
+          <Link href="/" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
+            <ArrowLeft className="w-4 h-4" />
           </Link>
           <span className="text-sm text-muted-foreground">Back to sign in</span>
         </div>

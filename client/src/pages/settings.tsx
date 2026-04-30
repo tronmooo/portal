@@ -300,10 +300,8 @@ export default function SettingsPage() {
         <PWAInstallCard />
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
-          <Link href="/dashboard">
-            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
-              <ArrowLeft className="w-4 h-4" />
-            </button>
+          <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
+            <ArrowLeft className="w-4 h-4" />
           </Link>
         </div>
 

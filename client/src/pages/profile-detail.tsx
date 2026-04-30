@@ -6361,8 +6361,8 @@ export default function ProfileDetailPage() {
         <AlertCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
         <p className="text-sm text-destructive mb-1">Profile not found</p>
         <p className="text-xs text-muted-foreground mb-3">This profile may have been deleted or the URL is invalid.</p>
-        <Link href="/profiles">
-          <Button variant="outline" size="sm"><ArrowLeft className="h-3.5 w-3.5 mr-1" /> Back to Profiles</Button>
+        <Link href="/profiles" className="inline-flex items-center justify-center rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 text-xs font-medium" data-testid="button-back-to-profiles" aria-label="Back to Profiles">
+          <ArrowLeft className="h-3.5 w-3.5 mr-1" /> Back to Profiles
         </Link>
       </div>
     );

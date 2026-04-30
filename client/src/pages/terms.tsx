@@ -7,7 +7,7 @@ export default function TermsPage() {
   return (
     <div className="min-h-screen bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto space-y-6">
-        <Link href="/"><button className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Back</button></Link>
+        <Link href="/" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground" aria-label="Back"><ArrowLeft className="h-4 w-4" /> Back</Link>
         <h1 className="text-2xl font-bold">Terms of Service</h1>
         <p className="text-sm text-muted-foreground">Last updated: April 3, 2026</p>
 

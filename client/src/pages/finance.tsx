@@ -226,10 +226,8 @@ export default function FinancePage() {
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
       <div>
         <div className="flex items-center gap-3 mb-4">
-          <Link href="/dashboard">
-            <button className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
-              <ArrowLeft className="w-4 h-4" />
-            </button>
+          <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
+            <ArrowLeft className="w-4 h-4" />
           </Link>
 
           <MultiProfileFilter

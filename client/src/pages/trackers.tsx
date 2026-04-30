@@ -3862,10 +3862,8 @@ export default function TrackersPage() {
     <div className="px-2 py-2 md:p-4 space-y-2 overflow-y-auto h-full pb-24" data-testid="page-trackers">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Link href="/dashboard">
-            <button className="inline-flex items-center justify-center rounded-md w-7 h-7 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back">
-              <ArrowLeft className="w-3.5 h-3.5" />
-            </button>
+          <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-7 h-7 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back">
+            <ArrowLeft className="w-3.5 h-3.5" />
           </Link>
 
           <span className="text-xs text-muted-foreground">
