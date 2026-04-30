@@ -485,21 +485,47 @@ function EventDetailDialog({
     },
   });
 
-  const toggleTaskMutation = useMutation({
+  const toggleTaskMutation = useMutation<any, Error, void, { prevTimeline: [readonly unknown[], unknown][]; prevTasks: [readonly unknown[], unknown][] }>({
     mutationFn: async () => {
       const newStatus = item.completed ? "todo" : "done";
       const res = await apiRequest("PATCH", `/api/tasks/${item.sourceId}`, { status: newStatus });
       return res.json();
     },
+    onMutate: async () => {
+      // Optimistically flip the calendar timeline item & the underlying task
+      await queryClient.cancelQueries({ queryKey: ["/api/calendar/timeline"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prevTimeline = queryClient.getQueriesData<any>({ queryKey: ["/api/calendar/timeline"] });
+      const prevTasks = queryClient.getQueriesData<any>({ queryKey: ["/api/tasks"] });
+      const newCompleted = !item.completed;
+      const newStatus = newCompleted ? "done" : "todo";
+      // Calendar timeline: items can live under .items or be the array itself
+      queryClient.setQueriesData<any>({ queryKey: ["/api/calendar/timeline"] }, (old: any) => {
+        if (!old) return old;
+        const flip = (it: any) => (it && it.sourceId === item.sourceId && (it.kind === "task" || it.type === "task") ? { ...it, completed: newCompleted, status: newStatus } : it);
+        if (Array.isArray(old)) return old.map(flip);
+        if (Array.isArray(old.items)) return { ...old, items: old.items.map(flip) };
+        return old;
+      });
+      // Tasks list
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/tasks"] }, (old) =>
+        (old || []).map((t: any) => (t.id === item.sourceId ? { ...t, status: newStatus, completed: newCompleted } : t))
+      );
+      return { prevTimeline, prevTasks };
+    },
     onSuccess: () => {
+      toast({ title: item.completed ? `"${item.title}" reopened` : `"${item.title}" completed` });
+    },
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prevTimeline) { for (const [k, d] of ctx.prevTimeline) queryClient.setQueryData(k, d); }
+      if (ctx?.prevTasks) { for (const [k, d] of ctx.prevTasks) queryClient.setQueryData(k, d); }
+      toast({ title: `Failed to update "${item.title}"`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: item.completed ? `"${item.title}" reopened` : `"${item.title}" completed` });
-    },
-    onError: (err: Error) => {
-      toast({ title: `Failed to update "${item.title}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
 

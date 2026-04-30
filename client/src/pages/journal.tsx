@@ -259,12 +259,23 @@ export default function JournalPage() {
 
   const editMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PATCH", `/api/journal/${editingEntry!.id}`, data),
+    onMutate: async (data: any) => {
+      // Optimistic update: patch the entry in any cached journal list immediately
+      await queryClient.cancelQueries({ queryKey: ["/api/journal"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/journal"] });
+      const targetId = editingEntry?.id;
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/journal"] }, (old) =>
+        (old || []).map((e: any) => (e.id === targetId ? { ...e, ...data } : e))
+      );
+      return { prev };
+    },
     onSuccess: () => {
       resetForm();
       setShowCreate(false);
       toast({ title: "Journal entry updated" });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v: any, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Failed to update journal entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {

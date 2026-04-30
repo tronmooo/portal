@@ -99,10 +99,16 @@ function NotificationToggle({ prefKey, label, description, icon }: { prefKey: st
   const enabled = pref?.value !== "false";
 
   async function toggle(checked: boolean) {
+    // Optimistic: update the preference value immediately so the Switch reflects the change with no flicker
+    const queryKey = [`/api/preferences/${prefKey}`];
+    const prev = queryClient.getQueryData<{ value: string | null }>(queryKey);
+    queryClient.setQueryData(queryKey, { value: String(checked) });
     try {
       await apiRequest("PUT", `/api/preferences/${prefKey}`, { value: String(checked) });
-      queryClient.invalidateQueries({ queryKey: [`/api/preferences/${prefKey}`] });
+      queryClient.invalidateQueries({ queryKey });
     } catch (err: any) {
+      // Rollback to previous value
+      if (prev !== undefined) queryClient.setQueryData(queryKey, prev);
       toast({ title: "Failed to update setting", description: err.message, variant: "destructive" });
     }
   }
@@ -193,10 +199,15 @@ export default function SettingsPage() {
   const aiSmartRouting = prefSmartRouting?.value !== "false";
 
   async function setAiPreference(key: string, value: string) {
+    // Optimistic: reflect the new value immediately so the Switch/Select doesn't flicker back
+    const queryKey = [`/api/preferences/${key}`];
+    const prev = queryClient.getQueryData<{ value: string | null }>(queryKey);
+    queryClient.setQueryData(queryKey, { value });
     try {
       await apiRequest("PUT", `/api/preferences/${key}`, { value });
-      queryClient.invalidateQueries({ queryKey: [`/api/preferences/${key}`] });
+      queryClient.invalidateQueries({ queryKey });
     } catch (err: any) {
+      if (prev !== undefined) queryClient.setQueryData(queryKey, prev);
       toast({ title: "Failed to update setting", description: err.message, variant: "destructive" });
     }
   }
