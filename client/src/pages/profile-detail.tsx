@@ -5691,9 +5691,9 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
     <div className="space-y-4" data-testid="subscription-billing-tab">
       {/* Billing Info */}
       <Card>
-        <button className="w-full flex items-center justify-between px-4 py-2.5">
+        <div className="w-full flex items-center justify-between px-4 py-2.5">
           <span className="text-xs font-semibold">Billing Info</span>
-        </button>
+        </div>
         <CardContent className="px-4 pb-3 pt-0">
           {billingFields.map(({ key, label }) => (
             <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
@@ -6058,9 +6058,9 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
 
       {/* Terms & Cancellation */}
       <Card>
-        <button className="w-full flex items-center justify-between px-4 py-2.5">
+        <div className="w-full flex items-center justify-between px-4 py-2.5">
           <span className="text-xs font-semibold">Terms & Cancellation</span>
-        </button>
+        </div>
         <CardContent className="px-4 pb-3 pt-0">
           {termsFields.map(({ key, label }) => (
             <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
@@ -6070,9 +6070,9 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
 
       {/* Support Info */}
       <Card>
-        <button className="w-full flex items-center justify-between px-4 py-2.5">
+        <div className="w-full flex items-center justify-between px-4 py-2.5">
           <span className="text-xs font-semibold">Support Info</span>
-        </button>
+        </div>
         <CardContent className="px-4 pb-3 pt-0">
           {supportFields.map(({ key, label }) => (
             <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />

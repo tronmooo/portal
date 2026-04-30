@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { parseMoney } from "@/lib/utils";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setDashboardProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -1048,7 +1049,11 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
   }, [enhanced, dismissedIds]);
 
   const overdueBills: any[] = useMemo(() => {
-    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil < 0);
+    // Bug fix: autopay bills don't go "overdue" — they auto-charge on the due date.
+    // A daysUntil<0 on autopay just means the server hasn't rolled forward to the
+    // next cycle yet; surfacing it as an overdue bill is misleading and causes
+    // every recurring autopay subscription to scream red on the dashboard.
+    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil < 0 && !b.autopay);
     return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
   }, [enhanced, dismissedIds]);
 
@@ -1465,9 +1470,10 @@ function ObligationsSection({ data }: { data: any[] }) {
     onError: (_err, variables) => toast({ title: `Failed to delete "${variables.name || "obligation"}"`, variant: "destructive" }),
   });
 
-  // Group bills by timeframe
-  const overdueBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil < 0), [data]);
-  const thisWeekBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7), [data]);
+  // Group bills by timeframe — autopay bills are never "overdue" (they auto-charge on due date).
+  // They show up under their next-cycle window instead of the overdue group.
+  const overdueBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil < 0 && !b.autopay), [data]);
+  const thisWeekBills = useMemo(() => (data || []).filter((b: any) => (b.daysUntil >= 0 && b.daysUntil <= 7) || (b.autopay && b.daysUntil < 0)), [data]);
   const thisMonthBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil > 7 && b.daysUntil <= 30), [data]);
 
   const monthlyTotal = useMemo(() => (data || []).reduce((sum: number, b: any) => sum + (b.amount || 0), 0), [data]);
@@ -2281,7 +2287,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     return cats;
   }, [monthExpenses]);
   const assetProfiles = useMemo(() => (allProfiles || []).filter((p: any) => {
-    if (!(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue)) return false;
+    if (parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue) <= 0) return false;
     // Apply the same profile filter as everything else
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const pParent = p.fields?._parentProfileId || p.parentProfileId;
@@ -2499,11 +2505,12 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         total={`$${netWorth.toLocaleString()}`}
         items={[
           ...assetProfiles.map((p: any) => {
-            const val = Number(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue || 0);
+            // parseMoney handles strings like "$25,000" and "40k" that Number() returns NaN for.
+            const val = parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue);
             return { label: p.name, value: `$${val.toLocaleString()}`, sub: p.type, category: "asset" };
           }),
-          ...((allObligations || []).filter((o: any) => o.fields?.remainingBalance || o.fields?.totalAmount).map((o: any) => {
-            const val = Number(o.fields?.remainingBalance || o.fields?.totalAmount || 0);
+          ...((allObligations || []).filter((o: any) => parseMoney(o.fields?.remainingBalance || o.fields?.totalAmount) > 0).map((o: any) => {
+            const val = parseMoney(o.fields?.remainingBalance || o.fields?.totalAmount);
             return { label: o.name, value: `-$${val.toLocaleString()}`, sub: "liability", category: "liability" };
           })),
         ]}

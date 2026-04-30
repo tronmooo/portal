@@ -24,6 +24,29 @@ import {
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 
+/**
+ * Parse a money-ish value into a number. Handles strings like "$25,000", "40k", "1.2m".
+ * Number("$25,000") returns NaN — this is the root cause of asset values showing $0.
+ */
+function parseMoney(input: any): number {
+  if (input == null) return 0;
+  if (typeof input === "number") return Number.isFinite(input) ? input : 0;
+  const s = String(input).trim();
+  if (!s) return 0;
+  const cleaned = s.replace(/[^0-9.\-kKmMbB]/g, "").trim();
+  if (!cleaned) return 0;
+  const m = cleaned.match(/^(-?\d*\.?\d+)([kKmMbB])?$/);
+  if (!m) {
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const base = Number(m[1]);
+  if (!Number.isFinite(base)) return 0;
+  const suffix = (m[2] || "").toLowerCase();
+  const mult = suffix === "k" ? 1_000 : suffix === "m" ? 1_000_000 : suffix === "b" ? 1_000_000_000 : 1;
+  return base * mult;
+}
+
 // ---- MIME type → file extension helper ----
 function getExtension(mimeType: string): string {
   const map: Record<string, string> = {
@@ -2949,13 +2972,12 @@ export class SupabaseStorage implements IStorage {
             return false;
           });
           return filteredAssetProfiles.reduce((s, p) => {
-            const price = p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue;
-            return s + (price ? Number(price) : 0);
+            // parseMoney handles strings like "$25,000" / "40k" that Number() returns NaN for.
+            return s + parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue);
           }, 0);
         })(),
         totalLiabilities: allObligations.reduce((s, o) => {
-          const remaining = o.fields?.remainingBalance || o.fields?.totalAmount;
-          return s + (remaining ? Number(remaining) : 0);
+          return s + parseMoney(o.fields?.remainingBalance || o.fields?.totalAmount);
         }, 0),
         recentExpenses: allExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category })),
         monthlyExpenseRecords: monthlyExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category, vendor: e.vendor })),
