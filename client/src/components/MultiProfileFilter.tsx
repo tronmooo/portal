@@ -67,38 +67,28 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
     notify();
   }, [notify]);
 
-  // Validate stored filter IDs against actual profiles — fix corrupted localStorage
+  // Validate stored filter IDs against actual profiles — only refresh display names
+  // when the underlying profile name changed. Never drop IDs based on a transient
+  // empty/incomplete profiles list (that's how we lost Jane Doe from the filter
+  // selection while keeping her in the label).
   useEffect(() => {
     if (!profiles || profiles.length === 0) return;
     const current = getProfileFilter();
-    if (current.mode === "selected" && current.selectedIds.length > 0) {
-      // Verify each stored ID matches a real profile AND the name matches
-      let needsFix = false;
-      const correctedIds: string[] = [];
-      const correctedNames: string[] = [];
-      for (let i = 0; i < current.selectedIds.length; i++) {
-        const storedId = current.selectedIds[i];
-        const storedName = current.selectedNames[i] || "";
-        const profile = profiles.find(p => p.id === storedId);
-        if (!profile) {
-          needsFix = true; // ID doesn't exist
-          continue;
-        }
-        // Check if stored name matches the profile's actual name
-        if (profile.name !== storedName) {
-          needsFix = true; // Name mismatch — could be wrong ID stored under wrong name
-        }
-        correctedIds.push(storedId);
-        correctedNames.push(profile.name);
-      }
-      if (needsFix) {
-        if (correctedIds.length === 0) {
-          setFilterEveryone();
-        } else {
-          setFilterSelected(correctedIds, correctedNames);
-        }
-        notify();
-      }
+    if (current.mode !== "selected" || current.selectedIds.length === 0) return;
+    // Only act when EVERY currently-selected id resolves to a profile in the list.
+    const allFound = current.selectedIds.every(id => profiles.some(p => p.id === id));
+    if (!allFound) return; // profiles list isn't fully loaded yet — leave state alone
+    // Refresh display names if any profile was renamed
+    let nameChanged = false;
+    const refreshedNames = current.selectedIds.map((id, i) => {
+      const prof = profiles.find(p => p.id === id);
+      const newName = prof?.name || current.selectedNames[i] || "";
+      if (newName !== current.selectedNames[i]) nameChanged = true;
+      return newName;
+    });
+    if (nameChanged) {
+      setFilterSelected([...current.selectedIds], refreshedNames);
+      notify();
     }
   }, [profiles]);
 

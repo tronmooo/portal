@@ -3,7 +3,7 @@ import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -3557,6 +3557,20 @@ export default function TrackersPage() {
   useEffect(() => { document.title = "Linked — Portol"; }, []);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  // Always keep page-local filter state in lockstep with the global filter store,
+  // even if the dropdown's onChange callback is stale or batched. This guarantees
+  // multi-profile selections (e.g. Test + Jane Doe) are honored end-to-end.
+  useEffect(() => {
+    const unsub = subscribeProfileFilter(state => {
+      setFilterMode(state.mode);
+      setFilterIds([...state.selectedIds]);
+    });
+    // Re-sync once on mount in case state changed before listeners attached
+    const cur = getProfileFilter();
+    setFilterMode(cur.mode);
+    setFilterIds([...cur.selectedIds]);
+    return unsub;
+  }, []);
   const trackerProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: trackers, isLoading } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", filterMode, ...filterIds],

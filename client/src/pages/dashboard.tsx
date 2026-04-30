@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
-import { getProfileFilter, setDashboardProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, setDashboardProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -2857,6 +2857,19 @@ export default function DashboardPage() {
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  // Keep dashboard filter state in lockstep with the global filter store — prevents
+  // multi-profile selections from silently collapsing if a child component's onChange
+  // is stale or batched.
+  useEffect(() => {
+    const unsub = subscribeProfileFilter(state => {
+      setFilterMode(state.mode);
+      setFilterIds([...state.selectedIds]);
+    });
+    const cur = getProfileFilter();
+    setFilterMode(cur.mode);
+    setFilterIds([...cur.selectedIds]);
+    return unsub;
+  }, []);
 
   // Fetch profiles for filter
   const { data: allProfiles = [] } = useQuery<any[]>({

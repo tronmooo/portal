@@ -31,12 +31,49 @@ function loadFromStorage(): FilterState {
   return { mode: "everyone", selectedIds: [], selectedNames: [] };
 }
 
+const FILTER_EVENT = "portol:profile-filter-change";
+
 function saveToStorage() {
   try {
     const json = JSON.stringify(_state);
     localStorage.setItem(LOCAL_KEY, json);
     sessionStorage.setItem(STORAGE_KEY, json); // backward compat
   } catch {}
+  // Broadcast so pages can sync their local state even if a child component's
+  // onChange callback is stale or never fires.
+  try {
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+      window.dispatchEvent(new CustomEvent(FILTER_EVENT, { detail: { ..._state } }));
+    }
+  } catch {}
+}
+
+/**
+ * Subscribe to filter changes. Fires every time the filter is mutated through
+ * the helpers in this module. Returns an unsubscribe function.
+ */
+export function subscribeProfileFilter(
+  cb: (state: FilterState) => void
+): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (e: Event) => {
+    const detail = (e as CustomEvent).detail as FilterState | undefined;
+    cb(detail ? { ...detail } : getProfileFilter());
+  };
+  window.addEventListener(FILTER_EVENT, handler as EventListener);
+  // Also react to other tabs writing to localStorage
+  const storageHandler = (e: StorageEvent) => {
+    if (e.key !== LOCAL_KEY) return;
+    try {
+      _state = e.newValue ? JSON.parse(e.newValue) : { mode: "everyone", selectedIds: [], selectedNames: [] };
+      cb(getProfileFilter());
+    } catch {}
+  };
+  window.addEventListener("storage", storageHandler);
+  return () => {
+    window.removeEventListener(FILTER_EVENT, handler as EventListener);
+    window.removeEventListener("storage", storageHandler);
+  };
 }
 
 // ── Public API ──────────────────────────────────────────────
