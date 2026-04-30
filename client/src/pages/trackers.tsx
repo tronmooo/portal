@@ -4030,12 +4030,43 @@ export default function TrackersPage() {
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
                   const fields = child.fields || {};
-                  const currentVal = fields.currentValue;
-                  const purchaseVal = fields.cost || fields.purchasePrice || fields.amount || fields.price;
-                  const year = fields.year || fields.purchaseDate?.slice(0, 4);
-                  const make = fields.make || '';
-                  const model = fields.model || '';
-                  const mileage = fields.mileage || fields.odometer;
+                  // Robust value resolver — historical data is stored under several
+                  // inconsistent paths (fields.currentValue, fields.housing.currentValue,
+                  // fields.other.purchasePrice, fields.finance.balance, etc.). Walk the
+                  // common locations so legacy and new entries both render correctly.
+                  const toNum = (v: any): number | null => {
+                    if (v == null || v === '') return null;
+                    if (typeof v === 'number' && isFinite(v)) return v;
+                    if (typeof v === 'string') {
+                      const n = parseFloat(v.replace(/[$,\s]/g, ''));
+                      return isFinite(n) ? n : null;
+                    }
+                    return null;
+                  };
+                  const housing = fields.housing || {};
+                  const other = fields.other || {};
+                  const finance = fields.finance || {};
+                  const currentVal =
+                    toNum(fields.currentValue) ??
+                    toNum(housing.currentValue) ??
+                    toNum(other.currentValue) ??
+                    toNum(other.value) ??
+                    toNum(finance.balance) ??
+                    toNum(fields.value);
+                  const purchaseVal =
+                    toNum(fields.purchasePrice) ??
+                    toNum(other.purchasePrice) ??
+                    toNum(other.purchase_price) ??
+                    toNum(fields.cost) ??
+                    toNum(other.cost) ??
+                    toNum(fields.amount) ??
+                    toNum(fields.price) ??
+                    toNum(other.price);
+                  const vehicleFields = fields.vehicles || {};
+                  const year = fields.year || vehicleFields.year || other.year || (fields.purchaseDate || other.purchaseDate || '')?.toString().slice(0, 4);
+                  const make = fields.make || vehicleFields.make || other.make || '';
+                  const model = fields.model || vehicleFields.model || other.model || '';
+                  const mileage = fields.mileage || vehicleFields.mileage || other.mileage || fields.odometer || vehicleFields.odometer || other.odometer;
                   // Safely stringify potentially-object fields (legacy AI extractions can store objects)
                   const safeStr = (v: any): string => {
                     if (v == null || v === '') return '';
@@ -4048,7 +4079,8 @@ export default function TrackersPage() {
                     }
                     return '';
                   };
-                  const insurance = safeStr(fields.insuranceProvider) || safeStr(fields.insurance) || '';
+                  const insuranceFields = fields.insurance || {};
+                  const insurance = safeStr(fields.insuranceProvider) || safeStr(fields.insurance) || safeStr(insuranceFields.insurance) || safeStr(insuranceFields.insurer) || safeStr(insuranceFields.provider) || '';
                   const accentHsl = child.type === 'vehicle' ? '262 60% 62%' : child.type === 'investment' ? '142 60% 45%' : child.type === 'property' ? '220 60% 55%' : '262 60% 62%';
                   const ac = `hsl(${accentHsl})`;
                   return (
@@ -4059,8 +4091,8 @@ export default function TrackersPage() {
                           <p className="text-[10px] font-bold text-foreground truncate">{child.name}</p>
                         </div>
                         <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-                          {currentVal ? <div className="flex items-baseline gap-1"><span className="text-xl font-black tabular-nums text-foreground">${Number(currentVal).toLocaleString()}</span></div>
-                          : purchaseVal ? <div className="flex items-baseline gap-1"><span className="text-lg font-black tabular-nums text-foreground">${Number(purchaseVal).toLocaleString()}</span><span className="text-[8px] text-muted-foreground">purchase</span></div>
+                          {currentVal != null && currentVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-xl font-black tabular-nums text-foreground">${currentVal.toLocaleString()}</span></div>
+                          : purchaseVal != null && purchaseVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-lg font-black tabular-nums text-foreground">${purchaseVal.toLocaleString()}</span><span className="text-[8px] text-muted-foreground">purchase</span></div>
                           : <span className="text-[10px] text-muted-foreground/50 italic">No value set</span>}
                           {(make || model) && <KpiLine label="Make/Model" value={[make, model].filter(Boolean).join(' ')} />}
                           {year && <KpiLine label="Year" value={year} />}
@@ -4118,13 +4150,24 @@ export default function TrackersPage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                 {subs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(sub => {
                   const fields = sub.fields || {};
-                  const cost = fields.cost || fields.amount || fields.price;
-                  const freq = fields.frequency || fields.billing || fields.billingCycle || 'monthly';
+                  // Nested subscription data is stored under fields.subscriptions for older entries
+                  const subFields = fields.subscriptions || {};
+                  const toNum = (v: any): number | null => {
+                    if (v == null || v === '') return null;
+                    if (typeof v === 'number' && isFinite(v)) return v;
+                    if (typeof v === 'string') {
+                      const n = parseFloat(v.replace(/[$,\s\/a-zA-Z]/g, ''));
+                      return isFinite(n) ? n : null;
+                    }
+                    return null;
+                  };
+                  const cost = toNum(fields.cost) ?? toNum(subFields.cost) ?? toNum(fields.amount) ?? toNum(fields.price) ?? toNum(subFields.amount) ?? toNum(subFields.price);
+                  const freq = fields.frequency || subFields.frequency || fields.billing || subFields.billing || fields.billingCycle || subFields.billingCycle || 'monthly';
                   const freqShort = String(freq).toLowerCase().includes('year') ? '/yr' : String(freq).toLowerCase().includes('week') ? '/wk' : '/mo';
-                  const category = fields.category || fields.type || '';
-                  const status = fields.status || (cost ? 'Active' : '');
-                  const provider = fields.provider || fields.company || '';
-                  const monthlyCost = cost ? (String(freq).toLowerCase().includes('year') ? Number(cost) / 12 : Number(cost)) : 0;
+                  const category = fields.category || subFields.category || fields.type || '';
+                  const status = fields.status || subFields.status || (cost != null && cost > 0 ? 'Active' : '');
+                  const provider = fields.provider || subFields.provider || fields.company || subFields.company || '';
+                  const monthlyCost = cost != null && cost > 0 ? (String(freq).toLowerCase().includes('year') ? cost / 12 : cost) : 0;
                   const annualCost = monthlyCost * 12;
                   const accentHsl = '43 85% 52%';
                   const ac = `hsl(${accentHsl})`;
@@ -4136,10 +4179,10 @@ export default function TrackersPage() {
                           <p className="text-[10px] font-bold text-foreground truncate">{sub.name}</p>
                         </div>
                         <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-                          {cost ? (
+                          {cost != null && cost > 0 ? (
                             <div className="flex items-center justify-between">
                               <div className="flex items-baseline gap-0.5">
-                                <span className="text-xl font-black tabular-nums text-foreground">${Number(cost).toLocaleString()}</span>
+                                <span className="text-xl font-black tabular-nums text-foreground">${cost.toLocaleString()}</span>
                                 <span className="text-[9px] text-muted-foreground">{freqShort}</span>
                               </div>
                               {annualCost > 0 && <Donut pct={Math.min(1, monthlyCost / 100)} color={ac} size={32} label={`$${Math.round(monthlyCost)}`} />}

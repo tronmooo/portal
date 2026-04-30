@@ -47,6 +47,51 @@ function parseMoney(input: any): number {
   return base * mult;
 }
 
+// Resolve the asset's current market value across all known historical storage paths.
+// Different code paths (form save, AI extraction, find-value, legacy migrations) wrote
+// to different nested keys; this checks every known location and returns the first
+// positive number.
+function resolveAssetValue(fields: any): number {
+  if (!fields || typeof fields !== "object") return 0;
+  const housing = fields.housing || {};
+  const other = fields.other || {};
+  const finance = fields.finance || {};
+  const candidates = [
+    fields.currentValue, housing.currentValue, other.currentValue,
+    fields.value, other.value,
+    fields.purchasePrice, other.purchasePrice, other.purchase_price, fields.purchase_price,
+    fields.cost, other.cost,
+    fields.amount, other.amount,
+    fields.price, other.price,
+    fields.balance, finance.balance,
+    fields.accountBalance, finance.accountBalance,
+  ];
+  for (const c of candidates) {
+    const n = parseMoney(c);
+    if (n > 0) return n;
+  }
+  return 0;
+}
+
+// Resolve any outstanding loan/debt balance for liability calculations. Includes
+// nested finance.loans[] entries which were created by AI extraction.
+function resolveLiabilityValue(fields: any): number {
+  if (!fields || typeof fields !== "object") return 0;
+  const finance = fields.finance || {};
+  const direct = parseMoney(
+    fields.remainingBalance || fields.loanBalance || fields.outstandingBalance ||
+    finance.remainingBalance || finance.loanBalance || finance.outstandingBalance
+  );
+  if (direct > 0) return direct;
+  // Sum nested loans[] balances if present
+  const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
+  if (loans.length > 0) {
+    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance), 0);
+    if (sum > 0) return sum;
+  }
+  return 0;
+}
+
 // ---- MIME type → file extension helper ----
 function getExtension(mimeType: string): string {
   const map: Record<string, string> = {
@@ -2972,8 +3017,9 @@ export class SupabaseStorage implements IStorage {
             return false;
           });
           return filteredAssetProfiles.reduce((s, p) => {
-            // parseMoney handles strings like "$25,000" / "40k" that Number() returns NaN for.
-            return s + parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue || p.fields?.balance || p.fields?.accountBalance);
+            // resolveAssetValue walks all known nesting paths (housing.currentValue,
+            // other.purchasePrice, finance.balance, etc.) so historical data shows up.
+            return s + resolveAssetValue(p.fields);
           }, 0);
         })(),
         // Liabilities: profiles carrying a loan/remaining balance (financed cars, mortgages,
@@ -2989,7 +3035,7 @@ export class SupabaseStorage implements IStorage {
             return false;
           });
           return filteredProfiles.reduce((s, p) => {
-            return s + parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance);
+            return s + resolveLiabilityValue(p.fields);
           }, 0);
         })(),
         recentExpenses: allExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category })),
