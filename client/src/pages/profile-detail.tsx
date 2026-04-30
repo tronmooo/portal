@@ -225,6 +225,32 @@ function formatKey(key: string) {
     .trim();
 }
 
+// Safely stringify a profile field for display. Profile fields can be primitives,
+// nested objects (legacy AI-extracted blobs), or arrays. Never render "[object Object]".
+function stringifyField(value: any): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value)) {
+    return value.map(v => stringifyField(v)).filter(Boolean).join(", ");
+  }
+  if (typeof value === "object") {
+    const preferredKeys = ["value", "name", "label", "display", "text", "title"];
+    for (const k of preferredKeys) {
+      if (value[k] !== undefined && (typeof value[k] === "string" || typeof value[k] === "number")) {
+        return String(value[k]);
+      }
+    }
+    const entries = Object.entries(value)
+      .filter(([_, v]) => v !== null && v !== undefined && v !== "" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
+      .slice(0, 2)
+      .map(([k, v]) => `${formatKey(k)}: ${v}`);
+    if (entries.length) return entries.join(", ");
+    return "";
+  }
+  try { return String(value); } catch { return ""; }
+}
+
 function formatCurrency(val: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(val);
 }
@@ -651,7 +677,8 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
   allFields?: Record<string, any>;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(String(value ?? ""));
+  const displayValue = stringifyField(value);
+  const [draft, setDraft] = useState(displayValue);
   const [saving, setSaving] = useState(false);
   const [finding, setFinding] = useState(false);
   const [foundValue, setFoundValue] = useState<{ estimatedValue: number; confidence: string; explanation: string; range?: { low: number; high: number } } | null>(null);
@@ -722,7 +749,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
     return (
       <div
         className="flex items-center justify-between py-2 border-b border-border/30 last:border-0 group cursor-pointer hover:bg-muted/20 px-2 -mx-2 rounded"
-        onClick={() => { setDraft(String(value ?? "")); setEditing(true); }}
+        onClick={() => { setDraft(displayValue); setEditing(true); }}
       >
         <span className="text-xs text-muted-foreground">{label}</span>
         <div className="flex items-center gap-1.5">
@@ -741,8 +768,8 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
             </button>
           )}
           <span className="text-xs font-medium max-w-[180px] truncate text-right">
-            {value != null && value !== ""
-              ? (isValueField && !isNaN(Number(value)) ? `$${Number(value).toLocaleString()}` : String(value))
+            {displayValue !== ""
+              ? (isValueField && !isNaN(Number(displayValue)) ? `$${Number(displayValue).toLocaleString()}` : displayValue)
               : <span className="text-muted-foreground/40 italic">tap to add</span>}
           </span>
           {/* Delete button — always visible on mobile */}

@@ -102,7 +102,10 @@ export default async function(req, res) {
     installCommand: "npm install",
     outputDirectory: "public",
     rewrites: [
-      { source: "/api/:path*", destination: "/api" }
+      { source: "/api/:path*", destination: "/api" },
+      // SPA fallback: any non-asset, non-api, non-file path → index.html
+      // Lets users refresh /dashboard, /trackers, /profiles/abc directly without hitting Vercel 404.
+      { source: "/((?!assets/|api/|.*\\.[a-zA-Z0-9]+$).*)", destination: "/" }
     ],
     headers: [
       {

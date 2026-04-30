@@ -4016,7 +4016,19 @@ export default function TrackersPage() {
                   const make = fields.make || '';
                   const model = fields.model || '';
                   const mileage = fields.mileage || fields.odometer;
-                  const insurance = fields.insuranceProvider || fields.insurance || '';
+                  // Safely stringify potentially-object fields (legacy AI extractions can store objects)
+                  const safeStr = (v: any): string => {
+                    if (v == null || v === '') return '';
+                    if (typeof v === 'string' || typeof v === 'number') return String(v);
+                    if (typeof v === 'object') {
+                      for (const k of ['provider', 'name', 'value', 'label', 'company']) {
+                        if (typeof v[k] === 'string' || typeof v[k] === 'number') return String(v[k]);
+                      }
+                      return '';
+                    }
+                    return '';
+                  };
+                  const insurance = safeStr(fields.insuranceProvider) || safeStr(fields.insurance) || '';
                   const accentHsl = child.type === 'vehicle' ? '262 60% 62%' : child.type === 'investment' ? '142 60% 45%' : child.type === 'property' ? '220 60% 55%' : '262 60% 62%';
                   const ac = `hsl(${accentHsl})`;
                   return (
@@ -4033,7 +4045,7 @@ export default function TrackersPage() {
                           {(make || model) && <KpiLine label="Make/Model" value={[make, model].filter(Boolean).join(' ')} />}
                           {year && <KpiLine label="Year" value={year} />}
                           {mileage && <KpiLine label="Mileage" value={`${Number(mileage).toLocaleString()} mi`} />}
-                          {insurance && <KpiLine label="Insurance" value={String(insurance).slice(0, 16)} />}
+                          {insurance && <KpiLine label="Insurance" value={insurance.slice(0, 16)} />}
                         </div>
                         <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
                           <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{child.type}</span>

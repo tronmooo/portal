@@ -1000,10 +1000,39 @@ const HIDDEN_FIELDS = ["class", "donor", "provider", "patientId", "property", "_
 // Vehicle/asset-specific fields that should not appear on person/pet profile cards
 const VEHICLE_SPECIFIC_FIELDS = ["make", "model", "year", "vin", "mileage", "color_ext", "color_int", "trim", "transmission", "fuelType", "engineSize", "licenseplate", "odo"];
 
-const formatFieldValue = (key: string, value: any): string => {
+// Stringify a profile field value safely. Profile fields can be primitives,
+// objects (e.g. structured health/identity blobs), or arrays. Never let raw
+// objects fall through to React (it renders as "[object Object]").
+const stringifyFieldValue = (value: any): string => {
+  if (value === null || value === undefined) return "";
   if (value === true || value === "true") return "Yes";
   if (value === false || value === "false") return "No";
-  return String(value);
+  if (typeof value === "number" || typeof value === "string") return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "";
+    return value.map(v => stringifyFieldValue(v)).filter(Boolean).join(", ");
+  }
+  if (typeof value === "object") {
+    // Pull the most meaningful primitive out of the object
+    const preferredKeys = ["value", "name", "label", "display", "text", "title"];
+    for (const k of preferredKeys) {
+      if (value[k] !== undefined && (typeof value[k] === "string" || typeof value[k] === "number")) {
+        return String(value[k]);
+      }
+    }
+    // Otherwise stringify the first 1–2 primitive entries as "k: v"
+    const entries = Object.entries(value)
+      .filter(([_, v]) => v !== null && v !== undefined && v !== "" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
+      .slice(0, 2)
+      .map(([k, v]) => `${k}: ${v}`);
+    if (entries.length) return entries.join(", ");
+    return "";
+  }
+  try { return String(value); } catch { return ""; }
+};
+
+const formatFieldValue = (key: string, value: any): string => {
+  return stringifyFieldValue(value);
 };
 
 // Profile type accent colors (HSL)
@@ -1088,12 +1117,16 @@ function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: s
 
         {/* KPI lines — show key fields */}
         <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-          {fields.slice(0, 5).map(([key, val]) => (
-            <div key={key} className="flex items-center justify-between gap-1">
-              <span className="text-[9px] text-muted-foreground truncate">{key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim()}</span>
-              <span className="text-[9px] font-bold tabular-nums text-foreground shrink-0">{formatFieldValue(key, String(val)).slice(0, 20)}</span>
-            </div>
-          ))}
+          {fields
+            .map(([key, val]) => [key, stringifyFieldValue(val)] as const)
+            .filter(([_, val]) => val !== "")
+            .slice(0, 5)
+            .map(([key, val]) => (
+              <div key={key} className="flex items-center justify-between gap-1">
+                <span className="text-[9px] text-muted-foreground truncate">{key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim()}</span>
+                <span className="text-[9px] font-bold tabular-nums text-foreground shrink-0">{val.slice(0, 20)}</span>
+              </div>
+            ))}
           {linkedCount > 0 && (
             <div className="flex items-center justify-between gap-1">
               <span className="text-[9px] text-muted-foreground">Linked</span>

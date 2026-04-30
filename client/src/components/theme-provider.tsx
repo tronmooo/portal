@@ -75,7 +75,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const apply = () => {
       const m: "light" | "dark" = mode === "system" ? getSystemMode() : mode;
-      document.documentElement.classList.toggle("dark", m === "dark");
+      const root = document.documentElement;
+      // Force-clear and re-add to be defensive against any race / stale class state
+      if (m === "dark") {
+        root.classList.add("dark");
+      } else {
+        root.classList.remove("dark");
+      }
+      // Also set data-theme + native color-scheme so browser form controls,
+      // scrollbars, and any CSS using [data-theme="dark"] selectors stay in sync.
+      root.setAttribute("data-theme", m);
+      root.style.colorScheme = m;
       setResolvedMode(m);
     };
     apply();
