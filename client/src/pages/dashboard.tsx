@@ -2517,28 +2517,40 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
       />
 
       {/* Net Worth Drill-Down */}
-      <DrillDownDialog
-        open={drill === "networth"}
-        onClose={() => setDrill(null)}
-        title="Net Worth Breakdown"
-        subtitle="Assets minus liabilities"
-        total={`$${netWorth.toLocaleString()}`}
-        items={[
-          ...assetProfiles.map((p: any) => {
-            // parseMoney handles strings like "$25,000" and "40k" that Number() returns NaN for.
-            const val = parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue);
-            return { label: p.name, value: `$${val.toLocaleString()}`, sub: p.type, category: "asset" };
-          }),
-          ...((allObligations || []).filter((o: any) => parseMoney(o.fields?.remainingBalance || o.fields?.totalAmount) > 0).map((o: any) => {
-            const val = parseMoney(o.fields?.remainingBalance || o.fields?.totalAmount);
-            return { label: o.name, value: `-$${val.toLocaleString()}`, sub: "liability", category: "liability" };
-          })),
-        ]}
-        obligations={(allObligations || []).map((o: any) => ({
-          id: o.id, name: o.name, amount: o.amount, frequency: o.frequency, nextDueDate: o.nextDueDate || o.dueDate,
-        }))}
-        emptyMessage="No assets or liabilities tracked yet."
-      />
+      {/* Liabilities are profiles carrying a loan/remaining balance (financed cars, mortgages,
+          explicit loans). Obligations (recurring bills like utilities) are excluded — they are
+          cash-flow, not balance-sheet liabilities. */}
+      {(() => {
+        const liabilityProfiles = (allProfiles || []).filter((p: any) => {
+          const bal = parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance);
+          if (bal <= 0) return false;
+          if (filterMode === "everyone" || filterIds.length === 0) return true;
+          const pParent = p.fields?._parentProfileId || p.parentProfileId;
+          if (pParent && filterIds.includes(pParent)) return true;
+          if (filterIds.includes(p.id)) return true;
+          return false;
+        });
+        return (
+          <DrillDownDialog
+            open={drill === "networth"}
+            onClose={() => setDrill(null)}
+            title="Net Worth Breakdown"
+            subtitle="Assets minus liabilities"
+            total={`$${netWorth.toLocaleString()}`}
+            items={[
+              ...assetProfiles.map((p: any) => {
+                const val = parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue);
+                return { label: p.name, value: `$${val.toLocaleString()}`, sub: p.type, category: "asset" };
+              }),
+              ...liabilityProfiles.map((p: any) => {
+                const val = parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance);
+                return { label: p.name, value: `-$${val.toLocaleString()}`, sub: `${p.type} loan`, category: "liability" };
+              }),
+            ]}
+            emptyMessage="No assets or liabilities tracked yet. Add a value or loan balance to a profile to see it here."
+          />
+        );
+      })()}
 
       {/* Budget Dialog */}
       <Dialog open={drill === "budget"} onOpenChange={(open) => { if (!open) setDrill(null); }}>

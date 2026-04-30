@@ -1099,8 +1099,9 @@ Respond ONLY in JSON format:
 {"value": 25000, "confidence": "medium", "explanation": "Based on...", "range": {"low": 22000, "high": 28000}}`;
 
       const resp = await client.messages.create({
-        model: "claude-opus-4-5",
-        max_tokens: 256,
+        // Same model used elsewhere in the codebase — "claude-opus-4-5" is not a valid alias.
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5-20250929",
+        max_tokens: 512,
         messages: [{ role: "user", content: prompt }],
       });
 
@@ -1119,8 +1120,9 @@ Respond ONLY in JSON format:
         profileName: profile.name,
       });
     } catch (err: any) {
-      console.error("[routes] find-value failed:", err.message);
-      res.status(500).json({ error: "Failed to estimate value. Please try again." });
+      console.error("[routes] find-value failed:", err?.message, err?.status, err?.error);
+      const detail = err?.error?.error?.message || err?.message || "Unknown error";
+      res.status(500).json({ error: `Failed to estimate value: ${detail}` });
     }
   }));
 

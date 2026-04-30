@@ -2961,24 +2961,37 @@ export class SupabaseStorage implements IStorage {
         spendByCategory, upcomingBills,
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
         totalAssetValue: (() => {
-          // Filter asset profiles by the same profile filter used for everything else
+          // Asset profiles: vehicles, real estate, investments, accounts, subscriptions, generic assets, even loans
+          // (a loan profile may carry the asset's market value separately from its remaining balance).
           const childTypes = new Set(["vehicle", "asset", "investment", "property", "subscription", "loan", "account"]);
           const filteredAssetProfiles = allProfiles.filter(p => {
             if (!childTypes.has(p.type)) return false;
             if (!fpIds || fpIds.length === 0) return true; // No filter = show all
-            // Check if the asset's parent is one of the filtered profiles
             const pParent = p.parentProfileId || p.fields?._parentProfileId;
             if (pParent && fpIds.includes(pParent)) return true;
             return false;
           });
           return filteredAssetProfiles.reduce((s, p) => {
             // parseMoney handles strings like "$25,000" / "40k" that Number() returns NaN for.
-            return s + parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue);
+            return s + parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue || p.fields?.balance || p.fields?.accountBalance);
           }, 0);
         })(),
-        totalLiabilities: allObligations.reduce((s, o) => {
-          return s + parseMoney(o.fields?.remainingBalance || o.fields?.totalAmount);
-        }, 0),
+        // Liabilities: profiles carrying a loan/remaining balance (financed cars, mortgages,
+        // explicit loans). Obligations (recurring bills) are intentionally excluded — they are
+        // monthly cash-flow items, not balance-sheet liabilities.
+        totalLiabilities: (() => {
+          const filteredProfiles = allProfiles.filter(p => {
+            if (!fpIds || fpIds.length === 0) return true;
+            const pParent = p.parentProfileId || p.fields?._parentProfileId;
+            if (pParent && fpIds.includes(pParent)) return true;
+            // Also include the filtered profile itself (in case the loan IS the parent)
+            if (fpIds.includes(p.id)) return true;
+            return false;
+          });
+          return filteredProfiles.reduce((s, p) => {
+            return s + parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance);
+          }, 0);
+        })(),
         recentExpenses: allExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category })),
         monthlyExpenseRecords: monthlyExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category, vendor: e.vendor })),
       },
