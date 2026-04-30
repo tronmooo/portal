@@ -255,6 +255,71 @@ function formatCurrency(val: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(val);
 }
 
+// ── Field flattening (nested → top-level) ───────────────────────────────────
+// Storage paths used by the app:
+//   fields.vehicles.{licensePlate,vin,make,model,year,mileage,color,trim,registrationExpiration}
+//   fields.insurance.{insurer,policyNumber,coverage,coverageType,monthlyPremium,deductible}
+//   fields.housing.{currentValue,address,beds,baths,sqft}
+//   fields.other.{purchasePrice,valuationDate,valuationMethod,valuationRange,valuationConfidence}
+//   fields.finance.{balance,monthlyPayment,interestRate,loans:[{balance}]}
+//   fields.subscriptions.{cost,frequency,monthlyCost,renewalDate,status}
+// Older / manual edits write the same keys at the top level. We promote nested
+// keys to the top level so every reader (`f.licensePlate`, `f.currentValue`,
+// etc.) works, with top-level winning if both exist. Numeric strings like "699"
+// are left as-is — Number(...) at the call site coerces them.
+function flattenProfileFields(rawFields: any): any {
+  if (!rawFields || typeof rawFields !== "object") return rawFields || {};
+  const NESTED_GROUPS = ["vehicles", "insurance", "housing", "other", "finance", "subscriptions"];
+  const out: any = {};
+  // First, copy nested-group keys up
+  for (const group of NESTED_GROUPS) {
+    const nested = rawFields[group];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      for (const [k, v] of Object.entries(nested)) {
+        if (v !== undefined && v !== null && v !== "") {
+          out[k] = v;
+        }
+      }
+    }
+  }
+  // Then, top-level keys win
+  for (const [k, v] of Object.entries(rawFields)) {
+    if (NESTED_GROUPS.includes(k)) {
+      // Preserve the original nested object too so existing code that reads
+      // fields.vehicles.* etc. keeps working
+      out[k] = v;
+      continue;
+    }
+    if (v !== undefined && v !== null && v !== "") {
+      out[k] = v;
+    }
+  }
+  // Liability fallback: if no top-level balance but finance.loans[] has one, sum them
+  const finance = rawFields.finance;
+  if (finance && Array.isArray(finance.loans) && finance.loans.length > 0) {
+    const loanSum = finance.loans.reduce(
+      (s: number, l: any) => s + (Number(l?.balance) || 0),
+      0,
+    );
+    if (loanSum > 0 && (out.balance == null || out.balance === "")) {
+      out.balance = loanSum;
+    }
+  }
+  return out;
+}
+
+// Apply flattening to a profile and (recursively) its child profiles.
+function flattenProfile<T extends { fields?: any; childProfiles?: any[] } | null | undefined>(p: T): T {
+  if (!p) return p;
+  const flat: any = { ...p, fields: flattenProfileFields((p as any).fields) };
+  if (Array.isArray((p as any).childProfiles)) {
+    flat.childProfiles = (p as any).childProfiles.map((c: any) =>
+      c ? { ...c, fields: flattenProfileFields(c.fields) } : c,
+    );
+  }
+  return flat as T;
+}
+
 function getExpirationStatus(doc: Document): "expired" | "soon" | "ok" | null {
   const expField = doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
   if (!expField) return null;
@@ -5882,7 +5947,7 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
   const parentId = f.parentProfileId;
   const parentQuery = useQuery<any>({
     queryKey: ["/api/profiles", parentId, "detail"],
-    queryFn: async () => { const res = await apiRequest("GET", `/api/profiles/${parentId}/detail`); return res.json(); },
+    queryFn: async () => { const res = await apiRequest("GET", `/api/profiles/${parentId}/detail`); return flattenProfile(await res.json()); },
     enabled: !!parentId,
   });
 
@@ -6247,7 +6312,12 @@ export default function ProfileDetailPage() {
     queryKey: ["/api/profiles", id, "detail"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/profiles/${id}/detail`);
-      return res.json();
+      const raw = await res.json();
+      // Flatten nested storage paths (fields.vehicles.*, fields.insurance.*,
+      // fields.housing.*, fields.other.*, fields.finance.*) up to top level so
+      // every reader (`f.licensePlate`, `f.currentValue`, `f.year`, etc.) works
+      // regardless of how the value was originally written. Top-level keys win.
+      return flattenProfile(raw);
     },
     enabled: !!id,
     refetchOnMount: true,
