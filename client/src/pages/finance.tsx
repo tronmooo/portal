@@ -95,6 +95,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
       toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
@@ -151,6 +152,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       toast({ title: "Paycheck deleted" });
     },
     onError: (err: Error) => {
@@ -166,6 +168,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       toast({ title: "Loan payment marked as paid" });
     },

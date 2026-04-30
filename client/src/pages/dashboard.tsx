@@ -1466,6 +1466,7 @@ function ObligationsSection({ data }: { data: any[] }) {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
     },
   });
@@ -1481,6 +1482,7 @@ function ObligationsSection({ data }: { data: any[] }) {
       );
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       toast({ title: `"${variables.name || "Obligation"}" deleted` });
       setSelectedBill(null);

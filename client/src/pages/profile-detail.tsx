@@ -1966,6 +1966,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
@@ -1986,6 +1987,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
@@ -2011,6 +2013,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
@@ -5043,7 +5046,8 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
       const res = await apiRequest("POST", "/api/expenses", { description: claimDesc || "Warranty Claim", amount: Number(claimAmt), date: claimDate, category: "warranty_claim", linkedProfiles: [profileId] });
       return res.json();
     },
-    onSuccess: () => { toast({ title: "Claim added" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setShowAdd(false); setClaimDesc(""); setClaimAmt(""); onChanged(); },
+    onSuccess: () => { toast({ title: "Claim added" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setShowAdd(false); setClaimDesc(""); setClaimAmt(""); onChanged(); },
     onError: (err: Error) => toast({ title: "Failed to add claim", description: formatApiError(err), variant: "destructive" }),
   });
   const deleteClaimMutation = useMutation({
@@ -5055,7 +5059,8 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
       });
       toast({ title: "Claim deleted" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to delete claim", description: formatApiError(err), variant: "destructive" }),
   });
@@ -5133,7 +5138,8 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
       const res = await apiRequest("POST", "/api/expenses", { description: redDesc || "Rewards Redemption", amount: Number(redPts), date: redDate, category: "rewards_redemption", linkedProfiles: [profileId] });
       return res.json();
     },
-    onSuccess: () => { toast({ title: "Redemption added" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setShowAdd(false); setRedDesc(""); setRedPts(""); onChanged(); },
+    onSuccess: () => { toast({ title: "Redemption added" }); queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setShowAdd(false); setRedDesc(""); setRedPts(""); onChanged(); },
     onError: (err: Error) => toast({ title: "Failed to add redemption", description: formatApiError(err), variant: "destructive" }),
   });
   const deleteRedemptionMutation = useMutation({
@@ -5145,7 +5151,8 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
       });
       toast({ title: "Redemption deleted" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to delete redemption", description: formatApiError(err), variant: "destructive" }),
   });
@@ -5494,6 +5501,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
       setShowRecord(false);
@@ -5510,7 +5518,8 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
       });
       toast({ title: "Payment deleted" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to delete payment", description: formatApiError(err), variant: "destructive" }),
   });
@@ -5670,6 +5679,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
@@ -5692,6 +5702,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
@@ -5706,7 +5717,8 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
       });
       toast({ title: "Payment deleted" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to delete payment", description: formatApiError(err), variant: "destructive" }),
   });
@@ -6259,6 +6271,7 @@ export default function ProfileDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       navigate("/profiles");
     },
