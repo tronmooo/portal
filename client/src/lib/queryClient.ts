@@ -8,7 +8,22 @@ export const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    // Try to parse the body as JSON and extract a friendly message.
+    // Server convention: { error: "msg" } or { error: { issues: [{ message }, ...] } } from Zod.
+    let friendly = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object') {
+        const e = parsed.error;
+        if (typeof e === 'string') friendly = e;
+        else if (e && Array.isArray(e.issues) && e.issues[0]?.message) friendly = e.issues.map((i: any) => i.message).filter(Boolean).join('; ');
+        else if (e && typeof e === 'object' && typeof e.message === 'string') friendly = e.message;
+        else if (typeof parsed.message === 'string') friendly = parsed.message;
+      }
+    } catch {
+      // Not JSON — keep raw text
+    }
+    throw new Error(`${res.status}: ${friendly}`);
   }
 }
 

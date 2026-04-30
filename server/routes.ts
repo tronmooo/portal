@@ -262,6 +262,7 @@ export async function registerRoutes(
         bustCache(`documents:${uid}`);
         bustCache(`goals:${uid}`);
         bustCache(`insights:${uid}`);
+        bustCache(`insights-data:${uid}`);
         bustCache(`activity:${uid}`);
         bustCache(`ai-digest:${uid}`);
         bustCache(`artifacts:${uid}`);
@@ -804,10 +805,14 @@ export async function registerRoutes(
   // ---- Insights ----
   app.get("/api/insights", asyncHandler(async (req, res) => {
     try {
+      const uid = (req as AuthenticatedRequest).userId || "anon";
       const profileIdsParam = req.query.profileIds as string | undefined;
       const profileId = req.query.profileId as string | undefined;
       const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
-      const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] = await Promise.all([
+      // Cache the *unfiltered* dataset under a per-user key for ~30s; filtering is cheap and runs per request.
+      const ck = `insights-data:${uid}`;
+      const hit = getCached(ck);
+      const dataset = hit || await dedupe(ck, () => Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
         storage.getTasks(),
@@ -818,7 +823,10 @@ export async function registerRoutes(
         storage.getDocuments(),
         storage.getGoals(),
         storage.getEvents(),
-      ]);
+      ]));
+      if (!hit) setCache(ck, dataset, 30 * 1000);
+      const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] =
+        dataset as [Awaited<ReturnType<typeof storage.getProfiles>>, Awaited<ReturnType<typeof storage.getTrackers>>, Awaited<ReturnType<typeof storage.getTasks>>, Awaited<ReturnType<typeof storage.getExpenses>>, Awaited<ReturnType<typeof storage.getHabits>>, Awaited<ReturnType<typeof storage.getObligations>>, Awaited<ReturnType<typeof storage.getJournalEntries>>, Awaited<ReturnType<typeof storage.getDocuments>>, Awaited<ReturnType<typeof storage.getGoals>>, Awaited<ReturnType<typeof storage.getEvents>>];
       // Filter by ANY of the selected profiles. If any selected ID is a 'self' profile,
       // legacy items with an empty linkedProfiles list also match.
       const filterActive = ids.length > 0;
@@ -958,7 +966,7 @@ export async function registerRoutes(
       }
     }
     const parsed = insertProfileSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     res.status(201).json(await storage.createProfile(parsed.data));
   }));
   app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
@@ -1320,7 +1328,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       return res.status(409).json({ error: `A tracker named "${dup.name}" already exists for this profile`, existingId: dup.id });
     }
     const parsed = insertTrackerSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // Pass linkedProfiles through to createTracker (schema strips it, so add it back)
     const trackerData = { ...parsed.data, linkedProfiles: requestedProfiles } as any;
     res.status(201).json(await storage.createTracker(trackerData));
@@ -1395,7 +1403,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (val > 100000) return res.status(400).json({ error: `Value ${val} for "${key}" exceeds maximum (100,000).` });
     }
     const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(404).json({ error: "Tracker not found" });
     const uid_te1 = (req as AuthenticatedRequest).userId || "anon";
@@ -1436,7 +1444,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Tasks ----
   app.get("/api/tasks", asyncHandler(async (req, res) => {
-    let items = await storage.getTasks();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `tasks:${uid}`;
+    const hit = getCached(ck);
+    let items: Awaited<ReturnType<typeof storage.getTasks>> = hit || await dedupe(ck, () => storage.getTasks());
+    if (!hit) setCache(ck, items, 3 * 60 * 1000);
     // Support both ?profileId=x (single) and ?profileIds=x,y (multi)
     const fp = req.query.profileId as string | undefined;
     const fps = req.query.profileIds as string | undefined;
@@ -1465,7 +1477,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     req.body.title = sanitize(req.body.title);
     if (req.body.description) req.body.description = sanitize(req.body.description);
     const parsed = insertTaskSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`);
@@ -1594,7 +1606,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const parsed = insertExpenseSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newExpense = await storage.createExpense(parsed.data);
     const uid_e1 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`); bustCache(`enhanced:`);
@@ -1622,7 +1634,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
-    let items = await storage.getPaychecks();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `paychecks:${uid}`;
+    const hit = getCached(ck);
+    let items: Awaited<ReturnType<typeof storage.getPaychecks>> = hit || await dedupe(ck, () => storage.getPaychecks());
+    if (!hit) setCache(ck, items, 3 * 60 * 1000);
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -1725,7 +1741,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
   app.post("/api/events", asyncHandler(async (req, res) => {
     const parsed = insertEventSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newEvent = await storage.createEvent(parsed.data);
     const uid_ev1 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`);
@@ -1924,7 +1940,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       return res.status(400).json({ error: "Habit name is required" });
     }
     const parsed = insertHabitSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     let newHabit = await storage.createHabit(parsed.data);
     // Apply linkedProfiles if provided (not part of insert schema)
     if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0) {
@@ -1980,7 +1996,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Obligations ----
   app.get("/api/obligations", asyncHandler(async (req, res) => {
-    let items = await storage.getObligations();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `obligations:${uid}`;
+    const hit = getCached(ck);
+    let items: Awaited<ReturnType<typeof storage.getObligations>> = hit || await dedupe(ck, () => storage.getObligations());
+    if (!hit) setCache(ck, items, 3 * 60 * 1000);
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     if (profileIdsParam) {
@@ -2003,7 +2023,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
   app.post("/api/obligations", asyncHandler(async (req, res) => {
     const parsed = insertObligationSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     res.status(201).json(await storage.createObligation(parsed.data));
   }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
@@ -2062,7 +2082,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.post("/api/artifacts", asyncHandler(async (req, res) => {
     if (req.body.title) req.body.title = sanitize(req.body.title);
     const parsed = insertArtifactSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     res.status(201).json(await storage.createArtifact(parsed.data));
   }));
   app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
@@ -2089,7 +2109,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Journal ----
   app.get("/api/journal", asyncHandler(async (req, res) => {
-    let items = await storage.getJournalEntries();
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `journal:${uid}`;
+    const hit = getCached(ck);
+    let items: Awaited<ReturnType<typeof storage.getJournalEntries>> = hit || await dedupe(ck, () => storage.getJournalEntries());
+    if (!hit) setCache(ck, items, 3 * 60 * 1000);
     const fp = req.query.profileId as string | undefined;
     if (fp) {
       const allProfiles = await storage.getProfiles();
@@ -2105,7 +2129,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     req.body.content = sanitize(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     let newEntry = await storage.createJournalEntry(parsed.data);
     // Apply linkedProfiles if provided (not part of insert schema)
     if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0) {
@@ -2156,7 +2180,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
   app.post("/api/memories", asyncHandler(async (req, res) => {
     const parsed = insertMemorySchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     try { res.status(201).json(await storage.saveMemory(parsed.data)); }
     catch (err: any) { console.error("[memories]", err?.message || err); res.status(500).json({ error: "Failed to save memory" }); }
   }));
@@ -2198,7 +2222,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
   app.post("/api/domains", asyncHandler(async (req, res) => {
     const parsed = insertDomainSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     res.status(201).json(await storage.createDomain(parsed.data));
   }));
   app.patch("/api/domains/:id", asyncHandler(async (req, res) => {
