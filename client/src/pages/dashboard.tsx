@@ -1442,14 +1442,32 @@ function ObligationsSection({ data }: { data: any[] }) {
 
   const payMutation = useMutation({
     mutationFn: ({ id, name, amount }: { id: string; name?: string; amount?: number }) => apiRequest("POST", `/api/obligations/${id}/pay`),
+    // Optimistic: remove the bill from the visible bills list immediately so the
+    // "Mark Paid" tap feels instant. Reconcile from server in onSettled.
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((b: any) => b.id !== id) : old
+      );
+      return { prev };
+    },
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       toast({ title: `"${variables.name || "Bill"}" marked paid`, description: variables.amount ? `$${variables.amount.toFixed(2)} payment recorded` : undefined });
       setSelectedBill(null);
     },
-    onError: (_err, variables) => toast({ title: `Failed to mark "${variables.name || "bill"}" as paid`, variant: "destructive" }),
+    onError: (_err, variables, context: any) => {
+      // Roll back optimistic removal
+      if (context?.prev) {
+        for (const [key, value] of context.prev) queryClient.setQueryData(key, value);
+      }
+      toast({ title: `Failed to mark "${variables.name || "bill"}" as paid`, variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+    },
   });
 
   const deleteMutation = useMutation({

@@ -3907,16 +3907,40 @@ function TasksTab({
       const res = await apiRequest("PATCH", `/api/tasks/${taskId}`, { status });
       return { ...(await res.json()), _title: title };
     },
-    onSuccess: (data, variables) => {
+    // Optimistic update — flip the status immediately in the profile detail cache
+    // so the checkbox/UI snaps without waiting for the network round trip.
+    onMutate: async ({ taskId, status }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const prev = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
+      if (prev) {
+        queryClient.setQueryData(["/api/profiles", profileId, "detail"], {
+          ...prev,
+          tasks: Array.isArray(prev.tasks)
+            ? prev.tasks.map((t: any) => t.id === taskId ? { ...t, status } : t)
+            : prev.tasks,
+        });
+      }
+      // Same for the bare /api/tasks list — cover all variant keys.
+      queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
+        Array.isArray(old) ? old.map((t: any) => t.id === taskId ? { ...t, status } : t) : old
+      );
+      return { prev };
+    },
+    onSuccess: (_data, variables) => {
+      toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
+      onChanged();
+    },
+    onError: (err: Error, variables, context: any) => {
+      // Roll back the optimistic update on failure
+      if (context?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], context.prev);
+      toast({ title: `Failed to update "${variables.title || "task"}"`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      // Reconcile with server to catch any drift
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
-      onChanged();
-    },
-    onError: (err: Error, variables) => {
-      toast({ title: `Failed to update "${variables.title || "task"}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
 

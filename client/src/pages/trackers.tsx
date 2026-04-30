@@ -1769,14 +1769,36 @@ function EntryRow({
 
   const editMutation = useMutation({
     mutationFn: () => apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, { values: editVals }),
+    // Optimistic: patch the entry inside cached trackers immediately so the
+    // edit feels instant. Roll back if the server rejects.
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/trackers"] });
+      queryClient.setQueriesData({ queryKey: ["/api/trackers"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((t: any) => {
+          if (t.id !== tracker.id) return t;
+          if (!Array.isArray(t.entries)) return t;
+          return { ...t, entries: t.entries.map((e: any) => e.id === entry.id ? { ...e, values: { ...e.values, ...editVals } } : e) };
+        });
+      });
+      return { prev };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setEditing(false);
       toast({ title: "Entry updated" });
     },
-    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error, _vars, context: any) => {
+      if (context?.prev) {
+        for (const [key, value] of context.prev) queryClient.setQueryData(key, value);
+      }
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
   });
 
   const startEdit = () => {

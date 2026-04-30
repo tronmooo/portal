@@ -103,31 +103,53 @@ function HabitCard({ habit }: { habit: Habit }) {
     },
   });
 
-  // Rename habit
-  const renameMutation = useMutation<any, Error, string>({
+  // Rename habit — optimistic so the new name shows instantly
+  const renameMutation = useMutation<any, Error, string, { prev: any }>({
     mutationFn: (newName: string) =>
       apiRequest("PATCH", `/api/habits/${habit.id}`, { name: newName }),
-    onSuccess: () => {
+    onMutate: async (newName) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData({ queryKey: ["/api/habits"] }, (old: any) =>
+        Array.isArray(old) ? old.map((h: any) => h.id === habit.id ? { ...h, name: newName } : h) : old
+      );
+      return { prev };
+    },
+    onSuccess: () => toast({ title: "Habit renamed" }),
+    onError: (err: Error, _v, context) => {
+      if (context?.prev) {
+        for (const [key, value] of context.prev) queryClient.setQueryData(key, value);
+      }
+      toast({ title: "Failed to rename", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: "Habit renamed" });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Failed to rename", description: formatApiError(err), variant: "destructive" });
     },
   });
 
-  // Change frequency
-  const frequencyMutation = useMutation<any, Error, string>({
+  // Change frequency — optimistic
+  const frequencyMutation = useMutation<any, Error, string, { prev: any }>({
     mutationFn: (newFrequency: string) =>
       apiRequest("PATCH", `/api/habits/${habit.id}`, { frequency: newFrequency }),
-    onSuccess: () => {
+    onMutate: async (newFrequency) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData({ queryKey: ["/api/habits"] }, (old: any) =>
+        Array.isArray(old) ? old.map((h: any) => h.id === habit.id ? { ...h, frequency: newFrequency } : h) : old
+      );
+      return { prev };
+    },
+    onSuccess: (_data, newFrequency) => toast({ title: `Frequency updated to ${newFrequency}` }),
+    onError: (err: Error, _v, context) => {
+      if (context?.prev) {
+        for (const [key, value] of context.prev) queryClient.setQueryData(key, value);
+      }
+      toast({ title: "Failed to update frequency", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      toast({ title: `Frequency updated to ${frequencyMutation.variables}` });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Failed to update frequency", description: formatApiError(err), variant: "destructive" });
     },
   });
 
