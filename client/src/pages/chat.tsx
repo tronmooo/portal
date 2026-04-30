@@ -488,6 +488,26 @@ function ExtractionConfirmation({
   const [selectedTrackers, setSelectedTrackers] = useState<boolean[]>(
     () => (extraction.trackerEntries || []).map(() => true)
   );
+  // Track which trackable PROFILE fields (height, weight, etc.) should ALSO be turned
+  // into a time-series tracker entry. Bug fix: previously "create tracker for height"
+  // checkbox had no effect because height was hard-coded as a profile-only field.
+  const TRACKABLE_PROFILE_KEYS = new Set([
+    'height', 'weight', 'bmi', 'bodyFat', 'bodyFatPercentage',
+    'systolic', 'diastolic', 'bloodPressure', 'heartRate', 'pulse',
+    'temperature', 'bodyTemperature', 'restingHeartRate', 'oxygenSaturation', 'spo2',
+    'glucose', 'bloodGlucose', 'cholesterol', 'totalCholesterol', 'ldl', 'hdl', 'triglycerides',
+    'a1c', 'hba1c'
+  ]);
+  const isTrackableField = (key: string) =>
+    TRACKABLE_PROFILE_KEYS.has(key) || /^(height|weight|bp|bmi|temperature|heart_?rate)$/i.test(key);
+  const [alsoTrack, setAlsoTrack] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    for (const f of extraction.extractedFields) {
+      // Default to ON for trackable fields — user almost always wants the time-series too.
+      if (isTrackableField(f.key)) init[f.key] = true;
+    }
+    return init;
+  });
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
   const [createExpense, setCreateExpense] = useState(!!extraction.pendingFinancial?.expense);
   const [createObligation, setCreateObligation] = useState(!!extraction.pendingFinancial?.obligation);
@@ -516,12 +536,66 @@ function ExtractionConfirmation({
         title: f.suggestedEvent!,
         category: /expir|renew/i.test(f.key || "") ? "finance" : /appoint|visit/i.test(f.key || "") ? "health" : "other",
       }));
+    // Build synthetic tracker entries from the trackable profile fields the user opted into.
+    // This makes the inline "Also track over time" checkbox actually create a tracker, fixing
+    // the silent drop where height/weight checkboxes did nothing because they're personal keys.
+    const syntheticTrackerEntries = fields
+      .filter((f) => f.selected && f.key && alsoTrack[f.key])
+      .map((f) => {
+        const rawStr = String(f.value ?? '').trim();
+        // Try to parse height like 5'10" → 70 (inches)
+        let numValue: number | null = null;
+        let unit = '';
+        if (/^(\d+)'\s*(\d+)?\"?$/.test(rawStr)) {
+          const m = rawStr.match(/^(\d+)'\s*(\d+)?\"?$/)!;
+          numValue = parseInt(m[1], 10) * 12 + parseInt(m[2] || '0', 10);
+          unit = 'in';
+        } else if (/^(\d+(\.\d+)?)\s*(lbs?|kg|cm|in|mmHg|bpm|°F|°C|mg\/dL|%)?$/i.test(rawStr)) {
+          const m = rawStr.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z%°\/]*)$/)!;
+          numValue = parseFloat(m[1]);
+          unit = (m[2] || '').toLowerCase();
+        } else if (/^\d+\/\d+$/.test(rawStr)) {
+          // Blood pressure like 120/80 — store both
+          const [sys, dia] = rawStr.split('/').map((n) => parseInt(n, 10));
+          return {
+            trackerName: 'Blood Pressure',
+            values: { systolic: sys, diastolic: dia },
+            unit: 'mmHg',
+            category: 'health',
+            __fromProfileField: f.key,
+          };
+        } else {
+          const n = parseFloat(rawStr);
+          if (!isNaN(n)) numValue = n;
+        }
+        if (numValue === null) return null;
+        // Default units when unparseable
+        if (!unit) {
+          if (/height/i.test(f.key)) unit = 'in';
+          else if (/weight/i.test(f.key)) unit = 'lbs';
+          else if (/temperature/i.test(f.key)) unit = '°F';
+          else if (/heart_?rate|pulse/i.test(f.key)) unit = 'bpm';
+        }
+        const niceName = (f.label || f.key).replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
+        return {
+          trackerName: niceName,
+          values: { value: numValue },
+          unit,
+          category: 'health',
+          __fromProfileField: f.key,
+        };
+      })
+      .filter((e): e is NonNullable<typeof e> => e !== null);
+
     const success = await onConfirm({
       extractionId: extraction.extractionId,
       confirmedFields,
       targetProfileId: selectedProfileId || extraction.targetProfile?.id,
       createCalendarEvents,
-      trackerEntries: (extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
+      trackerEntries: [
+        ...(extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
+        ...syntheticTrackerEntries,
+      ],
       createExpense: createExpense ? extraction.pendingFinancial?.expense : undefined,
       createObligation: createObligation ? extraction.pendingFinancial?.obligation : undefined,
     });
@@ -625,6 +699,27 @@ function ExtractionConfirmation({
                 <span className="text-xs text-blue-600 dark:text-blue-400">
                   Will create: {field.suggestedEvent}
                 </span>
+              )}
+              {/* "Also track over time" inline toggle for trackable numeric profile fields
+                  (height, weight, BP, etc.) — fixes the silent drop where this checkbox
+                  used to do nothing. */}
+              {field.selected && field.key && isTrackableField(field.key) && (
+                <label
+                  className="flex items-center gap-1.5 mt-0.5 cursor-pointer"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Checkbox
+                    checked={!!alsoTrack[field.key]}
+                    onCheckedChange={(checked) =>
+                      setAlsoTrack((prev) => ({ ...prev, [field.key]: !!checked }))
+                    }
+                    className="h-3 w-3"
+                    data-testid={`also-track-${field.key}`}
+                  />
+                  <span className="text-[10px] text-muted-foreground">
+                    Also create a tracker for this
+                  </span>
+                </label>
               )}
             </div>
           </label>

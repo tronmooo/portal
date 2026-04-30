@@ -100,10 +100,10 @@ function PageLoader() {
 }
 
 function ThemeToggle() {
-  const { theme, toggle } = useTheme();
+  const { resolvedMode, toggle } = useTheme();
   return (
-    <Button variant="ghost" size="icon" onClick={toggle} className="h-9 w-9" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} data-testid="button-theme-toggle">
-      {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    <Button variant="ghost" size="icon" onClick={toggle} className="h-8 w-8" aria-label={resolvedMode === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={resolvedMode === "dark" ? "Switch to light mode" : "Switch to dark mode"} data-testid="button-theme-toggle">
+      {resolvedMode === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </Button>
   );
 }
@@ -486,6 +486,8 @@ function App() {
                           <Users className="h-4 w-4" />
                         </Button>
                         <NotificationBell />
+                        {/* Top-right dark/light toggle — always visible on every screen size. */}
+                        <ThemeToggle />
                         {/* Calendar + Settings are in the sidebar on desktop — removed redundant header icons (fix #28) */}
                         <ProfileButton />
                       </div>

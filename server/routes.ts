@@ -87,10 +87,19 @@ function clearAllCache(): void {
 }
 
 // Middleware: clear server cache on ANY mutation (POST/PATCH/PUT/DELETE)
-// This ensures deleted documents, updated profiles, etc. are immediately reflected
+// This ensures deleted documents, updated profiles, etc. are immediately reflected.
+//
+// Bug fix: previously this only fired on res.on('finish'), which races with the
+// client's onSuccess invalidateAll() that fires GET /api/profiles immediately —
+// the GET could return stale cache before 'finish' cleared it. Now we ALSO bust
+// caches synchronously BEFORE handing control to the route for chat/upload paths
+// that mutate data via internal AI tool calls (not just direct REST writes).
 function cacheBustMiddleware(req: any, res: any, next: any) {
-  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
-    // Clear cache AFTER the response is sent (so the mutation completes first)
+  const isMutation = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
+  // Chat & upload endpoints can create/update entities via AI tools — pre-bust caches
+  // so the client's invalidate-then-refetch sequence sees fresh data.
+  const isAiMutator = req.path === '/api/chat' || req.path.startsWith('/api/upload') || req.path === '/api/chat/confirm-extraction';
+  if (isMutation || isAiMutator) {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 400) {
         clearAllCache();
@@ -264,6 +273,10 @@ export async function registerRoutes(
       const tz = getTimezone(req);
       (storage as any)._timezone = tz;
       const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
+      // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
+      // internal AI tool calls. Bust the response cache BEFORE sending the response so
+      // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
+      clearAllCache();
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
@@ -724,6 +737,8 @@ export async function registerRoutes(
         saved.push(`Created bill: $${obl.amount}/mo ${obl.name}`);
       }
 
+      // Bust caches BEFORE responding so client's invalidate-and-refetch sees fresh state.
+      clearAllCache();
       res.json({
         success: true,
         message: saved.length > 0
@@ -858,7 +873,9 @@ export async function registerRoutes(
     const hit = getCached(ck);
     if (hit) return res.json(paginate(hit, req, res));
     const items = await dedupe(ck, () => storage.getProfiles());
-    setCache(ck, items, 5 * 60 * 1000);
+    // Short cache (5s) so newly-created profiles appear immediately after chat creates them.
+    // Profile list is small (<1k rows) so DB cost is negligible. Bug fix: was 5 min, racing with chat.
+    setCache(ck, items, 5 * 1000);
     res.json(paginate(items, req, res));
   }));
   app.get("/api/profiles/:id", asyncHandler(async (req, res) => {

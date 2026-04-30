@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
-import { useTheme } from "@/components/theme-provider";
+import { useTheme, COLOR_PRESETS } from "@/components/theme-provider";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -124,7 +124,13 @@ function NotificationToggle({ prefKey, label, description, icon }: { prefKey: st
 export default function SettingsPage() {
   useEffect(() => { document.title = "Settings — Portol"; }, []);
   const { user, signOut } = useAuth();
-  const { theme, toggle } = useTheme();
+  const { mode, resolvedMode, setMode, primary, setPreset, setHue } = useTheme();
+  // Pull current hue from the live --primary CSS var so the slider always reflects what's applied.
+  const currentHue = (() => {
+    const m = primary.match(/^(\d+(?:\.\d+)?)/);
+    return m ? parseInt(m[1], 10) : 186;
+  })();
+  const matchedPreset = COLOR_PRESETS.find((p) => p.primary === primary)?.id;
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -452,18 +458,93 @@ export default function SettingsPage() {
               <CardTitle className="text-base">Appearance</CardTitle>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {theme === "dark" ? <Moon className="h-4 w-4 text-muted-foreground" /> : <Sun className="h-4 w-4 text-muted-foreground" />}
-                <div>
-                  <Label className="text-sm font-medium">Dark Mode</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {theme === "dark" ? "Dark theme active" : "Light theme active"}
-                  </p>
-                </div>
+          <CardContent className="space-y-5">
+            {/* Mode — light / dark / system */}
+            <div>
+              <Label className="text-sm font-medium">Mode</Label>
+              <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+                {mode === "system"
+                  ? `Following your device (${resolvedMode})`
+                  : `${resolvedMode === "dark" ? "Dark" : "Light"} theme active`}
+              </p>
+              <div className="inline-flex rounded-lg border border-border/60 bg-muted/30 p-0.5" role="radiogroup" aria-label="Theme mode">
+                {([
+                  { value: "light",  Icon: Sun,     label: "Light"  },
+                  { value: "dark",   Icon: Moon,    label: "Dark"   },
+                  { value: "system", Icon: Monitor, label: "System" },
+                ] as const).map(({ value, Icon, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setMode(value)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === value ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    aria-pressed={mode === value}
+                    data-testid={`mode-${value}`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {label}
+                  </button>
+                ))}
               </div>
-              <Switch checked={theme === "dark"} onCheckedChange={toggle} data-testid="switch-dark-mode" />
+            </div>
+
+            <Separator />
+
+            {/* Accent color presets */}
+            <div>
+              <Label className="text-sm font-medium">Accent color</Label>
+              <p className="text-xs text-muted-foreground mt-0.5 mb-2.5">
+                Pick a preset, or fine-tune with the hue slider below.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {COLOR_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setPreset(p.id)}
+                    className={`relative h-9 w-9 rounded-full border-2 transition-all hover:scale-105 ${matchedPreset === p.id ? "border-foreground shadow-md" : "border-border/40"}`}
+                    style={{ backgroundColor: `hsl(${p.primary})` }}
+                    aria-label={`Set accent color to ${p.label}`}
+                    title={p.label}
+                    data-testid={`color-preset-${p.id}`}
+                  >
+                    {matchedPreset === p.id && (
+                      <CheckCircle2 className="absolute -top-1 -right-1 h-4 w-4 bg-background rounded-full text-foreground" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom hue slider */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <Label className="text-sm font-medium">Custom hue</Label>
+                <span className="text-xs text-muted-foreground tabular-nums">{currentHue}°</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={360}
+                value={currentHue}
+                onChange={(e) => setHue(parseInt(e.target.value, 10))}
+                className="w-full h-3 rounded-full appearance-none cursor-pointer"
+                style={{
+                  background: "linear-gradient(to right, hsl(0 85% 50%), hsl(60 85% 50%), hsl(120 85% 50%), hsl(180 85% 50%), hsl(240 85% 50%), hsl(300 85% 50%), hsl(360 85% 50%))",
+                }}
+                aria-label="Custom theme hue"
+                data-testid="hue-slider"
+              />
+              <div className="mt-2 flex items-center gap-3">
+                <div
+                  className="h-8 w-8 rounded-lg border border-border/40"
+                  style={{ backgroundColor: `hsl(${primary})` }}
+                  aria-hidden
+                />
+                <span className="text-xs text-muted-foreground">
+                  Live preview — the whole app updates as you drag.
+                </span>
+              </div>
             </div>
           </CardContent>
         </Card>
