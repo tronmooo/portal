@@ -3975,10 +3975,10 @@ export default function TrackersPage() {
         </div>
       )}
 
-      {/* Summary cards */}
-      {(sectionFilter === "all" || sectionFilter === "trackers") && filteredTrackers.length > 0 && (
-        <TrackerSummary trackers={filteredTrackers} profiles={profiles || undefined} onTrackerClick={setSelectedTrackerId} />
-      )}
+      {/* Summary cards intentionally hidden — they duplicated the group filter
+          chips above and added noise (the "This Week / Most Active / Streak /
+          Health Score" KPI strip plus a second group pill row). Tap a group
+          chip above to scope the trackers list. */}
 
       {/* Assets & Vehicles — grouped by type */}
       {(sectionFilter === "all" || sectionFilter === "profiles") && (() => {

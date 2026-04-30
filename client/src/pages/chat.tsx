@@ -2183,6 +2183,11 @@ export default function ChatPage() {
                         log_tracker_entry: "tracker-entries",
                         add_tracker_entry: "tracker-entries",
                       };
+                      // update_profile is reverted in-place by re-applying previous fields,
+                      // not by deleting the row. Detect it separately so the action card can
+                      // render a Revert button.
+                      const previousState = (action.data as any)?._previousState;
+                      const canRevert = action.type === 'update_profile' && !isUndone && previousState && previousState.profileId;
                       const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
                       // Build a meaningful title — always uppercase tracker/type label
                       const isTrackerEntry = action.type === 'log_entry' || (action.type as string) === 'log_tracker_entry';
@@ -2285,6 +2290,50 @@ export default function ChatPage() {
                                 })}
                               >
                                 × Delete
+                              </button>
+                            )}
+                            {/* Revert button — update_profile only. Re-applies the field
+                                values that were overwritten so the change is undone in place. */}
+                            {canRevert && (
+                              <button
+                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-amber-500/50 text-amber-600 bg-amber-500/5 hover:bg-amber-500/15 active:scale-95 transition-all"
+                                title="Restore the previous values"
+                                data-testid={`button-revert-${action.type}-${i}`}
+                                onClick={stopProp(async () => {
+                                  const ps = (action.data as any)?._previousState;
+                                  if (!ps?.profileId) return;
+                                  try {
+                                    // Fetch current profile so we can compose a precise revert
+                                    // (strip keys that didn't exist before, restore those that did).
+                                    const cur = await apiRequest("GET", `/api/profiles/${ps.profileId}`).then(r => r.json());
+                                    const restoredFields: Record<string, any> = { ...(cur?.fields || {}) };
+                                    for (const [k, v] of Object.entries(ps.fields || {})) {
+                                      if (v === undefined) delete restoredFields[k];
+                                      else restoredFields[k] = v;
+                                    }
+                                    const body: any = { fields: restoredFields };
+                                    if (ps.notes !== undefined) body.notes = ps.notes;
+                                    if (ps.tags !== undefined) body.tags = ps.tags;
+                                    if (ps.type !== undefined) body.type = ps.type;
+                                    await apiRequest("PUT", `/api/profiles/${ps.profileId}`, body);
+                                    action.data = { ...action.data, _undone: true };
+                                    setMessages(prev => prev.map(m => ({
+                                      ...m,
+                                      actions: m.actions ? [...m.actions] : m.actions,
+                                    })));
+                                    queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+                                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                                    toast({
+                                      title: "Reverted",
+                                      description: `Restored ${cur?.name || 'profile'} to its previous state`,
+                                    });
+                                  } catch {
+                                    toast({ title: "Revert failed — try again", variant: "destructive" });
+                                  }
+                                })}
+                              >
+                                ↶ Revert
                               </button>
                             )}
                           </div>

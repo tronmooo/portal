@@ -2313,6 +2313,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const pParent = p.fields?._parentProfileId || p.parentProfileId;
     if (pParent && filterIds.includes(pParent)) return true;
+    // Also include the filtered profile itself (an asset can be linked directly,
+    // not just as a child of a parent profile). Without this, switching to e.g. Bob
+    // hides assets attached straight to Bob's profile.
+    if (filterIds.includes(p.id)) return true;
     return false;
   }), [allProfiles, filterMode, filterIds]);
 
@@ -2459,12 +2463,14 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
       </div>{/* end two-col grid */}
 
       {/* Spending Drill-Down */}
+      {/* Total is computed from the rendered records so the headline always
+          equals the sum of the rows shown under any profile filter. */}
       <DrillDownDialog
         open={drill === "spending"}
         onClose={() => setDrill(null)}
         title="Monthly Spending"
         subtitle={`${now.toLocaleDateString("en-US", { month: "long", year: "numeric" })} • ${monthExpenses.length} expenses`}
-        total={`$${monthlySpend.toLocaleString()}`}
+        total={`$${monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0).toLocaleString()}`}
         items={[
           ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).map(([cat, amt]) => ({
             label: cat.charAt(0).toUpperCase() + cat.slice(1),
@@ -2499,14 +2505,20 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
       />
 
       {/* Cash Flow Drill-Down */}
+      {(() => {
+        // Recompute totals from the same data shown below so the headline
+        // always reconciles with the breakdown rows under any filter.
+        const filteredSpend = monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0);
+        const filteredCashFlow = monthlyIncome - filteredSpend;
+        return (
       <DrillDownDialog
         open={drill === "cashflow"}
         onClose={() => setDrill(null)}
         title="Cash Flow Breakdown"
-        total={`${cashFlow >= 0 ? "+" : ""}$${cashFlow.toLocaleString()}`}
+        total={`${filteredCashFlow >= 0 ? "+" : "-"}$${Math.abs(filteredCashFlow).toLocaleString()}`}
         items={[
           { label: "Total Income", value: `+$${monthlyIncome.toLocaleString()}`, sub: `${(incomes || []).length} sources`, category: "income" },
-          { label: "Total Spending", value: `-$${monthlySpend.toLocaleString()}`, sub: `${monthExpenses.length} expenses`, category: "expense" },
+          { label: "Total Spending", value: `-$${filteredSpend.toLocaleString()}`, sub: `${monthExpenses.length} expenses`, category: "expense" },
           { label: "Monthly Bills", value: `-$${((allObligations || []).reduce((s: number, o: any) => s + (o.amount || 0), 0)).toLocaleString()}`, sub: `${(allObligations || []).length} obligations`, category: "obligation" },
           ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).slice(0, 5).map(([cat, amt]) => ({
             label: `Spending: ${cat}`, value: `-$${amt.toLocaleString()}`, category: cat,
@@ -2516,6 +2528,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           id: o.id, name: o.name, amount: o.amount, frequency: o.frequency, nextDueDate: o.nextDueDate || o.dueDate,
         }))}
       />
+        );
+      })()}
 
       {/* Net Worth Drill-Down */}
       {/* Liabilities are profiles carrying a loan/remaining balance (financed cars, mortgages,
@@ -2531,13 +2545,25 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           if (filterIds.includes(p.id)) return true;
           return false;
         });
+        // Compute the popup total from the SAME items rendered below — guarantees
+        // the headline figure always matches the sum of the breakdown rows under
+        // every filter (Everyone, single profile, multi-select).
+        const filteredAssetTotal = assetProfiles.reduce(
+          (s: number, p: any) => s + parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue),
+          0
+        );
+        const filteredLiabilityTotal = liabilityProfiles.reduce(
+          (s: number, p: any) => s + parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance),
+          0
+        );
+        const filteredNetWorth = filteredAssetTotal - filteredLiabilityTotal;
         return (
           <DrillDownDialog
             open={drill === "networth"}
             onClose={() => setDrill(null)}
             title="Net Worth Breakdown"
             subtitle="Assets minus liabilities"
-            total={`$${netWorth.toLocaleString()}`}
+            total={`${filteredNetWorth < 0 ? "-" : ""}$${Math.abs(filteredNetWorth).toLocaleString()}`}
             items={[
               ...assetProfiles.map((p: any) => {
                 const val = parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue);

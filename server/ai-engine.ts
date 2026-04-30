@@ -3228,13 +3228,43 @@ async function executeTool(name: string, input: any): Promise<any> {
           .map(p => p.name);
         return { error: `Profile "${input.name}" not found.${suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : " Use create_profile to create a new one."}` };
       }
-      
+
+      // ----- Revert support -----
+      // Capture the previous values of every key the change is touching so the
+      // chat UI can offer a Revert button. Only the keys actually being modified
+      // are recorded (so reverting restores exactly what was overwritten and
+      // leaves anything added later untouched).
+      const previousFields: Record<string, any> = {};
+      if (input.changes.fields && profile.fields) {
+        for (const key of Object.keys(input.changes.fields)) {
+          // Use `in` so we record `undefined` for keys that didn't exist before —
+          // reverting will then strip those keys back out.
+          previousFields[key] = key in profile.fields ? (profile.fields as any)[key] : undefined;
+        }
+      }
+      const previousNotes = input.changes.notes !== undefined ? (profile.notes ?? null) : undefined;
+      const previousTags = input.changes.tags !== undefined ? (profile.tags || []) : undefined;
+      const previousType = input.changes.type !== undefined ? profile.type : undefined;
+
       const changes: any = {};
       if (input.changes.fields) changes.fields = { ...profile.fields, ...input.changes.fields };
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
       if (input.changes.type) changes.type = input.changes.type;
-      return storage.updateProfile(profile.id, changes);
+      const updated = await storage.updateProfile(profile.id, changes);
+      // Attach revert metadata so the chat action card can render a Revert button.
+      // Non-enumerable would be safer, but the action result is JSON-serialised
+      // before reaching the client, so we use a plain underscore-prefixed key.
+      return {
+        ...(updated || {}),
+        _previousState: {
+          profileId: profile.id,
+          fields: previousFields,
+          notes: previousNotes,
+          tags: previousTags,
+          type: previousType,
+        },
+      };
     }
 
     case "delete_profile": {
@@ -5952,7 +5982,19 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
           // Only count as a real action if it succeeded (no error field)
           if (result && !result.error) {
-            allActions.push({ type: actionType, category: "ai", data: { ...inp, _entityId: entityId || undefined } });
+            // Forward revert metadata so the chat UI can render an Undo/Revert
+            // button. _previousState is set by tools that support reversal
+            // (currently update_profile).
+            const previousState = (result as any)?._previousState;
+            allActions.push({
+              type: actionType,
+              category: "ai",
+              data: {
+                ...inp,
+                _entityId: entityId || undefined,
+                ...(previousState ? { _previousState: previousState } : {}),
+              },
+            });
             allResults.push(result);
           }
           if (validation.warnings.length > 0 && result) {

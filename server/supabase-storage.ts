@@ -3060,6 +3060,10 @@ export class SupabaseStorage implements IStorage {
             if (!fpIds || fpIds.length === 0) return true; // No filter = show all
             const pParent = p.parentProfileId || p.fields?._parentProfileId;
             if (pParent && fpIds.includes(pParent)) return true;
+            // Also include the filtered profile itself — an asset can be linked
+            // directly (e.g. a vehicle owned by Bob with no parent), not just as
+            // a child. Without this, switching to Bob hides Bob's own assets.
+            if (fpIds.includes(p.id)) return true;
             return false;
           });
           return filteredAssetProfiles.reduce((s, p) => {
