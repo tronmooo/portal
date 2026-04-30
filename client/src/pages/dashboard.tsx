@@ -2108,9 +2108,9 @@ function BudgetManager() {
     <div className="space-y-3">
       {/* Month navigation */}
       <div className="flex items-center justify-between">
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={prevMonth}><ChevronLeft className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={prevMonth} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></Button>
         <span className="text-sm font-medium">{monthLabel}</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={nextMonth}><ChevronRight className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={nextMonth} aria-label="Next month"><ChevronRight className="h-4 w-4" /></Button>
       </div>
 
       {/* Summary bar */}
@@ -2157,15 +2157,15 @@ function BudgetManager() {
                     {editId === b.id ? (
                       <form onSubmit={(e) => { e.preventDefault(); const val = parseFloat((e.target as any).amt.value); if (val > 0) updateMutation.mutate({ id: b.id, amount: val }); }} className="flex items-center gap-1">
                         <Input name="amt" type="number" defaultValue={b.amount} className="h-6 w-20 text-xs" step="0.01" autoFocus />
-                        <Button type="submit" variant="ghost" size="icon" className="h-8 w-8"><Check className="h-3 w-3" /></Button>
+                        <Button type="submit" variant="ghost" size="icon" className="h-8 w-8" aria-label="Save budget"><Check className="h-3 w-3" /></Button>
                       </form>
                     ) : (
                       <>
                         <span className="text-xs tabular-nums">${actual.toLocaleString()} / ${b.amount.toLocaleString()}</span>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditId(b.id)} data-testid={`edit-budget-${b.category}`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditId(b.id)} data-testid={`edit-budget-${b.category}`} aria-label={`Edit ${b.category} budget`}>
                           <Pencil className="h-2.5 w-2.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(b.id)} data-testid={`delete-budget-${b.category}`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(b.id)} data-testid={`delete-budget-${b.category}`} aria-label={`Delete ${b.category} budget`}>
                           <X className="h-2.5 w-2.5" />
                         </Button>
                       </>
@@ -3067,7 +3067,7 @@ export default function DashboardPage() {
         <div className="flex items-center gap-1.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8" data-testid="btn-dashboard-menu">
+              <Button variant="outline" size="icon" className="h-8 w-8" data-testid="btn-dashboard-menu" aria-label="Dashboard menu">
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>

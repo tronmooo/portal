@@ -921,7 +921,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       {/* Header */}
       <div className="flex items-center justify-between gap-1">
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7" data-testid="btn-prev-month">
+          <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7" data-testid="btn-prev-month" aria-label="Previous month">
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
           <h2 className="text-xs font-semibold min-w-[100px] text-center" data-testid="text-month-year">
@@ -931,7 +931,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                 ? `Week of ${new Date(viewDate.getTime() - viewDate.getDay() * 86400000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
                 : fmtMonthYear(viewYear, viewMonth)}
           </h2>
-          <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" data-testid="btn-next-month">
+          <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" data-testid="btn-next-month" aria-label="Next month">
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
           <Button variant="outline" size="sm" onClick={goToday} className="h-6 text-xs px-2" data-testid="btn-today">
@@ -955,6 +955,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             onClick={handleGcalSync}
             disabled={syncing}
             title="Sync Google Calendar"
+            aria-label="Sync Google Calendar"
             data-testid="btn-gcal-sync"
           >
             <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />

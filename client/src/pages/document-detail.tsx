@@ -207,6 +207,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
           variant="ghost" size="icon" className="h-7 w-7"
           onClick={zoomOut} disabled={zoom <= 0.25}
           data-testid="btn-doc-zoom-out"
+          aria-label="Zoom out"
         >
           <ZoomOut className="h-3.5 w-3.5" />
         </Button>
@@ -216,6 +217,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
         <Button
           variant="ghost" size="icon" className="h-7 w-7"
           onClick={zoomIn} disabled={zoom >= 5}
+          aria-label="Zoom in"
           data-testid="btn-doc-zoom-in"
         >
           <ZoomIn className="h-3.5 w-3.5" />
@@ -225,6 +227,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
           variant="ghost" size="icon" className="h-7 w-7"
           onClick={rotate}
           data-testid="btn-doc-rotate"
+          aria-label="Rotate"
         >
           <RotateCw className="h-3.5 w-3.5" />
         </Button>
@@ -404,6 +407,7 @@ function DataPanel({
               onClick={downloadFile}
               data-testid="btn-download-doc"
               title="Download file"
+              aria-label="Download file"
             >
               <Download className="h-3.5 w-3.5" />
             </Button>

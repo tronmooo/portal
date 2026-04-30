@@ -548,10 +548,10 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
           <Input ref={inputRef} value={value} onChange={e => setValue(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") { setValue(fieldValue); setEditing(false); } }}
             className="h-7 text-xs text-right max-w-[200px]" />
-          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={handleSave} disabled={mutation.isPending}>
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={handleSave} disabled={mutation.isPending} aria-label="Save">
             <Check className="h-3 w-3 text-green-500" />
           </Button>
-          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => { setValue(fieldValue); setEditing(false); }}>
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => { setValue(fieldValue); setEditing(false); }} aria-label="Cancel">
             <X className="h-3 w-3 text-muted-foreground" />
           </Button>
         </div>

@@ -220,6 +220,7 @@ export function NotificationBell() {
           size="icon"
           className="h-8 w-8 relative"
           data-testid="button-notification-bell"
+          aria-label="Notifications"
         >
           <Bell className="h-4 w-4" />
           {urgentCount > 0 && !open && (

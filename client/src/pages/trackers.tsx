@@ -3455,7 +3455,7 @@ function TrackerDetailDialog({
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" data-testid="button-tracker-detail-menu">
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" data-testid="button-tracker-detail-menu" aria-label="Tracker actions">
                       <MoreHorizontal className="w-3.5 h-3.5" />
                     </Button>
                   </DropdownMenuTrigger>

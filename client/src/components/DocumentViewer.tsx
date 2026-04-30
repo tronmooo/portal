@@ -369,6 +369,7 @@ export default function DocumentViewer({
         onClick={zoomOut}
         disabled={zoom <= 0.25}
         data-testid={`btn-zoom-out-${id}`}
+        aria-label="Zoom out"
       >
         <ZoomOut className="h-3.5 w-3.5" />
       </Button>
@@ -382,6 +383,7 @@ export default function DocumentViewer({
         onClick={zoomIn}
         disabled={zoom >= 5}
         data-testid={`btn-zoom-in-${id}`}
+        aria-label="Zoom in"
       >
         <ZoomIn className="h-3.5 w-3.5" />
       </Button>
@@ -392,6 +394,7 @@ export default function DocumentViewer({
         className="h-7 w-7"
         onClick={rotate}
         data-testid={`btn-rotate-${id}`}
+        aria-label="Rotate"
       >
         <RotateCw className="h-3.5 w-3.5" />
       </Button>
@@ -783,6 +786,7 @@ function ExtractedDataPanel({
               onClick={downloadFile}
               data-testid="btn-download-doc"
               title="Download file"
+              aria-label="Download file"
             >
               <Download className="h-3.5 w-3.5" />
             </Button>
@@ -1033,6 +1037,7 @@ function DocumentPreviewPanel({
           variant="ghost" size="icon" className="h-7 w-7"
           onClick={zoomOut} disabled={zoom <= 0.25}
           data-testid={`btn-preview-zoom-out-${doc.id}`}
+          aria-label="Zoom out"
         >
           <ZoomOut className="h-3.5 w-3.5" />
         </Button>
@@ -1040,6 +1045,7 @@ function DocumentPreviewPanel({
         <Button
           variant="ghost" size="icon" className="h-7 w-7"
           onClick={zoomIn} disabled={zoom >= 5}
+          aria-label="Zoom in"
           data-testid={`btn-preview-zoom-in-${doc.id}`}
         >
           <ZoomIn className="h-3.5 w-3.5" />
@@ -1049,6 +1055,7 @@ function DocumentPreviewPanel({
           variant="ghost" size="icon" className="h-7 w-7"
           onClick={rotate}
           data-testid={`btn-preview-rotate-${doc.id}`}
+          aria-label="Rotate"
         >
           <RotateCw className="h-3.5 w-3.5" />
         </Button>
