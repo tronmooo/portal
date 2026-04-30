@@ -1270,10 +1270,13 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
     try {
       await apiRequest("DELETE", `/api/${endpoint}/${entityId}`);
       onDeleted();
-      // Optimistically remove from cache
-      queryClient.setQueryData([`/api/${endpoint}`], (old: any[]) => old?.filter(item => item.id !== entityId));
+      // Optimistically remove from cache. Note: TanStack queryKey matching is structural,
+      // but we only need a hint here — the invalidateQueries below covers all variants.
+      // Use prefix match (exact: false is default) to update any keys starting with the same path.
+      queryClient.setQueriesData({ queryKey: [`/api/${endpoint}`] }, (old: any) =>
+        Array.isArray(old) ? old.filter((item: any) => item?.id !== entityId) : old
+      );
       toast({ title: "Removed" });
-      // Invalidate outside try so we don't catch its errors
     } catch (err: any) {
       setDeleted(false); // Roll back on real failure
       const msg = err?.message || "";
@@ -1284,7 +1287,10 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
       });
       return;
     }
-    queryClient.invalidateQueries();
+    // Surgical invalidation — only the affected entity + dashboard rollups
+    queryClient.invalidateQueries({ queryKey: [`/api/${endpoint}`] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
   };
 
   return (
@@ -1493,11 +1499,12 @@ export default function ChatPage() {
   const chatMutation = useMutation({
     mutationFn: async (message: string) => {
       // Build conversation history for multi-step context.
-      // Exclude the LAST message — it's the one we just added to state and are sending as `message`.
-      // Without this, the AI receives the user's message twice (once in history, once as the prompt).
+      // Bug fix: setMessages is async, so the `messages` closure here still reflects state
+      // BEFORE the user message was appended in handleSend. So we DON'T need slice(0,-1) —
+      // the user msg isn't in `messages` yet. Previously slice(0,-1) was dropping the
+      // previous assistant reply instead, breaking multi-turn context.
       const history = messages
         .filter(m => m.id !== "welcome")
-        .slice(0, -1)  // drop the last message (current user message already in `message` param)
         .slice(-10)
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
       const res = await apiRequest("POST", "/api/chat", { message, history });
@@ -2260,9 +2267,14 @@ export default function ChatPage() {
                                       ...m,
                                       actions: m.actions ? [...m.actions] : m.actions
                                     })));
-                                    // Optimistically remove from cache
-                                    queryClient.setQueryData([`/api/${ep}`], (old: any[]) => old?.filter(item => item.id !== entityId));
-                                    queryClient.invalidateQueries();
+                                    // Optimistically remove from cache (prefix match).
+                                    queryClient.setQueriesData({ queryKey: [`/api/${ep}`] }, (old: any) =>
+                                      Array.isArray(old) ? old.filter((item: any) => item?.id !== entityId) : old
+                                    );
+                                    // Surgical invalidation — affected list + dashboard rollups
+                                    queryClient.invalidateQueries({ queryKey: [`/api/${ep}`] });
+                                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                                     toast({
                                       title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
                                       description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,

@@ -243,11 +243,31 @@ export async function registerRoutes(
           return res.status(429).json({ error: "Too many requests. Please slow down." });
         }
       }
-      // Bust response cache on write
+      // Bust response cache on write — BEFORE the route handler runs so the
+      // route's reads are guaranteed fresh. Covers every prefix any route uses.
       if (uid !== "anon") {
         bustCache(`stats:${uid}`);
+        bustCache(`enhanced:${uid}`);
+        bustCache(`enhanced:`); // legacy unscoped
         bustCache(`profile-detail:${uid}:`);
-        bustCache(`enhanced:`);
+        bustCache(`profiles:${uid}`);
+        bustCache(`trackers:${uid}`);
+        bustCache(`trackers:`); // some routes use unscoped key
+        bustCache(`tasks:${uid}`);
+        bustCache(`expenses:${uid}`);
+        bustCache(`events:${uid}`);
+        bustCache(`habits:${uid}`);
+        bustCache(`obligations:${uid}`);
+        bustCache(`journal:${uid}`);
+        bustCache(`documents:${uid}`);
+        bustCache(`goals:${uid}`);
+        bustCache(`insights:${uid}`);
+        bustCache(`activity:${uid}`);
+        bustCache(`ai-digest:${uid}`);
+        bustCache(`artifacts:${uid}`);
+        bustCache(`notifications:${uid}`);
+        bustCache(`cashflow:${uid}`);
+        bustCache(`calendar:${uid}`);
       } else {
         bustAllCaches();
       }
