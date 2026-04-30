@@ -94,8 +94,13 @@ export default async function(req, res) {
   // Copy all built frontend files
   await cp("dist/public", "public", { recursive: true });
 
-  // 4. Create vercel.json
+  // 4. Write vercel.json — the source-of-truth config that ALSO works for git-push deploys.
+  // Includes buildCommand + outputDirectory so Vercel auto-builds correctly when this file is
+  // already committed (i.e., on the next git push, Vercel won't rely on a previous prebuilt run).
   const vercelConfig = {
+    buildCommand: "npm run build",
+    installCommand: "npm install",
+    outputDirectory: "public",
     rewrites: [
       { source: "/api/:path*", destination: "/api" }
     ],

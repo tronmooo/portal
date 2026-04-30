@@ -15,5 +15,6 @@ api/_bundle.mjs
 
 # Build output — deployed via CI, not committed
 public/assets/
-api/
+# api/index.js stub is committed; the real bundle is gitignored
+api/_bundle.mjs
 .vercel

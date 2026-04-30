@@ -784,7 +784,9 @@ export async function registerRoutes(
   // ---- Insights ----
   app.get("/api/insights", asyncHandler(async (req, res) => {
     try {
-      const fp = req.query.profileId as string | undefined;
+      const profileIdsParam = req.query.profileIds as string | undefined;
+      const profileId = req.query.profileId as string | undefined;
+      const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
       const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] = await Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
@@ -797,9 +799,17 @@ export async function registerRoutes(
         storage.getGoals(),
         storage.getEvents(),
       ]);
-      // Filter by profile if specified
-      const isSelf = fp && allProfiles.find(p => p.id === fp)?.type === "self";
-      const mp = (linked: string[]) => !fp || linked.includes(fp) || (isSelf && linked.length === 0);
+      // Filter by ANY of the selected profiles. If any selected ID is a 'self' profile,
+      // legacy items with an empty linkedProfiles list also match.
+      const filterActive = ids.length > 0;
+      const selfMatch = filterActive && ids.some(id => allProfiles.find(p => p.id === id)?.type === 'self');
+      const fp = ids.length === 1 ? ids[0] : undefined; // back-compat for downstream code below
+      const mp = (linked: string[]) => {
+        if (!filterActive) return true;
+        const arr = Array.isArray(linked) ? linked : [];
+        if (arr.length === 0) return selfMatch;
+        return arr.some(id => ids.includes(id));
+      };
       const profiles = allProfiles;
       const trackers = allTrackers.filter(t => mp(t.linkedProfiles));
       const tasks = allTasks.filter(t => mp(t.linkedProfiles));
@@ -1593,11 +1603,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
     let items = await storage.getPaychecks();
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
-    if (profileId) {
-      items = items.filter((item: any) =>
-        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
-      );
+    const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
+    if (ids.length > 0) {
+      items = items.filter((item: any) => {
+        const linked = item.linkedProfiles || [];
+        return ids.some(id => linked.includes(id) || item.profileId === id);
+      });
     }
     res.json(items);
   }));
@@ -1621,17 +1634,20 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Loan Amortization ----
   app.get("/api/loans/schedule", asyncHandler(async (req, res) => {
     const loanId = req.query.loanId as string;
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
+    const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
     let items: any[];
     if (loanId) {
       items = await storage.getLoanSchedule(loanId);
     } else {
       items = await storage.getAllLoanSchedules();
     }
-    if (profileId) {
-      items = items.filter((item: any) =>
-        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
-      );
+    if (ids.length > 0) {
+      items = items.filter((item: any) => {
+        const linked = item.linkedProfiles || [];
+        return ids.some(id => linked.includes(id) || item.profileId === id);
+      });
     }
     res.json(items);
   }));
@@ -1649,12 +1665,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Cashflow ----
   app.get("/api/cashflow", asyncHandler(async (req, res) => {
     const month = req.query.month as string;
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
+    const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
     let items = await storage.getCashflow(month);
-    if (profileId) {
-      items = items.filter((item: any) =>
-        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
-      );
+    if (ids.length > 0) {
+      items = items.filter((item: any) => {
+        const linked = item.linkedProfiles || [];
+        return ids.some(id => linked.includes(id) || item.profileId === id);
+      });
     }
     res.json(items);
   }));
@@ -3269,15 +3288,16 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.get("/api/goals", asyncHandler(async (req, res) => {
     try {
       let goals = await storage.getGoals();
-      const fp = req.query.profileId as string | undefined;
-      if (fp) {
+      const profileIdsParam = req.query.profileIds as string | undefined;
+      const profileId = req.query.profileId as string | undefined;
+      const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
+      if (ids.length > 0) {
         const allProfiles = await storage.getProfiles();
-        const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+        const selfMatch = ids.some(id => allProfiles.find(p => p.id === id)?.type === "self");
         goals = goals.filter(g => {
           const lp = g.linkedProfiles || [];
-          if (lp.includes(fp)) return true;
-          if (isSelf && lp.length === 0) return true;
-          return false;
+          if (lp.length === 0) return selfMatch;
+          return lp.some(id => ids.includes(id));
         });
       }
       res.json(paginate(goals, req, res));

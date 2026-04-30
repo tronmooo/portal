@@ -99,10 +99,14 @@ export function getFilterLabel(): string {
 }
 
 // ── Legacy compat (used by pages that still read single filter) ──
-export function getDashboardProfileFilter(): { id: string | undefined; name: string } {
-  if (_state.mode === "everyone") return { id: undefined, name: "Everyone" };
-  if (_state.selectedIds.length === 1) return { id: _state.selectedIds[0], name: _state.selectedNames[0] };
-  return { id: undefined, name: "Everyone" };
+// IMPORTANT: this only returns a single id when exactly one profile is selected.
+// When 2+ are selected, callers MUST switch to getProfileFilter().selectedIds and
+// pass `?profileIds=a,b` to the server — otherwise the filter silently disappears.
+export function getDashboardProfileFilter(): { id: string | undefined; name: string; ids: string[] } {
+  if (_state.mode === "everyone") return { id: undefined, name: "Everyone", ids: [] };
+  if (_state.selectedIds.length === 1) return { id: _state.selectedIds[0], name: _state.selectedNames[0], ids: [..._state.selectedIds] };
+  // 2+ selected: name shows count, callers should rely on `ids` array.
+  return { id: undefined, name: getFilterLabel(), ids: [..._state.selectedIds] };
 }
 
 export function setDashboardProfileFilter(id: string | undefined, name: string) {

@@ -1477,12 +1477,33 @@ export class MemStorage implements IStorage {
 
   // ---- Dashboard ----
   async getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats> {
-    const tasks = Array.from(this.tasks.values());
-    const expenses = Array.from(this.expenses.values());
-    const trackers = Array.from(this.trackers.values());
-    const habits = Array.from(this.habits.values());
-    const obligations = Array.from(this.obligations.values());
-    const journalEntries = Array.from(this.journal.values());
+    // Build the active filter ID list. Single id collapses to [id]; empty/none = no filter.
+    const ids: string[] = filterProfileIds && filterProfileIds.length > 0
+      ? filterProfileIds
+      : (filterProfileId ? [filterProfileId] : []);
+    const filterActive = ids.length > 0;
+    // Resolve self-profile membership: if any selected ID is a 'self' profile, items with
+    // an empty linkedProfiles list (legacy/owner-only items) should match — they belong to self.
+    const allProfilesArr = Array.from(this.profiles.values());
+    const selfMatch = filterActive && ids.some(id => allProfilesArr.find(p => p.id === id)?.type === 'self');
+    const matchesFilter = (linked: string[] | undefined | null): boolean => {
+      if (!filterActive) return true;
+      const arr = Array.isArray(linked) ? linked : [];
+      if (arr.length === 0) return selfMatch;
+      return arr.some(id => ids.includes(id));
+    };
+    const allTasks = Array.from(this.tasks.values());
+    const allExpenses = Array.from(this.expenses.values());
+    const allTrackers = Array.from(this.trackers.values());
+    const allHabits = Array.from(this.habits.values());
+    const allObligations = Array.from(this.obligations.values());
+    const allJournal = Array.from(this.journal.values());
+    const tasks = allTasks.filter(t => matchesFilter((t as any).linkedProfiles));
+    const expenses = allExpenses.filter(e => matchesFilter((e as any).linkedProfiles));
+    const trackers = allTrackers.filter(t => matchesFilter((t as any).linkedProfiles));
+    const habits = allHabits.filter(h => matchesFilter((h as any).linkedProfiles));
+    const obligations = allObligations.filter(o => matchesFilter((o as any).linkedProfiles));
+    const journalEntries = allJournal.filter(j => matchesFilter((j as any).linkedProfiles));
     const now = new Date();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
@@ -1535,12 +1556,14 @@ export class MemStorage implements IStorage {
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
     return {
-      totalProfiles: this.profiles.size,
-      totalTrackers: this.trackers.size,
+      totalProfiles: filterActive ? ids.length : this.profiles.size,
+      totalTrackers: trackers.length,
       totalTasks: tasks.length,
       activeTasks: tasks.filter(t => t.status !== "done").length,
       totalExpenses: expenses.reduce((sum, e) => sum + e.amount, 0),
-      totalEvents: this.events.size,
+      totalEvents: filterActive
+        ? Array.from(this.events.values()).filter(e => matchesFilter((e as any).linkedProfiles)).length
+        : this.events.size,
       monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),
       weeklyEntries,
       streaks,
@@ -1587,8 +1610,22 @@ export class MemStorage implements IStorage {
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
 
+    // Build active filter, supporting multi-profile selection (was previously ignored).
+    const ids: string[] = filterProfileIds && filterProfileIds.length > 0
+      ? filterProfileIds
+      : (filterProfileId ? [filterProfileId] : []);
+    const filterActive = ids.length > 0;
+    const allProfilesArr = Array.from(this.profiles.values());
+    const selfMatch = filterActive && ids.some(id => allProfilesArr.find(p => p.id === id)?.type === 'self');
+    const matchesFilter = (linked: string[] | undefined | null): boolean => {
+      if (!filterActive) return true;
+      const arr = Array.isArray(linked) ? linked : [];
+      if (arr.length === 0) return selfMatch;
+      return arr.some(id => ids.includes(id));
+    };
+
     // Document expiration alerts — scan extractedData for date fields
-    const documents = Array.from(this.documents.values());
+    const documents = Array.from(this.documents.values()).filter(d => matchesFilter((d as any).linkedProfiles));
     const expiringDocs: any[] = [];
     for (const doc of documents) {
       const ed = doc.extractedData || {};
@@ -1619,7 +1656,7 @@ export class MemStorage implements IStorage {
     expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
 
     // Health snapshot — aggregate recent tracker data from health-related trackers
-    const trackers = Array.from(this.trackers.values());
+    const trackers = Array.from(this.trackers.values()).filter(t => matchesFilter((t as any).linkedProfiles));
     const healthCategories = ['health', 'fitness', 'weight', 'sleep', 'blood_pressure', 'running', 'exercise', 'nutrition', 'wellness'];
     const healthTrackers = trackers.filter(t => healthCategories.some(c => t.category.toLowerCase().includes(c) || t.name.toLowerCase().includes(c)));
     const healthSnapshot: any[] = [];
@@ -1647,7 +1684,7 @@ export class MemStorage implements IStorage {
     }
 
     // Finance snapshot — spending by category this month + upcoming bills
-    const expenses = Array.from(this.expenses.values());
+    const expenses = Array.from(this.expenses.values()).filter(e => matchesFilter((e as any).linkedProfiles));
     const monthlyExpenses = expenses.filter(e => {
       const d = new Date(e.date);
       return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
@@ -1666,7 +1703,7 @@ export class MemStorage implements IStorage {
     });
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const obligations = Array.from(this.obligations.values());
+    const obligations = Array.from(this.obligations.values()).filter(o => matchesFilter((o as any).linkedProfiles));
     const upcomingBills = obligations
       .filter(o => {
         const due = new Date(o.nextDueDate);
@@ -1696,7 +1733,7 @@ export class MemStorage implements IStorage {
     }, 0);
 
     // Overdue tasks
-    const tasks = Array.from(this.tasks.values());
+    const tasks = Array.from(this.tasks.values()).filter(t => matchesFilter((t as any).linkedProfiles));
     const overdueTasks = tasks.filter(t => {
       if (t.status === 'done' || !t.dueDate) return false;
       return new Date(t.dueDate) < now;
@@ -1709,7 +1746,7 @@ export class MemStorage implements IStorage {
     }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 
     // Today's events
-    const events = Array.from(this.events.values());
+    const events = Array.from(this.events.values()).filter(e => matchesFilter((e as any).linkedProfiles));
     const todaysEvents = events.filter(e => e.date === today)
       .map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
 

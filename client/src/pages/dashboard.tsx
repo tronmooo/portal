@@ -1644,10 +1644,12 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
   );
 }
 
-function GoalsSection({ profileId }: { profileId?: string }) {
-  const profileParam = profileId ? `?profileId=${profileId}` : "";
+function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; profileIds?: string[] }) {
+  // Multi-profile aware: prefer profileIds (array) when present, fall back to single profileId.
+  const ids = profileIds.length > 0 ? profileIds : (profileId ? [profileId] : []);
+  const profileParam = ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
   const { data: goals = [], isLoading, error: goalsError } = useQuery<GoalItem[]>({
-    queryKey: ["/api/goals", profileId || "all"],
+    queryKey: ["/api/goals", ids.join(",") || "all"],
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
   const [editGoal, setEditGoal] = useState<GoalItem | null>(null);
@@ -1686,8 +1688,8 @@ function GoalsSection({ profileId }: { profileId?: string }) {
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/goals"] });
-      const prev = queryClient.getQueryData(["/api/goals", profileId || "all"]);
-      queryClient.setQueryData(["/api/goals", profileId || "all"], (old: any[]) => (old || []).filter((g: any) => g.id !== id));
+      const prev = queryClient.getQueryData(["/api/goals", ids.join(",") || "all"]);
+      queryClient.setQueryData(["/api/goals", ids.join(",") || "all"], (old: any[]) => (old || []).filter((g: any) => g.id !== id));
       return { prev };
     },
     onSuccess: (_data, variables) => {
@@ -1698,7 +1700,7 @@ function GoalsSection({ profileId }: { profileId?: string }) {
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
     onError: (_err: Error, variables, ctx: any) => {
-      if (ctx?.prev) queryClient.setQueryData(["/api/goals", profileId || "all"], ctx.prev);
+      if (ctx?.prev) queryClient.setQueryData(["/api/goals", ids.join(",") || "all"], ctx.prev);
       toast({ title: `Failed to delete "${variables.title || "goal"}"`, variant: "destructive" });
     },
   });
@@ -2865,7 +2867,10 @@ export default function DashboardPage() {
   // Compute stats profile param for API calls
   const statsProfileParam = filterIds.length > 0 ? '?profileIds=' + filterIds.join(',') : '';
 
-  // Compute resolvedFilterId for backward compat with child components that take a single profileId
+  // Compute resolvedFilterId for backward compat with child components that only support a single id.
+  // Bug fix: when 2+ profiles are selected this used to collapse to undefined (= 'Everyone'),
+  // making the dashboard ignore the multi-select. Children that need full multi-id support get
+  // filterIds passed through directly.
   const resolvedFilterId = filterMode === "everyone" ? undefined : (filterIds.length === 1 ? filterIds[0] : undefined);
 
   // Sync profile filter to module-level state for backward compat with sub-pages
@@ -2980,7 +2985,7 @@ export default function DashboardPage() {
         content = <HealthSection data={enhanced?.healthSnapshot || []} />;
         break;
       case "goals":
-        content = <GoalsSection profileId={resolvedFilterId} />;
+        content = <GoalsSection profileId={resolvedFilterId} profileIds={filterIds} />;
         break;
       case "obligations":
         content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
