@@ -997,7 +997,28 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       </div>
 
       {/* Calendar Grid — conditional on viewMode */}
-      {viewMode === "month" && <div className="rounded-lg border border-border/40 overflow-hidden">
+      {timelineLoading && timelineItems.length === 0 && (
+        <div className="rounded-lg border border-border/40 overflow-hidden" data-testid="calendar-loading">
+          {/* Weekday header skeleton */}
+          <div className="grid grid-cols-7 border-b border-border">
+            {WEEKDAYS.map(d => (
+              <div key={d} className="text-[10px] font-medium text-muted-foreground py-1.5 text-center">{d}</div>
+            ))}
+          </div>
+          {/* 5 rows of 7 day cells */}
+          {Array.from({ length: 5 }, (_, ri) => (
+            <div key={ri} className="grid grid-cols-7 border-b border-border last:border-b-0">
+              {Array.from({ length: 7 }, (_, ci) => (
+                <div key={ci} className="min-h-[64px] p-1 border-r border-border last:border-r-0">
+                  <div className="h-3 w-4 rounded skeleton-shimmer mb-1" />
+                  {(ri + ci) % 3 === 0 && <div className="h-2 w-12 rounded skeleton-shimmer" />}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {viewMode === "month" && !(timelineLoading && timelineItems.length === 0) && <div className="rounded-lg border border-border/40 overflow-hidden">
           {/* Weekday header */}
           <div className="grid grid-cols-7 border-b border-border">
             {WEEKDAYS.map(d => (
@@ -1121,7 +1142,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       )}
 
       {/* Week View — Time-Blocked Layout */}
-      {viewMode === "week" && (() => {
+      {viewMode === "week" && !(timelineLoading && timelineItems.length === 0) && (() => {
         const weekStart = new Date(viewDate);
         weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
         const weekDays = Array.from({ length: 7 }, (_, i) => {
@@ -1234,7 +1255,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       })()}
 
       {/* Day View */}
-      {viewMode === "day" && (() => {
+      {viewMode === "day" && !(timelineLoading && timelineItems.length === 0) && (() => {
         const dayStr = toLocalDateStr(viewDate);
         const dayItems = (itemsByDate[dayStr] || []).sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
         const timedItems = dayItems.filter(i => i.time);
