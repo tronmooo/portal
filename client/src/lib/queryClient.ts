@@ -96,7 +96,13 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false, // Don't refetch when switching browser tabs
+      // Refetch on window focus so coming back to the tab shows fresh data.
+      // This is stale-while-revalidate — cached data renders instantly, then
+      // a background fetch updates with anything that changed (e.g. mutations
+      // made in another tab or device). Combined with our 5s staleTime so
+      // we don't hammer the API for quick alt-tabs.
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,    // Same idea after a network blip
       refetchOnMount: true,        // Refetch if data is stale on mount
       // 5-second stale time: data shows instantly from cache, but refetches in background
       // after 5 seconds. This means navigating between pages always gets fresh data
