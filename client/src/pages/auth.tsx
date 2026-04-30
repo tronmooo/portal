@@ -179,9 +179,14 @@ export default function AuthPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const result = await signIn(email, password);
-    if (result.error) setError(result.error);
-    setLoading(false);
+    try {
+      const result = await signIn(email, password);
+      if (result.error) setError(result.error);
+    } catch (err: any) {
+      setError(err?.message || "Sign in failed. Please try again.");
+    } finally {
+      setLoading(false); // never let the spinner hang
+    }
   }
 
   async function handleSignUp(e: React.FormEvent) {
@@ -196,17 +201,27 @@ export default function AuthPage() {
       return;
     }
     setLoading(true);
-    const result = await signUp(email, password);
-    if (result.error) setError(result.error);
-    setLoading(false);
+    try {
+      const result = await signUp(email, password);
+      if (result.error) setError(result.error);
+    } catch (err: any) {
+      setError(err?.message || "Sign up failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleGoogleSignIn() {
     setError("");
     setLoading(true);
-    const result = await signInWithGoogle();
-    if (result.error) setError(result.error);
-    setLoading(false);
+    try {
+      const result = await signInWithGoogle();
+      if (result.error) setError(result.error);
+    } catch (err: any) {
+      setError(err?.message || "Google sign in failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleForgotPassword(e: React.FormEvent) {

@@ -18,6 +18,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -158,6 +159,7 @@ function ProfileStep({
   const [profileType, setProfileType] = useState("person");
   const [notes, setNotes] = useState("");
 
+  const { toast } = useToast();
   const createProfile = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", "/api/profiles", {
@@ -170,6 +172,14 @@ function ProfileStep({
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding-status"] });
       onNext();
+    },
+    onError: (err: any) => {
+      const msg = err?.message || "";
+      toast({
+        title: "Could not create profile",
+        description: msg.includes("401") ? "Session expired \u2014 sign in again" : msg.includes("network") ? "Network error \u2014 check your connection" : "Please try again",
+        variant: "destructive",
+      });
     },
   });
 
@@ -273,12 +283,25 @@ function TipsStep({ onFinish }: { onFinish: () => void }) {
     },
   ];
 
+  const { toast } = useToast();
   const completeMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", "/api/onboarding/complete");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding-status"] });
+      onFinish();
+    },
+    onError: (err: any) => {
+      // Don't block the user — onboarding completion is non-critical;
+      // worst case we show the wizard again next time. Surface a toast so they know.
+      const msg = err?.message || "";
+      toast({
+        title: "Could not save onboarding state",
+        description: msg.includes("401") ? "Sign in again to continue" : "You can still use the app \u2014 we'll try again next time",
+        variant: "destructive",
+      });
+      // Still finish so user isn't stuck on the wizard
       onFinish();
     },
   });

@@ -393,22 +393,19 @@ export default function SettingsPage() {
                       onClick={async () => {
                         setChangingPassword(true);
                         try {
-                          const res = await fetch('/api/auth/change-password', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionStorage.getItem('portol_session') ? JSON.parse(sessionStorage.getItem('portol_session')!).access_token : ''}` },
-                            body: JSON.stringify({ newPassword }),
+                          // apiRequest centralises auth header + error handling
+                          await apiRequest('POST', '/api/auth/change-password', { newPassword });
+                          toast({ title: 'Password updated', description: 'Your password has been changed successfully.' });
+                          setShowPasswordForm(false);
+                          setNewPassword('');
+                          setConfirmPassword('');
+                        } catch (err: any) {
+                          const msg = err?.message || '';
+                          toast({
+                            title: 'Could not change password',
+                            description: msg.includes('401') ? 'Session expired \u2014 sign out and back in' : msg.includes('400') ? 'Password is too weak' : 'Please try again',
+                            variant: 'destructive',
                           });
-                          if (res.ok) {
-                            toast({ title: 'Password updated', description: 'Your password has been changed successfully.' });
-                            setShowPasswordForm(false);
-                            setNewPassword('');
-                            setConfirmPassword('');
-                          } else {
-                            const data = await res.json();
-                            toast({ title: 'Failed', description: data.error || 'Could not change password', variant: 'destructive' });
-                          }
-                        } catch {
-                          toast({ title: 'Error', description: 'Failed to change password', variant: 'destructive' });
                         } finally {
                           setChangingPassword(false);
                         }
