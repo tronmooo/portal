@@ -928,6 +928,7 @@ export async function registerRoutes(
     res.json(detail);
   }));
   app.post("/api/profiles", asyncHandler(async (req, res) => {
+    const uid_p1 = (req as AuthenticatedRequest).userId || "anon";
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Profile name is required" });
     }
@@ -967,9 +968,12 @@ export async function registerRoutes(
     }
     const parsed = insertProfileSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    res.status(201).json(await storage.createProfile(parsed.data));
+    const created = await storage.createProfile(parsed.data);
+    bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
+    res.status(201).json(created);
   }));
   app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
+    const uid_p2 = (req as AuthenticatedRequest).userId || "anon";
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
@@ -994,12 +998,15 @@ export async function registerRoutes(
     }
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
     res.json(updated);
   }));
   app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {
+    const uid_p3 = (req as AuthenticatedRequest).userId || "anon";
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
     await storage.deleteProfile(req.params.id);
+    bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     res.json({ success: true });
   }));
 
@@ -1018,6 +1025,8 @@ export async function registerRoutes(
           await storage.propagateDocumentToAncestors(entityId, req.params.id);
         } catch { /* non-critical */ }
       }
+      const uid_pl1 = (req as AuthenticatedRequest).userId || "anon";
+      bustCache(`profiles:${uid_pl1}`); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[profile-link]", err?.message || err);
@@ -1028,6 +1037,8 @@ export async function registerRoutes(
   app.post("/api/profiles/:id/unlink", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
+    const uid_pl2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
     res.json({ ok: true });
   }));
 
@@ -1482,7 +1493,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`);
+    bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`);
     res.status(201).json(newTask);
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
@@ -1496,21 +1507,21 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_t2 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`);
+    bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`);
     res.json(updated);
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteTask(req.params.id);
     const uid_t3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`);
+    bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t3}`);
     res.json({ success: true });
   }));
   app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreTask(req.params.id);
     if (!ok) return res.status(404).json({ error: "Task not found" });
     const uid_t4 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`);
+    bustCache(`tasks:${uid_t4}`); bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t4}`);
     const task = await storage.getTask(req.params.id);
     res.json(task || { id: req.params.id, restored: true });
   }));
@@ -1656,16 +1667,24 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.post("/api/paychecks", asyncHandler(async (req, res) => {
     const { source, amount, expected_date, notes } = req.body;
     if (!source || !amount || !expected_date) return res.status(400).json({ error: "source, amount, expected_date required" });
-    res.json(await storage.createPaycheck({ source, amount, expected_date, notes }));
+    const created = await storage.createPaycheck({ source, amount, expected_date, notes });
+    const uid_pc1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_pc1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc1}`);
+    res.json(created);
   }));
 
   app.patch("/api/paychecks/:id/confirm", asyncHandler(async (req, res) => {
     const { actual_amount } = req.body;
-    res.json(await storage.confirmPaycheck(req.params.id, actual_amount));
+    const updated = await storage.confirmPaycheck(req.params.id, actual_amount);
+    const uid_pc2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_pc2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc2}`);
+    res.json(updated);
   }));
 
   app.delete("/api/paychecks/:id", asyncHandler(async (req, res) => {
     await storage.deletePaycheck(req.params.id);
+    const uid_pc3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_pc3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc3}`);
     res.json({ success: true });
   }));
 
@@ -1693,11 +1712,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.post("/api/loans/schedule", asyncHandler(async (req, res) => {
     const { entries } = req.body;
     if (!Array.isArray(entries)) return res.status(400).json({ error: "entries array required" });
-    res.json(await storage.createLoanSchedule(entries));
+    const created = await storage.createLoanSchedule(entries);
+    const uid_ln1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_ln1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln1}`); bustCache(`profile-detail:${uid_ln1}:`);
+    res.json(created);
   }));
 
   app.patch("/api/loans/payment/:id/mark", asyncHandler(async (req, res) => {
-    res.json(await storage.markLoanPayment(req.params.id));
+    const updated = await storage.markLoanPayment(req.params.id);
+    const uid_ln2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`stats:${uid_ln2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
+    res.json(updated);
   }));
 
   // ---- Cashflow ----
@@ -1746,7 +1771,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newEvent = await storage.createEvent(parsed.data);
     const uid_ev1 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`);
+    bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev1}`);
     res.status(201).json(newEvent);
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
@@ -1757,7 +1782,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateEvent(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_ev2 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`);
+    bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev2}`);
     res.json(updated);
   }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
@@ -1765,7 +1790,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!existing) return res.status(404).json({ error: "Event not found" });
     await storage.deleteEvent(req.params.id);
     const uid_ev3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`);
+    bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev3}`);
     res.json({ success: true });
   }));
 
@@ -1804,6 +1829,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     try {
       const doc = await storage.createDocument(req.body);
+      const uid_d1 = (req as AuthenticatedRequest).userId || "anon";
+      bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d1}:`);
       res.status(201).json(doc);
     } catch (err: any) {
       console.error("[documents]", err?.message || err);
@@ -1817,11 +1844,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_d2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`);
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteDocument(req.params.id);
+    const uid_d3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`);
     res.json({ success: true });
   }));
   app.get("/api/profiles/:id/documents", asyncHandler(async (req, res) => {
@@ -1950,7 +1981,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (updated) newHabit = updated;
     }
     const uid_h3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`);
+    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`enhanced:`);
     res.status(201).json(newHabit);
   }));
   app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
@@ -1975,7 +2006,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
       const uid_h4 = (req as AuthenticatedRequest).userId || "anon";
-      bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`);
+      bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`); bustCache(`enhanced:`);
       res.json(result);
     } catch (e: any) { console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" }); }
   }));
@@ -2026,7 +2057,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.post("/api/obligations", asyncHandler(async (req, res) => {
     const parsed = insertObligationSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    res.status(201).json(await storage.createObligation(parsed.data));
+    const created = await storage.createObligation(parsed.data);
+    const uid_o1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`);
+    res.status(201).json(created);
   }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
     if (req.body.name !== undefined) {
@@ -2038,6 +2072,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const updated = await storage.updateObligation(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_o2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`);
     res.json(updated);
   }));
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
@@ -2057,12 +2093,16 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
+    const uid_o3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`);
     res.status(201).json(payment);
   }));
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getObligation(req.params.id);
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
     await storage.deleteObligation(req.params.id);
+    const uid_o4 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`);
     res.json({ success: true });
   }));
 
@@ -2085,7 +2125,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.body.title) req.body.title = sanitize(req.body.title);
     const parsed = insertArtifactSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    res.status(201).json(await storage.createArtifact(parsed.data));
+    const created = await storage.createArtifact(parsed.data);
+    const uid_a1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`artifacts:${uid_a1}`); bustCache(`stats:${uid_a1}`); bustCache(`enhanced:`);
+    res.status(201).json(created);
   }));
   app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
     if (req.body.title !== undefined) {
@@ -2095,17 +2138,23 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (req.body.description !== undefined && typeof req.body.description === "string") req.body.description = sanitize(req.body.description);
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_a2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`artifacts:${uid_a2}`); bustCache(`stats:${uid_a2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.post("/api/artifacts/:id/toggle/:itemId", asyncHandler(async (req, res) => {
     const result = await storage.toggleChecklistItem(req.params.id, req.params.itemId);
     if (!result) return res.status(404).json({ error: "Not found" });
+    const uid_a3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`artifacts:${uid_a3}`); bustCache(`stats:${uid_a3}`); bustCache(`enhanced:`);
     res.json(result);
   }));
   app.delete("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getArtifact(req.params.id);
     if (!existing) return res.status(404).json({ error: "Artifact not found" });
     await storage.deleteArtifact(req.params.id);
+    const uid_a4 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`artifacts:${uid_a4}`); bustCache(`stats:${uid_a4}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
 

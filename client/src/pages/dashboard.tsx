@@ -138,9 +138,9 @@ function CollapsibleSection({
   const iconColor = accent ? `hsl(${accent})` : undefined;
   const iconBg = accent ? `hsl(${accent} / 0.14)` : undefined;
   return (
-    <div data-testid={testId} className="rounded-xl border border-border/40 bg-card overflow-hidden">
+    <div data-testid={testId} className="rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm">
       <button
-        className="w-full flex items-center gap-2.5 px-3 py-3 text-left"
+        className="w-full flex items-center gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/30"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}
@@ -156,10 +156,10 @@ function CollapsibleSection({
         {sub && <span className="text-xs text-muted-foreground ml-1 truncate">{sub}</span>}
         <div className="ml-auto flex items-center gap-1.5 shrink-0">
           {headerRight}
-          {open ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+          {open ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground/70" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70" />}
         </div>
       </button>
-      {open && <div className="px-2.5 pb-2.5">{children}</div>}
+      {open && <div className="px-2.5 pb-3">{children}</div>}
     </div>
   );
 }
@@ -420,8 +420,8 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
 
   return (
     <>
-      <div className="rounded-lg border border-border/40 bg-card px-2 py-2" data-testid="section-kpis">
-        <div className="grid grid-cols-3 lg:grid-cols-6 gap-1.5">
+      <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
+        <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
           <KPITaskCard count={stats.activeTasks} onClick={() => setPopup("tasks")} />
           <KPISpendCard amount={stats.monthlySpend} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
           <KPIHabitsCard completionPct={stats.habitCompletionRate} totalHabits={stats.totalHabits} onClick={() => setPopup("habits")} />
@@ -529,7 +529,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
 
       {/* Tasks Popup */}
       <TasksPopup open={popup === "tasks"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
-      <HabitsPopup open={popup === "habits"} onClose={() => setPopup(null)} />
+      <HabitsPopup open={popup === "habits"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
 
       {/* Expiring Documents Popup */}
       <Dialog open={popup === "docs"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
@@ -794,7 +794,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   );
 }
 
-function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
+function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: { open: boolean; onClose: () => void; filterIds?: string[]; filterMode?: string }) {
   const { toast } = useToast();
   const today = new Date().toLocaleDateString('en-CA');
   const [, navigate] = useLocation();
@@ -815,9 +815,10 @@ function HabitsPopup({ open, onClose }: { open: boolean; onClose: () => void }) 
     onError: () => toast({ title: 'Failed to create habit', variant: 'destructive' }),
   });
 
+  const habitsProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: habits = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/habits"],
-    queryFn: () => apiRequest("GET", "/api/habits").then(r => r.json()),
+    queryKey: ["/api/habits", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/habits${habitsProfileParam}`).then(r => r.json()),
     enabled: open,
   });
 
@@ -3062,24 +3063,25 @@ export default function DashboardPage() {
   const rightSections = useMemo(() => sections.filter(s => s.visible && s.column === "right"), [sections]);
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden px-2 py-3 md:p-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
+    <div className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 md:p-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-medium text-muted-foreground">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-semibold text-foreground/90 tracking-tight">
               {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
             </p>
+            <span className="text-xs text-muted-foreground/60">·</span>
             <MultiProfileFilter
               onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
               compact
             />
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8" data-testid="btn-dashboard-menu" aria-label="Dashboard menu">
+              <Button variant="outline" size="icon" className="h-8 w-8 hover:bg-accent" data-testid="btn-dashboard-menu" aria-label="Dashboard menu">
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -3136,7 +3138,7 @@ export default function DashboardPage() {
             ))}
 
             {(leftSections.length > 0 || rightSections.length > 0) && (
-              <div className="md:columns-2 gap-3 mt-1">
+              <div className="md:columns-2 md:gap-3 gap-3 mt-1">
                 {/* Interleave left and right sections for balanced masonry flow */}
                 {(() => {
                   const interleaved: typeof leftSections = [];

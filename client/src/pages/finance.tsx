@@ -96,6 +96,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
       toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
@@ -528,6 +529,8 @@ export default function FinancePage() {
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
                   toast({ title: `"${editForm.description}" updated` });
                   setEditingExpense(null);
                 } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }
@@ -756,6 +759,8 @@ export default function FinancePage() {
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
                   toast({ title: `"${expense?.description}" deleted` });
                 } catch (err: any) {
                   toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" });
