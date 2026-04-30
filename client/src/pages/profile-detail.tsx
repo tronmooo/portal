@@ -269,16 +269,47 @@ function formatCurrency(val: number) {
 // are left as-is — Number(...) at the call site coerces them.
 function flattenProfileFields(rawFields: any): any {
   if (!rawFields || typeof rawFields !== "object") return rawFields || {};
-  const NESTED_GROUPS = ["vehicles", "insurance", "housing", "other", "finance", "subscriptions"];
+  const NESTED_GROUPS = [
+    // financial / asset groups
+    "vehicles", "insurance", "housing", "other", "finance", "subscriptions", "utilities",
+    // person / self groups
+    "personal", "identity", "health", "contact", "emergency",
+    // pet groups
+    "pets", "pet",
+  ];
+  // Aliases so UI keys match storage keys.
+  // Storage key (left) → UI key (right). When we promote a nested key, also
+  // mirror it under the UI alias if the alias slot is empty.
+  const KEY_ALIASES: Record<string, string> = {
+    dateOfBirth: "birthday",
+    dob: "birthday",
+    licenseNumber: "license",
+    licenseClass: "licenseClass",
+    issuingAuthority: "licenseState",
+    expirationDate: "licenseExpiration",
+    patientName: "name",
+    primaryPhone: "phone",
+    homePhone: "phone",
+    cellPhone: "phone",
+    homeAddress: "address",
+    serviceAddress: "address",
+  };
   const out: any = {};
+  const setIfEmpty = (key: string, val: any) => {
+    if (val === undefined || val === null || val === "") return;
+    if (out[key] === undefined || out[key] === null || out[key] === "") {
+      out[key] = val;
+    }
+  };
   // First, copy nested-group keys up
   for (const group of NESTED_GROUPS) {
     const nested = rawFields[group];
     if (nested && typeof nested === "object" && !Array.isArray(nested)) {
       for (const [k, v] of Object.entries(nested)) {
-        if (v !== undefined && v !== null && v !== "") {
-          out[k] = v;
-        }
+        if (v === undefined || v === null || v === "") continue;
+        setIfEmpty(k, v);
+        const alias = KEY_ALIASES[k];
+        if (alias && alias !== k) setIfEmpty(alias, v);
       }
     }
   }
@@ -286,7 +317,7 @@ function flattenProfileFields(rawFields: any): any {
   for (const [k, v] of Object.entries(rawFields)) {
     if (NESTED_GROUPS.includes(k)) {
       // Preserve the original nested object too so existing code that reads
-      // fields.vehicles.* etc. keeps working
+      // fields.vehicles.* / fields.personal.* etc. keeps working
       out[k] = v;
       continue;
     }
