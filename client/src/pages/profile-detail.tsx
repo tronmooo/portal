@@ -825,6 +825,492 @@ function ValueRollupCard({ profile }: { profile: ProfileDetail }) {
 }
 
 // ============================================================
+// MAINTENANCE CARD — Section 5 of NestedAssetSections
+// ============================================================
+
+const MAINT_RE = /maintenance|service|repair|warranty|filter|oil change|cleaning|inspection/i;
+
+// Default date helper: today + N days → "YYYY-MM-DD"
+function daysFromNow(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Difference in whole days: target - now (positive = future)
+function daysDiff(dateStr: string): number {
+  return Math.round((new Date(dateStr).getTime() - Date.now()) / 86400000);
+}
+
+function formatRelDays(n: number): string {
+  if (n === 0) return "today";
+  if (n > 0) return `in ${n} day${n === 1 ? "" : "s"}`;
+  return `${Math.abs(n)} day${Math.abs(n) === 1 ? "" : "s"} ago`;
+}
+
+const RECURRENCE_LABELS: Record<string, string> = {
+  none: "One-time",
+  daily: "Daily",
+  weekly: "Weekly",
+  biweekly: "Every 2 weeks",
+  monthly: "Monthly",
+  yearly: "Yearly",
+};
+
+function MaintenanceCard({
+  profile,
+}: {
+  profile: ProfileDetail;
+}) {
+  const { toast } = useToast();
+  const [collapsed, setCollapsed] = useState(true);
+  const [repairExpanded, setRepairExpanded] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [warrantyEditing, setWarrantyEditing] = useState(false);
+  const [warrantyInput, setWarrantyInput] = useState("");
+
+  // Add reminder form state
+  const [reminderTitle, setReminderTitle] = useState("");
+  const [reminderDate, setReminderDate] = useState(daysFromNow(7));
+  const [reminderRecurrence, setReminderRecurrence] = useState<string>("none");
+
+  // ── Section A: Warranty ──
+  const f = profile.fields || {};
+  const rawWarranty: string | undefined =
+    f.warrantyExpiry || f.warrantyEndDate || f.warranty || undefined;
+
+  const warrantyDays = rawWarranty ? daysDiff(rawWarranty) : null;
+
+  let warrantyTint = "";
+  let warrantyMsg = "";
+  if (rawWarranty && warrantyDays !== null) {
+    if (warrantyDays > 30) {
+      warrantyTint = "bg-green-500/10 text-green-700 dark:text-green-400";
+      warrantyMsg = `Warranty active · expires in ${warrantyDays} days`;
+    } else if (warrantyDays > 0) {
+      warrantyTint = "bg-orange-500/10 text-orange-700 dark:text-orange-400";
+      warrantyMsg = `Warranty expires soon · in ${warrantyDays} days`;
+    } else {
+      warrantyTint = "bg-red-500/10 text-red-700 dark:text-red-400";
+      warrantyMsg = `Warranty expired ${Math.abs(warrantyDays)} days ago`;
+    }
+  }
+
+  // ── Section B: Upcoming reminders (next 90 days) ──
+  // Use relatedEvents from the profile (already loaded) and supplement with tree fetch
+  const { data: treeDataMaint } = useQuery<TreeNode>({
+    queryKey: ["/api/profiles", profile.id, "tree"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profile.id}/tree`);
+      return res.json();
+    },
+    retry: false,
+    staleTime: 60000,
+  });
+
+  // Also fetch all events to filter by linkedProfiles for descendant matching
+  const { data: allEvents } = useQuery<any[]>({
+    queryKey: ["/api/events"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/events");
+      return res.json();
+    },
+    staleTime: 60000,
+  });
+
+  const descendantsMaint = treeDataMaint ? flattenTreeNodes(treeDataMaint) : [];
+  const descendantIdsMaint = useMemo(
+    () => new Set(descendantsMaint.map((d) => d.id)),
+    [descendantsMaint]
+  );
+  const descendantNameMapMaint = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of descendantsMaint) m.set(d.id, d.name);
+    return m;
+  }, [descendantsMaint]);
+
+  const now = Date.now();
+  const cutoff90 = now + 90 * 86400000;
+
+  const upcomingEvents = useMemo(() => {
+    const evts = allEvents || [];
+    const seen = new Set<string>();
+    const result: Array<{ event: any; fromChildName?: string }> = [];
+
+    for (const ev of evts) {
+      if (!ev.date) continue;
+      const ts = new Date(ev.date).getTime();
+      if (ts < now || ts > cutoff90) continue;
+      if (!MAINT_RE.test(ev.title || "") && !MAINT_RE.test(ev.category || "")) continue;
+
+      // Direct link to this profile
+      const linkedIds: string[] = ev.linkedProfiles || [];
+      if (linkedIds.includes(profile.id)) {
+        if (!seen.has(ev.id)) { seen.add(ev.id); result.push({ event: ev }); }
+        continue;
+      }
+
+      // Link via descendants
+      const childMatch = linkedIds.find((lid) => descendantIdsMaint.has(lid));
+      if (childMatch) {
+        if (!seen.has(ev.id)) {
+          seen.add(ev.id);
+          result.push({ event: ev, fromChildName: descendantNameMapMaint.get(childMatch) });
+        }
+      }
+    }
+
+    result.sort((a, b) => new Date(a.event.date).getTime() - new Date(b.event.date).getTime());
+    return result.slice(0, 5);
+  }, [allEvents, profile.id, descendantIdsMaint, descendantNameMapMaint, now, cutoff90]);
+
+  // ── Section C: Repair history (last 90 days) ──
+  const past90 = now - 90 * 86400000;
+
+  const directRepairs = useMemo(() => {
+    return (profile.relatedExpenses || []).filter((e: any) => {
+      if (!e.date) return false;
+      const ts = new Date(e.date).getTime();
+      if (ts < past90 || ts > now) return false;
+      const cat = (e.category || "").toLowerCase();
+      const desc = (e.description || "").toLowerCase();
+      return (
+        MAINT_RE.test(cat) ||
+        MAINT_RE.test(desc) ||
+        cat === "warranty_claim" ||
+        cat === "warranty"
+      );
+    });
+  }, [profile.relatedExpenses, past90, now]);
+
+  // Descendant repairs: use childProfiles' relatedExpenses where available
+  const descendantRepairs = useMemo(() => {
+    const result: Array<{ expense: any; childName: string }> = [];
+    const childProfs = (profile.childProfiles || []) as any[];
+    for (const cp of childProfs) {
+      if (!descendantIdsMaint.has(cp.id) && cp.id !== profile.id) continue;
+      const cpExpenses: any[] = cp.relatedExpenses || [];
+      for (const e of cpExpenses) {
+        if (!e.date) continue;
+        const ts = new Date(e.date).getTime();
+        if (ts < past90 || ts > now) continue;
+        const cat = (e.category || "").toLowerCase();
+        const desc = (e.description || "").toLowerCase();
+        if (MAINT_RE.test(cat) || MAINT_RE.test(desc) || cat === "warranty_claim" || cat === "warranty") {
+          result.push({ expense: e, childName: cp.name });
+        }
+      }
+    }
+    return result;
+  }, [profile.childProfiles, descendantIdsMaint, past90, now, profile.id]);
+
+  const allRepairs = useMemo(() => {
+    const direct = directRepairs.map((e: any) => ({ expense: e, childName: undefined as string | undefined }));
+    return [...direct, ...descendantRepairs].sort((a, b) => new Date(b.expense.date).getTime() - new Date(a.expense.date).getTime());
+  }, [directRepairs, descendantRepairs]);
+
+  const repairTotal = allRepairs.reduce((sum, r) => sum + (Number(r.expense.amount) || 0), 0);
+
+  // ── Warranty save mutation ──
+  const warrantySaveMut = useMutation({
+    mutationFn: async (dateVal: string) => {
+      const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
+        fields: { warrantyExpiry: dateVal },
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Warranty date saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      setWarrantyEditing(false);
+    },
+    onError: (err: Error) =>
+      toast({ title: "Failed to save warranty", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // ── Add reminder mutation ──
+  const addReminderMut = useMutation({
+    mutationFn: async () => {
+      // Schema supports: none|daily|weekly|biweekly|monthly|yearly
+      // "Every 6 months" is not natively supported — we use "monthly" with a note
+      // (recurrenceInterval is not in the schema, so we can't pass it)
+      let recurrence = reminderRecurrence;
+      if (recurrence === "every6months") {
+        // NOTE: Schema only supports monthly. User will need to skip 5 occurrences.
+        recurrence = "monthly";
+      }
+      const res = await apiRequest("POST", "/api/events", {
+        title: reminderTitle.trim(),
+        date: reminderDate,
+        allDay: true,
+        category: "other", // EventCategory doesn't include 'maintenance'; closest is 'other'
+        recurrence,
+        linkedProfiles: [profile.id],
+        source: "manual",
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Reminder created", description: reminderTitle });
+      setAddOpen(false);
+      setReminderTitle("");
+      setReminderDate(daysFromNow(7));
+      setReminderRecurrence("none");
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Failed to create reminder", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // Total content rows to decide if we need the chevron collapse
+  const totalRows = upcomingEvents.length + allRepairs.length;
+  const needsCollapse = totalRows > 5;
+
+  const bodyVisible = !needsCollapse || !collapsed;
+
+  return (
+    <Card data-testid="maintenance-card">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <Wrench className="h-4 w-4 text-primary" />
+            🛠️ Maintenance &amp; Reminders
+          </span>
+          {needsCollapse && (
+            <button
+              type="button"
+              className="p-1 rounded hover:bg-muted transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+              onClick={() => setCollapsed((c) => !c)}
+              aria-label={collapsed ? "Expand maintenance" : "Collapse maintenance"}
+              data-testid="maintenance-collapse-toggle"
+            >
+              {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+            </button>
+          )}
+        </CardTitle>
+      </CardHeader>
+
+      <CardContent className="pt-0 space-y-3">
+        {/* ── Section A: Warranty Status ── */}
+        <div data-testid="warranty-status" className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Warranty</p>
+          {!rawWarranty && !warrantyEditing && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">No warranty on file.</span>
+              <button
+                type="button"
+                onClick={() => { setWarrantyInput(daysFromNow(365)); setWarrantyEditing(true); }}
+                className="text-xs text-primary underline min-h-[44px] px-1"
+                data-testid="warranty-add-btn"
+              >
+                + Add
+              </button>
+            </div>
+          )}
+          {warrantyEditing && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <Input
+                type="date"
+                value={warrantyInput}
+                onChange={(e) => setWarrantyInput(e.target.value)}
+                className="h-9 w-auto text-sm"
+                data-testid="warranty-date-input"
+              />
+              <Button
+                size="sm"
+                className="h-9"
+                onClick={() => warrantySaveMut.mutate(warrantyInput)}
+                disabled={!warrantyInput || warrantySaveMut.isPending}
+                data-testid="warranty-save-btn"
+              >
+                Save
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9"
+                onClick={() => setWarrantyEditing(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
+          {rawWarranty && !warrantyEditing && (
+            <div className={`rounded-md px-3 py-2 text-sm flex items-center justify-between gap-2 ${warrantyTint}`}>
+              <span>{warrantyMsg}</span>
+              <span className="text-xs opacity-70">
+                {new Date(rawWarranty).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* ── Section B: Upcoming reminders (next 90 days) ── */}
+        {bodyVisible && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Upcoming (90 days)</p>
+            {upcomingEvents.length === 0 ? (
+              <p className="text-sm text-muted-foreground" data-testid="no-upcoming-maintenance">
+                No upcoming maintenance scheduled.
+              </p>
+            ) : (
+              <ul className="space-y-1" data-testid="upcoming-reminders-list">
+                {upcomingEvents.map(({ event, fromChildName }) => (
+                  <li
+                    key={event.id}
+                    className="rounded-md bg-muted/40 px-3 py-2 flex flex-col gap-0.5"
+                    data-testid={`upcoming-reminder-${event.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-sm font-medium leading-snug">{event.title}</span>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
+                        {formatRelDays(daysDiff(event.date))}
+                      </span>
+                    </div>
+                    {fromChildName && (
+                      <span className="text-[11px] text-muted-foreground">
+                        from {fromChildName}
+                      </span>
+                    )}
+                    {event.recurrence && event.recurrence !== "none" && (
+                      <span className="text-[11px] text-primary/70">
+                        {RECURRENCE_LABELS[event.recurrence] || event.recurrence}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* ── Section C: Repair history (last 90 days) ── */}
+        {bodyVisible && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Repair History (90 days)</p>
+            {allRepairs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No repair expenses recorded.</p>
+            ) : (
+              <div className="space-y-1.5" data-testid="repair-history">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-sm font-medium w-full text-left min-h-[44px] px-3 py-2 rounded-md bg-muted/40 hover:bg-muted/60 transition-colors"
+                  onClick={() => setRepairExpanded((x) => !x)}
+                  data-testid="repair-history-toggle"
+                >
+                  <span className="flex-1">
+                    {allRepairs.length} repair{allRepairs.length !== 1 ? "s" : ""} · {formatCurrency(repairTotal)} in last 90 days
+                  </span>
+                  {repairExpanded ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
+                </button>
+                {repairExpanded && (
+                  <ul className="space-y-1 pl-1">
+                    {allRepairs.map(({ expense: e, childName }) => (
+                      <li
+                        key={e.id}
+                        className="rounded-md bg-muted/20 px-3 py-2 flex flex-col gap-0.5"
+                        data-testid={`repair-item-${e.id}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-sm leading-snug">{e.description}</span>
+                          <span className="text-sm font-medium tabular-nums shrink-0">{formatCurrency(Number(e.amount) || 0)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(e.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                          </span>
+                          {childName && (
+                            <span className="text-[11px] text-muted-foreground">· {childName}</span>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Section D: Add reminder (collapsible form) ── */}
+        <div className="border-t border-border/30 pt-2">
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-sm text-primary font-medium min-h-[44px] w-full text-left"
+            onClick={() => setAddOpen((x) => !x)}
+            data-testid="add-reminder-toggle"
+            aria-expanded={addOpen}
+          >
+            <Plus className="h-4 w-4" />
+            Add reminder
+            {addOpen ? <ChevronUp className="h-3.5 w-3.5 ml-auto" /> : <ChevronDown className="h-3.5 w-3.5 ml-auto" />}
+          </button>
+
+          {addOpen && (
+            <form
+              className="space-y-2 mt-2"
+              data-testid="add-reminder-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!reminderTitle.trim() || !reminderDate) return;
+                addReminderMut.mutate();
+              }}
+            >
+              <Input
+                placeholder="Title (required)"
+                value={reminderTitle}
+                onChange={(e) => setReminderTitle(e.target.value)}
+                required
+                className="h-10"
+                data-testid="reminder-title-input"
+              />
+              <Input
+                type="date"
+                value={reminderDate}
+                onChange={(e) => setReminderDate(e.target.value)}
+                required
+                className="h-10"
+                data-testid="reminder-date-input"
+              />
+              <Select value={reminderRecurrence} onValueChange={setReminderRecurrence}>
+                <SelectTrigger className="h-10" data-testid="reminder-recurrence-select">
+                  <SelectValue placeholder="Recurrence" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">One-time</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  {/* Every 6 months: schema has no recurrenceInterval, so we use monthly and note the limitation */}
+                  <SelectItem value="every6months">Every 6 months (stored as monthly)</SelectItem>
+                  <SelectItem value="yearly">Yearly</SelectItem>
+                </SelectContent>
+              </Select>
+              {reminderRecurrence === "every6months" && (
+                <p className="text-[11px] text-muted-foreground">
+                  Note: stored as monthly recurrence — skip the intermediate 5 occurrences manually.
+                </p>
+              )}
+              <Button
+                type="submit"
+                size="sm"
+                className="w-full h-10"
+                disabled={!reminderTitle.trim() || !reminderDate || addReminderMut.isPending}
+                data-testid="reminder-submit-btn"
+              >
+                {addReminderMut.isPending ? "Saving…" : "Save Reminder"}
+              </Button>
+            </form>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============================================================
 // NESTED ASSETS — COMBINED SECTION WRAPPER (inject into InfoTab)
 // ============================================================
 
@@ -857,6 +1343,9 @@ function NestedAssetSections({
 
       {/* Section 4: Value Rollup */}
       <ValueRollupCard profile={profile} />
+
+      {/* Section 5: Maintenance & Reminders */}
+      <MaintenanceCard profile={profile} />
     </div>
   );
 }

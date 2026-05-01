@@ -36,7 +36,7 @@ import {
   Download, UploadCloud, MoreVertical,
   EyeOff, GripVertical, Settings, RotateCcw, Target,
   Trash2, Pencil, FileText, CheckCircle2, X,
-  ChevronLeft, ChevronRight, Plus,
+  ChevronLeft, ChevronRight, Plus, ShieldCheck,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -2626,6 +2626,127 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   );
 }
 
+// ─── Expiring Warranties Card ───────────────────────────────────────────────
+
+const ASSET_TYPES_WITH_WARRANTY = new Set(["asset", "vehicle", "property", "investment", "account"]);
+
+function ExpiringWarrantiesCard({
+  allProfiles,
+  filterIds = [],
+  filterMode = "everyone",
+}: {
+  allProfiles: any[];
+  filterIds?: string[];
+  filterMode?: string;
+}) {
+  const [, navigate] = useLocation();
+
+  const items = useMemo(() => {
+    const now = new Date();
+    const nowMs = now.getTime();
+    const SIXTY_DAYS_MS = 60 * 24 * 60 * 60 * 1000;
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+    const filtered = (allProfiles || []).filter((p: any) => {
+      // Only asset-type profiles
+      if (!ASSET_TYPES_WITH_WARRANTY.has(p.type)) return false;
+      // Apply profile filter — mirrors assetProfiles pattern from FinanceWidget
+      if (filterMode !== "everyone" && filterIds.length > 0) {
+        const pParent = p.fields?._parentProfileId || p.parentProfileId;
+        if (!filterIds.includes(p.id) && !(pParent && filterIds.includes(pParent))) return false;
+      }
+      // Check warranty field variants
+      const raw = p.fields?.warrantyExpiry || p.fields?.warrantyEndDate || p.fields?.warranty;
+      if (!raw) return false;
+      const expiry = new Date(raw);
+      if (isNaN(expiry.getTime())) return false;
+      const diffMs = expiry.getTime() - nowMs;
+      // In next 60 days (future) OR expired in last 30 days (past)
+      return diffMs <= SIXTY_DAYS_MS && diffMs >= -THIRTY_DAYS_MS;
+    });
+
+    return filtered
+      .map((p: any) => {
+        const raw = p.fields?.warrantyExpiry || p.fields?.warrantyEndDate || p.fields?.warranty;
+        const expiry = new Date(raw);
+        const diffDays = Math.round((expiry.getTime() - nowMs) / (24 * 60 * 60 * 1000));
+        return { id: p.id, name: p.name, type: p.type as string, diffDays, expiry };
+      })
+      .sort((a, b) => a.diffDays - b.diffDays)
+      .slice(0, 5);
+  }, [allProfiles, filterIds, filterMode]);
+
+  if (items.length === 0) return null;
+
+  const TYPE_COLORS: Record<string, string> = {
+    vehicle: "bg-blue-500/15 text-blue-600",
+    property: "bg-amber-500/15 text-amber-700",
+    asset: "bg-purple-500/15 text-purple-700",
+    investment: "bg-green-500/15 text-green-700",
+    account: "bg-slate-500/15 text-slate-600",
+  };
+
+  return (
+    <div
+      data-testid="expiring-warranties-card"
+      className="relative rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm"
+    >
+      {/* Header accent strip */}
+      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: "linear-gradient(90deg, hsl(25 90% 55%), transparent)" }} />
+      <div
+        className="flex items-center gap-2.5 px-3 py-3"
+        style={{ background: "linear-gradient(135deg, hsl(25 90% 55% / 0.06) 0%, transparent 50%)" }}
+      >
+        <div className="icon-badge" style={{ background: "hsl(25 90% 55% / 0.15)" }}>
+          <ShieldCheck className="h-3.5 w-3.5" style={{ color: "hsl(25 90% 55%)" }} />
+        </div>
+        <h2 className="text-xs font-semibold tracking-wide uppercase" style={{ color: "hsl(25 90% 55%)" }}>
+          🛡️ Expiring Warranties
+        </h2>
+        <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums ml-1">
+          {items.length}
+        </span>
+      </div>
+      <div className="px-2.5 pb-2.5 space-y-1">
+        {items.map((item) => {
+          const isExpired = item.diffDays < 0;
+          const isUrgent = !isExpired && item.diffDays <= 14;
+          const label = isExpired
+            ? `Expired ${Math.abs(item.diffDays)}d ago`
+            : item.diffDays === 0
+            ? "Expires today"
+            : item.diffDays === 1
+            ? "Expires tomorrow"
+            : `Expires in ${item.diffDays}d`;
+          const pillClass = TYPE_COLORS[item.type] || "bg-muted text-muted-foreground";
+          return (
+            <button
+              key={item.id}
+              onClick={() => navigate(`/profiles/${item.id}`)}
+              className="w-full flex items-center gap-2 rounded-lg px-2 hover:bg-muted/50 active:scale-[0.98] transition-all text-left"
+              style={{ minHeight: "44px" }}
+            >
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate leading-tight">{item.name}</p>
+              </div>
+              <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pillClass}`}>
+                {item.type}
+              </span>
+              <span
+                className={`shrink-0 text-[10px] font-semibold tabular-nums ${
+                  isExpired ? "text-red-500" : isUrgent ? "text-amber-600" : "text-muted-foreground"
+                }`}
+              >
+                {label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Section: AI Summary ─────────────────────────────────────────────────────
 
 // ─ Simple inline markdown renderer: **bold**, *italic*, \n→<br> ───────────────────────────
@@ -3101,7 +3222,12 @@ export default function DashboardPage() {
         content = <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />;
         break;
       case "finance":
-        content = <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
+        content = (
+          <div className="space-y-3">
+            <ExpiringWarrantiesCard allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />
+            <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} filterIds={filterIds} filterMode={filterMode} />
+          </div>
+        );
         break;
       case "ai-summary":
         content = <AISummaryWidget stats={stats} enhanced={enhanced} />;

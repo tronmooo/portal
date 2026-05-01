@@ -1207,19 +1207,20 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         fields: { type: "object", description: "Entity-specific fields. Include ALL known info in the right keys." },
         tags: { type: "array", items: { type: "string" }, description: "Tags for categorization" },
         notes: { type: "string", description: "Additional notes" },
-        forProfile: { type: "string", description: "Owner profile name. When creating a vehicle/asset/subscription/loan/investment/property FOR someone (e.g. 'Bob Johnson's car'), set this to the owner's name. The created profile will be a child of that person." },
+        forProfile: { type: "string", description: "Owner or parent profile name. When creating a vehicle/asset/subscription/loan/investment/property FOR a person (e.g. 'Bob Johnson's car'), set this to the owner's name. Can ALSO be the name of an asset/vehicle/property profile (e.g. 'My House', 'Kitchen') so the new asset becomes nested inside that parent asset. Example: 'Add Samsung refrigerator to my house' → forProfile: 'My House'. The created profile will be a child of the specified profile." },
       },
       required: ["type", "name"],
     },
   },
   {
     name: "update_profile",
-    description: "Update an existing profile's data. Use this for personal info (blood type, allergies, height, birthday, phone number), pet info (breed, weight, microchip), vehicle info (VIN, mileage, insurance), or any profile field update. Find by name, then apply changes.",
+    description: "Update an existing profile's data. Use this for personal info (blood type, allergies, height, birthday, phone number), pet info (breed, weight, microchip), vehicle info (VIN, mileage, insurance), asset info (value, purchase price), or any profile field update. Find by name, then apply changes. To set an asset's value: changes: { fields: { currentValue: 1200 } }. Common value fields: currentValue, purchasePrice, balance, remainingBalance.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Name of the profile to update (partial match). Use 'Me' for self profile." },
-        changes: { type: "object", description: "Fields to update — use 'fields' object for data like { bloodType: 'O+', allergies: 'penicillin', height: '5\'10\"' }. Can also include 'notes' (string) or 'tags' (array)." },
+        changes: { type: "object", description: "Fields to update — use 'fields' object for data like { bloodType: 'O+', allergies: 'penicillin', height: '5\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
+        parentProfileName: { type: "string", description: "Move this profile under a different parent. Pass the EXACT name of the new parent profile (e.g. 'My House', 'Kitchen', 'Bob'). Use this for commands like 'Move freezer from garage to basement' — set name='freezer' and parentProfileName='basement'. Pass empty string to detach (make top-level)." },
       },
       required: ["name", "changes"],
     },
@@ -1458,7 +1459,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Events ---
   {
     name: "create_event",
-    description: "Create a calendar event.",
+    description: "Create a calendar event. For asset/appliance maintenance reminders (e.g. 'replace fridge filter every 6 months', 'HVAC service yearly'), use recurrence='monthly' with the appropriate interval in the title or description, and set category='maintenance'. For recurring reminders tied to an asset, ALWAYS set forProfile to the asset name.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1468,8 +1469,9 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         endTime: { type: "string", description: "End time (HH:MM)" },
         location: { type: "string", description: "Location" },
         description: { type: "string", description: "Description" },
-        recurrence: { type: "string", enum: ["none", "daily", "weekly", "biweekly", "monthly", "yearly"], description: "Recurrence pattern" },
-        forProfile: { type: "string", description: "Name of the profile this event belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
+        recurrence: { type: "string", enum: ["none", "daily", "weekly", "biweekly", "monthly", "yearly"], description: "Recurrence pattern. For 'every 6 months' use 'monthly' and note the interval in the title." },
+        category: { type: "string", description: "Event category. Use 'maintenance' for asset/vehicle upkeep reminders (filter replacements, oil changes, HVAC service, etc.)." },
+        forProfile: { type: "string", description: "Name of the profile this event belongs to (e.g. 'Max', 'Mom', 'Tesla', 'Samsung refrigerator'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
       },
       required: ["title", "date"],
     },
@@ -2237,12 +2239,13 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Upload document (UI-only) ---
   {
     name: "upload_document",
-    description: "Help the user upload a document. This cannot be done programmatically — the user must use the attachment button in the chat UI.",
+    description: "Help the user upload a document or file. This cannot be done programmatically — the user must use the attachment (paperclip) button in the chat UI. Use when the user says 'upload this warranty to the refrigerator', 'attach this document to my house', 'link this file to my Tesla'. Set forProfile to the asset/profile name so the document is linked after upload.",
     input_schema: {
       type: "object" as const,
       properties: {
         fileName: { type: "string", description: "Name of the file the user wants to upload" },
-        profileId: { type: "string", description: "Optional profile to associate the document with" },
+        forProfile: { type: "string", description: "Profile name to link this document to after upload (e.g. 'Samsung refrigerator', 'My House', 'Tesla'). Works with any profile type: person, pet, vehicle, asset, property." },
+        profileId: { type: "string", description: "Optional profile ID to associate the document with (if ID is known)" },
         notes: { type: "string", description: "Optional notes about the document" },
       },
       required: [],
@@ -2259,6 +2262,32 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         profileId: { type: "string", description: "Optional profile ID to get summary for. If omitted, returns overall dashboard summary." },
       },
       required: [],
+    },
+  },
+
+  // --- Asset rollup & document search ---
+  {
+    name: "get_asset_rollup",
+    description: "Get the total value rollup for a profile and all its nested children/descendants. Use when the user asks 'what is the total value of my home including appliances?', 'what is my house worth with everything in it?', 'show me the value of X including children'. Returns base value, nested value, total value, loans, and a list of direct children.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        profileName: { type: "string", description: "Name of the profile to compute the rollup for (case-insensitive). Examples: 'My House', 'Tesla Model S', 'Refrigerator'." },
+      },
+      required: ["profileName"],
+    },
+  },
+  {
+    name: "search_documents",
+    description: "Search for documents linked to a specific profile. Use when the user asks 'show me all documents linked to my house', 'what documents does my car have?', 'find warranties for my appliances'. Set includeChildAssets=true to also return documents from nested child profiles (e.g. appliances inside a house).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        forProfile: { type: "string", description: "Profile name to search documents for (case-insensitive). Examples: 'My House', 'Tesla', 'Samsung refrigerator'." },
+        includeChildAssets: { type: "boolean", description: "If true, also return documents from all descendant (child, grandchild, etc.) profiles. Default false. Set to true for queries like 'show me all documents linked to my house'." },
+        query: { type: "string", description: "Optional text filter to narrow results by document name or type." },
+      },
+      required: ["forProfile"],
     },
   },
 ];
@@ -2842,7 +2871,7 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       }
       if (!normalized.date) normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: _userTz });
       // Category must be from allowed list
-      const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards"];
+      const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards", "repair", "maintenance"];
       if (normalized.category && !validCategories.includes(normalized.category)) {
         warnings.push(`Category "${normalized.category}" is not standard — defaulting to "general"`);
         normalized.category = "general";
@@ -3264,6 +3293,34 @@ async function executeTool(name: string, input: any): Promise<any> {
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
       if (input.changes.type) changes.type = input.changes.type;
+
+      // ---- Parent reassignment (parentProfileName) ----
+      const previousParentProfileId = input.parentProfileName !== undefined ? (profile.parentProfileId ?? null) : undefined;
+      if (input.parentProfileName !== undefined) {
+        if (input.parentProfileName === "") {
+          // Detach: make top-level
+          changes.parentProfileId = null;
+          if (!changes.fields) changes.fields = { ...(profile.fields || {}) };
+          changes.fields._parentProfileId = null;
+        } else {
+          // Resolve new parent by name
+          const parentNameLC = input.parentProfileName.toLowerCase().trim();
+          const newParent = profiles.find(p => p.name.toLowerCase() === parentNameLC)
+            || profiles.find(p => p.name.toLowerCase().includes(parentNameLC));
+          if (!newParent) {
+            return { error: `Parent profile '${input.parentProfileName}' not found.` };
+          }
+          // Cycle check
+          const hasCycle = await storage.wouldCreateCycle("", profile.id, newParent.id);
+          if (hasCycle) {
+            return { error: "Cannot move: would create a cycle." };
+          }
+          changes.parentProfileId = newParent.id;
+          if (!changes.fields) changes.fields = { ...(profile.fields || {}) };
+          changes.fields._parentProfileId = newParent.id;
+        }
+      }
+
       const updated = await storage.updateProfile(profile.id, changes);
       // Attach revert metadata so the chat action card can render a Revert button.
       // Non-enumerable would be safer, but the action result is JSON-serialised
@@ -3276,6 +3333,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           notes: previousNotes,
           tags: previousTags,
           type: previousType,
+          parentProfileId: previousParentProfileId,
         },
       };
     }
@@ -4906,11 +4964,21 @@ async function executeTool(name: string, input: any): Promise<any> {
     }
 
     case "upload_document": {
+      // Resolve forProfile to a profileId if provided
+      let uploadProfileId: string | null = input.profileId || null;
+      if (!uploadProfileId && input.forProfile) {
+        const allProfilesUpload = await storage.getProfiles();
+        const forProfileLC = (input.forProfile || "").toLowerCase().trim();
+        const matchedUploadProfile = allProfilesUpload.find(p => p.name.toLowerCase() === forProfileLC)
+          || allProfilesUpload.find(p => p.name.toLowerCase().includes(forProfileLC));
+        if (matchedUploadProfile) uploadProfileId = matchedUploadProfile.id;
+      }
       return {
-        message: "To upload a document, use the \uD83D\uDCCE button at the bottom of the chat and select your file. I'll automatically extract and organize the data once you upload it.",
+        message: `To upload a document, use the \uD83D\uDCCE button at the bottom of the chat and select your file. I'll automatically extract and organize the data once you upload it.${input.forProfile ? ` The document will be linked to "${input.forProfile}".` : ""}`,
         hint: "attachment_button",
         fileName: input.fileName || null,
-        profileId: input.profileId || null,
+        forProfile: input.forProfile || null,
+        profileId: uploadProfileId,
         notes: input.notes || null,
       };
     }
@@ -4958,6 +5026,137 @@ async function executeTool(name: string, input: any): Promise<any> {
           budgetCategories: budgets.map(b => ({ category: b.category, budgeted: b.amount })),
         },
         profileData,
+      };
+    }
+
+    case "get_asset_rollup": {
+      const allProfiles = await storage.getProfiles();
+      const searchNameRollup = (input.profileName || "").toLowerCase().trim();
+      // Exact then partial match
+      const rootProfile = allProfiles.find(p => p.name.toLowerCase() === searchNameRollup)
+        || allProfiles.find(p => p.name.toLowerCase().includes(searchNameRollup));
+      if (!rootProfile) {
+        return { error: `Profile "${input.profileName}" not found.` };
+      }
+
+      // Helper: extract numeric value from a profile's fields
+      const extractValue = (p: typeof allProfiles[0]): number => {
+        const f: any = p.fields || {};
+        return Number(f.currentValue ?? f.value ?? f.purchasePrice ?? f.balance ?? 0) || 0;
+      };
+      const extractLoan = (p: typeof allProfiles[0]): number => {
+        const f: any = p.fields || {};
+        return Number(f.remainingBalance ?? f.loanBalance ?? 0) || 0;
+      };
+
+      // Collect all descendants (BFS)
+      const getAllDescendants = (parentId: string): typeof allProfiles => {
+        const result: typeof allProfiles = [];
+        const queue = [parentId];
+        const visited = new Set<string>();
+        while (queue.length) {
+          const pid = queue.shift()!;
+          if (visited.has(pid)) continue;
+          visited.add(pid);
+          const children = allProfiles.filter(p => {
+            const pParentId = p.parentProfileId || (p.fields as any)?._parentProfileId;
+            return pParentId === pid;
+          });
+          result.push(...children);
+          queue.push(...children.map(c => c.id));
+        }
+        return result;
+      };
+
+      const directChildren = allProfiles.filter(p => {
+        const pParentId = p.parentProfileId || (p.fields as any)?._parentProfileId;
+        return pParentId === rootProfile.id;
+      });
+      const allDescendants = getAllDescendants(rootProfile.id);
+
+      const baseValue = extractValue(rootProfile);
+      const nestedValue = allDescendants.reduce((sum, p) => sum + extractValue(p), 0);
+      const totalValue = baseValue + nestedValue;
+      const totalLoans = extractLoan(rootProfile) + allDescendants.reduce((sum, p) => sum + extractLoan(p), 0);
+      const netValue = totalValue - totalLoans;
+
+      return {
+        profile: { id: rootProfile.id, name: rootProfile.name, type: rootProfile.type },
+        baseValue: Math.round(baseValue * 100) / 100,
+        nestedValue: Math.round(nestedValue * 100) / 100,
+        totalValue: Math.round(totalValue * 100) / 100,
+        totalLoans: Math.round(totalLoans * 100) / 100,
+        netValue: Math.round(netValue * 100) / 100,
+        childCount: directChildren.length,
+        descendantCount: allDescendants.length,
+        children: directChildren.map(c => ({
+          id: c.id,
+          name: c.name,
+          type: c.type,
+          currentValue: extractValue(c),
+        })),
+      };
+    }
+
+    case "search_documents": {
+      const allProfiles = await storage.getProfiles();
+      const searchNameDocs = (input.forProfile || "").toLowerCase().trim();
+      const rootProfileDocs = allProfiles.find(p => p.name.toLowerCase() === searchNameDocs)
+        || allProfiles.find(p => p.name.toLowerCase().includes(searchNameDocs));
+      if (!rootProfileDocs) {
+        return { error: `Profile "${input.forProfile}" not found.` };
+      }
+
+      // Collect profile IDs to search (root + descendants if includeChildAssets)
+      const profileIdsToSearch = new Set<string>([rootProfileDocs.id]);
+      if (input.includeChildAssets) {
+        // BFS over descendants
+        const queueDocs = [rootProfileDocs.id];
+        const visitedDocs = new Set<string>();
+        while (queueDocs.length) {
+          const pid = queueDocs.shift()!;
+          if (visitedDocs.has(pid)) continue;
+          visitedDocs.add(pid);
+          const kids = allProfiles.filter(p => {
+            const pParentId = p.parentProfileId || (p.fields as any)?._parentProfileId;
+            return pParentId === pid;
+          });
+          for (const k of kids) {
+            profileIdsToSearch.add(k.id);
+            queueDocs.push(k.id);
+          }
+        }
+      }
+
+      const allDocs = await storage.getDocuments();
+      const queryLower = (input.query || "").toLowerCase().trim();
+      const matchedDocs = allDocs.filter(d => {
+        const linkedProfiles: string[] = (d as any).linkedProfiles || [];
+        const isLinked = linkedProfiles.some(pid => profileIdsToSearch.has(pid));
+        if (!isLinked) return false;
+        if (queryLower && !d.name.toLowerCase().includes(queryLower) && !(d.type || "").toLowerCase().includes(queryLower)) return false;
+        return true;
+      });
+
+      // Include profile name for each doc so user knows which child it belongs to
+      const profileIdToName: Record<string, string> = {};
+      for (const p of allProfiles) profileIdToName[p.id] = p.name;
+
+      return {
+        profileName: rootProfileDocs.name,
+        includeChildAssets: input.includeChildAssets || false,
+        totalCount: matchedDocs.length,
+        documents: matchedDocs.map(d => {
+          const linkedProfiles: string[] = (d as any).linkedProfiles || [];
+          const ownerNames = linkedProfiles.map(pid => profileIdToName[pid]).filter(Boolean);
+          return {
+            id: d.id,
+            name: d.name,
+            type: d.type,
+            createdAt: (d as any).createdAt || null,
+            linkedTo: ownerNames,
+          };
+        }),
       };
     }
 
@@ -6012,7 +6211,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           const result = await executeTool(toolUse.name, validation.normalized);
           
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -6044,7 +6243,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -6287,6 +6486,8 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     spending_analytics: "retrieve",
     log_income: "log_expense",
     manage_document: "retrieve",
+    get_asset_rollup: "retrieve",
+    search_documents: "retrieve",
   };
   return mapping[toolName] || "retrieve";
 }
