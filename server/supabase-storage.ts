@@ -2811,10 +2811,15 @@ export class SupabaseStorage implements IStorage {
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
     const now = new Date();
-    const thisMonth = now.getMonth();
-    const thisYear = now.getFullYear();
-
-    const monthlyExpenses = expenses.filter(e => { const dd = new Date(e.date); return dd.getMonth() === thisMonth && dd.getFullYear() === thisYear; });
+    // CRITICAL: month boundaries must be evaluated in the user's timezone, not
+    // server UTC. The server runs in UTC on Vercel, so a user adding an expense
+    // at 6pm PDT on April 30 would have it filed under April locally but the
+    // server would compute thisMonth=May (UTC = May 1 already) and the
+    // expense would silently disappear from "this month" totals.
+    // We compare YYYY-MM strings (which are timezone-stable for the stored
+    // date strings, since expenses store local YYYY-MM-DD).
+    const userYM = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone }).slice(0, 7);
+    const monthlyExpenses = expenses.filter(e => (e.date || '').slice(0, 7) === userYM);
     const weekAgo = new Date(now.getTime() - 7 * 86400000);
     let weeklyEntries = 0;
     for (const t of trackers) weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length;
@@ -2946,6 +2951,10 @@ export class SupabaseStorage implements IStorage {
     const thisYear = now.getFullYear();
     // Multi-select filter support
     const fpIds = filterProfileIds || (filterProfileId ? [filterProfileId] : undefined);
+    // Same timezone fix as getStats — "this month" is the user's local month,
+    // not server-UTC month. Without this, all April expenses disappear after
+    // 5pm PDT on April 30 (UTC has already rolled to May).
+    const userYearMonth = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone }).slice(0, 7);
 
     const [documents, rawTrackers, allProfiles, rawExpenses, rawObligations, rawTasks, rawEvents] = await Promise.all([
       this.getDocuments(), this.getTrackers(), this.getProfiles(),
@@ -3017,13 +3026,18 @@ export class SupabaseStorage implements IStorage {
       healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: recent[recent.length - 1]?.timestamp, dailyTotal });
     }
 
-    const monthlyExpenses = allExpenses.filter(e => { const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear; });
+    const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth);
     const spendByCategory: Record<string, number> = {};
     for (const e of monthlyExpenses) spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const lastMonthDate = new Date(thisYear, thisMonth - 1, 1);
-    const lastMonthExpenses = allExpenses.filter(e => { const d = new Date(e.date); return d.getMonth() === lastMonthDate.getMonth() && d.getFullYear() === lastMonthDate.getFullYear(); });
+    // Previous month YYYY-MM, computed in the user's timezone
+    const [yStr, mStr] = userYearMonth.split('-');
+    const prevMonthIndex = parseInt(mStr, 10) - 2; // 0-indexed previous month
+    const prevYear = prevMonthIndex < 0 ? parseInt(yStr, 10) - 1 : parseInt(yStr, 10);
+    const prevMonth = ((prevMonthIndex % 12) + 12) % 12;
+    const lastMonthYM = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
+    const lastMonthExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === lastMonthYM);
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
     const upcomingBills = allObligations.filter(o => { const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => ({ id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil: Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000), autopay: o.autopay, category: o.category }));
