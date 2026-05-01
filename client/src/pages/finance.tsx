@@ -297,7 +297,41 @@ export default function FinancePage() {
                         ))}
                       </SelectContent>
                     </Select></div>
-                  <Button className="w-full" onClick={() => addExpenseMutation.mutate()} disabled={!newExpense.description || !newExpense.amount || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending} data-testid="button-save-expense">
+                  {/* Inline validation hints — the previous implementation
+                      silently disabled the Save button which left users
+                      guessing why nothing happened. Now we explicitly tell
+                      them which field is missing. */}
+                  {(!newExpense.description.trim() || !newExpense.amount || parseFloat(newExpense.amount) <= 0) && (
+                    <p className="text-xs text-muted-foreground" data-testid="hint-expense-required">
+                      {!newExpense.description.trim() && !newExpense.amount
+                        ? "Description and amount are required"
+                        : !newExpense.description.trim()
+                        ? "Description is required"
+                        : !newExpense.amount
+                        ? "Amount is required"
+                        : "Amount must be greater than $0"}
+                    </p>
+                  )}
+                  <Button
+                    className="w-full"
+                    onClick={() => {
+                      // Defensive client-side check that surfaces a toast even
+                      // if a future refactor accidentally drops the disabled
+                      // attribute. Server still validates independently.
+                      if (!newExpense.description.trim()) {
+                        toast({ title: "Description is required", variant: "destructive" });
+                        return;
+                      }
+                      const amt = parseFloat(newExpense.amount);
+                      if (!newExpense.amount || isNaN(amt) || amt <= 0) {
+                        toast({ title: "Amount must be greater than $0", variant: "destructive" });
+                        return;
+                      }
+                      addExpenseMutation.mutate();
+                    }}
+                    disabled={!newExpense.description.trim() || !newExpense.amount || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending}
+                    data-testid="button-save-expense"
+                  >
                     {addExpenseMutation.isPending ? "Saving..." : "Save Expense"}
                   </Button>
                 </div>

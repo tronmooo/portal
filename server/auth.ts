@@ -295,14 +295,28 @@ export function registerAuthRoutes(app: Express) {
     if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Not authenticated" });
     const token = authHeader.split(" ")[1];
 
-    const { newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body;
     if (!newPassword || newPassword.length < 6) {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
+    if (!currentPassword || typeof currentPassword !== "string") {
+      return res.status(400).json({ error: "Current password is required" });
+    }
 
-    // Get user ID from token
+    // Get user ID + email from token
     const { data: { user }, error: getUserErr } = await supabase.auth.getUser(token);
-    if (getUserErr || !user) return res.status(401).json({ error: "Invalid session" });
+    if (getUserErr || !user || !user.email) return res.status(401).json({ error: "Invalid session" });
+
+    // Verify the current password by attempting a sign-in. This guarantees only
+    // the owner of the account can rotate the password — without this check, a
+    // stolen access token alone would be enough to take over the account.
+    const { error: verifyErr } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword,
+    });
+    if (verifyErr) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
 
     // Use admin API to update password
     const { error } = await supabase.auth.admin.updateUserById(

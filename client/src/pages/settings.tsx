@@ -127,6 +127,69 @@ function NotificationToggle({ prefKey, label, description, icon }: { prefKey: st
   );
 }
 
+// Google Calendar integration row. The previous implementation showed a static
+// "Available" badge with no action — a dead-end UI. This component reads the
+// real connection state from /api/calendar/status, exposes a Sync Now button
+// when connected, and falls back to clear messaging when no refresh token
+// has been provisioned. Connect-the-account flow is intentionally out of
+// scope here (it requires OAuth redirect handling); the "Connect" link sends
+// the user to the help doc until that's wired.
+function GoogleCalendarRow() {
+  const { toast } = useToast();
+  const [syncing, setSyncing] = useState(false);
+  const { data: status } = useQuery<{ connected: boolean; lastSync: string | null; importedCount: number; totalEvents: number }>({
+    queryKey: ["/api/calendar/status"],
+    queryFn: () => apiRequest("GET", "/api/calendar/status").then(r => r.json()),
+    refetchOnWindowFocus: false,
+  });
+  const connected = !!status?.connected;
+  const lastSyncLabel = status?.lastSync
+    ? new Date(status.lastSync).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : null;
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await apiRequest("POST", "/api/calendar/sync", {}).then(r => r.json());
+      toast({ title: "Calendar synced", description: `${res.imported || 0} events imported` });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+    } catch (err: any) {
+      toast({
+        title: "Sync failed",
+        description: err?.message?.includes("502") ? "Could not reach Google Calendar" : "Please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+  return (
+    <div className="flex items-center justify-between" data-testid="row-google-calendar">
+      <div className="flex items-center gap-3">
+        <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+          <Calendar className="h-4 w-4 text-blue-500" />
+        </div>
+        <div>
+          <Label className="text-sm font-medium">Google Calendar</Label>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {connected
+              ? `Connected${lastSyncLabel ? ` — last synced ${lastSyncLabel}` : ""}`
+              : "Sync events from Google Calendar"}
+          </p>
+        </div>
+      </div>
+      {connected ? (
+        <Button size="sm" variant="outline" onClick={handleSync} disabled={syncing} data-testid="button-gcal-sync">
+          {syncing ? "Syncing…" : "Sync now"}
+        </Button>
+      ) : (
+        <Badge variant="outline" className="text-xs" data-testid="badge-gcal-not-connected">Not connected</Badge>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   useEffect(() => { document.title = "Settings — Portol"; }, []);
   const { user, signOut } = useAuth();
@@ -151,6 +214,7 @@ export default function SettingsPage() {
   const [lastCsvImport, setLastCsvImport] = useState<string | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
@@ -381,10 +445,20 @@ export default function SettingsPage() {
                 <div className="space-y-2 pl-0">
                   <Input
                     type="password"
+                    placeholder="Current password"
+                    value={currentPassword}
+                    onChange={e => setCurrentPassword(e.target.value)}
+                    className="h-8 text-sm"
+                    autoComplete="current-password"
+                    data-testid="input-current-password"
+                  />
+                  <Input
+                    type="password"
                     placeholder="New password (min 6 characters)"
                     value={newPassword}
                     onChange={e => setNewPassword(e.target.value)}
                     className="h-8 text-sm"
+                    autoComplete="new-password"
                     data-testid="input-new-password"
                   />
                   <Input
@@ -393,26 +467,36 @@ export default function SettingsPage() {
                     value={confirmPassword}
                     onChange={e => setConfirmPassword(e.target.value)}
                     className="h-8 text-sm"
+                    autoComplete="new-password"
                     data-testid="input-confirm-password"
                   />
                   <div className="flex gap-2">
                     <Button
                       size="sm"
-                      disabled={!newPassword || newPassword.length < 6 || newPassword !== confirmPassword || changingPassword}
+                      disabled={!currentPassword || !newPassword || newPassword.length < 6 || newPassword !== confirmPassword || newPassword === currentPassword || changingPassword}
                       onClick={async () => {
                         setChangingPassword(true);
                         try {
                           // apiRequest centralises auth header + error handling
-                          await apiRequest('POST', '/api/auth/change-password', { newPassword });
+                          await apiRequest('POST', '/api/auth/change-password', { currentPassword, newPassword });
                           toast({ title: 'Password updated', description: 'Your password has been changed successfully.' });
                           setShowPasswordForm(false);
+                          setCurrentPassword('');
                           setNewPassword('');
                           setConfirmPassword('');
                         } catch (err: any) {
                           const msg = err?.message || '';
+                          // Surface the exact server error when we can. The server
+                          // now returns 401 for an incorrect current password, so
+                          // distinguish that from a session-level 401.
+                          const isCurrentPwdWrong = msg.toLowerCase().includes('current password is incorrect');
                           toast({
                             title: 'Could not change password',
-                            description: msg.includes('401') ? 'Session expired \u2014 sign out and back in' : msg.includes('400') ? 'Password is too weak' : 'Please try again',
+                            description: isCurrentPwdWrong
+                              ? 'Current password is incorrect'
+                              : msg.includes('401') ? 'Session expired \u2014 sign out and back in'
+                              : msg.includes('400') ? 'Password is too weak'
+                              : 'Please try again',
                             variant: 'destructive',
                           });
                         } finally {
@@ -423,7 +507,7 @@ export default function SettingsPage() {
                     >
                       {changingPassword ? 'Saving...' : 'Save Password'}
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => { setShowPasswordForm(false); setNewPassword(''); setConfirmPassword(''); }}>
+                    <Button variant="outline" size="sm" onClick={() => { setShowPasswordForm(false); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); }}>
                       Cancel
                     </Button>
                   </div>
@@ -809,18 +893,7 @@ export default function SettingsPage() {
             <CardDescription>Integrations and external connections.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                  <Calendar className="h-4 w-4 text-blue-500" />
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Google Calendar</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">Sync events to/from Google Calendar</p>
-                </div>
-              </div>
-              <Badge variant="outline" className="text-xs">Available</Badge>
-            </div>
+            <GoogleCalendarRow />
             <Separator />
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">

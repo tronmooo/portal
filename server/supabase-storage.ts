@@ -2035,10 +2035,16 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteDocument(id: string): Promise<boolean> {
-    // Clean up profile links first (non-blocking)
+    // Capture storage_path BEFORE we mutate the row — we need it to remove the
+    // underlying file from the Supabase Storage bucket. Without this, deleted
+    // documents leave their files behind in the bucket forever, silently
+    // accumulating storage cost and potential PII leakage if a stale signed
+    // URL is ever resurfaced.
+    let storagePathToRemove: string | undefined;
     try {
       const doc = await this.getDocument(id);
       if (doc) {
+        storagePathToRemove = doc.storagePath;
         for (const pid of doc.linkedProfiles) {
           const profile = await this.getProfile(pid);
           if (profile) {
@@ -2057,6 +2063,17 @@ export class SupabaseStorage implements IStorage {
     if (error) {
       console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
       return false;
+    }
+    // Best-effort: remove the underlying file from Storage. We do this AFTER
+    // the soft-delete succeeds so a transient Storage error never blocks the
+    // user-visible delete. We log but don't fail — the row is already gone.
+    if (storagePathToRemove) {
+      try {
+        const { error: rmErr } = await this.supabase.storage.from("documents").remove([storagePathToRemove]);
+        if (rmErr) console.error(`[deleteDocument] Storage remove failed for ${storagePathToRemove}:`, rmErr.message);
+      } catch (e: any) {
+        console.error(`[deleteDocument] Storage remove exception for ${storagePathToRemove}:`, e.message);
+      }
     }
     return true; // Supabase delete succeeds even if 0 rows matched — that's fine, doc is gone
   }
@@ -2825,12 +2842,17 @@ export class SupabaseStorage implements IStorage {
     for (const t of trackers) weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length;
 
     const streaks: { name: string; days: number }[] = [];
+    // Tracker streaks: walk back from "today in user's timezone". Previously
+    // used UTC midnight which mismatched stored timestamp slices for users
+    // east of UTC and skewed late-evening entries west of UTC.
+    const trackerTodayStr = getUserToday(this._timezone);
+    const trackerTodayDate = parseLocalDate(trackerTodayStr);
     for (const t of trackers) {
       if (t.entries.length < 2) continue;
       let streak = 0;
-      const today = new Date(); today.setHours(0, 0, 0, 0);
       for (let i = 0; i < 30; i++) {
-        const checkDate = new Date(today); checkDate.setDate(checkDate.getDate() - i);
+        const checkDate = new Date(trackerTodayDate);
+        checkDate.setDate(checkDate.getDate() - i);
         const dayStr = checkDate.toISOString().slice(0, 10);
         if (t.entries.some(e => e.timestamp.slice(0, 10) === dayStr)) streak++; else if (i > 0) break;
       }
@@ -2840,9 +2862,16 @@ export class SupabaseStorage implements IStorage {
     const todayStr2 = getUserToday(this._timezone);
     const allActiveHabits = habits.filter(h => h.frequency === "daily" || h.frequency === "weekly");
     // For daily habits, check if completed today. For weekly habits, check if completed this week.
-    const weekStart = new Date(now);
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
-    weekStart.setHours(0, 0, 0, 0);
+    // Week starts on Monday — ISO 8601 / international convention. Using
+    // Sunday-start (getDay()===0) caused weekly-habit completion to flip on
+    // Sunday morning, before users typically think "new week". We also use
+    // a parsed local-date so the week boundary aligns with the user's
+    // timezone, not server UTC.
+    const todayLocal = parseLocalDate(todayStr2);
+    const dow = todayLocal.getDay(); // 0=Sun..6=Sat
+    const daysSinceMonday = (dow + 6) % 7; // Mon=0, Tue=1, ... Sun=6
+    const weekStart = new Date(todayLocal);
+    weekStart.setDate(weekStart.getDate() - daysSinceMonday);
     const weekStartStr = weekStart.toISOString().slice(0, 10);
     const todayCompleted = allActiveHabits.filter(h => {
       if (h.frequency === "daily") {
@@ -2868,10 +2897,18 @@ export class SupabaseStorage implements IStorage {
       }
     }, 0);
 
+    // Journal streak: walk backwards from today in the user's timezone.
+    // The previous implementation used `today.toISOString().slice(0,10)`
+    // which returns the UTC date, so a user writing at 11pm Pacific on
+    // April 30 (May 1 UTC) would record `date=2026-04-30` but the streak
+    // walk would compare against `2026-05-01` and miss the entry.
     let journalStreak = 0;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayUserStr = getUserToday(this._timezone);
+    const todayUserDate = parseLocalDate(todayUserStr);
     for (let i = 0; i < 30; i++) {
-      const dayStr = new Date(today.getTime() - i * 86400000).toISOString().slice(0, 10);
+      const d = new Date(todayUserDate);
+      d.setDate(d.getDate() - i);
+      const dayStr = d.toISOString().slice(0, 10);
       if (journalEntries.some(j => j.date === dayStr)) journalStreak++; else if (i > 0) break;
     }
 

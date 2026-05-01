@@ -1036,9 +1036,36 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
   );
 }
 
+// Dismissed action-required items live in localStorage so they survive a
+// page reload. The key includes a date-bucket so a user who dismisses
+// "Pay rent" today doesn't permanently hide it — the next day the bucket
+// flips and the dismissal expires. This matches the user-mental-model of
+// "dismiss for today" without requiring a server round-trip.
+const DISMISSED_LS_KEY = "portol_dismissed_action_v1";
+function loadDismissed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_LS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as { date: string; ids: string[] };
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+    if (parsed.date !== todayStr) {
+      // New day — wipe yesterday's dismissals.
+      localStorage.removeItem(DISMISSED_LS_KEY);
+      return new Set();
+    }
+    return new Set(parsed.ids);
+  } catch { return new Set(); }
+}
+function saveDismissed(ids: Set<string>) {
+  try {
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+    localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify({ date: todayStr, ids: Array.from(ids) }));
+  } catch { /* ignore quota errors */ }
+}
+
 function ActionRequiredSection({ stats, enhanced, profileId }: { stats: DashboardStats; enhanced: any; profileId?: string }) {
   const { toast } = useToast();
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => loadDismissed());
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const now = new Date();
@@ -1115,7 +1142,11 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     }
   };
 
-  const dismiss = (key: string) => setDismissedIds(prev => new Set([...prev, key]));
+  const dismiss = (key: string) => setDismissedIds(prev => {
+    const next = new Set([...prev, key]);
+    saveDismissed(next);
+    return next;
+  });
 
   // Build all items sorted by urgency
   const allItems: Array<{
