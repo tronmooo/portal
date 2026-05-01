@@ -3962,8 +3962,11 @@ export default function TrackersPage() {
             const isShowAllForCounts = filterMode === "everyone";
             const filteredAssetCount = (profiles || []).filter(p => {
               if (!childTypeSet.has(p.type)) return false;
-              if (isShowAllForCounts) return true;
+              // Hide assets nested under another asset — they show inside the parent's detail page
               const pParent = p.fields?._parentProfileId || p.parentProfileId;
+              const parentProfile = pParent ? (profiles || []).find(x => x.id === pParent) : null;
+              if (parentProfile && childTypeSet.has(parentProfile.type)) return false;
+              if (isShowAllForCounts) return true;
               if (pParent && filterIds.includes(pParent)) return true;
               return false;
             }).length;
@@ -4146,19 +4149,24 @@ export default function TrackersPage() {
             // "all" means no chip-level filter; everything passes.
             if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
             // Asset nesting chip filter — only applies on the Assets tab.
-            if (sectionFilter === "profiles" && assetNestingFilter !== "all") {
+            // DEFAULT BEHAVIOR (assetNestingFilter === "all"): hide assets nested under another asset.
+            // They show inside their parent's detail page, not in the main grid.
+            // The user can opt in to see them via the "Nested" chip.
+            if (sectionFilter === "profiles") {
               const pParentId = p.fields?._parentProfileId || p.parentProfileId;
               const parentProfile = pParentId ? (profiles || []).find(x => x.id === pParentId) : null;
-              if (assetNestingFilter === "topLevel") {
-                // Pass if no parent, or parent is a person/self/pet (not an asset-type profile)
-                if (pParentId && parentProfile && childTypeSet.has(parentProfile.type)) return false;
+              const parentIsAsset = !!parentProfile && childTypeSet.has(parentProfile.type);
+              if (assetNestingFilter === "all" || assetNestingFilter === "topLevel") {
+                // Hide assets whose parent is itself an asset-type profile.
+                // Children of a person/self/pet still appear (they're top-level relative to assets).
+                if (parentIsAsset) return false;
               } else if (assetNestingFilter === "hasChildren") {
                 // Pass if at least one other profile has this profile as parent AND is an asset type
                 const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
                 if (!hasAssetChild) return false;
               } else if (assetNestingFilter === "nested") {
-                // Pass if parent is itself an asset-type profile
-                if (!pParentId || !parentProfile || !childTypeSet.has(parentProfile.type)) return false;
+                // Pass only if parent is itself an asset-type profile
+                if (!parentIsAsset) return false;
               }
             }
             return true;
