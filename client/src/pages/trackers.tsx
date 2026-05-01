@@ -3683,6 +3683,10 @@ export default function TrackersPage() {
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   // Tracker category filter
   const [trackerCatFilter, setTrackerCatFilter] = useState<string>("all");
+  // Asset type filter (Vehicles, Properties, Investments, Assets…)
+  const [assetTypeFilter, setAssetTypeFilter] = useState<string>("all");
+  // Subscription category filter
+  const [subCatFilter, setSubCatFilter] = useState<string>("all");
   // Collapsible sections
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const toggleSection = (key: string) => setCollapsedSections(prev => {
@@ -3786,18 +3790,56 @@ export default function TrackersPage() {
   const docTypes = useMemo(() => [...new Set(profileFilteredDocs.map(d => d.type).filter(Boolean))].sort(), [profileFilteredDocs]);
 
   // Fully filtered documents (profile + type + search)
+  // docTypeFilter only applies on the Documents tab so a stale type filter doesn't silently hide docs on other tabs
   const filteredDocuments = useMemo(() => profileFilteredDocs.filter(d => {
-    if (docTypeFilter !== "all" && normalizeFilter(d.type) !== normalizeFilter(docTypeFilter)) return false;
+    if (sectionFilter === "documents" && docTypeFilter !== "all" && normalizeFilter(d.type) !== normalizeFilter(docTypeFilter)) return false;
     if (docSearch) {
       const s = docSearch.toLowerCase();
       return d.name.toLowerCase().includes(s) || d.type?.toLowerCase().includes(s);
     }
     return true;
-  }), [profileFilteredDocs, docTypeFilter, docSearch]);
+  }), [profileFilteredDocs, docTypeFilter, docSearch, sectionFilter]);
 
   // Unique canonical groups for filter chips
   const allTrackerCats = useMemo(() => [...new Set((trackers || []).map(t => getCanonicalGroup(t.category)))]
     .sort((a, b) => a.localeCompare(b)), [trackers]);
+
+  // Asset/vehicle/property type list (after profile filter) for the Assets tab chip row.
+  const assetTypeOptions = useMemo(() => {
+    const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
+    const isShowAll = filterMode === "everyone";
+    const visible = (profiles || []).filter(p => {
+      if (!childTypeSet.has(p.type)) return false;
+      if (isShowAll) return true;
+      const pParent = p.fields?._parentProfileId || (p as any).parentProfileId;
+      return pParent && filterIds.includes(pParent);
+    });
+    const labelFor = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
+    const counts: Record<string, number> = {};
+    for (const p of visible) {
+      const lab = labelFor(p.type);
+      counts[lab] = (counts[lab] || 0) + 1;
+    }
+    return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+  }, [profiles, filterMode, filterIds]);
+
+  // Subscription category list (after profile filter) for the Subscriptions tab chip row.
+  const subCategoryOptions = useMemo(() => {
+    const isShowAll = filterMode === "everyone";
+    const subs = (profiles || []).filter(p => {
+      if (p.type !== "subscription") return false;
+      if (isShowAll) return true;
+      const pParent = p.fields?._parentProfileId || (p as any).parentProfileId;
+      return pParent && filterIds.includes(pParent);
+    });
+    const counts: Record<string, number> = {};
+    for (const s of subs) {
+      const cat = (s.fields?.category || s.fields?.subscriptions?.category || s.fields?.type || "Other") as string;
+      const c = String(cat).trim() || "Other";
+      counts[c] = (counts[c] || 0) + 1;
+    }
+    return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+  }, [profiles, filterMode, filterIds]);
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
   const sortedFilterProfiles = useMemo(() => {
@@ -3817,10 +3859,15 @@ export default function TrackersPage() {
       const linkedIds = t.linkedProfiles || [];
       if (!linkedIds.some(id => filterIds.includes(id))) return false;
     }
-    if (trackerCatFilter !== "all" && normalizeFilter(getCanonicalGroup(t.category)) !== normalizeFilter(trackerCatFilter)) return false;
+    // The tracker-category chip filter only applies when the user is actually
+    // on the Trackers tab. If they’re viewing "All" or some other section, a
+    // stale category selection from a previous visit would silently hide
+    // trackers without showing the chip row — which is exactly the
+    // “why isn’t my data showing?” bug. Scope it to the active section.
+    if (sectionFilter === "trackers" && trackerCatFilter !== "all" && normalizeFilter(getCanonicalGroup(t.category)) !== normalizeFilter(trackerCatFilter)) return false;
     return true;
   }).sort((a, b) => cleanTrackerName(a.name).toLowerCase().localeCompare(cleanTrackerName(b.name).toLowerCase())
-  ), [trackers, filterMode, filterIds, trackerCatFilter]);
+  ), [trackers, filterMode, filterIds, trackerCatFilter, sectionFilter]);
 
   // Group trackers by canonical group — memoized
   const { grouped, sortedCats } = useMemo(() => {
@@ -3946,9 +3993,15 @@ export default function TrackersPage() {
 
       </div>
 
-      {/* Canonical group filter chips */}
-      {(sectionFilter === "all" || sectionFilter === "trackers") && allTrackerCats.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips">
+      {/* ── Section-specific filter chips ──
+          The previous version showed the tracker "All Groups / Fitness / Health…"
+          chip row on every tab, including "All", which made it look like a
+          global filter. Each section now owns its own contextual chips so the
+          row reflects whatever data the user is currently looking at. The
+          "All" tab intentionally has no chip row — it would be ambiguous which
+          dataset it filters. */}
+      {sectionFilter === "trackers" && allTrackerCats.length > 1 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-trackers">
           <button
             onClick={() => setTrackerCatFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${trackerCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -3975,6 +4028,80 @@ export default function TrackersPage() {
         </div>
       )}
 
+      {sectionFilter === "documents" && docTypes.length > 1 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-documents">
+          <button
+            onClick={() => setDocTypeFilter("all")}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+            data-testid="filter-doctype-all-top"
+          >
+            All Types
+          </button>
+          {docTypes.map(t => {
+            const count = profileFilteredDocs.filter(d => normalizeFilter(d.type) === normalizeFilter(t)).length;
+            const isActive = docTypeFilter === t;
+            return (
+              <button
+                key={t}
+                onClick={() => setDocTypeFilter(isActive ? "all" : t)}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                data-testid={`filter-doctype-top-${t}`}
+              >
+                {t.replace(/_/g, " ")} <span className="opacity-70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {sectionFilter === "profiles" && assetTypeOptions.length > 1 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-assets">
+          <button
+            onClick={() => setAssetTypeFilter("all")}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+          >
+            All Types
+          </button>
+          {assetTypeOptions.map(([label, count]) => {
+            const isActive = assetTypeFilter === label;
+            return (
+              <button
+                key={label}
+                onClick={() => setAssetTypeFilter(isActive ? "all" : label)}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                data-testid={`filter-asset-type-${label}`}
+              >
+                {label} <span className="opacity-70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {sectionFilter === "subscriptions" && subCategoryOptions.length > 1 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-subscriptions">
+          <button
+            onClick={() => setSubCatFilter("all")}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${subCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+          >
+            All Categories
+          </button>
+          {subCategoryOptions.map(([cat, count]) => {
+            const isActive = subCatFilter === cat;
+            return (
+              <button
+                key={cat}
+                onClick={() => setSubCatFilter(isActive ? "all" : cat)}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                data-testid={`filter-sub-cat-${cat}`}
+              >
+                {cat} <span className="opacity-70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Summary cards intentionally hidden — they duplicated the group filter
           chips above and added noise (the "This Week / Most Active / Streak /
           Health Score" KPI strip plus a second group pill row). Tap a group
@@ -3985,12 +4112,15 @@ export default function TrackersPage() {
         // Only show actual assets and vehicles here — NOT loans/obligations (those belong in Bills)
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone";
+        const labelForType = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
-          if (isShowAll) return true;
-          // Show assets whose parent is one of the selected filter profiles
-          const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          if (pParent && filterIds.includes(pParent)) return true;
+          if (isShowAll || (p.fields?._parentProfileId || p.parentProfileId) && filterIds.includes((p.fields?._parentProfileId || p.parentProfileId) as string)) {
+            // Asset type chip filter — only applies on the Assets tab.
+            // "all" means no chip-level filter; everything passes.
+            if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
+            return true;
+          }
           return false;
         });
         if (childProfiles.length === 0) return (
@@ -4118,11 +4248,19 @@ export default function TrackersPage() {
         const isShowAll = filterMode === "everyone";
         const subs = (profiles || []).filter(p => {
           if (p.type !== "subscription") return false;
-          if (isShowAll) return true;
-          // Show subscriptions whose parent is one of the selected filter profiles
-          const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          if (pParent && filterIds.includes(pParent)) return true;
-          return false;
+          // Profile-level scope first
+          let inScope = isShowAll;
+          if (!inScope) {
+            const pParent = p.fields?._parentProfileId || p.parentProfileId;
+            if (pParent && filterIds.includes(pParent)) inScope = true;
+          }
+          if (!inScope) return false;
+          // Subscription category chip filter — only applies on the Subscriptions tab.
+          if (sectionFilter === "subscriptions" && subCatFilter !== "all") {
+            const cat = String(p.fields?.category || p.fields?.subscriptions?.category || p.fields?.type || "Other").trim() || "Other";
+            if (cat !== subCatFilter) return false;
+          }
+          return true;
         });
         if (subs.length === 0) return (
           <div className="rounded-lg border bg-card p-6 text-center">
@@ -4278,7 +4416,11 @@ export default function TrackersPage() {
                 data-testid="input-search-documents-global"
               />
             )}
-            {docTypes.length > 1 && (
+            {/* Only show the inline doc-type chips on the "All" tab. When the
+                user is already on the Documents tab, the contextual filter row
+                at the top of the page handles type filtering, and showing it
+                twice would be noisy. */}
+            {sectionFilter === "all" && docTypes.length > 1 && (
               <div className="flex items-center gap-1.5 overflow-x-auto flex-nowrap scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
                 <button
                   onClick={() => setDocTypeFilter("all")}
