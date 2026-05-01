@@ -3529,19 +3529,37 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     res.json(incomes);
   }));
 
+  // Helper: bust every cache key derived from income (cashflow / dashboard /
+  // stats / enhanced). Without this, adding a paycheck wouldn't move the
+  // "Income this month" or "Net cashflow" numbers until the 5-min server
+  // cache expired, which made the dashboard look broken.
+  const bustIncomeCaches = (uid: string) => {
+    bustCache(`cashflow:${uid}`);
+    bustCache(`stats:${uid}`);
+    bustCache(`enhanced:`);
+    bustCache(`enhanced:${uid}`);
+    bustCache(`profile-detail:${uid}:`);
+  };
+
   app.post("/api/incomes", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     const income = await storage.createIncome(req.body);
+    bustIncomeCaches(uid);
     res.status(201).json(income);
   }));
 
   app.patch("/api/incomes/:id", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     const income = await storage.updateIncome(req.params.id, req.body);
     if (!income) return res.status(404).json({ error: "Not found" });
+    bustIncomeCaches(uid);
     res.json(income);
   }));
 
   app.delete("/api/incomes/:id", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     const ok = await storage.deleteIncome(req.params.id);
+    bustIncomeCaches(uid);
     res.json({ success: ok });
   }));
 

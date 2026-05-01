@@ -117,13 +117,20 @@ export function toggleFilterProfile(id: string, name: string) {
   saveToStorage();
 }
 
-/** Check if a specific profile ID passes the current filter */
+/**
+ * Check if a specific item passes the current filter.
+ *
+ * NOTE: This local helper does NOT know about profile types, so it cannot
+ * apply the "orphans belong to self" exception. It is intentionally
+ * conservative — it hides orphans whenever any filter is active. Pages that
+ * need the self-exception (finance, calendar, dashboard) should import
+ * `passesProfileFilter` from `@shared/profile-filter` and pass the loaded
+ * profile list. This function is left for callers that don't have profile
+ * types handy and just want a quick "is this in the selection" check.
+ */
 export function passesFilter(linkedProfileIds: string[] | undefined | null): boolean {
   if (_state.mode === "everyone") return true;
-  if (!linkedProfileIds || linkedProfileIds.length === 0) {
-    // Items with no linked profiles: show if "everyone", hide if filtering
-    return false;
-  }
+  if (!linkedProfileIds || linkedProfileIds.length === 0) return false;
   return linkedProfileIds.some(id => _state.selectedIds.includes(id));
 }
 

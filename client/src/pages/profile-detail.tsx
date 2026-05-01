@@ -100,6 +100,7 @@ import {
   Zap,
   Target,
   Search,
+  BookOpen,
 } from "lucide-react";
 import {
   LineChart,
@@ -212,6 +213,7 @@ function timelineIcon(type: string) {
     note: FileText,
     habit: Heart,
     obligation: CreditCard,
+    journal: BookOpen,
   };
   const Icon = icons[type] || Clock;
   return <Icon className="h-3.5 w-3.5" />;
@@ -532,6 +534,7 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
     document: "bg-primary/10 text-primary",
     habit: "bg-rose-500/10 text-rose-500",
     obligation: "bg-orange-500/10 text-orange-500",
+    journal: "bg-violet-500/10 text-violet-500",
   };
   const color = colors[entry.type] || "bg-muted text-muted-foreground";
 

@@ -482,7 +482,7 @@ export class SupabaseStorage implements IStorage {
     // (Previously this was 3 separate sequential batches)
     const [
       trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
-      trackerEntryRows, obligationPaymentRows,
+      trackerEntryRows, obligationPaymentRows, journalRows,
     ] = await Promise.all([
       trackerIds.length > 0
         ? this.supabase.from("trackers").select("*").eq("user_id", this.userId).in("id", trackerIds).then(r => r.data || [])
@@ -510,6 +510,15 @@ export class SupabaseStorage implements IStorage {
       obligationIds.length > 0
         ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIds).order("date", { ascending: false }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
+      // Pull journal entries linked to this profile. Journal has no junction
+      // table (yet) — we filter by linked_profiles array containment so
+      // "Journal entries about Bob" actually appear on Bob's profile page.
+      this.supabase.from("journal_entries")
+        .select("*")
+        .eq("user_id", this.userId)
+        .contains("linked_profiles", [id])
+        .order("created_at", { ascending: false })
+        .then(r => r.data || []),
     ]);
 
     // Build lookup maps for entries/payments
@@ -531,6 +540,7 @@ export class SupabaseStorage implements IStorage {
     const relatedEvents = (eventsRes as any[]).map((r: any) => this.rowToEvent(r));
     const relatedDocuments = (documentsRes as any[]).map((r: any) => this.rowToDocument({ ...r, file_data: "" }));
     const relatedObligations = (obligationsRes as any[]).map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
+    const relatedJournal = (journalRows as any[]).map((r: any) => this.rowToJournalEntry(r));
 
     // Child profiles: profiles whose parentProfileId points to this profile
     const childProfiles = allProfiles.filter(p => p.parentProfileId === id);
@@ -547,9 +557,12 @@ export class SupabaseStorage implements IStorage {
     for (const e of relatedEvents) timeline.push({ id: e.id, type: "event", title: e.title, description: e.description, timestamp: e.date });
     for (const d of relatedDocuments) timeline.push({ id: d.id, type: "document", title: d.name, description: d.type, timestamp: d.createdAt });
     for (const o of relatedObligations) timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt });
+    for (const j of relatedJournal) timeline.push({ id: j.id, type: "journal", title: j.content?.slice(0, 80) || "Journal entry", description: j.mood ? `Mood: ${j.mood}` : undefined, timestamp: j.date || (j as any).createdAt });
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, childProfiles, timeline };
+    // `relatedJournal` is added to the returned shape so the profile detail
+    // page can render a journal section. Existing keys are unchanged.
+    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedJournal, childProfiles, timeline } as any;
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {
@@ -1583,10 +1596,20 @@ export class SupabaseStorage implements IStorage {
     const [allEvents, allTasks, allObligations, allHabits, profiles] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getHabits(), this.getProfiles(),
     ]);
-    // Profile filtering: when profileIds provided, only include items linked to those profiles
+    // Profile filtering: use the same rule the client uses so the calendar
+    // doesn't silently drop legacy/orphan items when the user filters to
+    // only their own self-profile. Without this, a brand-new user who
+    // hasn't tagged anything yet sees an empty calendar the moment they
+    // touch the filter.
+    const filterActive = !!(profileIds && profileIds.length > 0);
+    const selfMatch = filterActive && profileIds!.some(id =>
+      profiles.find(p => p.id === id)?.type === "self",
+    );
     const matchesProfile = (linked: string[]) => {
-      if (!profileIds || profileIds.length === 0) return true;
-      return linked.some(id => profileIds.includes(id));
+      if (!filterActive) return true;
+      const arr = Array.isArray(linked) ? linked : [];
+      if (arr.length === 0) return selfMatch;
+      return arr.some(id => profileIds!.includes(id));
     };
     const events = allEvents.filter(e => matchesProfile(e.linkedProfiles));
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
@@ -1749,13 +1772,58 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    for (const habit of habits) {
-      for (const checkin of habit.checkins) {
-        const d = checkin.date;
-        if (d >= startDate && d <= endDate) {
-          items.push({ id: `habit-${habit.id}-${d}`, type: "habit", title: habit.name, date: d, allDay: true, color: habit.color || "#4F98A3", completed: true, linkedProfiles: [], sourceId: habit.id, meta: { streak: habit.currentStreak, icon: habit.icon } });
+    // (Removed: a second pass that iterated habit.checkins and pushed an
+    // additional habit item per checkin. The earlier loop above already
+    // projects habits onto each applicable day and merges the checkin
+    // count into the title. The second pass duplicated those days AND
+    // emitted them with `linkedProfiles: []`, which leaked the habit into
+    // every filtered view regardless of who the habit belongs to.)
+
+    // ── Loan amortization payments ───────────────────────────────
+    // The user has scheduled loan payments in `loan_amortization` (one row
+    // per payment). Previously these were only readable via the dedicated
+    // schedule view; the unified calendar didn't surface them, so a user
+    // looking at their month had no idea their car payment was hitting on
+    // the 17th. Pull unpaid rows in range and add them as obligation-style
+    // items so they participate in the same dedup pass below.
+    try {
+      const { data: loanRows } = await this.supabase
+        .from('loan_amortization')
+        .select('*')
+        .eq('user_id', this.userId);
+      if (Array.isArray(loanRows)) {
+        // Map loan_id → profile linked profiles (so per-profile filtering works).
+        const loanProfileMap = new Map<string, string[]>();
+        for (const p of profiles) {
+          if (p.type === 'loan') loanProfileMap.set(p.id, [p.id]);
+        }
+        for (const row of loanRows) {
+          if (row.paid) continue;
+          const dueRaw = row.due_date || row.payment_date || row.date;
+          if (!dueRaw) continue;
+          const d = String(dueRaw).slice(0, 10);
+          if (d < startDate || d > endDate) continue;
+          const linked = (row.loan_id && loanProfileMap.get(row.loan_id)) || [];
+          if (!matchesProfile(linked)) continue;
+          const amt = Number(row.payment || row.amount || row.payment_amount || 0);
+          const name = row.loan_name || 'Loan payment';
+          items.push({
+            id: `loan-${row.id || row.loan_id}-${d}`,
+            type: 'obligation',
+            title: `${name} — $${amt.toFixed(2)}`,
+            date: d,
+            allDay: true,
+            color: '#A13544',
+            category: 'loan',
+            description: `Scheduled loan payment ($${amt.toFixed(2)})`,
+            linkedProfiles: linked,
+            sourceId: row.loan_id || row.id,
+            meta: { amount: amt, paymentNumber: row.payment_number, source: 'loan_amortization' },
+          });
         }
       }
+    } catch (e: any) {
+      console.warn('[calendar] loan amortization read failed:', e?.message);
     }
 
     // ── Profile-derived virtual events ──────────────────────────
@@ -3126,8 +3194,17 @@ export class SupabaseStorage implements IStorage {
         // Liabilities: profiles carrying a loan/remaining balance (financed cars, mortgages,
         // explicit loans). Obligations (recurring bills) are intentionally excluded — they are
         // monthly cash-flow items, not balance-sheet liabilities.
+        //
+        // Scope tightening: only iterate profile types that can actually
+        // carry a balance (loan / vehicle / property / asset / account).
+        // The previous version walked EVERY profile (including persons and
+        // pets) and ran the liability resolver on whatever fields they had,
+        // which could double-count fields named things like `balance` or
+        // `amount` that aren't really debts.
         totalLiabilities: (() => {
+          const liabilityTypes = new Set(["loan", "vehicle", "property", "asset", "account", "investment"]);
           const filteredProfiles = allProfiles.filter(p => {
+            if (!liabilityTypes.has(p.type)) return false;
             if (!fpIds || fpIds.length === 0) return true;
             const pParent = p.parentProfileId || p.fields?._parentProfileId;
             if (pParent && fpIds.includes(pParent)) return true;
@@ -3414,7 +3491,62 @@ export class SupabaseStorage implements IStorage {
   async getCashflow(month?: string): Promise<any[]> {
     const m = month || new Date().toISOString().slice(0, 7);
     const { data } = await this.supabase.from('cashflow_projections').select('*').eq('month', m).order('week');
-    return data || [];
+    const projections = (data as any[]) || [];
+
+    // Layer in unpaid loan amortization payments scheduled for this month.
+    // Previously the cashflow view only read `cashflow_projections`, so the
+    // calendar showed loan payments coming due but the cashflow numbers
+    // didn't reflect them — making the projection silently wrong by
+    // hundreds of dollars/month for any user with a loan.
+    try {
+      const { data: schedule } = await this.supabase
+        .from('loan_amortization')
+        .select('*')
+        .eq('user_id', this.userId);
+      if (Array.isArray(schedule) && schedule.length > 0) {
+        // Bucket payments into ISO weeks of `m` (1–5) and sum.
+        const monthStart = parseLocalDate(`${m}-01`);
+        const nextMonth = new Date(monthStart);
+        nextMonth.setMonth(nextMonth.getMonth() + 1);
+        const weekTotals = new Map<number, number>();
+        for (const row of schedule) {
+          if (row.paid) continue;
+          const dueRaw = row.due_date || row.payment_date || row.date;
+          if (!dueRaw) continue;
+          const due = parseLocalDate(String(dueRaw).slice(0, 10));
+          if (due < monthStart || due >= nextMonth) continue;
+          // Week of month: 1-indexed, capped at 5
+          const week = Math.min(5, Math.floor((due.getDate() - 1) / 7) + 1);
+          const amt = Number(row.payment || row.amount || row.payment_amount || 0);
+          if (!isFinite(amt) || amt === 0) continue;
+          weekTotals.set(week, (weekTotals.get(week) || 0) + amt);
+        }
+        // Merge into existing projection rows (or insert virtual rows).
+        for (const [week, total] of weekTotals.entries()) {
+          const existing = projections.find(p => p.week === week);
+          if (existing) {
+            existing.projected_expenses = (Number(existing.projected_expenses) || 0) + total;
+            existing.includes_loan_payments = true;
+          } else {
+            projections.push({
+              month: m,
+              week,
+              projected_income: 0,
+              projected_expenses: total,
+              actual_income: 0,
+              actual_expenses: 0,
+              includes_loan_payments: true,
+              source: 'loan_amortization',
+            });
+          }
+        }
+        projections.sort((a: any, b: any) => (a.week || 0) - (b.week || 0));
+      }
+    } catch (e: any) {
+      console.warn('[cashflow] loan amortization merge failed:', e?.message);
+    }
+
+    return projections;
   }
 
   async upsertCashflow(entry: { month: string; week: number; projected_income?: number; projected_expenses?: number; actual_income?: number; actual_expenses?: number }): Promise<any> {

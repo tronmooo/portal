@@ -2267,7 +2267,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
 // SYSTEM PROMPT (simplified — no JSON format instructions)
 // ============================================================
 
-function buildSystemPrompt(context: string, selfProfileId?: string): string {
+function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: string): string {
+  // The user's IANA timezone is forwarded from the chat route via the
+  // `x-timezone` header; falling back to LA preserves prior behavior so
+  // model output stays sensible if the header is missing.
+  const tz = userTz || (storage as any)._timezone || 'America/Los_Angeles';
+  const tzLabel = tz === 'America/Los_Angeles' ? 'Pacific Time'
+    : tz === 'America/New_York' ? 'Eastern Time'
+    : tz === 'America/Chicago' ? 'Central Time'
+    : tz === 'America/Denver' ? 'Mountain Time'
+    : tz.replace(/_/g, ' ');
   return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
 EXISTING DATA (this is fresh from the database — use it for every answer):
@@ -2669,11 +2678,11 @@ After completing actions, confirm EACH one with WHERE to find it:
 - Profile update → "Updated [Profile] → visible in Profiles page"
 This helps the user trust and verify the data.
 
-Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' })} (Pacific Time).
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Los_Angeles' })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Los_Angeles' })}.
-${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })); } return 'Reference: ' + ref.join(', '); })()}
+Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).
+Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.
+${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })()}
 CRITICAL DATE RULES:
-- "tomorrow" = the day AFTER today in Pacific Time. Calculate carefully.
+- "tomorrow" = the day AFTER today in ${tzLabel}. Calculate carefully.
 - "by Friday" or "this Friday" = if today IS Friday, that means TODAY. If today is before Friday, it means the upcoming Friday of this week. NEVER push to next week.
 - "next Friday" = the Friday of NEXT week (7+ days away).
 - "this Saturday", "this Monday", etc. = the nearest upcoming occurrence. If today IS that day, it means TODAY.
@@ -2822,12 +2831,16 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       // Description required
       if (!normalized.description?.trim()) errors.push("Description is required");
       else normalized.description = normalized.description.trim();
-      // Date must be valid YYYY-MM-DD
+      // Date must be valid YYYY-MM-DD. Use the user's timezone (read from
+      // the `x-timezone` request header upstream) instead of hard-coding
+      // Pacific time — otherwise expenses created late at night get filed
+      // under the wrong day for users on the East Coast / abroad.
+      const _userTz = (storage as any)._timezone || 'America/Los_Angeles';
       if (normalized.date && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date)) {
         warnings.push(`Date "${normalized.date}" is not YYYY-MM-DD format — using today`);
-        normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: _userTz });
       }
-      if (!normalized.date) normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      if (!normalized.date) normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: _userTz });
       // Category must be from allowed list
       const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards"];
       if (normalized.category && !validCategories.includes(normalized.category)) {
@@ -3637,19 +3650,35 @@ async function executeTool(name: string, input: any): Promise<any> {
         else if (/school|tuition|textbook|course|udemy/.test(combined)) inferredCategory = "education";
         else if (/insurance|geico|allstate|progressive|state farm/.test(combined)) inferredCategory = "insurance";
       }
-      // Resolve the target profile BEFORE creating the expense so linkedProfiles is set correctly
+      // Resolve the target profile BEFORE creating the expense so
+      // linkedProfiles is set correctly. Match priority:
+      //   1. exact (case-insensitive) name match
+      //   2. word-boundary match (the requested name appears as a whole
+      //      word inside the profile name) — "Bob" matches "Bob Smith"
+      //      but NOT "Bobcat" or "Roboto".
+      // The previous code did a naive `.includes(searchName)`, so a chat
+      // like "add expense for Roy" silently linked to a profile named
+      // "Royale" or "royalty rewards".
       let expenseLinkedProfiles: string[] = [];
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const target = profiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
-          || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const search = safeLC(input.forProfile).trim();
+        const wordRe = new RegExp(`(^|\\b)${search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
+        const target = profiles.find(p => p.name.toLowerCase() === search)
+          || profiles.find(p => wordRe.test(p.name.toLowerCase()));
         if (target) expenseLinkedProfiles.push(target.id);
       }
+      // Default the expense date to today in the user's timezone, not
+      // hard-coded LA time. The chat route stores the user's IANA tz on
+      // `storage._timezone` from the `x-timezone` request header before
+      // calling into the AI engine; falling back to LA preserves the old
+      // behavior if for some reason the header was missing.
+      const userTz = (storage as any)._timezone || 'America/Los_Angeles';
       const newExpense = await storage.createExpense({
         amount: parsedAmount,
         category: inferredCategory,
         description: input.description || "Expense",
-        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz }),
         vendor: input.vendor,
         tags: input.tags || [],
         linkedProfiles: expenseLinkedProfiles.length > 0 ? expenseLinkedProfiles : undefined,
@@ -5183,8 +5212,20 @@ async function directLinkToProfile(entityType: string, entityId: string, forProf
   const profiles = await storage.getProfiles();
   const searchName = forProfile.toLowerCase().trim();
   // Exact match first, then partial
+  // Word-boundary match — see expense match comment above for the
+  // motivation. We look both directions ("Bob" finding "Bob Smith" AND
+  // "Bob Smith" finding "Bob") but only on whole words.
+  const escaped = searchName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const wordRe = new RegExp(`(^|\\b)${escaped}(\\b|$)`);
   const target = profiles.find(p => p.name.toLowerCase() === searchName)
-    || profiles.find(p => p.name.toLowerCase().includes(searchName) || searchName.includes(p.name.toLowerCase()));
+    || profiles.find(p => {
+      const pn = p.name.toLowerCase();
+      if (wordRe.test(pn)) return true;
+      // Also let a longer requested name find a shorter profile when the
+      // profile name appears as a whole word in the request.
+      const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(searchName);
+    });
   if (!target) {
     logger.warn("ai", `directLinkToProfile: profile "${forProfile}" not found`);
     return undefined;
@@ -5853,7 +5894,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   ].filter(Boolean).join("\n");
 
   const selfProfileId = profiles.find((p: any) => p.type === "self")?.id || '';
-  const systemPrompt = buildSystemPrompt(context, selfProfileId);
+  const systemPrompt = buildSystemPrompt(context, selfProfileId, (storage as any)._timezone);
 
   // Read user's preferred chat model from preferences
   let preferredModel: string | null = null;

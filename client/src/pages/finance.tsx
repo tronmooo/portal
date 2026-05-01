@@ -1,6 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { passesProfileFilter } from "@shared/profile-filter";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -194,12 +195,13 @@ export default function FinancePage() {
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
 
   // ── ALL useMemo hooks MUST be before early returns (React Rules of Hooks) ──
-  // Apply profile filter client-side
-  const profileFiltered = useMemo(() => (expenses || []).filter(e => {
-    if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const linked = e.linkedProfiles || [];
-    return linked.some(id => filterIds.includes(id));
-  }), [expenses, filterMode, filterIds]);
+  // Apply profile filter client-side using the shared rule so finance,
+  // calendar, dashboard and the server agree on what "active filter" means.
+  const filterCtx = useMemo(() => ({
+    selectedIds: filterMode === "everyone" ? [] : filterIds,
+    allProfiles: (profiles || []).map((p: any) => ({ id: p.id, type: p.type })),
+  }), [filterMode, filterIds, profiles]);
+  const profileFiltered = useMemo(() => (expenses || []).filter(e => passesProfileFilter(e.linkedProfiles, filterCtx)), [expenses, filterCtx]);
   const filtered = useMemo(() => filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => normalizeFilter(e.category) === normalizeFilter(filterCategory)), [profileFiltered, filterCategory]);
   const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
 
@@ -352,24 +354,30 @@ export default function FinancePage() {
         });
         const monthTotal = thisMonth.reduce((s, e) => s + e.amount, 0);
         
-        // Asset values from profiles (filtered by active profile selection)
+        // Asset values from profiles. We constrain to asset-bearing types
+        // (vehicle/asset/investment/property) and apply the SAME profile
+        // filter rule used elsewhere: if a filter is active, an asset only
+        // counts when its parent profile is selected, OR the asset itself
+        // is selected directly.
         const assetProfiles = (profiles || []).filter(p => {
           if (!["vehicle", "asset", "investment", "property"].includes(p.type)) return false;
           if (filterMode === "everyone" || filterIds.length === 0) return true;
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
-          return pParent && filterIds.includes(pParent);
+          if (pParent && filterIds.includes(pParent)) return true;
+          // Allow direct selection of the asset itself (e.g. selecting the
+          // F150 directly should still surface its value).
+          return filterIds.includes(p.id);
         });
         const totalAssetValue = assetProfiles.reduce((s, p) => {
           const val = p.fields?.purchasePrice || p.fields?.cost || p.fields?.value || p.fields?.amount || 0;
           return s + Number(val);
         }, 0);
 
-        // Liabilities from obligations (filtered + proper frequency conversion)
-        const oblData = (obligations || []).filter((o: any) => {
-          if (filterMode === "everyone" || filterIds.length === 0) return true;
-          const linked = o.linkedProfiles || [];
-          return linked.length === 0 || linked.some((id: string) => filterIds.includes(id));
-        });
+        // Liabilities from obligations. Use the unified rule so this view
+        // matches expense filtering (previously this lane silently included
+        // every orphan obligation when filtering, which inflated
+        // "Bob's monthly bills" with bills that weren't linked to anyone).
+        const oblData = (obligations || []).filter((o: any) => passesProfileFilter(o.linkedProfiles, filterCtx));
         const monthlyLiabilities = oblData.reduce((s: number, o: any) => {
           const amt = Number(o.amount) || 0;
           switch (o.frequency) {
