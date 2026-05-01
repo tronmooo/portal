@@ -1065,6 +1065,31 @@ export class SupabaseStorage implements IStorage {
     return this.rowToProfile(data);
   }
 
+  /**
+   * Returns true if setting profileId.parentProfileId = newParentId would create a cycle.
+   * A cycle exists when newParentId is profileId itself, or when walking up the ancestor chain
+   * from newParentId we encounter profileId.
+   */
+  async wouldCreateCycle(_userId: string, profileId: string, newParentId: string | null): Promise<boolean> {
+    if (!newParentId) return false;
+    if (newParentId === profileId) return true;
+    // Walk up the ancestor chain from newParentId using getProfile (user-scoped).
+    // If we ever encounter profileId, it's a cycle.
+    let currentId: string | null = newParentId;
+    const visited = new Set<string>();
+    while (currentId) {
+      if (visited.has(currentId)) break; // guard against pre-existing cycles in data
+      visited.add(currentId);
+      const current = await this.getProfile(currentId);
+      if (!current) break;
+      const parentId: string | null = current.parentProfileId || current.fields?._parentProfileId || null;
+      if (!parentId) break;
+      if (parentId === profileId) return true;
+      currentId = parentId;
+    }
+    return false;
+  }
+
   // Migrate all unlinked trackers to the "self" profile (bidirectional)
   async migrateUnlinkedTrackersToSelf(): Promise<number> {
     const selfProfile = await this.getSelfProfile();

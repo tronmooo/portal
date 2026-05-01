@@ -43,6 +43,7 @@ export interface IStorage {
   propagateDocumentToAncestors(documentId: string, profileId: string): Promise<string[]>;
   propagateEntityToAncestors(entityType: string, entityId: string, profileId: string): Promise<string[]>;
   getSelfProfile(): Promise<Profile | undefined>;
+  wouldCreateCycle(userId: string, profileId: string, newParentId: string | null): Promise<boolean>;
 
   // Trackers
   getTrackers(): Promise<Tracker[]>;
@@ -899,6 +900,24 @@ export class MemStorage implements IStorage {
 
   async getSelfProfile(): Promise<Profile | undefined> {
     return Array.from(this.profiles.values()).find(p => p.type === "self");
+  }
+
+  async wouldCreateCycle(_userId: string, profileId: string, newParentId: string | null): Promise<boolean> {
+    // TODO: MemStorage is dev-only; full cycle detection deferred to SupabaseStorage.
+    // Basic implementation: walk up from newParentId via parentProfileId.
+    if (!newParentId) return false;
+    if (newParentId === profileId) return true;
+    let current: Profile | undefined = this.profiles.get(newParentId);
+    const visited = new Set<string>();
+    while (current) {
+      if (visited.has(current.id)) break; // guard against existing cycles
+      visited.add(current.id);
+      const parentId = current.parentProfileId || (current.fields as any)?._parentProfileId;
+      if (!parentId) break;
+      if (parentId === profileId) return true;
+      current = this.profiles.get(parentId);
+    }
+    return false;
   }
 
   // ---- Trackers ----

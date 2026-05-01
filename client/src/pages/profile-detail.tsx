@@ -257,6 +257,610 @@ function formatCurrency(val: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(val);
 }
 
+// ============================================================
+// NESTED ASSETS — ASSET ROLLUP HELPER
+// TODO: replace with import from @shared/asset-rollup once available
+// import { computeAssetRollup } from "@shared/asset-rollup";
+// ============================================================
+
+const NESTED_ASSET_TYPES = ["vehicle", "property", "investment", "asset", "account"] as const;
+type NestedAssetType = typeof NESTED_ASSET_TYPES[number];
+
+interface AssetRollup {
+  baseValue: number;
+  nestedValue: number;
+  totalValue: number;
+  baseLoans: number;
+  nestedLoans: number;
+  totalLoans: number;
+  netValue: number;
+  childCount: number;
+  descendantCount: number;
+}
+
+interface TreeNode {
+  id: string;
+  name: string;
+  type: string;
+  fields: any;
+  parentProfileId?: string;
+  children: TreeNode[];
+}
+
+function getAssetBaseValue(fields: any): number {
+  return Number(fields?.currentValue || fields?.value || fields?.purchasePrice || fields?.balance || fields?.accountBalance || 0);
+}
+
+function getAssetLoanValue(fields: any): number {
+  return Number(fields?.loanBalance || fields?.remainingBalance || fields?.mortgageBalance || 0);
+}
+
+function flattenTreeNodes(node: TreeNode): TreeNode[] {
+  const result: TreeNode[] = [];
+  for (const child of node.children) {
+    result.push(child);
+    result.push(...flattenTreeNodes(child));
+  }
+  return result;
+}
+
+function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
+  const baseValue = getAssetBaseValue(profile.fields);
+  const baseLoans = getAssetLoanValue(profile.fields);
+  const directChildren = descendants.filter((d) => d.parentProfileId === profile.id);
+  const nestedValue = descendants.reduce((s, d) => s + getAssetBaseValue(d.fields), 0);
+  const nestedLoans = descendants.reduce((s, d) => s + getAssetLoanValue(d.fields), 0);
+  return {
+    baseValue,
+    nestedValue,
+    totalValue: baseValue + nestedValue,
+    baseLoans,
+    nestedLoans,
+    totalLoans: baseLoans + nestedLoans,
+    netValue: baseValue + nestedValue - baseLoans - nestedLoans,
+    childCount: directChildren.length,
+    descendantCount: descendants.length,
+  };
+}
+
+// ============================================================
+// NESTED ASSETS — BELONGS-TO EDITOR (Section 1)
+// ============================================================
+
+function BelongsToEditor({
+  profile,
+  allProfiles,
+  onSaved,
+}: {
+  profile: ProfileDetail;
+  allProfiles: any[];
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const { toast } = useToast();
+
+  // Fetch tree to know descendants (to exclude)
+  const { data: treeData } = useQuery<TreeNode>({
+    queryKey: ["/api/profiles", profile.id, "tree"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profile.id}/tree`);
+      return res.json();
+    },
+    enabled: open,
+    retry: false,
+  });
+
+  const descendantIds = useMemo(() => {
+    if (!treeData) return new Set<string>();
+    const ids = new Set<string>();
+    const collect = (node: TreeNode) => {
+      for (const c of node.children) {
+        ids.add(c.id);
+        collect(c);
+      }
+    };
+    collect(treeData);
+    return ids;
+  }, [treeData]);
+
+  // Candidate profiles: asset types + person/self/pet, not soft-deleted, not self, not descendants
+  const candidateTypes = [...NESTED_ASSET_TYPES, "person", "self", "pet"];
+  const candidates = useMemo(() => {
+    return allProfiles
+      .filter((p: any) =>
+        candidateTypes.includes(p.type) &&
+        p.id !== profile.id &&
+        !descendantIds.has(p.id) &&
+        !p.fields?.deleted
+      )
+      .sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
+  }, [allProfiles, descendantIds, profile.id]);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return candidates;
+    const q = search.toLowerCase();
+    return candidates.filter((p: any) =>
+      (p.name || "").toLowerCase().includes(q) || p.type.toLowerCase().includes(q)
+    );
+  }, [candidates, search]);
+
+  const currentParentId =
+    profile.parentProfileId ||
+    (profile as any).fields?._parentProfileId ||
+    null;
+  const currentParent = allProfiles.find((p: any) => p.id === currentParentId);
+
+  const patchParent = useMutation({
+    mutationFn: async (newParentId: string | null) => {
+      const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
+        parentProfileId: newParentId,
+      });
+      return res.json();
+    },
+    onSuccess: (_data, newParentId) => {
+      toast({ title: newParentId ? "Parent updated" : "Detached from parent" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      if (currentParentId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", currentParentId, "detail"] });
+      }
+      if (newParentId && newParentId !== currentParentId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", newParentId, "detail"] });
+      }
+      onSaved();
+      setOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <>
+      <div className="flex items-center gap-2 py-1" data-testid="belongs-to-row">
+        <span className="text-xs text-muted-foreground shrink-0">Belongs to:</span>
+        <span className="text-xs font-medium flex-1 truncate">
+          {currentParent ? currentParent.name : <span className="text-muted-foreground italic">None (top-level)</span>}
+        </span>
+        <button
+          className="h-[44px] w-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted active:bg-muted/80 shrink-0"
+          onClick={() => setOpen(true)}
+          aria-label="Edit parent"
+          data-testid="button-edit-belongs-to"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-sm max-h-[80vh] flex flex-col" data-testid="dialog-belongs-to">
+          <DialogHeader>
+            <DialogTitle>Set Parent</DialogTitle>
+            <DialogDescription>Choose where this asset belongs.</DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
+            <Input
+              placeholder="Search profiles..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-8 text-xs"
+              data-testid="input-belongs-to-search"
+            />
+            <div className="flex-1 overflow-y-auto space-y-1 pr-1" data-testid="list-belongs-to-candidates">
+              {/* None option */}
+              <button
+                className={`w-full text-left px-3 py-3 rounded-lg text-xs hover:bg-muted transition-colors min-h-[44px] flex items-center gap-2 ${
+                  !currentParentId ? "bg-primary/10 text-primary font-semibold" : ""
+                }`}
+                onClick={() => patchParent.mutate(null)}
+                disabled={patchParent.isPending}
+                data-testid="option-belongs-to-none"
+              >
+                <X className="h-3.5 w-3.5 shrink-0" />
+                None (top-level)
+              </button>
+              {filtered.map((p: any) => (
+                <button
+                  key={p.id}
+                  className={`w-full text-left px-3 py-3 rounded-lg text-xs hover:bg-muted transition-colors min-h-[44px] flex items-center gap-2 ${
+                    p.id === currentParentId ? "bg-primary/10 text-primary font-semibold" : ""
+                  }`}
+                  onClick={() => patchParent.mutate(p.id)}
+                  disabled={patchParent.isPending}
+                  data-testid={`option-belongs-to-${p.id}`}
+                >
+                  <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    {profileIcon(p.type)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="truncate font-medium">{p.name}</p>
+                    <p className="text-muted-foreground capitalize">{p.type}</p>
+                  </div>
+                  {p.id === currentParentId && <Check className="h-3.5 w-3.5 shrink-0" />}
+                </button>
+              ))}
+              {filtered.length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-4">No matching profiles</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)} className="h-[44px]">
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ============================================================
+// NESTED ASSETS — LOCATION EDITOR (Section 2)
+// ============================================================
+
+function LocationEditor({
+  profile,
+  onSaved,
+}: {
+  profile: ProfileDetail;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(profile.fields?.location || ""));
+  const { toast } = useToast();
+
+  const locationMut = useMutation({
+    mutationFn: async (loc: string) => {
+      const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
+        fields: { ...profile.fields, location: loc },
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Location updated" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      onSaved();
+      setEditing(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to update location", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const currentLocation = String(profile.fields?.location || "");
+
+  return (
+    <div className="space-y-1" data-testid="location-editor">
+      <div className="flex items-center gap-2">
+        <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        {editing ? (
+          <div className="flex items-center gap-1 flex-1">
+            <Input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="e.g. Kitchen, Garage, Safe..."
+              className="h-8 text-xs flex-1"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") locationMut.mutate(value.trim());
+                if (e.key === "Escape") { setValue(currentLocation); setEditing(false); }
+              }}
+              data-testid="input-location"
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-[44px] w-[44px] p-0"
+              onClick={() => locationMut.mutate(value.trim())}
+              disabled={locationMut.isPending}
+              aria-label="Save location"
+            >
+              <Check className="h-3.5 w-3.5 text-green-500" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-[44px] w-[44px] p-0"
+              onClick={() => { setValue(currentLocation); setEditing(false); }}
+              aria-label="Cancel"
+            >
+              <X className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 flex-1">
+            <span className="text-xs flex-1">
+              {currentLocation || <span className="text-muted-foreground italic">No location set</span>}
+            </span>
+            <button
+              className="h-[44px] w-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted active:bg-muted/80 shrink-0"
+              onClick={() => setEditing(true)}
+              aria-label="Edit location"
+              data-testid="button-edit-location"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+      {currentLocation && (
+        <p className="text-[11px] text-muted-foreground pl-5">
+          If you later add an asset named &quot;{currentLocation}&quot; under the same parent, this item will move under it automatically.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// NESTED ASSETS — CHILD ASSETS CARD (Section 3)
+// ============================================================
+
+function ChildAssetsCard({
+  profile,
+  onChildAdded,
+}: {
+  profile: ProfileDetail;
+  onChildAdded: () => void;
+}) {
+  const [showAddChild, setShowAddChild] = useState(false);
+  const [childName, setChildName] = useState("");
+  const [childType, setChildType] = useState<NestedAssetType>("asset");
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
+
+  const directChildren = useMemo(() => {
+    const all = ((profile as any).childProfiles || []) as any[];
+    return all.filter((c) => NESTED_ASSET_TYPES.includes(c.type as NestedAssetType));
+  }, [profile]);
+
+  const createChildMut = useMutation({
+    mutationFn: async () => {
+      if (!childName.trim()) throw new Error("Name required");
+      const res = await apiRequest("POST", "/api/profiles", {
+        name: childName.trim(),
+        type: childType,
+        fields: { _parentProfileId: profile.id },
+        parentProfileId: profile.id,
+        tags: [],
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: `"${childName}" created` });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      setChildName("");
+      setChildType("asset");
+      setShowAddChild(false);
+      onChildAdded();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to add child asset", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card data-testid="card-child-assets">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Package className="h-4 w-4 text-muted-foreground" /> Child Assets
+          </CardTitle>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-[44px] text-xs gap-1 px-3"
+            onClick={() => setShowAddChild(true)}
+            data-testid="button-add-child-asset"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Child
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        {directChildren.length === 0 ? (
+          <div className="py-4 text-center" data-testid="child-assets-empty">
+            <p className="text-sm text-muted-foreground">No child assets yet.</p>
+          </div>
+        ) : (
+          <div className="space-y-1" data-testid="child-assets-list">
+            {directChildren
+              .slice()
+              .sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""))
+              .map((child: any) => {
+                const childValue = getAssetBaseValue(child.fields);
+                return (
+                  <button
+                    key={child.id}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg border hover:bg-muted/30 transition-colors text-left min-h-[44px]"
+                    onClick={() => setLocation(`/profiles/${child.id}`)}
+                    data-testid={`child-asset-row-${child.id}`}
+                  >
+                    <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      {profileIcon(child.type)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{child.name}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{child.type}</p>
+                    </div>
+                    {childValue > 0 && (
+                      <span className="text-xs font-semibold tabular-nums shrink-0">
+                        {formatCurrency(childValue)}
+                      </span>
+                    )}
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  </button>
+                );
+              })}
+          </div>
+        )}
+      </CardContent>
+
+      {/* Add Child Dialog */}
+      <Dialog open={showAddChild} onOpenChange={setShowAddChild}>
+        <DialogContent className="max-w-sm" data-testid="dialog-add-child-asset">
+          <DialogHeader>
+            <DialogTitle>Add Child Asset</DialogTitle>
+            <DialogDescription>Create a new asset nested under &quot;{profile.name}&quot;.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium" htmlFor="child-asset-name">Name</label>
+              <Input
+                id="child-asset-name"
+                placeholder="e.g. Refrigerator, Samsung TV..."
+                value={childName}
+                onChange={(e) => setChildName(e.target.value)}
+                className="h-[44px] text-sm"
+                onKeyDown={(e) => { if (e.key === "Enter") createChildMut.mutate(); }}
+                data-testid="input-child-asset-name"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium" htmlFor="child-asset-type">Type</label>
+              <Select value={childType} onValueChange={(v) => setChildType(v as NestedAssetType)}>
+                <SelectTrigger id="child-asset-type" className="h-[44px]" data-testid="select-child-asset-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {NESTED_ASSET_TYPES.map((t) => (
+                    <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" className="h-[44px]" onClick={() => setShowAddChild(false)}>Cancel</Button>
+            <Button
+              size="sm"
+              className="h-[44px]"
+              onClick={() => createChildMut.mutate()}
+              disabled={createChildMut.isPending || !childName.trim()}
+              data-testid="button-confirm-add-child-asset"
+            >
+              {createChildMut.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+// ============================================================
+// NESTED ASSETS — VALUE ROLLUP CARD (Section 4)
+// ============================================================
+
+function ValueRollupCard({ profile }: { profile: ProfileDetail }) {
+  const { data: treeData } = useQuery<TreeNode>({
+    queryKey: ["/api/profiles", profile.id, "tree"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profile.id}/tree`);
+      return res.json();
+    },
+    retry: false,
+  });
+
+  const hasChildren = ((profile as any).childProfiles || []).some(
+    (c: any) => NESTED_ASSET_TYPES.includes(c.type as NestedAssetType)
+  );
+  const ownValue = getAssetBaseValue(profile.fields);
+
+  // Only show if profile has own value or children
+  if (!hasChildren && ownValue === 0) return null;
+
+  const descendants = treeData ? flattenTreeNodes(treeData) : [];
+  const rollup = computeAssetRollup(profile, descendants);
+
+  return (
+    <Card data-testid="card-value-rollup">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <BarChart2 className="h-4 w-4 text-primary" /> Value Rollup
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="grid grid-cols-2 gap-2" data-testid="rollup-grid">
+          <div className="rounded-lg bg-muted/30 p-2.5 text-center">
+            <p className="text-base font-bold tabular-nums">{formatCurrency(rollup.baseValue)}</p>
+            <p className="text-[11px] text-muted-foreground">Base Value</p>
+          </div>
+          <div className="rounded-lg bg-muted/30 p-2.5 text-center">
+            <p className="text-base font-bold tabular-nums">{formatCurrency(rollup.nestedValue)}</p>
+            <p className="text-[11px] text-muted-foreground">Nested Assets</p>
+          </div>
+          <div className="rounded-lg bg-green-500/8 border border-green-500/20 p-2.5 text-center col-span-2">
+            <p className="text-lg font-bold tabular-nums text-green-600 dark:text-green-400">
+              {formatCurrency(rollup.totalValue)}
+            </p>
+            <p className="text-[11px] text-muted-foreground">Total Combined</p>
+          </div>
+          {rollup.totalLoans > 0 && (
+            <>
+              <div className="rounded-lg bg-red-500/8 border border-red-500/20 p-2.5 text-center">
+                <p className="text-base font-bold tabular-nums text-red-500">{formatCurrency(rollup.totalLoans)}</p>
+                <p className="text-[11px] text-muted-foreground">Total Loans</p>
+              </div>
+              <div className="rounded-lg bg-muted/30 p-2.5 text-center">
+                <p className={`text-base font-bold tabular-nums ${rollup.netValue >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                  {formatCurrency(rollup.netValue)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">Net Value</p>
+              </div>
+            </>
+          )}
+        </div>
+        {rollup.descendantCount > 0 && (
+          <p className="text-[11px] text-muted-foreground mt-2 text-center">
+            Across {rollup.descendantCount} nested asset{rollup.descendantCount !== 1 ? "s" : ""}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============================================================
+// NESTED ASSETS — COMBINED SECTION WRAPPER (inject into InfoTab)
+// ============================================================
+
+function NestedAssetSections({
+  profile,
+  allProfiles,
+  onSaved,
+}: {
+  profile: ProfileDetail;
+  allProfiles: any[];
+  onSaved: () => void;
+}) {
+  const isAssetType = NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType);
+  if (!isAssetType) return null;
+
+  return (
+    <div className="space-y-3" data-testid="nested-asset-sections">
+      {/* Section 1 & 2: Belongs-to + Location */}
+      <Card data-testid="card-belongs-to-location">
+        <CardContent className="p-3 space-y-1">
+          <BelongsToEditor profile={profile} allProfiles={allProfiles} onSaved={onSaved} />
+          <div className="border-t border-border/30 pt-2">
+            <LocationEditor profile={profile} onSaved={onSaved} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Section 3: Child Assets */}
+      <ChildAssetsCard profile={profile} onChildAdded={onSaved} />
+
+      {/* Section 4: Value Rollup */}
+      <ValueRollupCard profile={profile} />
+    </div>
+  );
+}
+
 // ── Field flattening (nested → top-level) ───────────────────────────────────
 // Storage paths used by the app:
 //   fields.vehicles.{licensePlate,vin,make,model,year,mileage,color,trim,registrationExpiration}
@@ -1222,6 +1826,14 @@ function InfoTab({
     queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
   };
 
+  // ── Fetch all profiles for BelongsToEditor candidate list (only for asset types) ──
+  const isNestedAsset = NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType);
+  const { data: allProfilesForNesting } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: isNestedAsset,
+  });
+
   return (
     <div className="space-y-3">
       {/* ── Header summary row (no name repetition — hero already shows that) ── */}
@@ -1236,6 +1848,15 @@ function InfoTab({
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Nested Asset Sections (Sections 1-4) — asset/vehicle/property/investment/account only ── */}
+      {isNestedAsset && (
+        <NestedAssetSections
+          profile={profile}
+          allProfiles={allProfilesForNesting || []}
+          onSaved={handleSaved}
+        />
       )}
 
       {/* ── Stats Row ── Only for person/self/pet — hero already shows these stats for asset types */}
@@ -1531,11 +2152,13 @@ function DocumentsTab({
   documents,
   profileId,
   childProfiles,
+  profileType,
   onUploaded,
 }: {
   documents: ProfileDetail["relatedDocuments"];
   profileId: string;
   childProfiles?: Profile[];
+  profileType?: string;
   onUploaded: () => void;
 }) {
   const { toast } = useToast();
@@ -1546,6 +2169,55 @@ function DocumentsTab({
   const [docSearch, setDocSearch] = useState("");
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   const [linkTarget, setLinkTarget] = useState<string>("profile"); // "profile" or a child profile ID
+
+  // ── Child-asset documents (Section 5) ──
+  const isAssetTypeForDocs = profileType ? NESTED_ASSET_TYPES.includes(profileType as NestedAssetType) : false;
+  const { data: treeDataForDocs } = useQuery<TreeNode>({
+    queryKey: ["/api/profiles", profileId, "tree"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/tree`);
+      return res.json();
+    },
+    enabled: isAssetTypeForDocs,
+    retry: false,
+  });
+
+  // Build map of profileId -> childProfile name for attribution
+  const childProfileNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!treeDataForDocs) return map;
+    const collect = (node: TreeNode) => {
+      map.set(node.id, node.name);
+      for (const c of node.children) collect(c);
+    };
+    for (const c of treeDataForDocs.children) collect(c);
+    return map;
+  }, [treeDataForDocs]);
+
+  const descendantIdSetForDocs = useMemo(() => new Set(childProfileNameMap.keys()), [childProfileNameMap]);
+
+  // Direct doc ids (to dedupe from child docs)
+  const directDocIds = useMemo(() => new Set(documents.map(d => d.id)), [documents]);
+
+  // Child docs: from childProfiles' relatedDocuments if available, or we get them from tree
+  // Since we only have childProfiles from the parent detail endpoint (flat, no docs),
+  // we need to use the childProfiles prop's document links.
+  // NOTE: The approach here: we fetch child detail lazily only when tree available.
+  // For now, we use childProfiles documents if present, filtered by descendantIds.
+  const childAssetDocs = useMemo(() => {
+    if (!isAssetTypeForDocs || descendantIdSetForDocs.size === 0) return [];
+    // childProfiles may carry relatedDocuments in ProfileDetail context
+    // We filter to those whose profileId is a descendant
+    return (childProfiles || [])
+      .filter((cp: any) => descendantIdSetForDocs.has(cp.id))
+      .flatMap((cp: any) => {
+        const cpDocs = (cp as any).relatedDocuments || [];
+        return cpDocs.map((d: any) => ({ ...d, _fromProfileId: cp.id, _fromProfileName: cp.name }));
+      })
+      .filter((d: any) => !directDocIds.has(d.id))
+      // Dedupe by document id
+      .filter((d: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === d.id) === idx);
+  }, [isAssetTypeForDocs, descendantIdSetForDocs, childProfiles, directDocIds]);
 
   // Get unique doc types for filter
   const docTypes = useMemo(() => [...new Set(documents.map(d => d.type))].sort(), [documents]);
@@ -1836,6 +2508,35 @@ function DocumentsTab({
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {/* Section 5: From child assets (asset-type profiles only, read-only) */}
+      {isAssetTypeForDocs && childAssetDocs.length > 0 && (
+        <div className="mt-4" data-testid="section-child-docs">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">
+            From child assets ({childAssetDocs.length})
+          </p>
+          <div className="space-y-2">
+            {childAssetDocs.map((doc: any) => (
+              <Card key={doc.id} data-testid={`card-child-doc-${doc.id}`}>
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-muted text-muted-foreground">
+                      {doc.mimeType?.startsWith("image/") ? <ImageIcon className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{doc.name}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        From: {doc._fromProfileName}
+                      </p>
+                    </div>
+                    <Badge variant="secondary" className="text-xs capitalize shrink-0">{doc.type}</Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         </div>
       )}
 
@@ -6722,6 +7423,7 @@ export default function ProfileDetailPage() {
                     documents={profile.relatedDocuments}
                     profileId={profile.id}
                     childProfiles={profile.childProfiles}
+                    profileType={profile.type}
                     onUploaded={handleSaved}
                   />
                 </TabsContent>

@@ -927,6 +927,44 @@ export async function registerRoutes(
     if (!detail) return res.status(404).json({ error: "Not found" });
     res.json(detail);
   }));
+
+  // ---- Profile Tree (depth-first, all descendants) ----
+  app.get("/api/profiles/:id/tree", asyncHandler(async (req, res) => {
+    const root = await storage.getProfile(req.params.id);
+    if (!root) return res.status(404).json({ error: "Not found" });
+
+    // Fetch all profiles once (user-scoped) then build tree in memory
+    const allProfiles = await storage.getProfiles();
+
+    // Helper: build a TreeNode for a given profile, depth-first
+    interface TreeNode {
+      id: string;
+      name: string;
+      type: string;
+      fields: Record<string, any>;
+      parentProfileId?: string;
+      children: TreeNode[];
+    }
+
+    function buildTree(profileId: string): TreeNode {
+      const p = allProfiles.find(x => x.id === profileId)!;
+      const directChildren = allProfiles.filter(
+        c => c.parentProfileId === profileId && !c.deletedAt
+      );
+      return {
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        fields: p.fields,
+        parentProfileId: p.parentProfileId,
+        children: directChildren.map(c => buildTree(c.id)),
+      };
+    }
+
+    const tree = buildTree(root.id);
+    res.json(tree);
+  }));
+
   app.post("/api/profiles", asyncHandler(async (req, res) => {
     const uid_p1 = (req as AuthenticatedRequest).userId || "anon";
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
@@ -970,6 +1008,42 @@ export async function registerRoutes(
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const created = await storage.createProfile(parsed.data);
     bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
+
+    // ---- Location auto-attach hook ----
+    // If the new profile has a name AND a parentProfileId, look at all siblings
+    // (same parentProfileId, same userId, not this profile, not soft-deleted).
+    // If a sibling's fields.location (case-insensitive, trimmed) === the new profile's name,
+    // re-attach that sibling to the new profile.
+    // Non-blocking: wrap in try/catch so failures never delay the create response.
+    if (created.name && created.parentProfileId) {
+      (async () => {
+        try {
+          const allProfiles = await storage.getProfiles();
+          const newNameNorm = created.name.trim().toLowerCase();
+          const siblings = allProfiles.filter(p =>
+            p.id !== created.id &&
+            p.parentProfileId === created.parentProfileId &&
+            !p.deletedAt
+          );
+          for (const sibling of siblings) {
+            const loc = typeof sibling.fields?.location === "string"
+              ? sibling.fields.location.trim().toLowerCase()
+              : null;
+            if (loc && loc === newNameNorm) {
+              // Re-attach sibling: set parentProfileId to new profile's id
+              const updatedFields = { ...sibling.fields, _parentProfileId: created.id };
+              await storage.updateProfile(sibling.id, {
+                parentProfileId: created.id,
+                fields: updatedFields,
+              });
+            }
+          }
+        } catch (autoAttachErr: any) {
+          console.error("[auto-attach] location hook failed:", autoAttachErr?.message || autoAttachErr);
+        }
+      })();
+    }
+
     res.status(201).json(created);
   }));
   app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
@@ -996,6 +1070,48 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Blood type must be A+, A-, B+, B-, AB+, AB-, O+, or O-" });
       }
     }
+
+    // ---- parentProfileId validation (top-level or legacy fields._parentProfileId) ----
+    // Determine if caller is setting parentProfileId
+    const hasTopLevel = "parentProfileId" in req.body;
+    const hasLegacy = req.body.fields && typeof req.body.fields === "object" && "_parentProfileId" in req.body.fields;
+    if (hasTopLevel || hasLegacy) {
+      // Resolve the new parent value — empty string treated as null (detach)
+      const rawParent: string | null | undefined = hasTopLevel
+        ? req.body.parentProfileId
+        : req.body.fields._parentProfileId;
+      const newParentId: string | null = (!rawParent || rawParent === "") ? null : rawParent;
+
+      if (newParentId !== null) {
+        // Validate that new parent exists and belongs to the same user
+        const parentProfile = await storage.getProfile(newParentId);
+        if (!parentProfile) {
+          return res.status(404).json({ error: "Parent profile not found" });
+        }
+        // Ownership check: storage is already scoped to the user, but double-check
+        // by verifying the profile is accessible. If storage returned it, it's ours.
+        // (For extra safety, compare with userId from request.)
+        // Note: storage.getProfile() is user-scoped; if it returns a profile it belongs to this user.
+        // Still, verify the parentProfile is not from a different user via the returned type.
+        // Since getProfile is user-scoped, an accessible profile is always owned by the user.
+        // If you can't access it → already returns undefined (handled above as 404).
+
+        // Cycle detection
+        const cycle = await storage.wouldCreateCycle(uid_p2, req.params.id, newParentId);
+        if (cycle) {
+          return res.status(400).json({ error: "Cannot set parent: would create a cycle" });
+        }
+      }
+
+      // Persist: set top-level parentProfileId and mirror to fields._parentProfileId
+      req.body.parentProfileId = newParentId;
+      // Mirror into fields so legacy reads still work
+      if (!req.body.fields || typeof req.body.fields !== "object") {
+        req.body.fields = {};
+      }
+      req.body.fields._parentProfileId = newParentId;
+    }
+
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);

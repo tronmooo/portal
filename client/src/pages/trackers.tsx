@@ -3685,6 +3685,14 @@ export default function TrackersPage() {
   const [trackerCatFilter, setTrackerCatFilter] = useState<string>("all");
   // Asset type filter (Vehicles, Properties, Investments, Assets…)
   const [assetTypeFilter, setAssetTypeFilter] = useState<string>("all");
+  // Asset nesting filter (Top-level / Has children / Nested)
+  const [assetNestingFilter, setAssetNestingFilter] = useState<"all" | "topLevel" | "hasChildren" | "nested">(() => {
+    try { return (sessionStorage.getItem("portol_asset_nesting_filter") as any) || "all"; } catch { return "all"; }
+  });
+  const setAssetNesting = (val: "all" | "topLevel" | "hasChildren" | "nested") => {
+    setAssetNestingFilter(val);
+    try { sessionStorage.setItem("portol_asset_nesting_filter", val); } catch {};
+  };
   // Subscription category filter
   const [subCatFilter, setSubCatFilter] = useState<string>("all");
   // Collapsible sections
@@ -4057,8 +4065,8 @@ export default function TrackersPage() {
       {sectionFilter === "profiles" && assetTypeOptions.length > 1 && (
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-assets">
           <button
-            onClick={() => setAssetTypeFilter("all")}
-            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+            onClick={() => { setAssetTypeFilter("all"); setAssetNesting("all"); }}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" && assetNestingFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
           >
             All Types
           </button>
@@ -4072,6 +4080,24 @@ export default function TrackersPage() {
                 data-testid={`filter-asset-type-${label}`}
               >
                 {label} <span className="opacity-70">{count}</span>
+              </button>
+            );
+          })}
+          {/* Nesting chips — mutually exclusive with each other */}
+          {([
+            { value: "topLevel" as const, label: "Top-level" },
+            { value: "hasChildren" as const, label: "Has children" },
+            { value: "nested" as const, label: "Nested" },
+          ]).map(({ value, label }) => {
+            const isActive = assetNestingFilter === value;
+            return (
+              <button
+                key={value}
+                onClick={() => { setAssetTypeFilter("all"); setAssetNesting(isActive ? "all" : value); }}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                data-testid={`filter-asset-nesting-${value}`}
+              >
+                {label}
               </button>
             );
           })}
@@ -4119,6 +4145,22 @@ export default function TrackersPage() {
             // Asset type chip filter — only applies on the Assets tab.
             // "all" means no chip-level filter; everything passes.
             if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
+            // Asset nesting chip filter — only applies on the Assets tab.
+            if (sectionFilter === "profiles" && assetNestingFilter !== "all") {
+              const pParentId = p.fields?._parentProfileId || p.parentProfileId;
+              const parentProfile = pParentId ? (profiles || []).find(x => x.id === pParentId) : null;
+              if (assetNestingFilter === "topLevel") {
+                // Pass if no parent, or parent is a person/self/pet (not an asset-type profile)
+                if (pParentId && parentProfile && childTypeSet.has(parentProfile.type)) return false;
+              } else if (assetNestingFilter === "hasChildren") {
+                // Pass if at least one other profile has this profile as parent AND is an asset type
+                const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
+                if (!hasAssetChild) return false;
+              } else if (assetNestingFilter === "nested") {
+                // Pass if parent is itself an asset-type profile
+                if (!pParentId || !parentProfile || !childTypeSet.has(parentProfile.type)) return false;
+              }
+            }
             return true;
           }
           return false;
