@@ -231,7 +231,7 @@ function ObligationCard({ ob }: { ob: Obligation }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Amount ($)</Label>
-              <Input type="number" min="0" step="0.01" value={editAmount} onChange={e => setEditAmount(e.target.value)} data-testid="input-edit-amount" />
+              <Input type="number" inputMode="decimal" min="0" step="0.01" value={editAmount} onChange={e => setEditAmount(e.target.value)} data-testid="input-edit-amount" />
             </div>
             <div>
               <Label className="text-xs">Frequency</Label>
@@ -383,7 +383,7 @@ export default function ObligationsPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
-                <Input type="number" min="0" step="0.01" value={newAmount} onChange={e => setNewAmount(e.target.value)} placeholder="0.00" data-testid="input-obligation-amount" />
+                <Input type="number" inputMode="decimal" min="0" step="0.01" value={newAmount} onChange={e => setNewAmount(e.target.value)} placeholder="0.00" data-testid="input-obligation-amount" />
               </div>
               <div>
                 <Label className="text-xs">Frequency</Label>

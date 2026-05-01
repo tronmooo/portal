@@ -2188,7 +2188,7 @@ function BudgetManager() {
                   <div className="flex items-center gap-1">
                     {editId === b.id ? (
                       <form onSubmit={(e) => { e.preventDefault(); const val = parseFloat((e.target as any).amt.value); if (val > 0) updateMutation.mutate({ id: b.id, amount: val }); }} className="flex items-center gap-1">
-                        <Input name="amt" type="number" defaultValue={b.amount} className="h-6 w-20 text-xs" step="0.01" autoFocus />
+                        <Input name="amt" type="number" inputMode="decimal" defaultValue={b.amount} className="h-6 w-20 text-xs" step="0.01" autoFocus />
                         <Button type="submit" variant="ghost" size="icon" className="h-8 w-8" aria-label="Save budget"><Check className="h-3 w-3" /></Button>
                       </form>
                     ) : (
@@ -2245,7 +2245,7 @@ function BudgetManager() {
             <option value="">Select category...</option>
             {availableCategories.slice().sort((a, b) => a.localeCompare(b)).map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
           </select>
-          <Input placeholder="Amount" type="number" value={newAmt} onChange={(e) => setNewAmt(e.target.value)} className="h-8 text-xs" step="0.01" />
+          <Input placeholder="Amount" type="number" inputMode="decimal" value={newAmt} onChange={(e) => setNewAmt(e.target.value)} className="h-8 text-xs" step="0.01" />
           <Input placeholder="Notes (optional)" value={newNotes} onChange={(e) => setNewNotes(e.target.value)} className="h-8 text-xs" />
           <div className="flex gap-2">
             <Button size="sm" className="h-7 text-xs flex-1" disabled={!newCat || !newAmt || parseFloat(newAmt) <= 0} onClick={() => addMutation.mutate({ category: newCat, amount: parseFloat(newAmt), notes: newNotes || undefined })}>

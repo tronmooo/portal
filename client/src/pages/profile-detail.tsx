@@ -1436,8 +1436,14 @@ function InfoTab({
         <Card>
           <CardContent className="p-3 space-y-2">
             <div className="flex gap-2">
-              <Input placeholder="Field name" value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-key" />
-              <Input placeholder="Value" value={newFieldValue} onChange={e => setNewFieldValue(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-value" />
+              <div className="flex-1">
+                <label htmlFor="new-field-key" className="sr-only">Field name</label>
+                <Input id="new-field-key" placeholder="Field name" aria-label="Field name" value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-key" />
+              </div>
+              <div className="flex-1">
+                <label htmlFor="new-field-value" className="sr-only">Value</label>
+                <Input id="new-field-value" placeholder="Value" aria-label="Value" value={newFieldValue} onChange={e => setNewFieldValue(e.target.value)} className="h-7 text-xs" data-testid="input-new-field-value" />
+              </div>
             </div>
             <div className="flex gap-2 justify-end">
               <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setAddingField(false); setNewFieldKey(""); setNewFieldValue(""); }}>Cancel</Button>
@@ -2813,7 +2819,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Amount ($)</label>
-              <Input className="mt-1" type="number" step="0.01" value={expAmount} onChange={e => setExpAmount(e.target.value)} data-testid="input-edit-expense-amount" />
+              <Input className="mt-1" type="number" inputMode="decimal" step="0.01" value={expAmount} onChange={e => setExpAmount(e.target.value)} data-testid="input-edit-expense-amount" />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Category</label>
@@ -4794,7 +4800,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Loan Balance ($)</label>
               <Input
-                type="number" placeholder="e.g. 25000" value={formBalance}
+                type="number" inputMode="decimal" placeholder="e.g. 25000" value={formBalance}
                 onChange={e => setFormBalance(e.target.value)}
                 data-testid="input-loan-balance"
               />
@@ -4802,7 +4808,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Interest Rate (%)</label>
               <Input
-                type="number" step="0.01" placeholder="e.g. 5.5" value={formRate}
+                type="number" inputMode="decimal" step="0.01" placeholder="e.g. 5.5" value={formRate}
                 onChange={e => setFormRate(e.target.value)}
                 data-testid="input-loan-rate"
               />
@@ -4810,7 +4816,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Term (months)</label>
               <Input
-                type="number" placeholder="e.g. 60" value={formTerm}
+                type="number" inputMode="numeric" placeholder="e.g. 60" value={formTerm}
                 onChange={e => setFormTerm(e.target.value)}
                 data-testid="input-loan-term"
               />
@@ -4818,7 +4824,7 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Monthly Payment ($)</label>
               <Input
-                type="number" step="0.01" placeholder="e.g. 477" value={formPayment}
+                type="number" inputMode="decimal" step="0.01" placeholder="e.g. 477" value={formPayment}
                 onChange={e => setFormPayment(e.target.value)}
                 data-testid="input-loan-payment"
               />
@@ -5907,7 +5913,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
             </div>
             <div>
               <label className="text-xs text-muted-foreground">Amount</label>
-              <Input className="mt-1 h-8 text-xs" type="number" step="0.01" value={payAmount} onChange={e => setPayAmount(e.target.value)} placeholder="0.00" data-testid="input-payment-amount" />
+              <Input className="mt-1 h-8 text-xs" type="number" inputMode="decimal" step="0.01" value={payAmount} onChange={e => setPayAmount(e.target.value)} placeholder="0.00" data-testid="input-payment-amount" />
             </div>
             <div>
               <label className="text-xs text-muted-foreground">Date</label>

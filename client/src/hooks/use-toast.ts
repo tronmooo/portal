@@ -8,7 +8,10 @@ import { announce } from "@/lib/announce"
 
 const TOAST_LIMIT = 1
 const TOAST_REMOVE_DELAY = 1000
+// Default 4s for normal toasts is fine, but error toasts deserve more time.
+// Users complained 4s was too fast to read "Failed to save..." before it vanished.
 const TOAST_AUTO_DISMISS_DELAY = 4000
+const TOAST_AUTO_DISMISS_DELAY_DESTRUCTIVE = 8000
 
 type ToasterToast = ToastProps & {
   id: string
@@ -167,10 +170,14 @@ function toast({ ...props }: Toast) {
   const msg = typeof props.title === "string" ? props.title : typeof props.description === "string" ? props.description : "";
   if (msg) announce(msg);
 
-  // Auto-dismiss after delay so toasts don't persist indefinitely
+  // Auto-dismiss after delay so toasts don't persist indefinitely.
+  // Destructive (error) toasts get longer so users have time to read them.
+  const dismissDelay = (props as any).variant === "destructive"
+    ? TOAST_AUTO_DISMISS_DELAY_DESTRUCTIVE
+    : TOAST_AUTO_DISMISS_DELAY
   setTimeout(() => {
     dismiss()
-  }, TOAST_AUTO_DISMISS_DELAY)
+  }, dismissDelay)
 
   return {
     id: id,

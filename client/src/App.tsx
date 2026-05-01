@@ -173,7 +173,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-background">
+      <div className="flex items-center justify-center h-dvh bg-background">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-primary" />
           <p className="text-sm text-muted-foreground">Loading Portol...</p>
@@ -465,7 +465,10 @@ function App() {
             <CommandSearchProvider>
               <KeyboardShortcuts />
               <SidebarProvider style={sidebarStyle as React.CSSProperties}>
-                <div className="flex h-screen w-full max-w-[90rem] mx-auto">
+                {/* h-dvh (dynamic viewport) instead of h-screen so iOS Safari's URL bar
+                    doesn't push content off-screen. Falls back to 100vh on browsers
+                    that don't support dvh. */}
+                <div className="flex h-dvh w-full max-w-[90rem] mx-auto">
                   {/* Sidebar hidden on mobile */}
                   <div className="hidden md:block">
                     <AppSidebar />
