@@ -60,6 +60,10 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
   const handleEveryone = useCallback(() => {
     setFilterEveryone();
     notify();
+    // "Everyone" is a terminal choice (clears all selection) so close the popup
+    // afterwards. Multi-select toggles below intentionally keep the popup open.
+    setDesktopOpen(false);
+    setMobileOpen(false);
   }, [notify]);
 
   const handleToggle = useCallback((id: string, name: string) => {
@@ -201,15 +205,23 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
           <PopoverContent align="start" className="w-60 p-2 max-h-[400px] overflow-y-auto z-50">
             <div className="flex items-center justify-between mb-2 px-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Filter by Person</span>
-              {!isEveryone && (
-                <Button variant="ghost" size="sm" className="h-6 text-xs px-1.5 gap-1" onClick={() => { handleEveryone(); setDesktopOpen(false); }}>
-                  <X className="h-3 w-3" /> Clear
+              <div className="flex items-center gap-1">
+                {!isEveryone && (
+                  <Button variant="ghost" size="sm" className="h-6 text-xs px-1.5 gap-1" onClick={() => { handleEveryone(); setDesktopOpen(false); }}>
+                    <X className="h-3 w-3" /> Clear
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" className="h-6 text-xs px-1.5" onClick={() => setDesktopOpen(false)}>
+                  Done
                 </Button>
-              )}
+              </div>
             </div>
-            <div onClick={() => setDesktopOpen(false)}>
-              {listContent}
-            </div>
+            {/* IMPORTANT: do NOT auto-close on every click here. The previous
+                wrapper <div onClick={close}> made multi-select impossible —
+                tapping any profile slammed the popover shut after a single
+                toggle. Users now click profiles freely; the popover closes on
+                Done, Clear, Everyone, or by clicking outside (Radix default). */}
+            {listContent}
           </PopoverContent>
         </Popover>
       </div>

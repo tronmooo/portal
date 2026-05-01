@@ -466,7 +466,7 @@ export default function TasksPage() {
     ? `/api/tasks?profileIds=${filterIds.join(",")}`
     : "/api/tasks";
   const { data: tasks, isLoading, error, refetch } = useQuery<Task[]>({
-    queryKey: ["/api/tasks", filterMode, filterIds],
+    queryKey: ["/api/tasks", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", taskUrl).then(r => r.json()),
   });
 

@@ -58,8 +58,19 @@ export default function FinancePage() {
   }, []);
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: obligations } = useQuery<any[]>({ queryKey: ["/api/obligations", filterMode, ...filterIds] });
-  const { data: enhanced } = useQuery<any>({ queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds] });
+  // CRITICAL: each filtered query MUST set its own queryFn that appends
+  // ?profileIds=... to the URL. Without an explicit queryFn the default fetcher
+  // hits the bare endpoint and returns unfiltered data — the cache key changes
+  // when filter flips but the response never does, so the page silently shows
+  // everyone's data even when a profile is selected.
+  const { data: obligations } = useQuery<any[]>({
+    queryKey: ["/api/obligations", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
+  });
+  const { data: enhanced } = useQuery<any>({
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()),
+  });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
