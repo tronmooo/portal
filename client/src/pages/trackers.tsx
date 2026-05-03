@@ -1517,7 +1517,7 @@ function HeroBackdrop({ accentHsl, Icon, imageUrl, badge }: { accentHsl: string;
   if (imageUrl) {
     return (
       <div
-        className="relative w-full h-[68px] overflow-hidden"
+        className="relative w-full h-[72px] shrink-0 overflow-hidden"
         style={{ backgroundImage: `url(${imageUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
       >
         <div className="absolute inset-0" style={{ background: `linear-gradient(180deg, transparent 0%, hsl(var(--card) / 0.6) 100%)` }} />
@@ -1527,7 +1527,7 @@ function HeroBackdrop({ accentHsl, Icon, imageUrl, badge }: { accentHsl: string;
   }
   return (
     <div
-      className="relative w-full h-[68px] overflow-hidden"
+      className="relative w-full h-[72px] shrink-0 overflow-hidden"
       style={{
         background: `radial-gradient(120% 100% at 30% 30%, hsl(${accentHsl} / 0.32) 0%, hsl(${accentHsl} / 0.10) 45%, transparent 75%), linear-gradient(135deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 100%)`,
       }}
@@ -4432,7 +4432,7 @@ export default function TrackersPage() {
                   return (
                     <Link key={child.id} href={`/profiles/${child.id}`}>
                       <div
-                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-full"
+                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-[180px] min-h-[180px] max-h-[180px]"
                         style={{
                           background: `linear-gradient(180deg, hsl(var(--card)) 0%, hsl(var(--card)) 100%)`,
                           border: `1px solid hsl(${accentHsl} / 0.22)`,
@@ -4450,15 +4450,15 @@ export default function TrackersPage() {
                             <Link2 className="h-2.5 w-2.5" /> {nestedCount}
                           </span>
                         )}
-                        <div className="px-2.5 pt-1.5 pb-1 flex flex-col gap-1 flex-1">
-                          <p className="text-[11px] font-bold text-foreground truncate leading-tight line-clamp-1">{child.name}</p>
-                          <div className="flex items-baseline justify-between gap-1">
+                        <div className="px-2.5 pt-1.5 pb-1 flex flex-col gap-1 flex-1 min-h-0">
+                          <p className="text-[11px] font-bold text-foreground truncate leading-tight line-clamp-1 h-[14px]">{child.name}</p>
+                          <div className="flex items-baseline justify-between gap-1 h-[20px]">
                             {currentVal != null && currentVal > 0 ? (
                               <span className="text-[17px] font-black tabular-nums text-foreground leading-none" style={{ letterSpacing: '-0.02em' }}>${currentVal.toLocaleString()}</span>
                             ) : purchaseVal != null && purchaseVal > 0 ? (
-                              <span className="text-[15px] font-black tabular-nums text-foreground leading-none" style={{ letterSpacing: '-0.02em' }}>${purchaseVal.toLocaleString()}</span>
+                              <span className="text-[17px] font-black tabular-nums text-foreground/90 leading-none" style={{ letterSpacing: '-0.02em' }}>${purchaseVal.toLocaleString()}</span>
                             ) : (
-                              <span className="text-[10px] text-muted-foreground/50 italic">No value</span>
+                              <span className="text-[17px] font-black tabular-nums text-muted-foreground/50 leading-none" style={{ letterSpacing: '-0.02em' }}>—</span>
                             )}
                             {trendPct != null && currentVal != null && currentVal > 0 && <TrendArrow delta={trendPct} />}
                           </div>
@@ -4467,11 +4467,11 @@ export default function TrackersPage() {
                               const kpi = secondaryKpis[i];
                               return kpi
                                 ? <MetricPill key={i} label={kpi.label} value={kpi.value} />
-                                : <div key={i} className="h-[26px]" />;
+                                : <div key={i} className="h-[26px] rounded-md" style={{ background: 'hsl(var(--foreground) / 0.025)' }} />;
                             })}
                           </div>
                         </div>
-                        <div className="px-2.5 pb-1.5 pt-0.5 flex items-center justify-between gap-1">
+                        <div className="px-2.5 pb-1.5 pt-0.5 flex items-center justify-between gap-1 h-[22px] shrink-0">
                           <span
                             className="text-[7px] font-bold uppercase tracking-wider capitalize px-1.5 py-0.5 rounded-md"
                             style={{
@@ -4480,7 +4480,7 @@ export default function TrackersPage() {
                               border: `1px solid hsl(${accentHsl} / 0.18)`,
                             }}
                           >{child.type}</span>
-                          {updatedLabel && <span className="text-[7px] text-muted-foreground">{updatedLabel}</span>}
+                          <span className="text-[7px] text-muted-foreground tabular-nums">{updatedLabel || ''}</span>
                         </div>
                       </div>
                     </Link>
@@ -4592,7 +4592,7 @@ export default function TrackersPage() {
                   return (
                     <Link key={sub.id} href={`/profiles/${sub.id}`}>
                       <div
-                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-full"
+                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-[180px] min-h-[180px] max-h-[180px]"
                         style={{
                           background: `linear-gradient(165deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 50%)`,
                           border: `1px solid hsl(${accentHsl} / 0.22)`,
@@ -4634,7 +4634,15 @@ export default function TrackersPage() {
                                 <p className="text-[8px] text-muted-foreground tabular-nums leading-tight mt-0.5">${Math.round(displayAnnual).toLocaleString()}/yr {isYearly ? '· billed yearly' : ''}</p>
                               )}
                             </div>
-                          ) : <span className="text-[10px] text-muted-foreground/50 italic">No cost set</span>}
+                          ) : (
+                            <div>
+                              <div className="flex items-baseline gap-0.5">
+                                <span className="text-[20px] font-black tabular-nums text-muted-foreground/50 leading-none" style={{ letterSpacing: '-0.02em' }}>—</span>
+                                <span className="text-[9px] text-muted-foreground/50 font-semibold">/mo</span>
+                              </div>
+                              <p className="text-[8px] text-muted-foreground/50 tabular-nums leading-tight mt-0.5">No cost set</p>
+                            </div>
+                          )}
                           {/* Category + frequency chips */}
                           <div className="flex items-center gap-1 flex-wrap">
                             {category && (
@@ -4653,8 +4661,8 @@ export default function TrackersPage() {
                             >{isYearly ? 'Yearly' : String(freq).toLowerCase().includes('week') ? 'Weekly' : 'Monthly'}</span>
                           </div>
                         </div>
-                        {/* Footer: billing countdown + cycle progress bar */}
-                        <div className="px-2.5 pb-1.5 pt-0.5 flex flex-col gap-1">
+                        {/* Footer: billing countdown + cycle progress bar (fixed height) */}
+                        <div className="px-2.5 pb-1.5 pt-0.5 flex flex-col gap-1 h-[28px] shrink-0 justify-end">
                           {daysUntil != null ? (
                             <div className="flex items-center justify-between gap-1">
                               <span className="text-[8px] font-semibold tabular-nums" style={{ color: countdownTone }}>
@@ -4665,14 +4673,14 @@ export default function TrackersPage() {
                           ) : (
                             <span className="text-[8px] text-muted-foreground/70 tabular-nums">{isActive ? 'Active subscription' : 'No upcoming charge'}</span>
                           )}
-                          {daysUntil != null && (
-                            <div className="h-[3px] rounded-full overflow-hidden" style={{ background: 'hsl(var(--foreground) / 0.07)' }}>
+                          <div className="h-[3px] rounded-full overflow-hidden" style={{ background: 'hsl(var(--foreground) / 0.07)' }}>
+                            {daysUntil != null && (
                               <div className="h-full rounded-full transition-all" style={{
                                 width: `${Math.min(100, Math.max(2, cycleProgress * 100))}%`,
                                 background: daysUntil < 3 ? 'linear-gradient(90deg, #ef4444, #f97316)' : daysUntil < 7 ? 'linear-gradient(90deg, #f97316, #eab308)' : `linear-gradient(90deg, hsl(${accentHsl}), hsl(${accentHsl} / 0.6))`,
                               }} />
-                            </div>
-                          )}
+                            )}
+                          </div>
                         </div>
                       </div>
                     </Link>
@@ -4857,7 +4865,7 @@ export default function TrackersPage() {
                         return (
                           <div
                             key={doc.id}
-                            className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col group h-full"
+                            className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col group h-[180px] min-h-[180px] max-h-[180px]"
                             style={{
                               background: `linear-gradient(165deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 50%)`,
                               border: `1px solid hsl(${accentHsl} / 0.22)`,
