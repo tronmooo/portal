@@ -136,10 +136,25 @@ export const queryClient = new QueryClient({
     mutations: {
       retry: false,
       onSuccess: () => {
-        // Global: after ANY successful mutation, invalidate dashboard data
-        // This ensures deleted documents, updated profiles, etc. are reflected everywhere
+        // Global: after ANY successful mutation, invalidate every collection the
+        // dashboard reads from so the KPI tiles, popups, charts and every linked
+        // tab card update in real time. Without invalidating /api/profiles,
+        // /api/expenses, /api/obligations, and /api/incomes, the FinanceWidget
+        // tile and Net Worth popup can keep stale numbers even after a CRUD
+        // mutation succeeds.
         queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
         queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       },
       onError: (error: Error) => {
         console.error("Mutation failed:", error.message);

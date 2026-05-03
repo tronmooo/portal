@@ -1467,101 +1467,6 @@ function KpiLine({ label, value, accent }: { label: string; value: string | numb
   );
 }
 
-// ── New richer card primitives ────────────────────────────────────────────────
-
-// Tiny status dot (for adherence / streak / freshness signals)
-function StatusDot({ tone, title }: { tone: 'green' | 'yellow' | 'red' | 'muted'; title?: string }) {
-  const color = tone === 'green' ? '#22c55e' : tone === 'yellow' ? '#eab308' : tone === 'red' ? '#ef4444' : 'hsl(var(--muted-foreground) / 0.45)';
-  return (
-    <span
-      className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-      title={title}
-      style={{ backgroundColor: color, boxShadow: tone !== 'muted' ? `0 0 6px ${color}` : undefined }}
-    />
-  );
-}
-
-// Trend arrow with percent — green for positive, red for negative, muted for neutral
-function TrendArrow({ delta, invert = false }: { delta: number | null; invert?: boolean }) {
-  if (delta == null || !isFinite(delta)) return null;
-  const positive = invert ? delta < 0 : delta > 0;
-  const negative = invert ? delta > 0 : delta < 0;
-  const color = Math.abs(delta) < 0.5 ? 'hsl(var(--muted-foreground))' : positive ? '#22c55e' : negative ? '#ef4444' : 'hsl(var(--muted-foreground))';
-  const Icon = Math.abs(delta) < 0.5 ? MinusIcon : delta > 0 ? ArrowUpRight : ArrowDownRight;
-  return (
-    <span className="inline-flex items-center gap-0.5 text-[8px] font-bold tabular-nums shrink-0" style={{ color }}>
-      <Icon className="h-2.5 w-2.5" strokeWidth={2.5} />
-      {Math.abs(delta).toFixed(Math.abs(delta) >= 10 ? 0 : 1)}%
-    </span>
-  );
-}
-
-// Tiny labeled stat pill, used in 2/3/4-up rows at the bottom of cards
-function MetricPill({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
-  return (
-    <div
-      className="flex flex-col gap-0 px-1.5 py-1 rounded-md min-w-0"
-      style={{
-        background: 'hsl(var(--foreground) / 0.04)',
-        border: '1px solid hsl(var(--foreground) / 0.05)',
-      }}
-    >
-      <span className="text-[7px] uppercase tracking-wider text-muted-foreground/80 truncate leading-none">{label}</span>
-      <span className="text-[10px] font-bold tabular-nums text-foreground leading-tight truncate" style={accent ? { color: accent } : undefined}>{value}</span>
-    </div>
-  );
-}
-
-// Hero backdrop for asset/document cards: radial gradient + huge faded icon
-function HeroBackdrop({ accentHsl, Icon, imageUrl, badge }: { accentHsl: string; Icon: any; imageUrl?: string | null; badge?: React.ReactNode }) {
-  if (imageUrl) {
-    return (
-      <div
-        className="relative w-full h-[72px] shrink-0 overflow-hidden"
-        style={{ backgroundImage: `url(${imageUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-      >
-        <div className="absolute inset-0" style={{ background: `linear-gradient(180deg, transparent 0%, hsl(var(--card) / 0.6) 100%)` }} />
-        {badge && <div className="absolute top-1.5 right-1.5">{badge}</div>}
-      </div>
-    );
-  }
-  return (
-    <div
-      className="relative w-full h-[72px] shrink-0 overflow-hidden"
-      style={{
-        background: `radial-gradient(120% 100% at 30% 30%, hsl(${accentHsl} / 0.32) 0%, hsl(${accentHsl} / 0.10) 45%, transparent 75%), linear-gradient(135deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 100%)`,
-      }}
-    >
-      <div className="absolute -right-2 -bottom-3 opacity-25" style={{ color: `hsl(${accentHsl})` }}>
-        <Icon className="w-16 h-16" strokeWidth={1.4} />
-      </div>
-      <div className="absolute left-2 top-2 w-7 h-7 rounded-lg flex items-center justify-center" style={{
-        background: `linear-gradient(135deg, hsl(${accentHsl} / 0.45), hsl(${accentHsl} / 0.18))`,
-        boxShadow: `0 2px 8px hsl(${accentHsl} / 0.25), inset 0 1px 0 hsl(0 0% 100% / 0.15)`,
-      }}>
-        <Icon className="w-3.5 h-3.5" style={{ color: `hsl(${accentHsl})` }} strokeWidth={2.2} />
-      </div>
-      {badge && <div className="absolute top-1.5 right-1.5">{badge}</div>}
-    </div>
-  );
-}
-
-// Frosted glass chip for hero overlays
-function FrostedChip({ children, accentHsl }: { children: React.ReactNode; accentHsl?: string }) {
-  return (
-    <span
-      className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md backdrop-blur-md"
-      style={{
-        background: 'hsl(0 0% 0% / 0.35)',
-        border: '1px solid hsl(0 0% 100% / 0.12)',
-        color: accentHsl ? `hsl(${accentHsl})` : 'hsl(var(--foreground))',
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
 function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void }) {
   const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
   const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
@@ -1808,70 +1713,40 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
     );
   }
 
-  // Freshness signal for the status dot — green if recent, yellow if a bit stale, red if old/none
-  const lastMs = lastEntry ? Date.now() - new Date(lastEntry.timestamp).getTime() : Infinity;
-  const tone: 'green' | 'yellow' | 'red' | 'muted' = !lastEntry ? 'muted'
-    : lastMs < 36 * 3600000 ? 'green'
-    : lastMs < 7 * 86400000 ? 'yellow'
-    : 'red';
-
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col group"
+      className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col"
       style={{
-        background: `linear-gradient(165deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 50%, hsl(var(--card)) 100%)`,
-        border: `1px solid hsl(${catAccent} / 0.20)`,
-        boxShadow: `0 1px 0 hsl(0 0% 100% / 0.04) inset, 0 8px 24px -8px hsl(${catAccent} / 0.30), 0 1px 2px hsl(0 0% 0% / 0.4)`,
+        background: `linear-gradient(160deg, hsl(${catAccent} / 0.14) 0%, hsl(var(--card)) 45%)`,
+        border: `1px solid hsl(${catAccent} / 0.2)`,
+        boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
       }}
       onClick={() => onOpenDetail?.(tracker.id)}
     >
-      {/* Top-edge accent bar */}
-      <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: `linear-gradient(90deg, hsl(${catAccent} / 0.6) 0%, hsl(${catAccent} / 0.15) 60%, transparent 100%)` }} />
-
-      {/* Header strip: icon tile + title + status dot + relative time */}
-      <div className="px-2.5 pt-2 pb-1.5 flex items-center gap-1.5">
-        <div
-          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-          style={{
-            background: `linear-gradient(135deg, hsl(${catAccent} / 0.42), hsl(${catAccent} / 0.16))`,
-            boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.12), 0 1px 4px hsl(${catAccent} / 0.2)`,
-            color: ac,
-          }}
-        >
+      {/* Header: icon + title + profile */}
+      <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
           {specIcon}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1">
-            <p className="text-[10px] font-bold text-foreground truncate leading-tight">{tracker.name}</p>
-            <StatusDot tone={tone} title={timeAgo ? `Updated ${timeAgo} ago` : 'No entries'} />
-          </div>
-          <p className="text-[8px] text-muted-foreground/80 truncate leading-tight">
-            {profileLabel || (tracker.category || 'custom')}{timeAgo ? ` · ${timeAgo}` : ''}
+          <p className="text-[10px] font-bold text-foreground truncate leading-tight">
+            {profileLabel ? `${profileLabel}: ` : ''}{tracker.name}
           </p>
         </div>
       </div>
 
       {/* Rich body */}
-      <div className="px-2.5 pb-1.5 flex-1 flex flex-col gap-0.5 min-h-0">
+      <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5 min-h-0">
         {renderBody()}
       </div>
 
-      {/* Footer: category chip + entries count */}
-      <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between gap-1">
-        <span
-          className="text-[7px] font-bold uppercase tracking-wider capitalize px-1.5 py-0.5 rounded-md"
-          style={{
-            background: `linear-gradient(135deg, hsl(${catAccent} / 0.18), hsl(${catAccent} / 0.08))`,
-            color: ac,
-            border: `1px solid hsl(${catAccent} / 0.18)`,
-          }}
-        >
+      {/* Footer */}
+      <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+        <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${catAccent} / 0.12)`, color: ac }}>
           {tracker.category || 'custom'}
         </span>
-        <span className="text-[7px] text-muted-foreground tabular-nums">
-          {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
-        </span>
+        <span className="text-[7px] text-muted-foreground tabular-nums">{timeAgo || `${entries.length} entries`}</span>
       </div>
     </div>
   );
@@ -4332,7 +4207,7 @@ export default function TrackersPage() {
               {collapsedSections.has("profiles") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("profiles") && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 auto-rows-fr">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
                   const fields = child.fields || {};
@@ -4389,98 +4264,25 @@ export default function TrackersPage() {
                   const insurance = safeStr(fields.insuranceProvider) || safeStr(fields.insurance) || safeStr(insuranceFields.insurance) || safeStr(insuranceFields.insurer) || safeStr(insuranceFields.provider) || '';
                   const accentHsl = child.type === 'vehicle' ? '262 60% 62%' : child.type === 'investment' ? '142 60% 45%' : child.type === 'property' ? '220 60% 55%' : '262 60% 62%';
                   const ac = `hsl(${accentHsl})`;
-                  // Compute trend: current vs purchase — green if appreciating, red if not
-                  const trendPct = (currentVal != null && purchaseVal != null && purchaseVal > 0)
-                    ? ((currentVal - purchaseVal) / purchaseVal) * 100
-                    : null;
-                  // Nested-children count (for the link badge)
-                  const nestedCount = (profiles || []).filter(x => x.id !== child.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === child.id).length;
-                  // Image URL hint (some legacy assets carry one)
-                  const imageUrl = (fields.imageUrl || fields.image || other.imageUrl || other.image) as string | null | undefined;
-                  // Updated/edited time (best-effort)
-                  const updatedAt = (child as any).updatedAt || (child as any).createdAt;
-                  const updatedLabel = updatedAt ? (() => {
-                    const d = Math.floor((Date.now() - new Date(updatedAt).getTime()) / 86400000);
-                    if (d < 1) return 'today';
-                    if (d < 30) return `${d}d ago`;
-                    if (d < 365) return `${Math.floor(d / 30)}mo ago`;
-                    return `${Math.floor(d / 365)}y ago`;
-                  })() : '';
-                  // Two secondary KPIs to surface depending on type
-                  const secondaryKpis: { label: string; value: string }[] = [];
-                  if (child.type === 'vehicle') {
-                    if (year) secondaryKpis.push({ label: 'Year', value: String(year) });
-                    if (mileage) secondaryKpis.push({ label: 'Miles', value: `${Number(mileage).toLocaleString()}` });
-                    else if (make || model) secondaryKpis.push({ label: 'Model', value: [make, model].filter(Boolean).join(' ').slice(0, 14) });
-                    if (secondaryKpis.length < 2 && insurance) secondaryKpis.push({ label: 'Insured', value: insurance.slice(0, 14) });
-                  } else if (child.type === 'property') {
-                    if (year) secondaryKpis.push({ label: 'Built', value: String(year) });
-                    const addr = safeStr(fields.address) || safeStr(housing.address) || '';
-                    if (addr) secondaryKpis.push({ label: 'Location', value: addr.slice(0, 14) });
-                  } else if (child.type === 'investment') {
-                    if (purchaseVal != null && purchaseVal > 0) secondaryKpis.push({ label: 'Cost', value: `$${purchaseVal.toLocaleString()}` });
-                    const acct = safeStr(fields.account) || safeStr(finance.account) || safeStr(finance.broker) || '';
-                    if (acct) secondaryKpis.push({ label: 'Account', value: acct.slice(0, 14) });
-                    if (year) secondaryKpis.push({ label: 'Since', value: String(year) });
-                  } else {
-                    if (year) secondaryKpis.push({ label: 'Year', value: String(year) });
-                    if (purchaseVal != null && purchaseVal > 0) secondaryKpis.push({ label: 'Cost', value: `$${purchaseVal.toLocaleString()}` });
-                  }
-                  const heroBadge = (
-                    <FrostedChip accentHsl={accentHsl}>{child.type}</FrostedChip>
-                  );
                   return (
                     <Link key={child.id} href={`/profiles/${child.id}`}>
-                      <div
-                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-[180px] min-h-[180px] max-h-[180px]"
-                        style={{
-                          background: `linear-gradient(180deg, hsl(var(--card)) 0%, hsl(var(--card)) 100%)`,
-                          border: `1px solid hsl(${accentHsl} / 0.22)`,
-                          boxShadow: `0 1px 0 hsl(0 0% 100% / 0.04) inset, 0 10px 28px -10px hsl(${accentHsl} / 0.35), 0 1px 2px hsl(0 0% 0% / 0.4)`,
-                        }}
-                        data-testid={`button-view-child-${child.id}`}
-                      >
-                        <HeroBackdrop accentHsl={accentHsl} Icon={Icon} imageUrl={imageUrl as any} badge={heroBadge} />
-                        {nestedCount > 0 && (
-                          <span
-                            className="absolute top-1.5 left-1.5 text-[8px] font-bold px-1.5 py-0.5 rounded-md backdrop-blur-md inline-flex items-center gap-0.5"
-                            style={{ background: 'hsl(0 0% 0% / 0.4)', color: ac, border: `1px solid hsl(${accentHsl} / 0.4)` }}
-                            title={`${nestedCount} linked item${nestedCount > 1 ? 's' : ''}`}
-                          >
-                            <Link2 className="h-2.5 w-2.5" /> {nestedCount}
-                          </span>
-                        )}
-                        <div className="px-2.5 pt-1.5 pb-1 flex flex-col gap-1 flex-1 min-h-0">
-                          <p className="text-[11px] font-bold text-foreground truncate leading-tight line-clamp-1 h-[14px]">{child.name}</p>
-                          <div className="flex items-baseline justify-between gap-1 h-[20px]">
-                            {currentVal != null && currentVal > 0 ? (
-                              <span className="text-[17px] font-black tabular-nums text-foreground leading-none" style={{ letterSpacing: '-0.02em' }}>${currentVal.toLocaleString()}</span>
-                            ) : purchaseVal != null && purchaseVal > 0 ? (
-                              <span className="text-[17px] font-black tabular-nums text-foreground/90 leading-none" style={{ letterSpacing: '-0.02em' }}>${purchaseVal.toLocaleString()}</span>
-                            ) : (
-                              <span className="text-[17px] font-black tabular-nums text-muted-foreground/50 leading-none" style={{ letterSpacing: '-0.02em' }}>—</span>
-                            )}
-                            {trendPct != null && currentVal != null && currentVal > 0 && <TrendArrow delta={trendPct} />}
-                          </div>
-                          <div className="grid grid-cols-2 gap-1 mt-0.5">
-                            {[0, 1].map(i => {
-                              const kpi = secondaryKpis[i];
-                              return kpi
-                                ? <MetricPill key={i} label={kpi.label} value={kpi.value} />
-                                : <div key={i} className="h-[26px] rounded-md" style={{ background: 'hsl(var(--foreground) / 0.025)' }} />;
-                            })}
-                          </div>
+                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`button-view-child-${child.id}`}>
+                        <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><Icon className="h-3.5 w-3.5" /></div>
+                          <p className="text-[10px] font-bold text-foreground truncate">{child.name}</p>
                         </div>
-                        <div className="px-2.5 pb-1.5 pt-0.5 flex items-center justify-between gap-1 h-[22px] shrink-0">
-                          <span
-                            className="text-[7px] font-bold uppercase tracking-wider capitalize px-1.5 py-0.5 rounded-md"
-                            style={{
-                              background: `linear-gradient(135deg, hsl(${accentHsl} / 0.18), hsl(${accentHsl} / 0.08))`,
-                              color: ac,
-                              border: `1px solid hsl(${accentHsl} / 0.18)`,
-                            }}
-                          >{child.type}</span>
-                          <span className="text-[7px] text-muted-foreground tabular-nums">{updatedLabel || ''}</span>
+                        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
+                          {currentVal != null && currentVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-xl font-black tabular-nums text-foreground">${currentVal.toLocaleString()}</span></div>
+                          : purchaseVal != null && purchaseVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-lg font-black tabular-nums text-foreground">${purchaseVal.toLocaleString()}</span><span className="text-[8px] text-muted-foreground">purchase</span></div>
+                          : <span className="text-[10px] text-muted-foreground/50 italic">No value set</span>}
+                          {(make || model) && <KpiLine label="Make/Model" value={[make, model].filter(Boolean).join(' ')} />}
+                          {year && <KpiLine label="Year" value={year} />}
+                          {mileage && <KpiLine label="Mileage" value={`${Number(mileage).toLocaleString()} mi`} />}
+                          {insurance && <KpiLine label="Insurance" value={insurance.slice(0, 16)} />}
+                        </div>
+                        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                          <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{child.type}</span>
+                          {year && <span className="text-[7px] text-muted-foreground">{year}</span>}
                         </div>
                       </div>
                     </Link>
@@ -4534,7 +4336,7 @@ export default function TrackersPage() {
               {collapsedSections.has("subscriptions") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("subscriptions") && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 auto-rows-fr">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                 {subs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(sub => {
                   const fields = sub.fields || {};
                   // Nested subscription data is stored under fields.subscriptions for older entries
@@ -4556,131 +4358,33 @@ export default function TrackersPage() {
                   const provider = fields.provider || subFields.provider || fields.company || subFields.company || '';
                   const monthlyCost = cost != null && cost > 0 ? (String(freq).toLowerCase().includes('year') ? cost / 12 : cost) : 0;
                   const annualCost = monthlyCost * 12;
-                  // Category-coded accent (Streaming red, Software blue, Utilities yellow, etc.)
-                  const catLower = String(category || '').toLowerCase();
-                  const catAccentMap: Record<string, string> = {
-                    streaming: '0 72% 55%', entertainment: '0 72% 55%', music: '340 70% 55%',
-                    software: '213 72% 55%', saas: '213 72% 55%', cloud: '213 72% 55%', tools: '213 72% 55%',
-                    utilities: '43 85% 52%', utility: '43 85% 52%', power: '43 85% 52%', water: '188 65% 48%',
-                    internet: '262 60% 62%', phone: '262 60% 62%', mobile: '262 60% 62%',
-                    fitness: '25 85% 55%', gym: '25 85% 55%', health: '173 60% 44%', insurance: '213 72% 51%',
-                    food: '94 60% 42%', meal: '94 60% 42%',
-                    finance: '142 60% 45%', investment: '142 60% 45%',
-                    news: '215 70% 58%', education: '188 65% 48%', gaming: '270 60% 55%',
-                  };
-                  const accentHsl = catAccentMap[catLower] || '43 85% 52%';
+                  const accentHsl = '43 85% 52%';
                   const ac = `hsl(${accentHsl})`;
-                  // Display values
-                  const isYearly = String(freq).toLowerCase().includes('year');
-                  const displayMonthly = monthlyCost;
-                  const displayAnnual = annualCost;
-                  // Billing-cycle progress: try to find a next-billing or last-billing date in fields
-                  const nextBillingRaw = (fields.nextBillingDate || subFields.nextBillingDate || fields.nextPayment || subFields.nextPayment || fields.renewalDate || subFields.renewalDate) as string | undefined;
-                  const nextBilling = nextBillingRaw ? new Date(nextBillingRaw) : null;
-                  const cycleDays = isYearly ? 365 : String(freq).toLowerCase().includes('week') ? 7 : 30;
-                  let daysUntil: number | null = null;
-                  let cycleProgress = 0;
-                  if (nextBilling && !isNaN(nextBilling.getTime())) {
-                    const ms = nextBilling.getTime() - Date.now();
-                    daysUntil = Math.ceil(ms / 86400000);
-                    cycleProgress = Math.max(0, Math.min(1, 1 - daysUntil / cycleDays));
-                  }
-                  const countdownTone = daysUntil == null ? 'muted' : daysUntil < 3 ? '#ef4444' : daysUntil < 7 ? '#f97316' : 'hsl(var(--muted-foreground))';
-                  const isActive = String(status).toLowerCase() === 'active' || (cost != null && cost > 0);
-                  const providerName = String(provider || sub.name || '?');
-                  const initial = providerName.trim().charAt(0).toUpperCase() || '?';
                   return (
                     <Link key={sub.id} href={`/profiles/${sub.id}`}>
-                      <div
-                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-[180px] min-h-[180px] max-h-[180px]"
-                        style={{
-                          background: `linear-gradient(165deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 50%)`,
-                          border: `1px solid hsl(${accentHsl} / 0.22)`,
-                          boxShadow: `0 1px 0 hsl(0 0% 100% / 0.04) inset, 0 10px 28px -10px hsl(${accentHsl} / 0.30), 0 1px 2px hsl(0 0% 0% / 0.4)`,
-                        }}
-                        data-testid={`sub-card-${sub.id}`}
-                      >
-                        {/* Top accent bar */}
-                        <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: `linear-gradient(90deg, hsl(${accentHsl} / 0.7) 0%, hsl(${accentHsl} / 0.15) 60%, transparent 100%)` }} />
-                        {/* Header: provider monogram + name + autopay/active dot */}
+                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`sub-card-${sub.id}`}>
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-                          <div
-                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-[11px] font-black"
-                            style={{
-                              background: `linear-gradient(135deg, hsl(${accentHsl} / 0.55), hsl(${accentHsl} / 0.22))`,
-                              boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.15), 0 1px 4px hsl(${accentHsl} / 0.25)`,
-                              color: ac,
-                            }}
-                          >{initial}</div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1">
-                              <p className="text-[10px] font-bold text-foreground truncate leading-tight line-clamp-1">{sub.name}</p>
-                              <StatusDot tone={isActive ? 'green' : 'muted'} title={isActive ? 'Active' : 'Inactive'} />
-                            </div>
-                            {provider && String(provider) !== sub.name && (
-                              <p className="text-[8px] text-muted-foreground/80 truncate leading-tight">{String(provider).slice(0, 22)}</p>
-                            )}
-                          </div>
+                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><CreditCard className="h-3.5 w-3.5" /></div>
+                          <p className="text-[10px] font-bold text-foreground truncate">{sub.name}</p>
                         </div>
-                        {/* Body */}
-                        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-1">
+                        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
                           {cost != null && cost > 0 ? (
-                            <div>
+                            <div className="flex items-center justify-between">
                               <div className="flex items-baseline gap-0.5">
-                                <span className="text-[20px] font-black tabular-nums text-foreground leading-none" style={{ letterSpacing: '-0.02em' }}>${displayMonthly.toFixed(displayMonthly >= 100 ? 0 : 2).replace(/\.00$/, '')}</span>
-                                <span className="text-[9px] text-muted-foreground font-semibold">/mo</span>
+                                <span className="text-xl font-black tabular-nums text-foreground">${cost.toLocaleString()}</span>
+                                <span className="text-[9px] text-muted-foreground">{freqShort}</span>
                               </div>
-                              {displayAnnual > 0 && (
-                                <p className="text-[8px] text-muted-foreground tabular-nums leading-tight mt-0.5">${Math.round(displayAnnual).toLocaleString()}/yr {isYearly ? '· billed yearly' : ''}</p>
-                              )}
+                              {annualCost > 0 && <Donut pct={Math.min(1, monthlyCost / 100)} color={ac} size={32} label={`$${Math.round(monthlyCost)}`} />}
                             </div>
-                          ) : (
-                            <div>
-                              <div className="flex items-baseline gap-0.5">
-                                <span className="text-[20px] font-black tabular-nums text-muted-foreground/50 leading-none" style={{ letterSpacing: '-0.02em' }}>—</span>
-                                <span className="text-[9px] text-muted-foreground/50 font-semibold">/mo</span>
-                              </div>
-                              <p className="text-[8px] text-muted-foreground/50 tabular-nums leading-tight mt-0.5">No cost set</p>
-                            </div>
-                          )}
-                          {/* Category + frequency chips */}
-                          <div className="flex items-center gap-1 flex-wrap">
-                            {category && (
-                              <span
-                                className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md"
-                                style={{
-                                  background: `linear-gradient(135deg, hsl(${accentHsl} / 0.22), hsl(${accentHsl} / 0.10))`,
-                                  color: ac,
-                                  border: `1px solid hsl(${accentHsl} / 0.22)`,
-                                }}
-                              >{String(category).slice(0, 12)}</span>
-                            )}
-                            <span
-                              className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md"
-                              style={{ background: 'hsl(var(--foreground) / 0.06)', color: 'hsl(var(--muted-foreground))', border: '1px solid hsl(var(--foreground) / 0.06)' }}
-                            >{isYearly ? 'Yearly' : String(freq).toLowerCase().includes('week') ? 'Weekly' : 'Monthly'}</span>
-                          </div>
+                          ) : <span className="text-[10px] text-muted-foreground/50 italic">No cost set</span>}
+                          {annualCost > 0 && <KpiLine label="Annual" value={`$${Math.round(annualCost).toLocaleString()}/yr`} />}
+                          {provider && <KpiLine label="Provider" value={String(provider).slice(0, 18)} />}
+                          {category && <KpiLine label="Category" value={String(category).slice(0, 16)} />}
+                          {status && <KpiLine label="Status" value={status} accent={String(status).toLowerCase() === 'active' ? '#22c55e' : undefined} />}
                         </div>
-                        {/* Footer: billing countdown + cycle progress bar (fixed height) */}
-                        <div className="px-2.5 pb-1.5 pt-0.5 flex flex-col gap-1 h-[28px] shrink-0 justify-end">
-                          {daysUntil != null ? (
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-[8px] font-semibold tabular-nums" style={{ color: countdownTone }}>
-                                Next: {nextBilling!.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · {daysUntil <= 0 ? 'due' : `${daysUntil}d`}
-                              </span>
-                              <span className="text-[7px] text-muted-foreground/80 tabular-nums">{Math.round(cycleProgress * 100)}%</span>
-                            </div>
-                          ) : (
-                            <span className="text-[8px] text-muted-foreground/70 tabular-nums">{isActive ? 'Active subscription' : 'No upcoming charge'}</span>
-                          )}
-                          <div className="h-[3px] rounded-full overflow-hidden" style={{ background: 'hsl(var(--foreground) / 0.07)' }}>
-                            {daysUntil != null && (
-                              <div className="h-full rounded-full transition-all" style={{
-                                width: `${Math.min(100, Math.max(2, cycleProgress * 100))}%`,
-                                background: daysUntil < 3 ? 'linear-gradient(90deg, #ef4444, #f97316)' : daysUntil < 7 ? 'linear-gradient(90deg, #f97316, #eab308)' : `linear-gradient(90deg, hsl(${accentHsl}), hsl(${accentHsl} / 0.6))`,
-                              }} />
-                            )}
-                          </div>
+                        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                          <span className="text-[7px] font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>Subscription</span>
+                          <span className="text-[7px] text-muted-foreground tabular-nums">{String(freq).slice(0, 8)}</span>
                         </div>
                       </div>
                     </Link>
@@ -4836,7 +4540,7 @@ export default function TrackersPage() {
                         <span>{DOC_TYPE_EMOJI[docType] || '📄'}</span> {docType.replace(/_/g, ' ')} <span className="text-muted-foreground font-normal">({docs.length})</span>
                       </h4>
                     )}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 auto-rows-fr">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                       {docs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
                         const accentHsl = DOC_TYPE_HSL[doc.type] || '25 80% 54%';
                         const ac = `hsl(${accentHsl})`;
@@ -4844,94 +4548,24 @@ export default function TrackersPage() {
                         const createdDate = new Date(doc.createdAt);
                         const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
                         const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
-                        // Try to resolve an expiry date from common doc field paths
-                        const dataAny = (doc as any).data || {};
-                        const expiryRaw = dataAny.expiryDate || dataAny.expirationDate || dataAny.expiresAt || dataAny.expires || dataAny.validUntil || (doc as any).expiryDate;
-                        const expiry = expiryRaw ? new Date(expiryRaw) : null;
-                        const validExpiry = expiry && !isNaN(expiry.getTime()) ? expiry : null;
-                        let expiryLabel = '';
-                        let expiryColor = 'hsl(var(--muted-foreground))';
-                        if (validExpiry) {
-                          const monthsLeft = Math.floor((validExpiry.getTime() - Date.now()) / (30 * 86400000));
-                          if (monthsLeft < 0) { expiryLabel = `Expired ${validExpiry.toLocaleDateString(undefined, { month: 'short', year: '2-digit' })}`; expiryColor = '#ef4444'; }
-                          else if (monthsLeft < 1) { expiryLabel = `Expires soon`; expiryColor = '#ef4444'; }
-                          else if (monthsLeft < 6) { expiryLabel = `Expires ${validExpiry.toLocaleDateString(undefined, { month: 'short', year: '2-digit' })} · ${monthsLeft}mo`; expiryColor = '#eab308'; }
-                          else { expiryLabel = `Valid → ${validExpiry.toLocaleDateString(undefined, { month: 'short', year: '2-digit' })}`; expiryColor = '#22c55e'; }
-                        }
-                        const pageCount = dataAny.pageCount || dataAny.pages;
-                        const fileSize = (doc as any).fileSize || (doc as any).size;
-                        const fileSizeLabel = typeof fileSize === 'number' ? (fileSize > 1048576 ? `${(fileSize / 1048576).toFixed(1)}MB` : `${Math.round(fileSize / 1024)}KB`) : '';
-                        // Format-specific icon — PDF gets red tinted FileText, image gets gallery icon, etc.
                         return (
-                          <div
-                            key={doc.id}
-                            className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col group h-[180px] min-h-[180px] max-h-[180px]"
-                            style={{
-                              background: `linear-gradient(165deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 50%)`,
-                              border: `1px solid hsl(${accentHsl} / 0.22)`,
-                              boxShadow: `0 1px 0 hsl(0 0% 100% / 0.04) inset, 0 10px 28px -10px hsl(${accentHsl} / 0.30), 0 1px 2px hsl(0 0% 0% / 0.4)`,
-                            }}
-                            data-testid={`global-doc-${doc.id}`}
-                            onClick={() => setViewingDoc(doc)}
-                          >
-                            {/* Top accent bar */}
-                            <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: `linear-gradient(90deg, hsl(${accentHsl} / 0.7) 0%, hsl(${accentHsl} / 0.15) 60%, transparent 100%)` }} />
-                            {/* Header: colored icon tile + title + actions */}
-                            <div className="px-2.5 pt-2 pb-1 flex items-start gap-1.5">
-                              <div
-                                className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                                style={{
-                                  background: `linear-gradient(135deg, hsl(${accentHsl} / 0.45), hsl(${accentHsl} / 0.18))`,
-                                  boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.12), 0 1px 4px hsl(${accentHsl} / 0.22)`,
-                                  color: ac,
-                                }}
-                              ><FileText className="w-3.5 h-3.5" strokeWidth={2.2} /></div>
-                              <div className="min-w-0 flex-1">
-                                <p
-                                  className="text-[10px] font-bold text-foreground leading-tight"
-                                  style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-                                >{doc.name}</p>
-                              </div>
-                              {daysSince <= 7 && (
-                                <span className="text-[7px] px-1 py-0.5 rounded font-bold uppercase tracking-wider shrink-0" style={{ background: 'hsl(142 60% 45% / 0.18)', color: '#22c55e', border: '1px solid hsl(142 60% 45% / 0.3)' }}>New</span>
-                              )}
+                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)}>
+                            <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+                              <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
+                              <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>
                             </div>
-                            {/* Body: type chip + linked profile + format/size */}
-                            <div className="px-2.5 pb-1 flex-1 flex flex-col gap-1">
-                              <div className="flex items-center gap-1 flex-wrap">
-                                <span
-                                  className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md capitalize"
-                                  style={{
-                                    background: `linear-gradient(135deg, hsl(${accentHsl} / 0.22), hsl(${accentHsl} / 0.10))`,
-                                    color: ac,
-                                    border: `1px solid hsl(${accentHsl} / 0.22)`,
-                                  }}
-                                >{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
-                                <span
-                                  className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md"
-                                  style={{ background: 'hsl(var(--foreground) / 0.06)', color: 'hsl(var(--muted-foreground))', border: '1px solid hsl(var(--foreground) / 0.06)' }}
-                                >{mimeShort}</span>
-                              </div>
-                              {linkedNames.length > 0 && (
-                                <p className="text-[8px] text-muted-foreground truncate leading-tight">
-                                  <span className="text-muted-foreground/60">Linked:</span> <span className="font-semibold text-foreground/80">{linkedNames.join(', ')}</span>
-                                </p>
-                              )}
-                              {/* Expiry status — color-coded */}
-                              {expiryLabel ? (
-                                <p className="text-[8px] font-semibold tabular-nums leading-tight" style={{ color: expiryColor }}>{expiryLabel}</p>
-                              ) : (
-                                <p className="text-[8px] text-muted-foreground/70 tabular-nums leading-tight">Added {createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}</p>
-                              )}
+                            <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
+                              <span className="text-base font-black text-foreground capitalize">{doc.type?.replace(/_/g, ' ') || 'Document'}</span>
+                              <KpiLine label="Format" value={mimeShort} />
+                              <KpiLine label="Added" value={createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} />
+                              {linkedNames.length > 0 && <KpiLine label="Owner" value={linkedNames.join(', ')} />}
+                              {daysSince <= 7 && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
                             </div>
-                            {/* Footer: pages/size + actions */}
-                            <div className="px-2.5 pb-1.5 pt-0.5 flex items-center justify-between gap-1">
-                              <span className="text-[7px] text-muted-foreground tabular-nums">
-                                {pageCount ? `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}` : fileSizeLabel || `${daysSince}d ago`}
-                              </span>
+                            <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                              <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
                               <div className="flex gap-1">
-                                <button onClick={stopProp(() => handleShareDoc(doc))} className="text-muted-foreground/60 hover:text-foreground transition-colors"><Share2 className="h-3 w-3" /></button>
-                                <button onClick={stopProp(() => setDocDeleteConfirmId(doc.id))} className="text-muted-foreground/60 hover:text-destructive transition-colors"><X className="h-3 w-3" /></button>
+                                <button onClick={stopProp(() => handleShareDoc(doc))} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>
+                                <button onClick={stopProp(() => setDocDeleteConfirmId(doc.id))} className="text-muted-foreground/60 hover:text-destructive"><X className="h-3 w-3" /></button>
                               </div>
                             </div>
                           </div>

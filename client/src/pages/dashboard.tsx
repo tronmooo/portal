@@ -28,7 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Activity, ListTodo, DollarSign, Calendar, BarChart3, Flame,
   CreditCard, BookHeart, Sparkles, Smile, Meh, Frown,
-  TrendingUp, TrendingDown, AlertTriangle, AlertCircle, Heart,
+  TrendingUp, AlertTriangle, Heart,
   Check, Clock, MapPin,
   ChevronDown, ChevronUp,
   ExternalLink, Eye,
@@ -84,19 +84,21 @@ function daysUntilStr(days: number): string {
   return `in ${days}d`;
 }
 
-// Resolve asset value across legacy/new nested storage paths
-// (fields.currentValue, fields.housing.currentValue, fields.other.purchasePrice,
-//  fields.finance.balance, etc.). Mirrors the canonical resolver in trackers.tsx.
+// Walks both top-level and legacy nested storage paths so assets/liabilities
+// stored under fields.housing.* / fields.finance.* / fields.other.* are picked
+// up by the Net Worth tile and the Net Worth popup. Without this, profiles
+// with nested storage report $0 even though their values render in the
+// Trackers grid via the field-resolution logic in trackers.tsx.
 function resolveAssetValue(p: any): number {
-  const f = p?.fields || {};
-  const housing = f.housing || {};
-  const other = f.other || {};
-  const finance = f.finance || {};
-  const candidates = [
-    f.currentValue, housing.currentValue, other.currentValue, other.value,
-    finance.balance, f.value,
-    f.purchasePrice, other.purchasePrice, other.purchase_price,
-    f.cost, other.cost, f.amount, f.price, other.price,
+  if (!p || !p.fields) return 0;
+  const f = p.fields;
+  const candidates: any[] = [
+    f.purchasePrice, f.value, f.currentValue, f.marketValue, f.estimatedValue,
+    f.housing?.currentValue, f.housing?.purchasePrice, f.housing?.marketValue,
+    f.other?.purchasePrice, f.other?.value, f.other?.currentValue,
+    f.finance?.balance, f.finance?.currentValue, f.finance?.value,
+    f.vehicle?.purchasePrice, f.vehicle?.currentValue, f.vehicle?.value,
+    f.investment?.balance, f.investment?.value, f.investment?.currentValue,
   ];
   for (const c of candidates) {
     const n = parseMoney(c);
@@ -106,13 +108,13 @@ function resolveAssetValue(p: any): number {
 }
 
 function resolveLiabilityBalance(p: any): number {
-  const f = p?.fields || {};
-  const finance = f.finance || {};
-  const loan = f.loan || {};
-  const candidates = [
-    f.remainingBalance, finance.remainingBalance, loan.remainingBalance,
-    f.loanBalance, finance.loanBalance, loan.balance,
-    f.outstandingBalance, finance.outstandingBalance, finance.balance,
+  if (!p || !p.fields) return 0;
+  const f = p.fields;
+  const candidates: any[] = [
+    f.remainingBalance, f.loanBalance, f.outstandingBalance, f.balance,
+    f.finance?.remainingBalance, f.finance?.loanBalance, f.finance?.outstandingBalance, f.finance?.balance,
+    f.loan?.remainingBalance, f.loan?.balance, f.loan?.outstandingBalance,
+    f.other?.remainingBalance, f.other?.balance,
   ];
   for (const c of candidates) {
     const n = parseMoney(c);
@@ -175,28 +177,28 @@ function CollapsibleSection({
   const iconColor = accent ? `hsl(${accent})` : undefined;
   const iconBg = accent ? `hsl(${accent} / 0.14)` : undefined;
   return (
-    <div data-testid={testId} className="h-full flex flex-col rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm">
+    <div data-testid={testId} className="rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm">
       <button
-        className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-muted/30"
+        className="w-full flex items-center gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/30"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}
         style={accent ? { background: `linear-gradient(135deg, hsl(${accent} / 0.06) 0%, transparent 50%)` } : {}}
       >
         <div className="icon-badge" style={iconBg ? { background: iconBg } : { background: 'hsl(var(--muted))' }}>
-          <Icon className="h-3 w-3" style={iconColor ? { color: iconColor } : { color: 'hsl(var(--primary))' }} />
+          <Icon className="h-3.5 w-3.5" style={iconColor ? { color: iconColor } : { color: 'hsl(var(--primary))' }} />
         </div>
-        <h2 className="text-[11px] font-semibold tracking-wide uppercase" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
+        <h2 className="text-xs font-semibold tracking-wide uppercase" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
         {count !== undefined && (
-          <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
+          <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
         )}
-        {sub && <span className="text-[10px] text-muted-foreground ml-1 truncate">{sub}</span>}
+        {sub && <span className="text-xs text-muted-foreground ml-1 truncate">{sub}</span>}
         <div className="ml-auto flex items-center gap-1.5 shrink-0">
           {headerRight}
           {open ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground/70" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70" />}
         </div>
       </button>
-      {open && <div className="px-2.5 pb-2.5 flex-1 min-h-0">{children}</div>}
+      {open && <div className="px-2.5 pb-3">{children}</div>}
     </div>
   );
 }
@@ -207,7 +209,7 @@ function MiniStat({
   const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
-      className={`relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden card-lift ${
+      className={`relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[72px] overflow-hidden card-lift ${
         onClick ? "cursor-pointer active:scale-[0.97] transition-all" : ""
       }`}
       onClick={onClick}
@@ -249,7 +251,7 @@ function MiniStat({
         )}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
     </div>
@@ -292,7 +294,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
   const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-open-tasks">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(262 65% 62%), transparent)' }} />
@@ -302,7 +304,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
       {/* Fill bar */}
@@ -322,7 +324,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
   const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
   const maxBar = Math.max(...bars, 1);
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-monthly-spend">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
@@ -335,7 +337,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         </span>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
       {/* Mini bar chart */}
@@ -354,13 +356,13 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
   const animatedPct = useCountUp(pct);
   const dash = (pct / 100) * circ;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-habits-today">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
       <div className="flex items-start justify-between gap-2 relative z-10">
         <div>
-          <div className="text-base font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
+          <div className="text-lg font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">Habits Today</p>
           <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
         </div>
@@ -381,7 +383,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
   const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-journal-streak">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(310 50% 58%), transparent)' }} />
@@ -391,7 +393,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
       {/* 7-day dots */}
@@ -410,7 +412,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   const isUrgent = expiredCount > 0;
   const accent = isUrgent ? '0 72% 52%' : '25 80% 54%';
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
       data-testid="stat-card-expiring-docs">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />
@@ -422,7 +424,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
         {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">EXPIRED</span>}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
       {mostOverdue && (
@@ -442,67 +444,11 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   );
 }
 
-// ─── Compact KPI tiles (new on desktop strip) ──────────────────────────────
-
-function CompactKPI({
-  accent, icon: Icon, label, value, sub, trendDir, onClick, testId,
-}: { accent: string; icon: any; label: string; value: string | number; sub?: string; trendDir?: "up" | "down" | "flat"; onClick?: () => void; testId?: string }) {
-  const trendCol = trendDir === "up" ? "hsl(155 60% 44%)" : trendDir === "down" ? "#ef4444" : "hsl(var(--muted-foreground))";
-  const trendChar = trendDir === "up" ? "↑" : trendDir === "down" ? "↓" : "—";
-  return (
-    <div
-      onClick={onClick}
-      className={`relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden card-lift ${onClick ? "cursor-pointer active:scale-[0.97] transition-all" : ""}`}
-      style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, transparent 60%)` }}
-      data-testid={testId}
-    >
-      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />
-      <div className="flex items-start justify-between relative z-10">
-        <div className="icon-badge" style={{ background: `hsl(${accent} / 0.15)` }}>
-          <Icon className="h-3.5 w-3.5" style={{ color: `hsl(${accent})` }} />
-        </div>
-        {trendDir && (
-          <span className="text-[10px] font-bold tabular-nums" style={{ color: trendCol }}>{trendChar}</span>
-        )}
-      </div>
-      <div className="mt-1 relative z-10">
-        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: `hsl(${accent})` }}>{value}</span>
-      </div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 truncate relative z-10">{label}</p>
-      {sub && <p className="text-[9px] text-muted-foreground/60 mt-0.5 truncate relative z-10">{sub}</p>}
-    </div>
-  );
-}
-
 // ─── Section: KPI Stats ──────────────────────────────────────────────────────
 
 function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | "habits" | null>(null);
-
-  // Pull data needed for new KPI tiles (income, goals, trackers, events) using same
-  // profile filter pattern used elsewhere on the dashboard.
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: incomes = [] } = useQuery<any[]>({
-    queryKey: ["/api/incomes", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/incomes${profileParam}`).then(r => r.json()),
-  });
-  const { data: goals = [] } = useQuery<any[]>({
-    queryKey: ["/api/goals", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
-  });
-  const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()),
-  });
-  const { data: trackers = [] } = useQuery<any[]>({
-    queryKey: ["/api/trackers", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/trackers${profileParam}`).then(r => r.json()),
-  });
-  const { data: allProfilesForKPI = [] } = useQuery<any[]>({
-    queryKey: ["/api/profiles"],
-    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-  });
 
   if (!stats) return null;
 
@@ -511,79 +457,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
 
   const moodConf = stats.currentMood ? MOOD_CONFIG[stats.currentMood] : null;
 
-  // ── Computed values for the 5 new KPIs ─────────────────────────────────
-  // Net Worth using the same client-side resolvers as the popup, so this strip
-  // and the FinanceWidget tile always agree.
-  const matchesFilter = (p: any) => {
-    if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const pParent = p.fields?._parentProfileId || p.parentProfileId;
-    if (pParent && filterIds.includes(pParent)) return true;
-    if (filterIds.includes(p.id)) return true;
-    return false;
-  };
-  const netWorthAssets = (allProfilesForKPI || []).filter((p: any) => resolveAssetValue(p) > 0 && matchesFilter(p)).reduce((s: number, p: any) => s + resolveAssetValue(p), 0);
-  const netWorthLiab = (allProfilesForKPI || []).filter((p: any) => resolveLiabilityBalance(p) > 0 && matchesFilter(p)).reduce((s: number, p: any) => s + resolveLiabilityBalance(p), 0);
-  const netWorth = netWorthAssets - netWorthLiab;
-  const nwTrend: "up" | "down" | "flat" = netWorth > 0 ? "up" : netWorth < 0 ? "down" : "flat";
-  const nwAbs = Math.abs(netWorth);
-  const nwLabel = nwAbs >= 1_000_000 ? `$${(nwAbs / 1_000_000).toFixed(1)}M` : nwAbs >= 1000 ? `$${(nwAbs / 1000).toFixed(1)}k` : `$${Math.round(nwAbs)}`;
-  const nwDisplay = `${netWorth < 0 ? "-" : ""}${nwLabel}`;
-
-  // Income MTD
-  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
-  const incomeMTD = (incomes || []).filter((i: any) => {
-    const ts = i.date || i.receivedAt || i.createdAt;
-    if (!ts) return true; // assume current month entry
-    return new Date(ts) >= monthStart;
-  }).reduce((s: number, i: any) => s + (Number(i.amount) || 0), 0);
-  const incomeMTDLabel = incomeMTD >= 1000 ? `$${(incomeMTD / 1000).toFixed(1)}k` : `$${Math.round(incomeMTD)}`;
-
-  // Goals progress (avg %)
-  const activeGoals = (goals || []).filter((g: any) => g.status !== "completed" && g.status !== "archived");
-  const goalsAvg = activeGoals.length > 0
-    ? Math.round(
-        activeGoals.reduce((s: number, g: any) => {
-          const target = Number(g.targetValue) || Number(g.target) || 0;
-          const current = Number(g.currentValue) || Number(g.progress) || 0;
-          if (target <= 0) return s;
-          return s + Math.min(100, Math.max(0, (current / target) * 100));
-        }, 0) / activeGoals.length,
-      )
-    : 0;
-
-  // Trackers logged today
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-  const trackerEntriesToday = (trackers || []).reduce((sum: number, t: any) => {
-    const entries = t.entries || [];
-    return sum + entries.filter((e: any) => {
-      const ts = e.timestamp || e.date;
-      if (!ts) return false;
-      return new Date(ts).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }) === todayStr;
-    }).length;
-  }, 0);
-
-  // Upcoming events next 7 days
-  const sevenDaysOut = Date.now() + 7 * 86400000;
-  const upcomingEvents = (events || []).filter((e: any) => {
-    const start = e.startTime || e.startsAt || e.date || e.start;
-    if (!start) return false;
-    const t = new Date(start).getTime();
-    return t >= Date.now() && t <= sevenDaysOut;
-  }).length;
-  const nextEvent = (events || [])
-    .filter((e: any) => {
-      const start = e.startTime || e.startsAt || e.date || e.start;
-      return start && new Date(start).getTime() >= Date.now();
-    })
-    .sort((a: any, b: any) => new Date(a.startTime || a.startsAt || a.date || a.start).getTime() - new Date(b.startTime || b.startsAt || b.date || b.start).getTime())[0];
-  const nextEventLabel = nextEvent
-    ? `Next: ${new Date(nextEvent.startTime || nextEvent.startsAt || nextEvent.date || nextEvent.start).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
-    : "None scheduled";
-
   return (
     <>
       <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-10 gap-2">
+        <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
           <KPITaskCard count={stats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
@@ -599,53 +476,6 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
           <KPIDocsCard docs={enhanced?.expiringDocuments || []} onClick={() => setPopup("docs")} />
-          {/* New on desktop: 5 additional KPI tiles to fill the row at xl breakpoint */}
-          <CompactKPI
-            accent="155 60% 44%"
-            icon={TrendingUp}
-            label="Net Worth"
-            value={nwDisplay}
-            sub={`${netWorthAssets > 0 ? "+" : ""}$${(netWorthAssets / 1000).toFixed(1)}k assets`}
-            trendDir={nwTrend}
-            onClick={() => navigate("/dashboard/finance")}
-            testId="stat-card-net-worth"
-          />
-          <CompactKPI
-            accent="142 70% 45%"
-            icon={DollarSign}
-            label="Income MTD"
-            value={incomeMTDLabel}
-            sub={`${(incomes || []).length} source${(incomes || []).length === 1 ? "" : "s"}`}
-            onClick={() => navigate("/dashboard/finance")}
-            testId="stat-card-income-mtd"
-          />
-          <CompactKPI
-            accent="38 92% 50%"
-            icon={Target}
-            label="Goals"
-            value={`${goalsAvg}%`}
-            sub={`${activeGoals.length} active`}
-            onClick={() => navigate("/dashboard/goals")}
-            testId="stat-card-goals-progress"
-          />
-          <CompactKPI
-            accent="195 85% 55%"
-            icon={Activity}
-            label="Logged Today"
-            value={trackerEntriesToday}
-            sub={`${(trackers || []).length} trackers`}
-            onClick={() => navigate("/dashboard/trackers")}
-            testId="stat-card-trackers-today"
-          />
-          <CompactKPI
-            accent="262 65% 62%"
-            icon={CalendarClock}
-            label="Upcoming"
-            value={upcomingEvents}
-            sub={nextEventLabel}
-            onClick={() => navigate("/dashboard/calendar")}
-            testId="stat-card-upcoming-events"
-          />
         </div>
       </div>
 
@@ -2587,8 +2417,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     return false;
   }), [allProfiles, filterMode, filterIds]);
 
-  // Same client-side resolver pattern for liabilities — keeps the tile aligned with the popup
-  const liabilityProfilesTile = useMemo(() => (allProfiles || []).filter((p: any) => {
+  // Derive Net Worth from the same resolved profiles the popup uses, so the
+  // tile total and the popup total are always identical. Falls back to the
+  // /api/dashboard-enhanced numbers only while profiles are still loading.
+  const tileLiabilityProfiles = useMemo(() => (allProfiles || []).filter((p: any) => {
     if (resolveLiabilityBalance(p) <= 0) return false;
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const pParent = p.fields?._parentProfileId || p.parentProfileId;
@@ -2596,16 +2428,13 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     if (filterIds.includes(p.id)) return true;
     return false;
   }), [allProfiles, filterMode, filterIds]);
-
-  // Bug fix: tile must use the SAME client-side resolvers the popup uses, otherwise the
-  // headline ($31,750 from server-cached snapshot) diverges from the popup ($-2,750 client).
   const totalAssetValue = useMemo(
-    () => assetProfiles.reduce((s: number, p: any) => s + resolveAssetValue(p), 0),
-    [assetProfiles],
+    () => allProfiles ? assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0) : (data?.totalAssetValue || 0),
+    [allProfiles, assetProfiles, data?.totalAssetValue]
   );
   const totalLiabilities = useMemo(
-    () => liabilityProfilesTile.reduce((s: number, p: any) => s + resolveLiabilityBalance(p), 0),
-    [liabilityProfilesTile],
+    () => allProfiles ? tileLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0) : (data?.totalLiabilities || 0),
+    [allProfiles, tileLiabilityProfiles, data?.totalLiabilities]
   );
   const netWorth = totalAssetValue - totalLiabilities;
 
@@ -2644,12 +2473,12 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
-          <button onClick={() => setDrill("networth")} className="relative rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer overflow-hidden">
-            {/* Header row: label + value */}
+          <button onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
-            {/* 6-month sparkline — promoted to a prominent edge-to-edge slot */}
-            {netWorth > 0 ? (() => {
+            <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
+            {/* Net Worth trend sparkline — uses estimated monthly snapshots */}
+            {netWorth > 0 && (() => {
               const baseNW = netWorth;
               const mSpend = data?.totalMonthlySpend || monthlySpend || 0;
               const nwData = Array.from({length: 6}, (_, i) => ({
@@ -2658,21 +2487,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
               }));
               const isUp = nwData[5].value >= nwData[0].value;
               return (
-                <div className="mt-1 -mx-2 -mb-2" onClick={stopProp()}>
-                  <div className="flex items-center justify-between px-2 mb-0.5">
-                    <span className="text-[9px] text-muted-foreground uppercase tracking-wide font-semibold">6-Month</span>
-                    <span className={`text-[9px] font-bold ${isUp ? 'text-green-500' : 'text-red-400'}`}>{isUp ? '↑' : '↓'} Trending</span>
+                <div className="mt-2 px-1" onClick={stopProp()}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">6-Month Trend</span>
+                    <span className={`text-[10px] font-bold ${isUp ? 'text-green-500' : 'text-red-400'}`}>{isUp ? '↑' : '↓'} Trending</span>
                   </div>
-                  <ResponsiveContainer width="100%" height={28}>
-                    <LineChart data={nwData} margin={{top:0,right:0,left:0,bottom:0}}>
+                  <ResponsiveContainer width="100%" height={40}>
+                    <LineChart data={nwData} margin={{top:2,right:2,left:2,bottom:2}}>
                       <Line type="monotone" dataKey="value" stroke={isUp ? '#10b981' : '#ef4444'} strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               );
-            })() : (
-              <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
-            )}
+            })()}
           </button>
           <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <div className="flex items-center justify-center gap-2">
@@ -3046,86 +2873,48 @@ function RenderMarkdown({ text }: { text: string }) {
   );
 }
 
-// ─── Smart Insights Row ──────────────────────────────────────────────────────
-// Replaces the empty AI Summary widget with computed at-a-glance signals.
+function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefined; enhanced: any }) {
+  const [summary, setSummary] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [lastGenerated, setLastGenerated] = useState<string | null>(null);
 
-type Insight = { icon: any; label: string; tone: 'good'|'warn'|'bad'|'neutral'; href?: string };
-
-function SmartInsightsRow({ stats, enhanced }: { stats: DashboardStats | undefined; enhanced: any }) {
-  const [, navigate] = useLocation();
-  const finSnap = enhanced?.financeSnapshot;
-  const monthlySpend = finSnap?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
-  const lastMonthTotal = finSnap?.lastMonthTotal ?? 0;
-  const bills = finSnap?.upcomingBills || [];
-  const streak = stats?.journalStreak ?? 0;
-  const habits = stats?.habitCompletionRate ?? 0;
-  const overdueRaw = (enhanced?.overdueTasks?.length ?? 0) as number;
-
-  const insights: Insight[] = [];
-  // Spending vs last month
-  if (lastMonthTotal > 0) {
-    const delta = Math.round(((monthlySpend - lastMonthTotal) / lastMonthTotal) * 100);
-    if (Math.abs(delta) >= 5) {
-      insights.push({
-        icon: delta > 0 ? TrendingUp : TrendingDown,
-        label: `Spending ${delta > 0 ? 'up' : 'down'} ${Math.abs(delta)}% vs last month`,
-        tone: delta > 0 ? 'warn' : 'good',
+  const generateSummary = async () => {
+    setLoading(true);
+    try {
+      const resp = await apiRequest("POST", "/api/chat", {
+        message: "Give me a brief daily summary of my current status. Include: tasks due today, habits completion, upcoming events, and any health or finance highlights. Keep it under 4 sentences. Be direct and specific with numbers.",
       });
-    }
-  }
-  // Next bill due
-  const sortedBills = (bills as any[]).slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99));
-  const nextBill = sortedBills[0];
-  if (nextBill && typeof nextBill.daysUntil === 'number' && nextBill.daysUntil <= 7) {
-    insights.push({
-      icon: AlertCircle,
-      label: `${nextBill.name} due ${nextBill.daysUntil < 0 ? `${Math.abs(nextBill.daysUntil)}d overdue` : nextBill.daysUntil === 0 ? 'today' : `in ${nextBill.daysUntil}d`}`,
-      tone: nextBill.daysUntil <= 2 ? 'bad' : 'warn',
-      href: '/dashboard/obligations',
-    });
-  }
-  // Journal streak
-  if (streak >= 3) insights.push({ icon: Flame, label: `${streak}-day journal streak`, tone: 'good', href: '/dashboard/journal' });
-  // Habit completion
-  if (habits >= 80) insights.push({ icon: CheckCircle2, label: `${habits}% habits done today`, tone: 'good' });
-  // Overdue tasks
-  if (overdueRaw > 0) insights.push({ icon: AlertTriangle, label: `${overdueRaw} overdue task${overdueRaw > 1 ? 's' : ''}`, tone: 'bad', href: '/dashboard/tasks' });
-
-  const items = insights.slice(0, 4);
-  const empty: Insight = { icon: CheckCircle2, label: 'All caught up — nothing pressing.', tone: 'neutral' };
-  const display = items.length === 0 ? [empty] : items;
-
-  const toneClass = (t: Insight['tone']) => {
-    switch (t) {
-      case 'good': return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500';
-      case 'warn': return 'bg-amber-500/10 border-amber-500/30 text-amber-500';
-      case 'bad': return 'bg-red-500/10 border-red-500/30 text-red-500';
-      default: return 'bg-muted/40 border-border/40 text-muted-foreground';
+      const data = await resp.json();
+      setSummary(data.reply || "No summary available.");
+      setLastGenerated(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+    } catch {
+      setSummary("Unable to generate summary right now.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  return (
-    <div
-      className="flex items-center gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1 py-0.5"
-      style={{ WebkitOverflowScrolling: 'touch' }}
-      data-testid="section-smart-insights"
-    >
-      {display.map((ins, i) => {
-        const Icon = ins.icon;
-        const Pill: any = ins.href ? 'button' : 'div';
-        return (
-          <Pill
-            key={i}
-            onClick={ins.href ? () => navigate(ins.href!) : undefined}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[11px] font-semibold whitespace-nowrap shrink-0 transition-all ${toneClass(ins.tone)} ${ins.href ? 'cursor-pointer hover:scale-[1.03] active:scale-[0.97]' : ''}`}
-            data-testid={`insight-pill-${i}`}
-          >
-            <Icon className="h-3 w-3" />
-            <span className="truncate max-w-[280px]">{ins.label}</span>
-          </Pill>
-        );
-      })}
-    </div>
+  return summary ? (
+    <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
+      <div className="space-y-2">
+        <RenderMarkdown text={summary} />
+        <div className="flex items-center justify-between">
+          {lastGenerated && <span className="text-xs text-muted-foreground">Generated at {lastGenerated}</span>}
+          <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={generateSummary} disabled={loading}>
+            <RotateCcw className={`h-2.5 w-2.5 ${loading ? "animate-spin" : ""}`} /> Refresh
+          </Button>
+        </div>
+      </div>
+    </CollapsibleSection>
+  ) : (
+    <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
+      <div className="flex flex-col items-center gap-2 py-3">
+        <p className="text-xs text-muted-foreground">Get a personalized AI-powered daily briefing</p>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" onClick={generateSummary} disabled={loading}>
+          {loading ? <><RotateCcw className="h-3 w-3 animate-spin" /> Generating...</> : <><Sparkles className="h-3 w-3" /> Generate Summary</>}
+        </Button>
+      </div>
+    </CollapsibleSection>
   );
 }
 
@@ -3193,318 +2982,6 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
   );
 }
 
-// ─── New widgets to fill desktop space ──────────────────────────────────────
-
-// 1. Profile cluster: horizontal scroll of all profiles with avatar + last activity
-function ProfileClusterSection({ filterIds = [] }: { filterIds?: string[] }) {
-  const [, navigate] = useLocation();
-  const { data: profiles = [] } = useQuery<any[]>({
-    queryKey: ["/api/profiles"],
-    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-  });
-  const peopleProfiles = useMemo(() => (profiles || []).filter((p: any) => {
-    const t = String(p.type || "").toLowerCase();
-    if (["asset", "vehicle", "property", "investment", "account", "subscription", "document"].includes(t)) return false;
-    if (p.fields?._parentProfileId || p.parentProfileId) return false;
-    return true;
-  }), [profiles]);
-
-  if (peopleProfiles.length === 0) return null;
-
-  return (
-    <CollapsibleSection accent="262 65% 62%" icon={Heart} label="Profiles" count={peopleProfiles.length} testId="section-profile-cluster">
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" }}>
-        {peopleProfiles.map((p: any) => {
-          const initial = String(p.name || "?").trim().charAt(0).toUpperCase();
-          const isFiltered = filterIds.includes(p.id);
-          return (
-            <button
-              key={p.id}
-              onClick={() => navigate(`/profiles/${p.id}`)}
-              className={`shrink-0 flex flex-col items-center gap-1 p-1.5 rounded-lg transition-all hover:bg-muted/40 active:scale-95 ${isFiltered ? "ring-1 ring-primary/40 bg-primary/5" : ""}`}
-              style={{ width: 64 }}
-              data-testid={`profile-cluster-${p.id}`}
-            >
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
-                style={{
-                  background: "linear-gradient(135deg, hsl(262 65% 62% / 0.4), hsl(262 65% 62% / 0.15))",
-                  color: "hsl(262 65% 62%)",
-                  border: "1px solid hsl(262 65% 62% / 0.25)",
-                }}
-              >{initial}</div>
-              <span className="text-[10px] font-medium text-foreground truncate w-full text-center">{(p.name || "").split(" ")[0]}</span>
-              <span className="text-[9px] text-muted-foreground capitalize truncate w-full text-center">{p.type || "profile"}</span>
-            </button>
-          );
-        })}
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-// 2. Tracker quick-log buttons: one-click "+ log today" per active tracker
-function TrackerQuickLogSection({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
-  const [, navigate] = useLocation();
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: trackers = [] } = useQuery<any[]>({
-    queryKey: ["/api/trackers", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/trackers${profileParam}`).then(r => r.json()),
-  });
-  const topTrackers = useMemo(() => {
-    return (trackers || [])
-      .slice()
-      .sort((a: any, b: any) => {
-        const al = (a.entries || [])[((a.entries || []).length - 1)]?.timestamp;
-        const bl = (b.entries || [])[((b.entries || []).length - 1)]?.timestamp;
-        return new Date(bl || b.updatedAt || 0).getTime() - new Date(al || a.updatedAt || 0).getTime();
-      })
-      .slice(0, 4);
-  }, [trackers]);
-
-  if (topTrackers.length === 0) return null;
-
-  return (
-    <CollapsibleSection accent="195 85% 55%" icon={Plus} label="Quick Log" count={topTrackers.length} testId="section-tracker-quicklog">
-      <div className="grid grid-cols-2 gap-2">
-        {topTrackers.map((t: any) => {
-          const last = (t.entries || [])[((t.entries || []).length - 1)];
-          const ago = last ? timeAgo(last.timestamp) : "never";
-          return (
-            <button
-              key={t.id}
-              onClick={() => navigate(`/trackers/${t.id}?log=1`)}
-              className="group flex items-center gap-2 p-2 rounded-lg border border-border/40 bg-card hover:bg-muted/40 hover:border-primary/30 active:scale-[0.98] transition-all text-left"
-              data-testid={`quicklog-${t.id}`}
-            >
-              <div
-                className="w-7 h-7 rounded-md flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform"
-                style={{ background: "hsl(195 85% 55% / 0.15)", color: "hsl(195 85% 55%)" }}
-              >
-                <Plus className="h-4 w-4" strokeWidth={2.5} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold truncate">{t.name}</p>
-                <p className="text-[10px] text-muted-foreground truncate">Last: {ago}</p>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-// 3. Calendar mini-month: 7×6 grid with dots on days that have events/tasks/journals
-function CalendarMiniSection({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
-  const [, navigate] = useLocation();
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()),
-  });
-  const { data: tasks = [] } = useQuery<any[]>({
-    queryKey: ["/api/tasks", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
-  });
-
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  const firstOfMonth = new Date(year, month, 1);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const startDayOfWeek = firstOfMonth.getDay();
-
-  const dotMap = useMemo(() => {
-    const m: Record<number, { event: boolean; task: boolean }> = {};
-    (events || []).forEach((e: any) => {
-      const start = e.startTime || e.startsAt || e.date || e.start;
-      if (!start) return;
-      const d = new Date(start);
-      if (d.getFullYear() === year && d.getMonth() === month) {
-        m[d.getDate()] = { ...(m[d.getDate()] || { event: false, task: false }), event: true };
-      }
-    });
-    (tasks || []).forEach((t: any) => {
-      const due = t.dueDate || t.due_date;
-      if (!due) return;
-      const d = new Date(due);
-      if (d.getFullYear() === year && d.getMonth() === month) {
-        m[d.getDate()] = { ...(m[d.getDate()] || { event: false, task: false }), task: true };
-      }
-    });
-    return m;
-  }, [events, tasks, year, month]);
-
-  const cells: Array<{ day: number | null; isToday: boolean; markers?: { event: boolean; task: boolean } }> = [];
-  for (let i = 0; i < startDayOfWeek; i++) cells.push({ day: null, isToday: false });
-  for (let d = 1; d <= daysInMonth; d++) {
-    cells.push({
-      day: d,
-      isToday: d === today.getDate(),
-      markers: dotMap[d],
-    });
-  }
-  while (cells.length % 7 !== 0) cells.push({ day: null, isToday: false });
-
-  const monthLabel = today.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-  const dayLabels = ["S", "M", "T", "W", "T", "F", "S"];
-
-  return (
-    <CollapsibleSection accent="195 85% 55%" icon={Calendar} label="Calendar" sub={monthLabel} testId="section-calendar-mini">
-      <div className="grid grid-cols-7 gap-0.5 text-center">
-        {dayLabels.map((d, i) => (
-          <div key={`hdr-${i}`} className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 pb-1">{d}</div>
-        ))}
-        {cells.map((c, i) => {
-          if (c.day === null) return <div key={`cell-${i}`} className="h-7" />;
-          return (
-            <button
-              key={`cell-${i}`}
-              onClick={() => navigate("/dashboard/calendar")}
-              className={`relative h-7 flex flex-col items-center justify-center rounded text-[10px] font-medium transition-colors hover:bg-muted/40 ${c.isToday ? "bg-primary/15 text-primary font-bold" : "text-foreground/80"}`}
-              data-testid={`mini-cal-day-${c.day}`}
-            >
-              <span className="leading-none">{c.day}</span>
-              {c.markers && (
-                <div className="absolute bottom-0.5 flex gap-0.5">
-                  {c.markers.event && <span className="w-1 h-1 rounded-full bg-blue-400" />}
-                  {c.markers.task && <span className="w-1 h-1 rounded-full bg-amber-400" />}
-                </div>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      <div className="flex items-center justify-end gap-2 mt-1.5 text-[9px] text-muted-foreground">
-        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-400" /> Event</span>
-        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-400" /> Task</span>
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-// 4. Spending category donut
-function SpendDonutSection({ enhanced }: { enhanced: any }) {
-  const [, navigate] = useLocation();
-  const finSnap = enhanced?.financeSnapshot;
-  const total = finSnap?.totalMonthlySpend || 0;
-  const categories = useMemo(() => {
-    const obj = finSnap?.spendByCategory as Record<string, number> | undefined;
-    if (!obj) return [];
-    return Object.entries(obj)
-      .filter(([, amt]) => amt > 0)
-      .sort(([, a], [, b]) => b - a);
-  }, [finSnap]);
-
-  const COLORS = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#f97316", "#ec4899", "#84cc16", "#6366f1"];
-
-  return (
-    <CollapsibleSection accent="43 85% 52%" icon={DollarSign} label="Spend Breakdown" sub={total > 0 ? `$${Math.round(total).toLocaleString()} this month` : undefined} testId="section-spend-donut">
-      {categories.length === 0 ? (
-        <div className="text-center py-4">
-          <DollarSign className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-xs text-muted-foreground">No spending this month</p>
-        </div>
-      ) : (
-        <div className="flex items-center gap-3">
-          <div className="w-[110px] h-[110px] shrink-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={categories.map(([name, value]) => ({ name, value }))}
-                  innerRadius={32}
-                  outerRadius={50}
-                  paddingAngle={1}
-                  dataKey="value"
-                  stroke="none"
-                >
-                  {categories.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="flex-1 min-w-0 space-y-1">
-            {categories.slice(0, 5).map(([cat, amt], i) => {
-              const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
-              return (
-                <div key={cat} className="flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
-                  <span className="capitalize truncate flex-1">{cat}</span>
-                  <span className="tabular-nums text-muted-foreground">{pct}%</span>
-                </div>
-              );
-            })}
-            {categories.length > 5 && <p className="text-[10px] text-muted-foreground/60">+{categories.length - 5} more</p>}
-          </div>
-        </div>
-      )}
-      <button onClick={() => navigate("/dashboard/finance")} className="flex items-center gap-1 text-xs text-primary hover:underline mt-2">
-        <ExternalLink className="h-2.5 w-2.5" /> View Finance Page
-      </button>
-    </CollapsibleSection>
-  );
-}
-
-// 5. Recent journal entries snippet
-function JournalSnippetSection({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
-  const [, navigate] = useLocation();
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: entries = [] } = useQuery<any[]>({
-    queryKey: ["/api/journal", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/journal${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const recent = useMemo(() => {
-    return (entries || [])
-      .slice()
-      .sort((a: any, b: any) => new Date(b.createdAt || b.date || 0).getTime() - new Date(a.createdAt || a.date || 0).getTime())
-      .slice(0, 3);
-  }, [entries]);
-
-  return (
-    <CollapsibleSection accent="310 50% 58%" icon={BookHeart} label="Recent Journal" count={recent.length || undefined} testId="section-journal-snippet">
-      {recent.length === 0 ? (
-        <div className="text-center py-4">
-          <BookHeart className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-xs text-muted-foreground">No journal entries yet</p>
-          <button onClick={() => navigate("/dashboard/journal")} className="text-xs text-primary hover:underline mt-1">Write your first entry</button>
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          {recent.map((entry: any) => {
-            const mood = (entry.mood as MoodLevel | undefined);
-            const moodConf = mood ? MOOD_CONFIG[mood] : null;
-            const text = String(entry.content || entry.text || entry.body || "").trim();
-            const preview = text.length > 110 ? text.slice(0, 110).trim() + "…" : text;
-            const date = entry.createdAt || entry.date || "";
-            return (
-              <button
-                key={entry.id}
-                onClick={() => navigate("/dashboard/journal")}
-                className="w-full text-left p-2 rounded-lg border border-border/30 bg-card hover:bg-muted/30 transition-colors"
-                data-testid={`journal-snippet-${entry.id}`}
-              >
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  {moodConf && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: `${moodConf.color}22`, color: moodConf.color }}>
-                      {moodConf.label}
-                    </span>
-                  )}
-                  <span className="text-[10px] text-muted-foreground tabular-nums">{date ? timeAgo(date) : ""}</span>
-                </div>
-                <p className="text-xs text-foreground/80 line-clamp-2 leading-snug">{preview || <span className="italic text-muted-foreground/60">(empty)</span>}</p>
-              </button>
-            );
-          })}
-        </div>
-      )}
-      <button onClick={() => navigate("/dashboard/journal")} className="flex items-center gap-1 text-xs text-primary hover:underline mt-2">
-        <ExternalLink className="h-2.5 w-2.5" /> Open Journal
-      </button>
-    </CollapsibleSection>
-  );
-}
-
 // ─── Customize Dialog ────────────────────────────────────────────────────────
 
 interface DashboardSection {
@@ -3516,30 +2993,23 @@ interface DashboardSection {
 }
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
-  // Top of dashboard — full-width compact strips
-  { id: "insights",         label: "Smart Insights",       icon: Sparkles,     visible: true, column: "full" },
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
-  { id: "profile-cluster",  label: "Profiles",             icon: Heart,        visible: true, column: "full" },
-  // Bento grid — each section assigned to a column slot. On wide screens (xl)
-  // the renderer turns this into a 3-col bento; on tablet (md) into 2-col;
-  // mobile stacks 1-col.
-  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "left"  },
+  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
+  // Left+Right columns: only short, snappy sections — no tall sections in either column
+  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
-  { id: "spend-donut",      label: "Spend Breakdown",      icon: BarChart3,    visible: true, column: "left"  },
-  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left"  },
+  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left" },
   { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "right" },
-  { id: "calendar-mini",    label: "Calendar",             icon: Calendar,     visible: true, column: "right" },
-  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left"  },
-  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "right" },
-  { id: "tracker-quicklog", label: "Quick Log",            icon: Plus,         visible: true, column: "left"  },
-  { id: "journal-snippet",  label: "Recent Journal",       icon: BookHeart,    visible: true, column: "right" },
-  // Activity full-width at the bottom
-  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full"  },
+  // Finance, Bills, Activity are full-width — they're too tall for a column and look better spanning full
+  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "full" },
+  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
+  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
 ];
-// Bento grid layout: full-width sections stack at top/bottom; left+right sections
-// are paired into a 2-col grid with items-stretch so each row's cells equalize.
+// Layout rule: LEFT = [Today, Health] RIGHT = [Action Required, Goals]
+// FULL = [Finance, Bills, Activity]
+// Uses CSS columns (masonry) layout — sections flow naturally and fill space without dead zones
 
-const LAYOUT_VERSION = 6; // Bump: 3-col xl bento + 5 new widgets + 5 new KPI tiles
+const LAYOUT_VERSION = 4; // Bump: Finance/Bills/Activity moved to full-width to eliminate column dead zones
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -3851,27 +3321,11 @@ export default function DashboardPage() {
           </div>
         );
         break;
-      case "insights":
-        content = <SmartInsightsRow stats={stats} enhanced={enhanced} />;
+      case "ai-summary":
+        content = <AISummaryWidget stats={stats} enhanced={enhanced} />;
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
-        break;
-      // ── New widget cases ─────────────────────────────────────────
-      case "profile-cluster":
-        content = <ProfileClusterSection filterIds={filterIds} />;
-        break;
-      case "tracker-quicklog":
-        content = <TrackerQuickLogSection filterIds={filterIds} filterMode={filterMode} />;
-        break;
-      case "calendar-mini":
-        content = <CalendarMiniSection filterIds={filterIds} filterMode={filterMode} />;
-        break;
-      case "spend-donut":
-        content = <SpendDonutSection enhanced={enhanced} />;
-        break;
-      case "journal-snippet":
-        content = <JournalSnippetSection filterIds={filterIds} filterMode={filterMode} />;
         break;
       default:
         content = null;
@@ -3946,57 +3400,34 @@ export default function DashboardPage() {
       <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}
         sections={sections} onSave={(layout) => saveMutation.mutate(layout)} />
 
-      {/* Bento grid render (v6):
-           1. Full-width sections (insights, kpis, profile-cluster) that come BEFORE any
-              column section render at the top in a stacked column.
-           2. All left/right column sections flow into a single grid that adapts:
-                mobile  → grid-cols-1
-                tablet  → md:grid-cols-2
-                desktop → xl:grid-cols-3 (3-COL BENTO — the key change)
-              Cells use items-stretch so each row equalizes height.
-           3. Full-width sections that come AFTER the column sections render at the bottom. */}
+      {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid */}
       {(() => {
-        const visibleSections = sections.filter(s => s.visible);
-        const firstColumnIdx = visibleSections.findIndex(s => s.column === "left" || s.column === "right");
-        const lastColumnIdx = (() => {
-          for (let i = visibleSections.length - 1; i >= 0; i--) {
-            if (visibleSections[i].column === "left" || visibleSections[i].column === "right") return i;
-          }
-          return -1;
-        })();
-        const beforeGrid = firstColumnIdx === -1
-          ? visibleSections.filter(s => s.column === "full")
-          : visibleSections.slice(0, firstColumnIdx).filter(s => s.column === "full");
-        const afterGrid = lastColumnIdx === -1
-          ? []
-          : visibleSections.slice(lastColumnIdx + 1).filter(s => s.column === "full");
-
-        // Interleave left/right sections in saved order so on tablet (2-col) the
-        // intended left/right pairing still appears, and on desktop (3-col) cards
-        // simply fill in left-to-right reading order.
-        const leftQ = leftSections.slice();
-        const rightQ = rightSections.slice();
-        const rowItems: { id: string; key: string }[] = [];
-        while (leftQ.length || rightQ.length) {
-          const l = leftQ.shift();
-          const r = rightQ.shift();
-          if (l) rowItems.push({ id: l.id, key: l.id });
-          if (r) rowItems.push({ id: r.id, key: r.id });
-        }
-
+        // Split full-width into before-grid (kpis, ai-summary) and after-grid (activity, obligations)
+        const afterGridIds = new Set(["activity"]);
+        const beforeGrid = fullWidthSections.filter(s => !afterGridIds.has(s.id));
+        const afterGrid = fullWidthSections.filter(s => afterGridIds.has(s.id));
         return (
           <>
             {beforeGrid.map(s => (
               <div key={s.id}>{renderSection(s.id)}</div>
             ))}
 
-            {rowItems.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-stretch">
-                {rowItems.map(it => (
-                  <div key={it.key} className="h-full min-w-0">
-                    {renderSection(it.id)}
-                  </div>
-                ))}
+            {(leftSections.length > 0 || rightSections.length > 0) && (
+              <div className="md:columns-2 md:gap-3 gap-3 mt-1">
+                {/* Interleave left and right sections for balanced masonry flow */}
+                {(() => {
+                  const interleaved: typeof leftSections = [];
+                  const maxLen = Math.max(leftSections.length, rightSections.length);
+                  for (let i = 0; i < maxLen; i++) {
+                    if (i < leftSections.length) interleaved.push(leftSections[i]);
+                    if (i < rightSections.length) interleaved.push(rightSections[i]);
+                  }
+                  return interleaved.map(s => (
+                    <div key={s.id} className="mb-3" style={{ breakInside: 'avoid' }}>
+                      {renderSection(s.id)}
+                    </div>
+                  ));
+                })()}
               </div>
             )}
 
