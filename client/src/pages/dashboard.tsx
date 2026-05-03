@@ -151,7 +151,7 @@ function CollapsibleSection({
         </div>
         <h2 className="text-xs font-semibold tracking-wide uppercase" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
         {count !== undefined && (
-          <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
+          <span className="inline-flex items-center h-5 min-w-5 px-1.5 text-[10px] text-muted-foreground bg-muted rounded-full tabular-nums">{count}</span>
         )}
         {sub && <span className="text-xs text-muted-foreground ml-1 truncate">{sub}</span>}
         <div className="ml-auto flex items-center gap-1.5 shrink-0">
@@ -2733,7 +2733,7 @@ function ExpiringWarrantiesCard({
         <h2 className="text-xs font-semibold tracking-wide uppercase" style={{ color: "hsl(25 90% 55%)" }}>
           🛡️ Expiring Warranties
         </h2>
-        <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums ml-1">
+        <span className="inline-flex items-center h-5 min-w-5 px-1.5 text-[10px] text-muted-foreground bg-muted rounded-full tabular-nums ml-1">
           {items.length}
         </span>
       </div>
@@ -2759,7 +2759,7 @@ function ExpiringWarrantiesCard({
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium truncate leading-tight">{item.name}</p>
               </div>
-              <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pillClass}`}>
+              <span className={`inline-flex items-center shrink-0 h-5 px-1.5 text-[10px] font-semibold rounded-full ${pillClass}`}>
                 {item.type}
               </span>
               <span

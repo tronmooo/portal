@@ -2239,7 +2239,7 @@ export default function ChatPage() {
                                   {entityTitle || actionLabel(action.type).toUpperCase()}
                                 </p>
                                 {/* WHO badge — always show */}
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                                <span className={`inline-flex items-center h-4 px-1.5 text-[9px] font-bold rounded-full shrink-0 ${
                                   whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
                                 }`}>
                                   {whoFor.toUpperCase()}
@@ -2439,7 +2439,7 @@ export default function ChatPage() {
               <button
                 key={s}
                 onClick={() => handleSuggestion(s)}
-                className="text-xs px-3 py-1.5 rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 active:scale-95 transition-all text-muted-foreground hover:text-foreground"
+                className="inline-flex items-center h-6 px-2 text-[11px] rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 active:scale-95 transition-all text-muted-foreground hover:text-foreground"
                 data-testid={`button-suggestion-${s.slice(0, 20)}`}
               >
                 {s}

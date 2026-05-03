@@ -1954,7 +1954,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
             <button
               onClick={stopProp(findValue)}
               disabled={finding}
-              className="opacity-0 group-hover:opacity-100 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all flex items-center gap-1 shrink-0"
+              className="opacity-0 group-hover:opacity-100 inline-flex items-center gap-1 h-6 px-2 text-[11px] rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all shrink-0"
               title="Find current market value using AI"
             >
               {finding ? (
@@ -2004,7 +2004,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
               AI estimate: ${foundValue.estimatedValue.toLocaleString()}
               {foundValue.range && <span className="text-muted-foreground font-normal ml-1">(${foundValue.range.low.toLocaleString()}–${foundValue.range.high.toLocaleString()})</span>}
             </span>
-            <span className={`text-xs px-1.5 py-0.5 rounded-full ${foundValue.confidence === "high" ? "bg-green-500/15 text-green-600" : foundValue.confidence === "medium" ? "bg-amber-500/15 text-amber-600" : "bg-muted text-muted-foreground"}`}>
+            <span className={`inline-flex items-center h-5 px-1.5 text-[10px] rounded-full ${foundValue.confidence === "high" ? "bg-green-500/15 text-green-600" : foundValue.confidence === "medium" ? "bg-amber-500/15 text-amber-600" : "bg-muted text-muted-foreground"}`}>
               {foundValue.confidence}
             </span>
           </div>
@@ -5393,14 +5393,14 @@ function TasksTab({
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`text-sm font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}>{task.title}</span>
                       {task.priority && (
-                        <span className={`text-xs rounded-full px-1.5 py-0.5 font-medium capitalize border ${PRIORITY_BADGE[task.priority] || "bg-muted text-muted-foreground"}`}>
+                        <span className={`inline-flex items-center h-5 px-1.5 text-[10px] rounded-full font-medium capitalize border ${PRIORITY_BADGE[task.priority] || "bg-muted text-muted-foreground"}`}>
                           {task.priority}
                         </span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       {task.status && !isDone && (
-                        <span className={`text-xs rounded-full px-1.5 py-0.5 font-medium capitalize ${statusBadge(task.status)}`}>
+                        <span className={`inline-flex items-center h-5 px-1.5 text-[10px] rounded-full font-medium capitalize ${statusBadge(task.status)}`}>
                           {task.status.replace("-", " ")}
                         </span>
                       )}

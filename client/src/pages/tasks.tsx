@@ -528,7 +528,7 @@ export default function TasksPage() {
           <button
             key={tab}
             onClick={() => setTabFilter(tab)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+            className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors ${
               tabFilter === tab
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted"
