@@ -4148,26 +4148,27 @@ export default function TrackersPage() {
             // Asset type chip filter — only applies on the Assets tab.
             // "all" means no chip-level filter; everything passes.
             if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
-            // Asset nesting chip filter — only applies on the Assets tab.
-            // DEFAULT BEHAVIOR (assetNestingFilter === "all"): hide assets nested under another asset.
-            // They show inside their parent's detail page, not in the main grid.
-            // The user can opt in to see them via the "Nested" chip.
-            if (sectionFilter === "profiles") {
-              const pParentId = p.fields?._parentProfileId || p.parentProfileId;
-              const parentProfile = pParentId ? (profiles || []).find(x => x.id === pParentId) : null;
-              const parentIsAsset = !!parentProfile && childTypeSet.has(parentProfile.type);
-              if (assetNestingFilter === "all" || assetNestingFilter === "topLevel") {
-                // Hide assets whose parent is itself an asset-type profile.
-                // Children of a person/self/pet still appear (they're top-level relative to assets).
-                if (parentIsAsset) return false;
-              } else if (assetNestingFilter === "hasChildren") {
-                // Pass if at least one other profile has this profile as parent AND is an asset type
-                const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
-                if (!hasAssetChild) return false;
-              } else if (assetNestingFilter === "nested") {
-                // Pass only if parent is itself an asset-type profile
-                if (!parentIsAsset) return false;
-              }
+            // Asset nesting filter — applies on BOTH the "All" tab and the "Assets" tab.
+            // Bug fix: previously this check was gated on sectionFilter === "profiles",
+            // so nested assets (e.g. Samsung refrigerator under Home) leaked into the
+            // "All" view's asset row even though the rule says they should only live
+            // inside their parent's detail page. Apply it universally — only the
+            // explicit "Nested" / "Has children" chips on the Assets tab override it.
+            const pParentId = p.fields?._parentProfileId || p.parentProfileId;
+            const parentProfile = pParentId ? (profiles || []).find(x => x.id === pParentId) : null;
+            const parentIsAsset = !!parentProfile && childTypeSet.has(parentProfile.type);
+            const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
+            if (nestingFilter === "all" || nestingFilter === "topLevel") {
+              // Hide assets whose parent is itself an asset-type profile.
+              // Children of a person/self/pet still appear (they're top-level relative to assets).
+              if (parentIsAsset) return false;
+            } else if (nestingFilter === "hasChildren") {
+              // Pass if at least one other profile has this profile as parent AND is an asset type
+              const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
+              if (!hasAssetChild) return false;
+            } else if (nestingFilter === "nested") {
+              // Pass only if parent is itself an asset-type profile
+              if (!parentIsAsset) return false;
             }
             return true;
           }
