@@ -92,13 +92,17 @@ function daysUntilStr(days: number): string {
 function resolveAssetValue(p: any): number {
   if (!p || !p.fields) return 0;
   const f = p.fields;
+  // Both camelCase and snake_case keys are present in production data
+  // (Honda CRV stores fields.other.purchase_price). Cover every observed path.
   const candidates: any[] = [
-    f.purchasePrice, f.value, f.currentValue, f.marketValue, f.estimatedValue,
-    f.housing?.currentValue, f.housing?.purchasePrice, f.housing?.marketValue,
-    f.other?.purchasePrice, f.other?.value, f.other?.currentValue,
-    f.finance?.balance, f.finance?.currentValue, f.finance?.value,
-    f.vehicle?.purchasePrice, f.vehicle?.currentValue, f.vehicle?.value,
-    f.investment?.balance, f.investment?.value, f.investment?.currentValue,
+    f.purchasePrice, f.purchase_price, f.value, f.currentValue, f.current_value,
+    f.marketValue, f.market_value, f.estimatedValue, f.estimated_value,
+    f.housing?.currentValue, f.housing?.current_value, f.housing?.purchasePrice, f.housing?.purchase_price, f.housing?.marketValue, f.housing?.market_value,
+    f.other?.purchasePrice, f.other?.purchase_price, f.other?.value, f.other?.currentValue, f.other?.current_value, f.other?.marketValue, f.other?.market_value,
+    f.finance?.balance, f.finance?.currentValue, f.finance?.current_value, f.finance?.value, f.finance?.marketValue, f.finance?.market_value,
+    f.vehicle?.purchasePrice, f.vehicle?.purchase_price, f.vehicle?.currentValue, f.vehicle?.current_value, f.vehicle?.value,
+    f.vehicles?.purchasePrice, f.vehicles?.purchase_price, f.vehicles?.currentValue, f.vehicles?.current_value, f.vehicles?.value,
+    f.investment?.balance, f.investment?.value, f.investment?.currentValue, f.investment?.current_value,
   ];
   for (const c of candidates) {
     const n = parseMoney(c);
@@ -111,10 +115,12 @@ function resolveLiabilityBalance(p: any): number {
   if (!p || !p.fields) return 0;
   const f = p.fields;
   const candidates: any[] = [
-    f.remainingBalance, f.loanBalance, f.outstandingBalance, f.balance,
-    f.finance?.remainingBalance, f.finance?.loanBalance, f.finance?.outstandingBalance, f.finance?.balance,
-    f.loan?.remainingBalance, f.loan?.balance, f.loan?.outstandingBalance,
-    f.other?.remainingBalance, f.other?.balance,
+    f.remainingBalance, f.remaining_balance, f.loanBalance, f.loan_balance,
+    f.outstandingBalance, f.outstanding_balance, f.balance,
+    f.finance?.remainingBalance, f.finance?.remaining_balance, f.finance?.loanBalance, f.finance?.loan_balance,
+    f.finance?.outstandingBalance, f.finance?.outstanding_balance, f.finance?.balance,
+    f.loan?.remainingBalance, f.loan?.remaining_balance, f.loan?.balance, f.loan?.outstandingBalance, f.loan?.outstanding_balance,
+    f.other?.remainingBalance, f.other?.remaining_balance, f.other?.balance,
   ];
   for (const c of candidates) {
     const n = parseMoney(c);
