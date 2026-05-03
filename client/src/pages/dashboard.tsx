@@ -28,7 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Activity, ListTodo, DollarSign, Calendar, BarChart3, Flame,
   CreditCard, BookHeart, Sparkles, Smile, Meh, Frown,
-  TrendingUp, AlertTriangle, Heart,
+  TrendingUp, TrendingDown, AlertTriangle, AlertCircle, Heart,
   Check, Clock, MapPin,
   ChevronDown, ChevronUp,
   ExternalLink, Eye,
@@ -82,6 +82,43 @@ function daysUntilStr(days: number): string {
   if (days === 0) return "Today";
   if (days === 1) return "Tomorrow";
   return `in ${days}d`;
+}
+
+// Resolve asset value across legacy/new nested storage paths
+// (fields.currentValue, fields.housing.currentValue, fields.other.purchasePrice,
+//  fields.finance.balance, etc.). Mirrors the canonical resolver in trackers.tsx.
+function resolveAssetValue(p: any): number {
+  const f = p?.fields || {};
+  const housing = f.housing || {};
+  const other = f.other || {};
+  const finance = f.finance || {};
+  const candidates = [
+    f.currentValue, housing.currentValue, other.currentValue, other.value,
+    finance.balance, f.value,
+    f.purchasePrice, other.purchasePrice, other.purchase_price,
+    f.cost, other.cost, f.amount, f.price, other.price,
+  ];
+  for (const c of candidates) {
+    const n = parseMoney(c);
+    if (n > 0) return n;
+  }
+  return 0;
+}
+
+function resolveLiabilityBalance(p: any): number {
+  const f = p?.fields || {};
+  const finance = f.finance || {};
+  const loan = f.loan || {};
+  const candidates = [
+    f.remainingBalance, finance.remainingBalance, loan.remainingBalance,
+    f.loanBalance, finance.loanBalance, loan.balance,
+    f.outstandingBalance, finance.outstandingBalance, finance.balance,
+  ];
+  for (const c of candidates) {
+    const n = parseMoney(c);
+    if (n > 0) return n;
+  }
+  return 0;
 }
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
@@ -138,28 +175,28 @@ function CollapsibleSection({
   const iconColor = accent ? `hsl(${accent})` : undefined;
   const iconBg = accent ? `hsl(${accent} / 0.14)` : undefined;
   return (
-    <div data-testid={testId} className="rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm">
+    <div data-testid={testId} className="h-full flex flex-col rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm">
       <button
-        className="w-full flex items-center gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/30"
+        className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-muted/30"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}
         style={accent ? { background: `linear-gradient(135deg, hsl(${accent} / 0.06) 0%, transparent 50%)` } : {}}
       >
         <div className="icon-badge" style={iconBg ? { background: iconBg } : { background: 'hsl(var(--muted))' }}>
-          <Icon className="h-3.5 w-3.5" style={iconColor ? { color: iconColor } : { color: 'hsl(var(--primary))' }} />
+          <Icon className="h-3 w-3" style={iconColor ? { color: iconColor } : { color: 'hsl(var(--primary))' }} />
         </div>
-        <h2 className="text-xs font-semibold tracking-wide uppercase" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
+        <h2 className="text-[11px] font-semibold tracking-wide uppercase" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
         {count !== undefined && (
-          <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
+          <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
         )}
-        {sub && <span className="text-xs text-muted-foreground ml-1 truncate">{sub}</span>}
+        {sub && <span className="text-[10px] text-muted-foreground ml-1 truncate">{sub}</span>}
         <div className="ml-auto flex items-center gap-1.5 shrink-0">
           {headerRight}
           {open ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground/70" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70" />}
         </div>
       </button>
-      {open && <div className="px-2.5 pb-3">{children}</div>}
+      {open && <div className="px-2.5 pb-2.5 flex-1 min-h-0">{children}</div>}
     </div>
   );
 }
@@ -170,7 +207,7 @@ function MiniStat({
   const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
-      className={`relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[72px] overflow-hidden card-lift ${
+      className={`relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden card-lift ${
         onClick ? "cursor-pointer active:scale-[0.97] transition-all" : ""
       }`}
       onClick={onClick}
@@ -212,7 +249,7 @@ function MiniStat({
         )}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
+        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
     </div>
@@ -255,7 +292,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
   const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-open-tasks">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(262 65% 62%), transparent)' }} />
@@ -265,7 +302,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
+        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
       {/* Fill bar */}
@@ -285,7 +322,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
   const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
   const maxBar = Math.max(...bars, 1);
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-monthly-spend">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
@@ -298,7 +335,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         </span>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
+        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
       {/* Mini bar chart */}
@@ -317,13 +354,13 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
   const animatedPct = useCountUp(pct);
   const dash = (pct / 100) * circ;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-habits-today">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
       <div className="flex items-start justify-between gap-2 relative z-10">
         <div>
-          <div className="text-lg font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
+          <div className="text-base font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">Habits Today</p>
           <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
         </div>
@@ -344,7 +381,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
   const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border border-border/40 min-h-[64px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-journal-streak">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(310 50% 58%), transparent)' }} />
@@ -354,7 +391,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
+        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
       {/* 7-day dots */}
@@ -373,7 +410,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   const isUrgent = expiredCount > 0;
   const accent = isUrgent ? '0 72% 52%' : '25 80% 54%';
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-2 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
       data-testid="stat-card-expiring-docs">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />
@@ -385,7 +422,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
         {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">EXPIRED</span>}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
+        <span className="text-base font-bold metric-value tracking-tight leading-none" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
       {mostOverdue && (
@@ -2369,7 +2406,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     return cats;
   }, [monthExpenses]);
   const assetProfiles = useMemo(() => (allProfiles || []).filter((p: any) => {
-    if (parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue) <= 0) return false;
+    if (resolveAssetValue(p) <= 0) return false;
     // Apply the same profile filter as everything else
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const pParent = p.fields?._parentProfileId || p.parentProfileId;
@@ -2416,12 +2453,12 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
-          <button onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button onClick={() => setDrill("networth")} className="relative rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer overflow-hidden">
+            {/* Header row: label + value */}
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
-            <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
-            {/* Net Worth trend sparkline — uses estimated monthly snapshots */}
-            {netWorth > 0 && (() => {
+            {/* 6-month sparkline — promoted to a prominent edge-to-edge slot */}
+            {netWorth > 0 ? (() => {
               const baseNW = netWorth;
               const mSpend = data?.totalMonthlySpend || monthlySpend || 0;
               const nwData = Array.from({length: 6}, (_, i) => ({
@@ -2430,19 +2467,21 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
               }));
               const isUp = nwData[5].value >= nwData[0].value;
               return (
-                <div className="mt-2 px-1" onClick={stopProp()}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">6-Month Trend</span>
-                    <span className={`text-[10px] font-bold ${isUp ? 'text-green-500' : 'text-red-400'}`}>{isUp ? '↑' : '↓'} Trending</span>
+                <div className="mt-1 -mx-2 -mb-2" onClick={stopProp()}>
+                  <div className="flex items-center justify-between px-2 mb-0.5">
+                    <span className="text-[9px] text-muted-foreground uppercase tracking-wide font-semibold">6-Month</span>
+                    <span className={`text-[9px] font-bold ${isUp ? 'text-green-500' : 'text-red-400'}`}>{isUp ? '↑' : '↓'} Trending</span>
                   </div>
-                  <ResponsiveContainer width="100%" height={40}>
-                    <LineChart data={nwData} margin={{top:2,right:2,left:2,bottom:2}}>
+                  <ResponsiveContainer width="100%" height={28}>
+                    <LineChart data={nwData} margin={{top:0,right:0,left:0,bottom:0}}>
                       <Line type="monotone" dataKey="value" stroke={isUp ? '#10b981' : '#ef4444'} strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               );
-            })()}
+            })() : (
+              <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
+            )}
           </button>
           <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <div className="flex items-center justify-center gap-2">
@@ -2598,7 +2637,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           cash-flow, not balance-sheet liabilities. */}
       {(() => {
         const liabilityProfiles = (allProfiles || []).filter((p: any) => {
-          const bal = parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance);
+          const bal = resolveLiabilityBalance(p);
           if (bal <= 0) return false;
           if (filterMode === "everyone" || filterIds.length === 0) return true;
           const pParent = p.fields?._parentProfileId || p.parentProfileId;
@@ -2610,11 +2649,11 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         // the headline figure always matches the sum of the breakdown rows under
         // every filter (Everyone, single profile, multi-select).
         const filteredAssetTotal = assetProfiles.reduce(
-          (s: number, p: any) => s + parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue),
+          (s: number, p: any) => s + resolveAssetValue(p),
           0
         );
         const filteredLiabilityTotal = liabilityProfiles.reduce(
-          (s: number, p: any) => s + parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance),
+          (s: number, p: any) => s + resolveLiabilityBalance(p),
           0
         );
         const filteredNetWorth = filteredAssetTotal - filteredLiabilityTotal;
@@ -2627,11 +2666,11 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             total={`${filteredNetWorth < 0 ? "-" : ""}$${Math.abs(filteredNetWorth).toLocaleString()}`}
             items={[
               ...assetProfiles.map((p: any) => {
-                const val = parseMoney(p.fields?.purchasePrice || p.fields?.value || p.fields?.currentValue);
+                const val = resolveAssetValue(p);
                 return { label: p.name, value: `$${val.toLocaleString()}`, sub: p.type, category: "asset" };
               }),
               ...liabilityProfiles.map((p: any) => {
-                const val = parseMoney(p.fields?.remainingBalance || p.fields?.loanBalance || p.fields?.outstandingBalance);
+                const val = resolveLiabilityBalance(p);
                 return { label: p.name, value: `-$${val.toLocaleString()}`, sub: `${p.type} loan`, category: "liability" };
               }),
             ]}
@@ -2816,48 +2855,86 @@ function RenderMarkdown({ text }: { text: string }) {
   );
 }
 
-function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefined; enhanced: any }) {
-  const [summary, setSummary] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [lastGenerated, setLastGenerated] = useState<string | null>(null);
+// ─── Smart Insights Row ──────────────────────────────────────────────────────
+// Replaces the empty AI Summary widget with computed at-a-glance signals.
 
-  const generateSummary = async () => {
-    setLoading(true);
-    try {
-      const resp = await apiRequest("POST", "/api/chat", {
-        message: "Give me a brief daily summary of my current status. Include: tasks due today, habits completion, upcoming events, and any health or finance highlights. Keep it under 4 sentences. Be direct and specific with numbers.",
+type Insight = { icon: any; label: string; tone: 'good'|'warn'|'bad'|'neutral'; href?: string };
+
+function SmartInsightsRow({ stats, enhanced }: { stats: DashboardStats | undefined; enhanced: any }) {
+  const [, navigate] = useLocation();
+  const finSnap = enhanced?.financeSnapshot;
+  const monthlySpend = finSnap?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
+  const lastMonthTotal = finSnap?.lastMonthTotal ?? 0;
+  const bills = finSnap?.upcomingBills || [];
+  const streak = stats?.journalStreak ?? 0;
+  const habits = stats?.habitCompletionRate ?? 0;
+  const overdueRaw = (enhanced?.overdueTasks?.length ?? 0) as number;
+
+  const insights: Insight[] = [];
+  // Spending vs last month
+  if (lastMonthTotal > 0) {
+    const delta = Math.round(((monthlySpend - lastMonthTotal) / lastMonthTotal) * 100);
+    if (Math.abs(delta) >= 5) {
+      insights.push({
+        icon: delta > 0 ? TrendingUp : TrendingDown,
+        label: `Spending ${delta > 0 ? 'up' : 'down'} ${Math.abs(delta)}% vs last month`,
+        tone: delta > 0 ? 'warn' : 'good',
       });
-      const data = await resp.json();
-      setSummary(data.reply || "No summary available.");
-      setLastGenerated(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
-    } catch {
-      setSummary("Unable to generate summary right now.");
-    } finally {
-      setLoading(false);
+    }
+  }
+  // Next bill due
+  const sortedBills = (bills as any[]).slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99));
+  const nextBill = sortedBills[0];
+  if (nextBill && typeof nextBill.daysUntil === 'number' && nextBill.daysUntil <= 7) {
+    insights.push({
+      icon: AlertCircle,
+      label: `${nextBill.name} due ${nextBill.daysUntil < 0 ? `${Math.abs(nextBill.daysUntil)}d overdue` : nextBill.daysUntil === 0 ? 'today' : `in ${nextBill.daysUntil}d`}`,
+      tone: nextBill.daysUntil <= 2 ? 'bad' : 'warn',
+      href: '/dashboard/obligations',
+    });
+  }
+  // Journal streak
+  if (streak >= 3) insights.push({ icon: Flame, label: `${streak}-day journal streak`, tone: 'good', href: '/dashboard/journal' });
+  // Habit completion
+  if (habits >= 80) insights.push({ icon: CheckCircle2, label: `${habits}% habits done today`, tone: 'good' });
+  // Overdue tasks
+  if (overdueRaw > 0) insights.push({ icon: AlertTriangle, label: `${overdueRaw} overdue task${overdueRaw > 1 ? 's' : ''}`, tone: 'bad', href: '/dashboard/tasks' });
+
+  const items = insights.slice(0, 4);
+  const empty: Insight = { icon: CheckCircle2, label: 'All caught up — nothing pressing.', tone: 'neutral' };
+  const display = items.length === 0 ? [empty] : items;
+
+  const toneClass = (t: Insight['tone']) => {
+    switch (t) {
+      case 'good': return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500';
+      case 'warn': return 'bg-amber-500/10 border-amber-500/30 text-amber-500';
+      case 'bad': return 'bg-red-500/10 border-red-500/30 text-red-500';
+      default: return 'bg-muted/40 border-border/40 text-muted-foreground';
     }
   };
 
-  return summary ? (
-    <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
-      <div className="space-y-2">
-        <RenderMarkdown text={summary} />
-        <div className="flex items-center justify-between">
-          {lastGenerated && <span className="text-xs text-muted-foreground">Generated at {lastGenerated}</span>}
-          <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={generateSummary} disabled={loading}>
-            <RotateCcw className={`h-2.5 w-2.5 ${loading ? "animate-spin" : ""}`} /> Refresh
-          </Button>
-        </div>
-      </div>
-    </CollapsibleSection>
-  ) : (
-    <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
-      <div className="flex flex-col items-center gap-2 py-3">
-        <p className="text-xs text-muted-foreground">Get a personalized AI-powered daily briefing</p>
-        <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" onClick={generateSummary} disabled={loading}>
-          {loading ? <><RotateCcw className="h-3 w-3 animate-spin" /> Generating...</> : <><Sparkles className="h-3 w-3" /> Generate Summary</>}
-        </Button>
-      </div>
-    </CollapsibleSection>
+  return (
+    <div
+      className="flex items-center gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1 py-0.5"
+      style={{ WebkitOverflowScrolling: 'touch' }}
+      data-testid="section-smart-insights"
+    >
+      {display.map((ins, i) => {
+        const Icon = ins.icon;
+        const Pill: any = ins.href ? 'button' : 'div';
+        return (
+          <Pill
+            key={i}
+            onClick={ins.href ? () => navigate(ins.href!) : undefined}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[11px] font-semibold whitespace-nowrap shrink-0 transition-all ${toneClass(ins.tone)} ${ins.href ? 'cursor-pointer hover:scale-[1.03] active:scale-[0.97]' : ''}`}
+            data-testid={`insight-pill-${i}`}
+          >
+            <Icon className="h-3 w-3" />
+            <span className="truncate max-w-[280px]">{ins.label}</span>
+          </Pill>
+        );
+      })}
+    </div>
   );
 }
 
@@ -2936,23 +3013,23 @@ interface DashboardSection {
 }
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
+  // Top of dashboard — full-width compact strips
+  { id: "insights",         label: "Smart Insights",       icon: Sparkles,     visible: true, column: "full" },
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
-  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
-  // Left+Right columns: only short, snappy sections — no tall sections in either column
-  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
+  // Bento 2-col grid — paired so each row's two cells equalize via items-stretch
+  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "left"  },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
-  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left" },
+  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left"  },
   { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "right" },
-  // Finance, Bills, Activity are full-width — they're too tall for a column and look better spanning full
-  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "full" },
-  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
-  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
+  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left"  },
+  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "right" },
+  // Activity full-width at the bottom
+  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full"  },
 ];
-// Layout rule: LEFT = [Today, Health] RIGHT = [Action Required, Goals]
-// FULL = [Finance, Bills, Activity]
-// Uses CSS columns (masonry) layout — sections flow naturally and fill space without dead zones
+// Bento grid layout: full-width sections stack at top/bottom; left+right sections
+// are paired into a 2-col grid with items-stretch so each row's cells equalize.
 
-const LAYOUT_VERSION = 4; // Bump: Finance/Bills/Activity moved to full-width to eliminate column dead zones
+const LAYOUT_VERSION = 5; // Bump: bento grid replaces masonry, AI Summary replaced with Smart Insights
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -3264,8 +3341,8 @@ export default function DashboardPage() {
           </div>
         );
         break;
-      case "ai-summary":
-        content = <AISummaryWidget stats={stats} enhanced={enhanced} />;
+      case "insights":
+        content = <SmartInsightsRow stats={stats} enhanced={enhanced} />;
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
@@ -3343,34 +3420,63 @@ export default function DashboardPage() {
       <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}
         sections={sections} onSave={(layout) => saveMutation.mutate(layout)} />
 
-      {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid */}
+      {/* Bento grid render:
+           1. Full-width sections that come BEFORE any column section render at the top.
+           2. Left/right paired into a 2-col md grid with items-stretch so each row's two
+              cells equalize — eliminates the black masonry gaps.
+           3. Full-width sections that come AFTER the column sections render at the bottom.
+         The split point is the first index where a section is left/right. */}
       {(() => {
-        // Split full-width into before-grid (kpis, ai-summary) and after-grid (activity, obligations)
-        const afterGridIds = new Set(["activity"]);
-        const beforeGrid = fullWidthSections.filter(s => !afterGridIds.has(s.id));
-        const afterGrid = fullWidthSections.filter(s => afterGridIds.has(s.id));
+        const visibleSections = sections.filter(s => s.visible);
+        const firstColumnIdx = visibleSections.findIndex(s => s.column === "left" || s.column === "right");
+        const lastColumnIdx = (() => {
+          for (let i = visibleSections.length - 1; i >= 0; i--) {
+            if (visibleSections[i].column === "left" || visibleSections[i].column === "right") return i;
+          }
+          return -1;
+        })();
+        const beforeGrid = firstColumnIdx === -1
+          ? visibleSections.filter(s => s.column === "full")
+          : visibleSections.slice(0, firstColumnIdx).filter(s => s.column === "full");
+        const afterGrid = lastColumnIdx === -1
+          ? []
+          : visibleSections.slice(lastColumnIdx + 1).filter(s => s.column === "full");
+
+        // Pair left/right sections into rows for the bento grid.
+        // Each row gets one left + one right (in saved order); items-stretch on the grid
+        // ensures the two cells equalize height even if their content differs.
+        const leftQ = leftSections.slice();
+        const rightQ = rightSections.slice();
+        const rowItems: { id: string; key: string; colSpan?: number }[] = [];
+        while (leftQ.length || rightQ.length) {
+          const l = leftQ.shift();
+          const r = rightQ.shift();
+          if (l && r) {
+            rowItems.push({ id: l.id, key: l.id });
+            rowItems.push({ id: r.id, key: r.id });
+          } else if (l) {
+            rowItems.push({ id: l.id, key: l.id, colSpan: 2 });
+          } else if (r) {
+            rowItems.push({ id: r.id, key: r.id, colSpan: 2 });
+          }
+        }
+
         return (
           <>
             {beforeGrid.map(s => (
               <div key={s.id}>{renderSection(s.id)}</div>
             ))}
 
-            {(leftSections.length > 0 || rightSections.length > 0) && (
-              <div className="md:columns-2 md:gap-3 gap-3 mt-1">
-                {/* Interleave left and right sections for balanced masonry flow */}
-                {(() => {
-                  const interleaved: typeof leftSections = [];
-                  const maxLen = Math.max(leftSections.length, rightSections.length);
-                  for (let i = 0; i < maxLen; i++) {
-                    if (i < leftSections.length) interleaved.push(leftSections[i]);
-                    if (i < rightSections.length) interleaved.push(rightSections[i]);
-                  }
-                  return interleaved.map(s => (
-                    <div key={s.id} className="mb-3" style={{ breakInside: 'avoid' }}>
-                      {renderSection(s.id)}
-                    </div>
-                  ));
-                })()}
+            {rowItems.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                {rowItems.map(it => (
+                  <div
+                    key={it.key}
+                    className={`h-full min-w-0 ${it.colSpan === 2 ? "md:col-span-2" : ""}`}
+                  >
+                    {renderSection(it.id)}
+                  </div>
+                ))}
               </div>
             )}
 

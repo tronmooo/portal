@@ -4332,7 +4332,7 @@ export default function TrackersPage() {
               {collapsedSections.has("profiles") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("profiles") && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 auto-rows-fr">
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
                   const fields = child.fields || {};
@@ -4432,7 +4432,7 @@ export default function TrackersPage() {
                   return (
                     <Link key={child.id} href={`/profiles/${child.id}`}>
                       <div
-                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col"
+                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-full"
                         style={{
                           background: `linear-gradient(180deg, hsl(var(--card)) 0%, hsl(var(--card)) 100%)`,
                           border: `1px solid hsl(${accentHsl} / 0.22)`,
@@ -4451,7 +4451,7 @@ export default function TrackersPage() {
                           </span>
                         )}
                         <div className="px-2.5 pt-1.5 pb-1 flex flex-col gap-1 flex-1">
-                          <p className="text-[11px] font-bold text-foreground truncate leading-tight">{child.name}</p>
+                          <p className="text-[11px] font-bold text-foreground truncate leading-tight line-clamp-1">{child.name}</p>
                           <div className="flex items-baseline justify-between gap-1">
                             {currentVal != null && currentVal > 0 ? (
                               <span className="text-[17px] font-black tabular-nums text-foreground leading-none" style={{ letterSpacing: '-0.02em' }}>${currentVal.toLocaleString()}</span>
@@ -4462,13 +4462,14 @@ export default function TrackersPage() {
                             )}
                             {trendPct != null && currentVal != null && currentVal > 0 && <TrendArrow delta={trendPct} />}
                           </div>
-                          {secondaryKpis.length > 0 && (
-                            <div className="grid grid-cols-2 gap-1 mt-0.5">
-                              {secondaryKpis.slice(0, 2).map((kpi, i) => (
-                                <MetricPill key={i} label={kpi.label} value={kpi.value} />
-                              ))}
-                            </div>
-                          )}
+                          <div className="grid grid-cols-2 gap-1 mt-0.5">
+                            {[0, 1].map(i => {
+                              const kpi = secondaryKpis[i];
+                              return kpi
+                                ? <MetricPill key={i} label={kpi.label} value={kpi.value} />
+                                : <div key={i} className="h-[26px]" />;
+                            })}
+                          </div>
                         </div>
                         <div className="px-2.5 pb-1.5 pt-0.5 flex items-center justify-between gap-1">
                           <span
@@ -4533,7 +4534,7 @@ export default function TrackersPage() {
               {collapsedSections.has("subscriptions") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("subscriptions") && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 auto-rows-fr">
                 {subs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(sub => {
                   const fields = sub.fields || {};
                   // Nested subscription data is stored under fields.subscriptions for older entries
@@ -4591,7 +4592,7 @@ export default function TrackersPage() {
                   return (
                     <Link key={sub.id} href={`/profiles/${sub.id}`}>
                       <div
-                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col"
+                        className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col h-full"
                         style={{
                           background: `linear-gradient(165deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 50%)`,
                           border: `1px solid hsl(${accentHsl} / 0.22)`,
@@ -4613,7 +4614,7 @@ export default function TrackersPage() {
                           >{initial}</div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1">
-                              <p className="text-[10px] font-bold text-foreground truncate leading-tight">{sub.name}</p>
+                              <p className="text-[10px] font-bold text-foreground truncate leading-tight line-clamp-1">{sub.name}</p>
                               <StatusDot tone={isActive ? 'green' : 'muted'} title={isActive ? 'Active' : 'Inactive'} />
                             </div>
                             {provider && String(provider) !== sub.name && (
@@ -4827,7 +4828,7 @@ export default function TrackersPage() {
                         <span>{DOC_TYPE_EMOJI[docType] || '📄'}</span> {docType.replace(/_/g, ' ')} <span className="text-muted-foreground font-normal">({docs.length})</span>
                       </h4>
                     )}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 auto-rows-fr">
                       {docs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
                         const accentHsl = DOC_TYPE_HSL[doc.type] || '25 80% 54%';
                         const ac = `hsl(${accentHsl})`;
@@ -4856,7 +4857,7 @@ export default function TrackersPage() {
                         return (
                           <div
                             key={doc.id}
-                            className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col group"
+                            className="relative rounded-[14px] overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-px flex flex-col group h-full"
                             style={{
                               background: `linear-gradient(165deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 50%)`,
                               border: `1px solid hsl(${accentHsl} / 0.22)`,

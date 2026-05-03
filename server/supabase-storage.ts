@@ -310,7 +310,7 @@ export class SupabaseStorage implements IStorage {
 
   private rowToExpense(r: any): Expense {
     return {
-      id: r.id, amount: r.amount, category: r.category, description: r.description,
+      id: r.id, amount: Number(r.amount) || 0, category: r.category, description: r.description,
       vendor: r.vendor || undefined, isRecurring: r.is_recurring || undefined,
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
       date: r.date, createdAt: r.created_at,
@@ -360,14 +360,14 @@ export class SupabaseStorage implements IStorage {
 
   private rowToPayment(r: any): ObligationPayment {
     return {
-      id: r.id, amount: r.amount, date: r.date,
+      id: r.id, amount: Number(r.amount) || 0, date: r.date,
       method: r.method || undefined, confirmationNumber: r.confirmation_number || undefined,
     };
   }
 
   private rowToObligation(r: any, payments: ObligationPayment[]): Obligation {
     return {
-      id: r.id, name: r.name, amount: r.amount, frequency: r.frequency,
+      id: r.id, name: r.name, amount: Number(r.amount) || 0, frequency: r.frequency,
       category: r.category, nextDueDate: r.next_due_date, autopay: r.autopay || false,
       status: r.status || "active",
       linkedProfiles: r.linked_profiles || [], payments,
