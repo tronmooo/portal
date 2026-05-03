@@ -920,10 +920,10 @@ function ExtractedDataPanel({
                 {linkedProfileObjects.map((p) => (
                   <div
                     key={p.id}
-                    className="inline-flex items-center gap-1 h-6 bg-muted rounded-full px-2"
+                    className="flex items-center gap-1 bg-muted rounded-full px-2 py-0.5"
                     data-testid={`badge-profile-${p.id}`}
                   >
-                    <span className="text-[11px]">{p.name}</span>
+                    <span className="text-xs">{p.name}</span>
                     <button
                       onClick={() => unlinkProfile(p.id)}
                       className="text-muted-foreground hover:text-destructive transition-colors"

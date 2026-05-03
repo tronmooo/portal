@@ -191,7 +191,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
             <Button
               variant="outline"
               size={compact ? "sm" : "default"}
-              className={`gap-1.5 ${compact ? "h-7 text-[11px] px-2" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
+              className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
               data-testid="button-profile-filter"
             >
               <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
@@ -231,7 +231,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
         <Button
           variant="outline"
           size={compact ? "sm" : "default"}
-          className={`gap-1.5 ${compact ? "h-7 text-[11px] px-2" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
+          className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
           onClick={() => setMobileOpen(true)}
           data-testid="button-profile-filter-mobile"
         >

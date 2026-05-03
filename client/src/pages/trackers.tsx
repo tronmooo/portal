@@ -103,9 +103,6 @@ import {
   Loader2,
   Pill,
   TreePine,
-  Thermometer,
-  FlaskConical,
-  Droplet,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
@@ -949,7 +946,7 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
             {refillDate && <p className="text-sm text-muted-foreground">Refill: <span className="font-medium text-foreground">{refillDate}</span></p>}
           </div>
           {/* Today's status badge */}
-          <div className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-bold ${
+          <div className={`px-3 py-1.5 rounded-full text-xs font-bold ${
             takenToday ? 'bg-green-500/20 text-green-500' : 'bg-amber-500/20 text-amber-500'
           }`}>
             {takenToday ? '✓ Taken today' : 'Not taken yet'}
@@ -1754,524 +1751,6 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
     </div>
   );
 }
-// ── TrackerDashboard ────────────────────────────────────────────────────────
-// 3-zone medical-grade dashboard layout per user spec:
-//   Top row   → Vitals cards with circular gauges + sparklines
-//   Bottom-L  → Lab Results panel (Metabolic + CBC)
-//   Bottom-R  → Vehicle / non-medical widget
-//   Fallback  → "Other" compact list for anything else
-
-// Vital ranges used for status dot + gauge fill
-const VITAL_RANGES: Record<string, { min: number; max: number; warnLow?: number; warnHigh?: number }> = {
-  "heart rate":      { min: 40,  max: 200, warnLow: 50,  warnHigh: 100  },
-  "pulse":           { min: 40,  max: 200, warnLow: 50,  warnHigh: 100  },
-  "heart_rate":      { min: 40,  max: 200, warnLow: 50,  warnHigh: 100  },
-  "body temperature":{ min: 95,  max: 106, warnLow: 97,  warnHigh: 99.5 },
-  "temperature":     { min: 95,  max: 106, warnLow: 97,  warnHigh: 99.5 },
-  "body temp":       { min: 95,  max: 106, warnLow: 97,  warnHigh: 99.5 },
-  "respiratory rate":{ min: 8,   max: 30,  warnLow: 12,  warnHigh: 20   },
-  "oxygen saturation":{ min: 85, max: 100, warnLow: 95,  warnHigh: 100  },
-  "spo2":            { min: 85,  max: 100, warnLow: 95,  warnHigh: 100  },
-  "pulse ox":        { min: 85,  max: 100, warnLow: 95,  warnHigh: 100  },
-  // blood pressure handled specially
-};
-
-const LAB_METABOLIC = ["glucose", "ldl", "hdl", "total cholesterol", "cholesterol", "triglycerides", "a1c", "hba1c"];
-const LAB_CBC = ["hemoglobin", "wbc", "rbc", "platelets", "hematocrit", "white blood cell", "red blood cell"];
-
-function isVitalTracker(t: Tracker): boolean {
-  const name = t.name.toLowerCase();
-  const cat  = t.category?.toLowerCase() || "";
-  return (
-    cat === "vitals" ||
-    name.includes("blood pressure") ||
-    name.includes("heart rate") ||
-    name.includes("pulse") ||
-    name.includes("temperature") ||
-    name.includes("body temp") ||
-    name.includes("respiratory") ||
-    name.includes("oxygen") ||
-    name.includes("spo2")
-  );
-}
-
-function isLabTracker(t: Tracker): boolean {
-  const name = t.name.toLowerCase();
-  const cat  = t.category?.toLowerCase() || "";
-  return (
-    cat === "lab" || cat === "labs" ||
-    LAB_METABOLIC.some(k => name.includes(k)) ||
-    LAB_CBC.some(k => name.includes(k))
-  );
-}
-
-function isVehicleTracker(t: Tracker): boolean {
-  const name = t.name.toLowerCase();
-  const cat  = t.category?.toLowerCase() || "";
-  const unit = (t.unit || "").toLowerCase();
-  return (
-    cat === "vehicle" ||
-    name.includes("odometer") ||
-    name.includes("mileage") ||
-    unit === "mi" ||
-    unit === "km" ||
-    unit === "miles"
-  );
-}
-
-// Compute status: "normal" | "caution" | "danger"
-function vitalStatus(name: string, value: number | null): "normal" | "caution" | "danger" {
-  if (value === null) return "normal";
-  const key = Object.keys(VITAL_RANGES).find(k => name.toLowerCase().includes(k));
-  if (!key) return "normal";
-  const r = VITAL_RANGES[key];
-  if (value < r.min || value > r.max) return "danger";
-  if ((r.warnLow !== undefined && value < r.warnLow) || (r.warnHigh !== undefined && value > r.warnHigh)) return "caution";
-  return "normal";
-}
-
-function bpStatus(sys: number | null): "normal" | "caution" | "danger" {
-  if (sys === null) return "normal";
-  if (sys >= 140) return "danger";
-  if (sys >= 130) return "caution";
-  return "normal";
-}
-
-function labStatus(name: string, value: number | null): "normal" | "caution" | "danger" {
-  if (value === null) return "normal";
-  const n = name.toLowerCase();
-  if (n.includes("glucose")) {
-    if (value > 125 || value < 70) return "danger";
-    if (value > 100) return "caution";
-    return "normal";
-  }
-  if (n.includes("ldl")) {
-    if (value > 190) return "danger";
-    if (value > 130) return "caution";
-    return "normal";
-  }
-  if (n.includes("hdl")) {
-    if (value < 40) return "danger";
-    if (value < 60) return "caution";
-    return "normal";
-  }
-  if (n.includes("cholesterol")) {
-    if (value > 240) return "danger";
-    if (value > 200) return "caution";
-    return "normal";
-  }
-  if (n.includes("triglyceride")) {
-    if (value > 500) return "danger";
-    if (value > 200) return "caution";
-    return "normal";
-  }
-  if (n.includes("a1c") || n.includes("hba1c")) {
-    if (value >= 6.5) return "danger";
-    if (value >= 5.7) return "caution";
-    return "normal";
-  }
-  if (n.includes("hemoglobin")) {
-    if (value < 12 || value > 18) return "danger";
-    if (value < 13.5 || value > 17) return "caution";
-    return "normal";
-  }
-  return "normal";
-}
-
-const STATUS_DOT_COLORS = {
-  normal:  "#22c55e",
-  caution: "#f59e0b",
-  danger:  "#ef4444",
-} as const;
-
-// Circular gauge ring component (64px)
-function CircularGauge({ pct, status, size = 64 }: { pct: number; status: "normal" | "caution" | "danger"; size?: number }) {
-  const color = STATUS_DOT_COLORS[status];
-  const r = (size - 8) / 2;
-  const circ = 2 * Math.PI * r;
-  const filled = Math.min(1, Math.max(0, pct)) * circ;
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="hsl(var(--muted-foreground) / 0.12)" strokeWidth="5" />
-      <circle
-        cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke={color} strokeWidth="5" strokeLinecap="round"
-        strokeDasharray={`${filled} ${circ}`}
-        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        style={{ transition: 'stroke-dasharray 0.4s ease' }}
-      />
-    </svg>
-  );
-}
-
-// Status dot
-function StatusDot({ status }: { status: "normal" | "caution" | "danger" }) {
-  return <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: STATUS_DOT_COLORS[status] }} />;
-}
-
-// Mini sparkline for last 7 values (SVG inline)
-function MiniSparkline({ values, color }: { values: number[]; color: string }) {
-  if (values.length < 2) return null;
-  const w = 80, h = 22;
-  const mn = Math.min(...values), mx = Math.max(...values), rng = mx - mn || 1;
-  const pts = values.map((v, i) => {
-    const x = (i / (values.length - 1)) * w;
-    const y = h - 2 - ((v - mn) / rng) * (h - 6);
-    return `${x},${y}`;
-  });
-  const uid = `ms${color.replace(/[^a-z0-9]/gi, '').slice(0, 8)}`;
-  return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
-      <defs>
-        <linearGradient id={uid} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.25" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={`M0,${h} L${pts.join(' L')} L${w},${h}Z`} fill={`url(#${uid})`} />
-      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-// Vitals card — circular gauge + big number + sparkline
-function VitalCard({ tracker, onOpenDetail }: { tracker: Tracker; onOpenDetail?: (id: string) => void }) {
-  const name = tracker.name;
-  const nameLow = name.toLowerCase();
-  const isBP = nameLow.includes("blood pressure") || nameLow.includes("pressure");
-
-  const entries = tracker.entries || [];
-  const lastEntry = entries[entries.length - 1];
-  const primaryField = tracker.fields.find(f => f.isPrimary)?.name || tracker.fields.find(f => f.type === 'number')?.name || tracker.fields[0]?.name || 'value';
-  const unit = tracker.unit || tracker.fields.find(f => f.name === primaryField)?.unit || '';
-
-  // Icon selection
-  const Icon = isBP || nameLow.includes("heart") || nameLow.includes("pulse")
-    ? Heart
-    : nameLow.includes("temp") ? Thermometer
-    : nameLow.includes("oxygen") || nameLow.includes("spo2") ? Droplet
-    : Activity;
-
-  // Accent color
-  const accentHsl = "173 60% 44%"; // health teal
-  const ac = `hsl(${accentHsl})`;
-
-  // Latest value + status
-  let displayVal: string;
-  let gaugeVal: number | null = null;
-  let status: "normal" | "caution" | "danger" = "normal";
-
-  if (isBP) {
-    const sys = lastEntry?.values['systolic'] ?? lastEntry?.values['systolic_pressure'] ?? lastEntry?.values['sbp'];
-    const dia = lastEntry?.values['diastolic'] ?? lastEntry?.values['diastolic_pressure'] ?? lastEntry?.values['dbp'];
-    displayVal = (typeof sys === 'number' && typeof dia === 'number') ? `${sys}/${dia}` : '—';
-    const sysNum = typeof sys === 'number' ? sys : null;
-    status = bpStatus(sysNum);
-    // Gauge: 0 = 90mmHg, 1 = 180mmHg → (sys-90)/90
-    gaugeVal = sysNum !== null ? Math.min(1, Math.max(0, (sysNum - 90) / 90)) : 0;
-  } else {
-    const raw = lastEntry?.values[primaryField];
-    const num = typeof raw === 'number' ? raw : null;
-    displayVal = num !== null ? `${num % 1 === 0 ? num : num.toFixed(1)}${unit ? ` ${unit}` : ''}` : '—';
-    status = vitalStatus(nameLow, num);
-    // Gauge: use normalized position within range
-    const key = Object.keys(VITAL_RANGES).find(k => nameLow.includes(k));
-    if (key && num !== null) {
-      const r = VITAL_RANGES[key];
-      gaugeVal = Math.min(1, Math.max(0, (num - r.min) / (r.max - r.min)));
-    } else if (num !== null) {
-      gaugeVal = 0.5;
-    } else {
-      gaugeVal = 0;
-    }
-  }
-
-  // Sparkline: last 7 numeric values
-  const sparkVals = (isBP
-    ? entries.slice(-7).map(e => (e.values['systolic'] ?? e.values['systolic_pressure']) as number)
-    : entries.slice(-7).map(e => e.values[primaryField] as number)
-  ).filter((v): v is number => typeof v === 'number');
-
-  return (
-    <div
-      className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] flex flex-col"
-      style={{
-        background: `linear-gradient(160deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 50%)`,
-        border: `1px solid hsl(${accentHsl} / 0.25)`,
-        boxShadow: `0 2px 12px hsl(${accentHsl} / 0.08)`,
-      }}
-      onClick={() => onOpenDetail?.(tracker.id)}
-      data-testid={`vital-card-${tracker.id}`}
-    >
-      {/* Header */}
-      <div className="px-3 pt-3 pb-1 flex items-center gap-2">
-        <div className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.18)`, color: ac }}>
-          <Icon className="h-3.5 w-3.5" />
-        </div>
-        <span className="text-[11px] font-bold text-foreground truncate flex-1">{name}</span>
-        <StatusDot status={status} />
-      </div>
-
-      {/* Body: gauge + big number */}
-      <div className="px-3 pb-1 flex items-center gap-3">
-        <CircularGauge pct={gaugeVal ?? 0} status={status} size={56} />
-        <div className="flex flex-col min-w-0">
-          <span className="text-2xl font-black tabular-nums leading-none text-foreground" style={{ letterSpacing: '-0.02em' }}>
-            {isBP ? (
-              <>
-                <span style={{ color: ac }}>{displayVal.split('/')[0]}</span>
-                <span className="text-sm text-muted-foreground/60">/</span>
-                <span style={{ color: ac }}>{displayVal.split('/')[1] ?? ''}</span>
-              </>
-            ) : (
-              <span style={{ color: ac }}>{displayVal.split(' ')[0]}</span>
-            )}
-          </span>
-          {unit && !isBP && (
-            <span className="text-[9px] text-muted-foreground mt-0.5">{unit}</span>
-          )}
-          {isBP && (
-            <span className="text-[9px] text-muted-foreground mt-0.5">mmHg</span>
-          )}
-        </div>
-      </div>
-
-      {/* Sparkline */}
-      {sparkVals.length > 1 && (
-        <div className="px-3 pb-2">
-          <MiniSparkline values={sparkVals} color={ac} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Lab Results panel — groups trackers into Metabolic / CBC / Other Lab
-function LabResultsPanel({ trackers, onOpenDetail }: { trackers: Tracker[]; onOpenDetail?: (id: string) => void }) {
-  const metabolic = trackers.filter(t => LAB_METABOLIC.some(k => t.name.toLowerCase().includes(k)));
-  const cbc = trackers.filter(t => LAB_CBC.some(k => t.name.toLowerCase().includes(k)));
-  const other = trackers.filter(t => !metabolic.includes(t) && !cbc.includes(t));
-
-  function LabRow({ tracker }: { tracker: Tracker }) {
-    const primaryField = tracker.fields.find(f => f.isPrimary)?.name || tracker.fields.find(f => f.type === 'number')?.name || tracker.fields[0]?.name || 'value';
-    const lastEntry = (tracker.entries || []).slice(-1)[0];
-    const raw = lastEntry?.values[primaryField];
-    const num = typeof raw === 'number' ? raw : null;
-    const unit = tracker.unit || tracker.fields.find(f => f.name === primaryField)?.unit || '';
-    const status = labStatus(tracker.name, num);
-    const displayVal = num !== null ? `${num % 1 === 0 ? num : num.toFixed(1)}${unit ? ` ${unit}` : ''}` : '—';
-    return (
-      <button
-        className="flex items-center gap-2 w-full py-1.5 px-1 rounded hover:bg-muted/40 transition-colors text-left"
-        onClick={() => onOpenDetail?.(tracker.id)}
-      >
-        <StatusDot status={status} />
-        <span className="text-[11px] text-foreground/80 flex-1 truncate">{tracker.name}</span>
-        <span className="text-[11px] font-bold tabular-nums shrink-0" style={{ color: STATUS_DOT_COLORS[status] }}>{displayVal}</span>
-      </button>
-    );
-  }
-
-  if (trackers.length === 0) return null;
-
-  const accentHsl = "188 65% 48%"; // education blue-green
-  const ac = `hsl(${accentHsl})`;
-
-  return (
-    <Card
-      className="rounded-xl overflow-hidden"
-      style={{ border: `1px solid hsl(${accentHsl} / 0.2)`, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.08) 0%, hsl(var(--card)) 45%)` }}
-    >
-      <CardHeader className="px-3 pt-3 pb-1">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}>
-            <FlaskConical className="h-3.5 w-3.5" />
-          </div>
-          <CardTitle className="text-[12px] font-bold" style={{ color: ac }}>Lab Results</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent className="px-3 pb-3 space-y-3">
-        {metabolic.length > 0 && (
-          <div>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Metabolic Panel</p>
-            <div className="divide-y divide-border/30">
-              {metabolic.map(t => <LabRow key={t.id} tracker={t} />)}
-            </div>
-          </div>
-        )}
-        {cbc.length > 0 && (
-          <div>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">CBC</p>
-            <div className="divide-y divide-border/30">
-              {cbc.map(t => <LabRow key={t.id} tracker={t} />)}
-            </div>
-          </div>
-        )}
-        {other.length > 0 && (
-          <div>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Other Lab</p>
-            <div className="divide-y divide-border/30">
-              {other.map(t => <LabRow key={t.id} tracker={t} />)}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// Vehicle / Odometer widget
-function VehicleWidget({ trackers, onOpenDetail }: { trackers: Tracker[]; onOpenDetail?: (id: string) => void }) {
-  if (trackers.length === 0) return null;
-  const accentHsl = "262 60% 62%"; // vehicle purple
-  const ac = `hsl(${accentHsl})`;
-  return (
-    <Card
-      className="rounded-xl overflow-hidden"
-      style={{ border: `1px solid hsl(${accentHsl} / 0.2)`, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.1) 0%, hsl(var(--card)) 45%)` }}
-    >
-      <CardHeader className="px-3 pt-3 pb-1">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}>
-            <Car className="h-3.5 w-3.5" />
-          </div>
-          <CardTitle className="text-[12px] font-bold" style={{ color: ac }}>Vehicle Data</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent className="px-3 pb-3 space-y-2">
-        {trackers.map(t => {
-          const primaryField = t.fields.find(f => f.isPrimary)?.name || t.fields.find(f => f.type === 'number')?.name || t.fields[0]?.name || 'value';
-          const lastEntry = (t.entries || []).slice(-1)[0];
-          const raw = lastEntry?.values[primaryField];
-          const num = typeof raw === 'number' ? raw : null;
-          const unit = t.unit || t.fields.find(f => f.name === primaryField)?.unit || '';
-          const displayVal = num !== null ? num.toLocaleString() : '—';
-          // Trend
-          const recentVals = (t.entries || []).slice(-7).map(e => e.values[primaryField] as number).filter((v): v is number => typeof v === 'number');
-          return (
-            <button
-              key={t.id}
-              className="w-full flex items-center gap-3 rounded-lg hover:bg-muted/40 transition-colors px-1 py-1 text-left"
-              onClick={() => onOpenDetail?.(t.id)}
-            >
-              <div className="flex-1 min-w-0">
-                <p className="text-[11px] font-semibold truncate text-foreground/80">{t.name}</p>
-                <div className="flex items-baseline gap-1 mt-0.5">
-                  <span className="text-xl font-black tabular-nums" style={{ color: ac }}>{displayVal}</span>
-                  {unit && <span className="text-[9px] text-muted-foreground">{unit}</span>}
-                </div>
-              </div>
-              {recentVals.length > 1 && (
-                <div className="w-16 h-8 shrink-0">
-                  <MiniSparkline values={recentVals} color={ac} />
-                </div>
-              )}
-            </button>
-          );
-        })}
-      </CardContent>
-    </Card>
-  );
-}
-
-// "Other" compact row list for trackers that don't fit any zone
-function OtherTrackersSection({ trackers, onOpenDetail }: { trackers: Tracker[]; onOpenDetail?: (id: string) => void }) {
-  if (trackers.length === 0) return null;
-  return (
-    <div>
-      <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Other</p>
-      <div className="rounded-xl border border-border/30 bg-card overflow-hidden divide-y divide-border/20">
-        {trackers.map(t => {
-          const primaryField = t.fields.find(f => f.isPrimary)?.name || t.fields.find(f => f.type === 'number')?.name || t.fields[0]?.name || 'value';
-          const lastEntry = (t.entries || []).slice(-1)[0];
-          const raw = lastEntry?.values[primaryField];
-          const num = typeof raw === 'number' ? raw : null;
-          const unit = t.unit || t.fields.find(f => f.name === primaryField)?.unit || '';
-          const displayVal = num !== null ? `${num % 1 === 0 ? num : num.toFixed(1)}${unit ? ` ${unit}` : ''}` : '—';
-          const ac = `hsl(${getCategoryAccent(t.category)})`;
-          return (
-            <button
-              key={t.id}
-              className="flex items-center gap-2 w-full px-3 py-2 hover:bg-muted/30 transition-colors text-left"
-              onClick={() => onOpenDetail?.(t.id)}
-            >
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: ac }} />
-              <span className="text-[11px] text-foreground/80 flex-1 truncate">{t.name}</span>
-              <span className="text-[11px] font-bold tabular-nums shrink-0" style={{ color: ac }}>{displayVal}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// Main dashboard component
-function TrackerDashboard({
-  trackers,
-  profileName,
-  onOpenDetail,
-}: {
-  trackers: Tracker[];
-  profileName: string;
-  onOpenDetail?: (id: string) => void;
-}) {
-  // Partition trackers into zones
-  const vitals   = trackers.filter(isVitalTracker);
-  const labs     = trackers.filter(t => !isVitalTracker(t) && isLabTracker(t));
-  const vehicles = trackers.filter(t => !isVitalTracker(t) && !isLabTracker(t) && isVehicleTracker(t));
-  const others   = trackers.filter(t => !isVitalTracker(t) && !isLabTracker(t) && !isVehicleTracker(t));
-
-  const hasLabs     = labs.length > 0;
-  const hasVehicles = vehicles.length > 0;
-  const hasRightPanel = hasLabs || hasVehicles;
-
-  return (
-    <div className="space-y-4" data-testid="tracker-dashboard">
-      {/* ── Global header ── */}
-      <div className="flex items-center gap-2 px-0.5">
-        <HeartPulse className="h-4 w-4 text-muted-foreground/60" />
-        <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground/70">
-          Patient: {profileName.toUpperCase()} | Dashboard
-        </span>
-      </div>
-
-      {/* ── Vitals row (top) ── */}
-      {vitals.length > 0 && (
-        <div>
-          <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Vitals</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-            {vitals.map(t => (
-              <VitalCard key={t.id} tracker={t} onOpenDetail={onOpenDetail} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Bottom zone: labs (left) + vehicle (right) ── */}
-      {hasRightPanel && (
-        <div className={`grid gap-3 ${hasLabs && hasVehicles ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
-          {hasLabs && <LabResultsPanel trackers={labs} onOpenDetail={onOpenDetail} />}
-          {hasVehicles && <VehicleWidget trackers={vehicles} onOpenDetail={onOpenDetail} />}
-        </div>
-      )}
-
-      {/* ── Fallback: Other ── */}
-      {others.length > 0 && (
-        <OtherTrackersSection trackers={others} onOpenDetail={onOpenDetail} />
-      )}
-
-      {/* Edge case: no trackers at all */}
-      {vitals.length === 0 && labs.length === 0 && vehicles.length === 0 && others.length === 0 && (
-        <div className="text-center py-8">
-          <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-xs text-muted-foreground">No trackers to display</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── EntryRow ───────────────────────────────────────────────────────────────────
 
 function EntryRow({
@@ -4425,7 +3904,7 @@ export default function TrackersPage() {
       <div className="p-3 md:p-5 space-y-3">
         <div className="h-7 w-32 rounded skeleton-shimmer" />
         <div className="flex gap-2 overflow-x-hidden">
-          {[...Array(4)].map((_, i) => <div key={i} className="h-6 w-16 rounded-full skeleton-shimmer shrink-0" />)}
+          {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
           {[...Array(8)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
@@ -4511,7 +3990,7 @@ export default function TrackersPage() {
               <button
                 key={s}
                 onClick={() => setSectionFilter(s)}
-                className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${sectionFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${sectionFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
                 data-testid={`filter-section-${s}`}
               >
                 {labels[s]}
@@ -4536,7 +4015,7 @@ export default function TrackersPage() {
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-trackers">
           <button
             onClick={() => setTrackerCatFilter("all")}
-            className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${trackerCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${trackerCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
           >
             All Groups
           </button>
@@ -4549,7 +4028,7 @@ export default function TrackersPage() {
               <button
                 key={group}
                 onClick={() => setTrackerCatFilter(isActive ? "all" : group)}
-                className={`inline-flex items-center gap-1 h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "ring-1 ring-offset-1" : "hover:bg-muted border border-border/50"}`}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "ring-1 ring-offset-1" : "hover:bg-muted border border-border/50"}`}
                 style={isActive ? { background: `hsl(${gAccent} / 0.18)`, color: `hsl(${gAccent})`, borderColor: `hsl(${gAccent} / 0.4)` } : { color: `hsl(${gAccent})` }}
               >
                 <GIco className="h-2.5 w-2.5" />
@@ -4564,7 +4043,7 @@ export default function TrackersPage() {
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-documents">
           <button
             onClick={() => setDocTypeFilter("all")}
-            className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
             data-testid="filter-doctype-all-top"
           >
             All Types
@@ -4576,7 +4055,7 @@ export default function TrackersPage() {
               <button
                 key={t}
                 onClick={() => setDocTypeFilter(isActive ? "all" : t)}
-                className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
                 data-testid={`filter-doctype-top-${t}`}
               >
                 {t.replace(/_/g, " ")} <span className="opacity-70">{count}</span>
@@ -4590,7 +4069,7 @@ export default function TrackersPage() {
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-assets">
           <button
             onClick={() => { setAssetTypeFilter("all"); setAssetNesting("all"); }}
-            className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" && assetNestingFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" && assetNestingFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
           >
             All Types
           </button>
@@ -4600,7 +4079,7 @@ export default function TrackersPage() {
               <button
                 key={label}
                 onClick={() => setAssetTypeFilter(isActive ? "all" : label)}
-                className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
                 data-testid={`filter-asset-type-${label}`}
               >
                 {label} <span className="opacity-70">{count}</span>
@@ -4618,7 +4097,7 @@ export default function TrackersPage() {
               <button
                 key={value}
                 onClick={() => { setAssetTypeFilter("all"); setAssetNesting(isActive ? "all" : value); }}
-                className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
                 data-testid={`filter-asset-nesting-${value}`}
               >
                 {label}
@@ -4632,7 +4111,7 @@ export default function TrackersPage() {
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-subscriptions">
           <button
             onClick={() => setSubCatFilter("all")}
-            className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${subCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${subCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
           >
             All Categories
           </button>
@@ -4642,7 +4121,7 @@ export default function TrackersPage() {
               <button
                 key={cat}
                 onClick={() => setSubCatFilter(isActive ? "all" : cat)}
-                className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
+                className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
                 data-testid={`filter-sub-cat-${cat}`}
               >
                 {cat} <span className="opacity-70">{count}</span>
@@ -4721,7 +4200,7 @@ export default function TrackersPage() {
               <div className="flex-1 text-left">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-bold" style={{ color: 'hsl(262 60% 62%)' }}>Assets & Vehicles</span>
-                  <span className="inline-flex items-center h-5 min-w-5 px-1.5 text-[10px] rounded-full font-semibold" style={{ background: 'hsl(262 60% 62% / 0.15)', color: 'hsl(262 60% 62%)' }}>{childProfiles.length}</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(262 60% 62% / 0.15)', color: 'hsl(262 60% 62%)' }}>{childProfiles.length}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">Vehicles, property, investments and more</p>
               </div>
@@ -4850,7 +4329,7 @@ export default function TrackersPage() {
               <div className="flex-1 text-left">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-bold" style={{ color: 'hsl(43 85% 52%)' }}>Subscriptions & Bills</span>
-                  <span className="inline-flex items-center h-5 min-w-5 px-1.5 text-[10px] rounded-full font-semibold" style={{ background: 'hsl(43 85% 52% / 0.15)', color: 'hsl(43 85% 52%)' }}>{subs.length}</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(43 85% 52% / 0.15)', color: 'hsl(43 85% 52%)' }}>{subs.length}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">Recurring payments and services</p>
               </div>
@@ -4927,7 +4406,7 @@ export default function TrackersPage() {
               <div className="flex-1 text-left">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-bold" style={{ color: 'hsl(25 80% 54%)' }}>Documents</span>
-                  <span className="inline-flex items-center h-5 min-w-5 px-1.5 text-[10px] rounded-full font-semibold" style={{ background: 'hsl(25 80% 54% / 0.15)', color: 'hsl(25 80% 54%)' }}>{filteredDocuments.length}</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(25 80% 54% / 0.15)', color: 'hsl(25 80% 54%)' }}>{filteredDocuments.length}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">IDs, insurance, contracts, and more</p>
               </div>
@@ -4996,7 +4475,7 @@ export default function TrackersPage() {
               <div className="flex items-center gap-1.5 overflow-x-auto flex-nowrap scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
                 <button
                   onClick={() => setDocTypeFilter("all")}
-                  className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                   data-testid="filter-doctype-all"
                 >All ({profileFilteredDocs.length})</button>
                 {docTypes.map(t => {
@@ -5005,7 +4484,7 @@ export default function TrackersPage() {
                     <button
                       key={t}
                       onClick={() => setDocTypeFilter(t)}
-                      className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                       data-testid={`filter-doctype-${t}`}
                     >
                       {t.replace(/_/g, " ")} ({count})
@@ -5080,7 +4559,7 @@ export default function TrackersPage() {
                               <KpiLine label="Format" value={mimeShort} />
                               <KpiLine label="Added" value={createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} />
                               {linkedNames.length > 0 && <KpiLine label="Owner" value={linkedNames.join(', ')} />}
-                              {daysSince <= 7 && <span className="inline-flex items-center h-4 px-1.5 text-[9px] rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
+                              {daysSince <= 7 && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
                             </div>
                             <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
                               <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
@@ -5344,7 +4823,7 @@ export default function TrackersPage() {
                   <div className="flex items-center gap-1 mt-0.5">
                     {linkedProfile && <span className="text-2xs px-1 rounded bg-primary/10 text-primary">{linkedProfile.name}</span>}
                     <span
-                      className="inline-flex items-center h-5 px-1.5 text-[10px] rounded-full font-medium capitalize"
+                      className="text-2xs px-1.5 py-0.5 rounded-full font-medium capitalize"
                       style={{ background: `hsl(${getCategoryAccent(tracker.category)} / 0.15)`, color: `hsl(${getCategoryAccent(tracker.category)})` }}
                     >
                       {tracker.category}
@@ -5370,28 +4849,83 @@ export default function TrackersPage() {
           })}
         </div>
       ) : (
-        /* ── TRACKER DASHBOARD (3-zone redesign) ── */
+        /* ── PERSON-GROUPED CARD GRID ── */
         (() => {
-          // Derive a profile display name for the global header.
-          // If exactly one profile is selected, use its name; otherwise "All Profiles".
-          const dashboardProfileName = (() => {
-            if (filterMode === "selected" && filterIds.length === 1) {
-              const p = (profiles || []).find(pr => pr.id === filterIds[0]);
-              return p?.name || "All Profiles";
+          const allTrackersList = sortedCats.flatMap((cat) => grouped[cat]);
+          const personGroups: Record<string, { name: string; type: string; trackers: typeof allTrackersList }> = {};
+          const selfProfile = (profiles || []).find(p => p.type === 'self');
+          const selfId = selfProfile?.id || '';
+          // When a profile filter is active, only group under filtered profile IDs
+          const activeFilterIds = (filterMode === "selected" && filterIds.length > 0) ? new Set(filterIds) : null;
+          for (const t of allTrackersList) {
+            const lp = t.linkedProfiles || [];
+            if (lp.length === 0) {
+              const key = selfId || '__me__';
+              if (!activeFilterIds || activeFilterIds.has(key)) {
+                if (!personGroups[key]) personGroups[key] = { name: selfProfile?.name || 'Me', type: 'self', trackers: [] };
+                personGroups[key].trackers.push(t);
+              }
+            } else {
+              for (const pid of lp) {
+                // Skip person groups that don't match the active filter
+                if (activeFilterIds && !activeFilterIds.has(pid)) continue;
+                const prof = (profiles || []).find(p => p.id === pid);
+                if (!personGroups[pid]) personGroups[pid] = { name: prof?.name || 'Unknown', type: prof?.type || 'person', trackers: [] };
+                personGroups[pid].trackers.push(t);
+              }
             }
-            if (filterMode === "selected" && filterIds.length > 1) return "All Profiles";
-            // Everyone mode — check if only self profile exists or multiple profiles present
-            const humanProfiles = (profiles || []).filter(p => ["self", "person", "pet"].includes(p.type));
-            if (humanProfiles.length === 1) return humanProfiles[0].name;
-            const self = (profiles || []).find(p => p.type === "self");
-            return self?.name || "All Profiles";
-          })();
+          }
+          const typeOrder: Record<string, number> = { self: 0, person: 1, pet: 2 };
+          const sortedKeys = Object.keys(personGroups).sort((a, b) => {
+            const ta = typeOrder[personGroups[a].type] ?? 3;
+            const tb = typeOrder[personGroups[b].type] ?? 3;
+            return ta - tb || personGroups[a].name.localeCompare(personGroups[b].name);
+          });
           return (
-            <TrackerDashboard
-              trackers={filteredTrackers}
-              profileName={dashboardProfileName}
-              onOpenDetail={(id) => setSelectedTrackerId(id)}
-            />
+            <div className="space-y-4">
+              {sortedKeys.map(pk => {
+                const g = personGroups[pk];
+                const icon = g.type === 'self' ? '👤' : g.type === 'pet' ? '🐾' : '👥';
+                // Group trackers by canonical category within each person
+                const trackersByCategory: Record<string, typeof g.trackers> = {};
+                for (const t of g.trackers) {
+                  const cat = getCanonicalGroup(t.category);
+                  (trackersByCategory[cat] = trackersByCategory[cat] || []).push(t);
+                }
+                // Sort category groups by CANONICAL_GROUPS.order
+                const sortedCatKeys = Object.keys(trackersByCategory).sort((a, b) => {
+                  const oa = CANONICAL_GROUPS[a]?.order ?? 99;
+                  const ob = CANONICAL_GROUPS[b]?.order ?? 99;
+                  return oa - ob || a.localeCompare(b);
+                });
+                return (
+                  <div key={pk}>
+                    <div className="flex items-center gap-2 mb-2 px-0.5">
+                      <span className="text-sm">{icon}</span>
+                      <span className="text-xs font-bold text-foreground">{g.type === 'self' ? 'Me' : g.name}</span>
+                      <span className="text-[10px] text-muted-foreground">({g.trackers.length})</span>
+                    </div>
+                    {sortedCatKeys.map(catName => {
+                      const catTrackers = trackersByCategory[catName];
+                      const gDef = CANONICAL_GROUPS[catName];
+                      const gAccent = gDef?.accent || "240 20% 60%";
+                      return (
+                        <div key={catName} className="mb-2.5">
+                          <h4 className="text-xs font-semibold uppercase tracking-wider mt-3 mb-1.5 flex items-center gap-1.5" style={{ color: `hsl(${gAccent})` }}>
+                            <span>{categoryGroupEmoji(catName)}</span> {catName} <span className="text-muted-foreground font-normal">({catTrackers.length})</span>
+                          </h4>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                            {catTrackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
+                              <TrackerCard key={tracker.id} tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
           );
         })()
       ))}

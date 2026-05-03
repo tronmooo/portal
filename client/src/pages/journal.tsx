@@ -339,7 +339,7 @@ export default function JournalPage() {
               <ArrowLeft className="w-4 h-4" />
             </Link>
 {filterMode === "selected" && filterLabel && (
-            <span className="inline-flex items-center h-6 px-2 text-[11px] font-medium text-muted-foreground bg-muted rounded-full">{filterLabel}</span>
+            <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-full">{filterLabel}</span>
           )}
           </div>
           <p className="text-xs text-muted-foreground">{entries.length} entries</p>

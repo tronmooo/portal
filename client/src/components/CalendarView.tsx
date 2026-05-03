@@ -279,7 +279,7 @@ function EventFormDialog({
                 <button
                   key={cat}
                   type="button"
-                  className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium border transition-all ${
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
                     form.category === cat
                       ? "border-transparent text-white"
                       : "border-border text-muted-foreground hover:border-foreground/30"
@@ -984,7 +984,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         ].map(f => (
           <button
             key={f.key}
-            className={`inline-flex items-center h-6 px-2 text-[11px] rounded-full font-medium border transition-all ${
+            className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-all ${
               filterType === f.key
                 ? f.activeClass
                 : "border-border/50 text-muted-foreground hover:bg-muted"
