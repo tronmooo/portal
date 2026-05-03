@@ -96,14 +96,18 @@ function clearAllCache(): void {
 // that mutate data via internal AI tool calls (not just direct REST writes).
 function cacheBustMiddleware(req: any, res: any, next: any) {
   const isMutation = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
-  // Chat & upload endpoints can create/update entities via AI tools — pre-bust caches
-  // so the client's invalidate-then-refetch sequence sees fresh data.
   const isAiMutator = req.path === '/api/chat' || req.path.startsWith('/api/upload') || req.path === '/api/chat/confirm-extraction';
   if (isMutation || isAiMutator) {
+    // Bug fix: bust BEFORE the handler runs as well as on finish.
+    // Previously only the res.on('finish') bust existed, which races with the
+    // client's invalidate-then-refetch: the GET /api/stats that fires immediately
+    // after onSuccess() could still hit a warm cache entry because 'finish' fires
+    // asynchronously AFTER the response has been sent.  Clearing synchronously here
+    // ensures any in-flight read that arrives while the mutation handler is executing
+    // will miss the cache and go to the DB instead.
+    clearAllCache();
     res.on('finish', () => {
-      if (res.statusCode >= 200 && res.statusCode < 400) {
-        clearAllCache();
-      }
+      if (res.statusCode >= 200 && res.statusCode < 400) clearAllCache();
     });
   }
   next();
@@ -784,7 +788,10 @@ export async function registerRoutes(
     if (cached) return res.json(cached);
     // dedupe: concurrent identical requests share one DB query
     const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds));
-    setCache(cacheKey, stats, 5 * 60 * 1000); // 5-minute cache (stats are not real-time critical)
+    // Bug fix: shortened from 5 min to 15 s — dashboard data must feel realtime after mutations.
+    // 15 s is enough to absorb burst deduplication at page load without keeping stale numbers
+    // around for minutes after the user adds an expense or triggers an AI extraction.
+    setCache(cacheKey, stats, 15 * 1000); // 15-second cache
     res.json(stats);
   }));
 
@@ -798,7 +805,8 @@ export async function registerRoutes(
     if (cached) return res.json(cached);
     // dedupe: concurrent identical requests share one DB query
     const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
-    setCache(cacheKey, data, 5 * 60 * 1000); // 5-minute cache
+    // Bug fix: shortened from 5 min to 15 s — same rationale as /api/stats above.
+    setCache(cacheKey, data, 15 * 1000); // 15-second cache
     res.json(data);
   }));
 

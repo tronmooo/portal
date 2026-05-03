@@ -1023,6 +1023,11 @@ function MaintenanceCard({
       toast({ title: "Warranty date saved" });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      // Bug fix: dashboard's Expiring Documents/Warranties cards read from
+      // /api/dashboard-enhanced; without these invalidations they stayed
+      // stale for up to 5 minutes after a warranty edit.
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       setWarrantyEditing(false);
     },
     onError: (err: Error) =>

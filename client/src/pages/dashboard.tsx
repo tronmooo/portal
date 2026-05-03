@@ -423,11 +423,17 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
         <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
           <KPITaskCard count={stats.activeTasks} onClick={() => setPopup("tasks")} />
-          <KPISpendCard amount={stats.monthlySpend} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
+          {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
+               over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
+          <KPISpendCard amount={enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
           <KPIHabitsCard completionPct={stats.habitCompletionRate} totalHabits={stats.totalHabits} onClick={() => setPopup("habits")} />
           <KPIJournalCard streak={stats.journalStreak} mood={stats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
+          {/* Bug fix: derive bill count from the same enhanced.financeSnapshot.upcomingBills
+               array the popup renders, so the count on the KPI card always matches the
+               number of rows shown in the drilldown. Falls back to the legacy stats field
+               for the brief window before /api/dashboard-enhanced resolves. */}
           <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
-            value={stats.upcomingObligations}
+            value={enhanced?.financeSnapshot?.upcomingBills?.length ?? stats.upcomingObligations}
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
           <KPIDocsCard docs={enhanced?.expiringDocuments || []} onClick={() => setPopup("docs")} />
@@ -2045,7 +2051,7 @@ const BUDGET_CATEGORIES = [
   "transport", "utilities", "vehicle",
 ];
 
-function BudgetManager() {
+function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
   const { toast } = useToast();
   const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7));
   const [addOpen, setAddOpen] = useState(false);
@@ -2054,14 +2060,25 @@ function BudgetManager() {
   const [newAmt, setNewAmt] = useState("");
   const [newNotes, setNewNotes] = useState("");
 
+  // Bug fix: previously /api/expenses and /api/budgets were called without
+  // profileIds, so the budget popup always showed all-profile spending
+  // regardless of the active profile filter. Thread the filter through both
+  // query URLs so the popup's totals match the dashboard's filter selection.
+  const profileQs = filterMode === "selected" && filterIds.length > 0
+    ? `&profileIds=${filterIds.join(",")}`
+    : "";
+  const profileQsLeading = filterMode === "selected" && filterIds.length > 0
+    ? `?profileIds=${filterIds.join(",")}`
+    : "";
+
   const { data: budgetRes, refetch } = useQuery<{month: string; budgets: any[]}>({
-    queryKey: ["/api/budgets", month],
-    queryFn: () => apiRequest("GET", `/api/budgets?month=${month}`).then(r => r.json()),
+    queryKey: ["/api/budgets", month, filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/budgets?month=${month}${profileQs}`).then(r => r.json()),
   });
 
   const { data: expensesData } = useQuery<any>({
-    queryKey: ["/api/expenses"],
-    queryFn: () => apiRequest("GET", "/api/expenses").then(r => r.json()),
+    queryKey: ["/api/expenses", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/expenses${profileQsLeading}`).then(r => r.json()),
   });
 
   const budgets = budgetRes?.budgets || [];
@@ -2293,12 +2310,22 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   });
 
   const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  // Bug fix: budget summary was previously fetched without profileIds, so the
+  // "Monthly Budget" card showed all-profile spending no matter which profile
+  // filter the user had active. Thread the filter into both /api/budgets and
+  // /api/expenses so the card respects the same filter as everything else.
+  const budgetSummaryProfileLeading = filterMode === "selected" && filterIds.length > 0
+    ? `?profileIds=${filterIds.join(",")}`
+    : "";
+  const budgetSummaryProfileTrailing = filterMode === "selected" && filterIds.length > 0
+    ? `&profileIds=${filterIds.join(",")}`
+    : "";
   const { data: budgetData } = useQuery<{month: string; totalBudget: number; totalSpent: number; remaining: number; categories: any[]}>({
-    queryKey: ["/api/budgets/summary", currentMonth],
+    queryKey: ["/api/budgets/summary", currentMonth, filterMode, ...filterIds],
     queryFn: async () => {
       const [budgetRes, expensesRes] = await Promise.all([
-        apiRequest("GET", `/api/budgets?month=${currentMonth}`).then(r => r.json()),
-        apiRequest("GET", "/api/expenses").then(r => r.json()),
+        apiRequest("GET", `/api/budgets?month=${currentMonth}${budgetSummaryProfileTrailing}`).then(r => r.json()),
+        apiRequest("GET", `/api/expenses${budgetSummaryProfileLeading}`).then(r => r.json()),
       ]);
       const budgets = budgetRes.budgets || [];
       const allExpenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.items || []);
@@ -2322,7 +2349,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     },
   });
 
-  const monthlySpend = stats?.monthlySpend || 0;
+  // Bug fix: prefer financeSnapshot.totalMonthlySpend (from /api/dashboard-enhanced, same
+  // source the drilldown popup uses) so the card headline and the popup total always match.
+  // Falls back to stats?.monthlySpend for the brief window before enhanced data arrives.
+  const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = useMemo(() => (incomes || []).reduce((s, i) => s + (i.amount || 0), 0), [incomes]);
   const cashFlow = monthlyIncome - monthlySpend;
   const totalAssetValue = data?.totalAssetValue || 0;
@@ -2619,7 +2649,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
               Monthly Budget
             </DialogTitle>
           </DialogHeader>
-          <BudgetManager />
+          <BudgetManager filterIds={filterIds} filterMode={filterMode} />
         </DialogContent>
       </Dialog>
     </CollapsibleSection>
@@ -3095,8 +3125,13 @@ export default function DashboardPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
-  // Compute stats profile param for API calls
-  const statsProfileParam = filterIds.length > 0 ? '?profileIds=' + filterIds.join(',') : '';
+  // Compute stats profile param for API calls.
+  // Bug fix: gate on filterMode === "selected" so that when the user is in
+  // "everyone" mode but filterIds still has stale ids during a transition,
+  // we don't accidentally send a profileIds filter and over-restrict the data.
+  const statsProfileParam = filterMode === "selected" && filterIds.length > 0
+    ? '?profileIds=' + filterIds.join(',')
+    : '';
 
   // Compute resolvedFilterId for backward compat with child components that only support a single id.
   // Bug fix: when 2+ profiles are selected this used to collapse to undefined (= 'Everyone'),
