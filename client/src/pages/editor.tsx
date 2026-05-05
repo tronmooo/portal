@@ -7,7 +7,8 @@
 // Saves to /api/artifacts. Autosaves every 5s after the first manual save.
 // Posts a chat preview card when launched from chat (via ?source=chat).
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTheme } from "@/components/theme-provider";
 import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
@@ -49,10 +50,11 @@ function emptySheet(rows = DEFAULT_ROWS, cols = DEFAULT_COLS): SheetData {
   return { rows, cols, cells: {} };
 }
 
-// react-spreadsheet uses [{ value }][] matrix. Convert sparse map ↔ matrix.
-// For formulas we display the evaluated value (v) — the formula text is preserved
-// in state and surfaced via the active-cell formula bar. When the user types into
-// a cell and the new raw text starts with "=", we re-detect it as a formula.
+// react-spreadsheet auto-evaluates formulas via fast-formula-parser when the
+// cell value starts with "=" (full Excel grammar: SUM, AVERAGE, IF, VLOOKUP,
+// arithmetic, etc.). We just hand it the raw string and let it do the work.
+// Our SheetData persists the raw text (formula or literal) in `f` for formulas
+// and `v` for literals so reload round-trips perfectly.
 function sheetToMatrix(s: SheetData): { value: string }[][] {
   const m: { value: string }[][] = [];
   for (let r = 0; r < s.rows; r++) {
@@ -60,8 +62,8 @@ function sheetToMatrix(s: SheetData): { value: string }[][] {
     for (let c = 0; c < s.cols; c++) {
       const cell = s.cells[`${r},${c}`];
       let v = "";
-      if (cell?.v !== undefined && cell.v !== null) v = String(cell.v);
-      else if (cell?.f) v = cell.f;
+      if (cell?.f) v = cell.f;                                 // formula text wins
+      else if (cell?.v !== undefined && cell.v !== null) v = String(cell.v);
       row.push({ value: v });
     }
     m.push(row);
@@ -69,20 +71,16 @@ function sheetToMatrix(s: SheetData): { value: string }[][] {
   return m;
 }
 
-function matrixToSheet(m: any[][], rows: number, cols: number, prev: Record<string, SheetCell>): SheetData {
+function matrixToSheet(m: any[][], rows: number, cols: number): SheetData {
   const cells: Record<string, SheetCell> = {};
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const raw = m[r]?.[c]?.value;
-      const key = `${r},${c}`;
-      const prevCell = prev[key];
       if (raw === undefined || raw === null || raw === "") continue;
       const s = String(raw);
+      const key = `${r},${c}`;
       if (s.startsWith("=")) {
         cells[key] = { f: s };
-      } else if (prevCell?.f && (prevCell.v !== undefined ? String(prevCell.v) === s : false)) {
-        // User did not modify — keep formula as-is so the cell stays formulaic.
-        cells[key] = { f: prevCell.f, v: prevCell.v };
       } else {
         const n = Number(s);
         cells[key] = { v: isFinite(n) && s.trim() !== "" ? n : s };
@@ -92,41 +90,21 @@ function matrixToSheet(m: any[][], rows: number, cols: number, prev: Record<stri
   return { rows, cols, cells };
 }
 
-// Tiny formula evaluator: =SUM(A1:B3), =AVG / =AVERAGE, =COUNT, =MIN, =MAX,
-// or arithmetic on cell refs. Anything else returns the literal formula text.
 function colLetterToIndex(s: string): number {
   let n = 0;
   for (const ch of s.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
   return n - 1;
 }
 
-function evalFormula(formula: string, cells: Record<string, SheetCell>): string | number {
-  try {
-    const expr = formula.slice(1).trim();
-    const fnMatch = expr.match(/^(SUM|AVG|AVERAGE|COUNT|MIN|MAX)\(([A-Z]+\d+):([A-Z]+\d+)\)$/i);
-    if (fnMatch) {
-      const fn = fnMatch[1].toUpperCase();
-      const c1 = colLetterToIndex(fnMatch[2].match(/[A-Z]+/i)![0]);
-      const r1 = parseInt(fnMatch[2].match(/\d+/)![0], 10) - 1;
-      const c2 = colLetterToIndex(fnMatch[3].match(/[A-Z]+/i)![0]);
-      const r2 = parseInt(fnMatch[3].match(/\d+/)![0], 10) - 1;
-      const nums: number[] = [];
-      for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++) {
-        for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c++) {
-          const v = cells[`${r},${c}`]?.v;
-          if (typeof v === "number" && isFinite(v)) nums.push(v);
-        }
-      }
-      if (fn === "SUM") return nums.reduce((a, b) => a + b, 0);
-      if (fn === "AVG" || fn === "AVERAGE") return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
-      if (fn === "COUNT") return nums.length;
-      if (fn === "MIN") return nums.length ? Math.min(...nums) : 0;
-      if (fn === "MAX") return nums.length ? Math.max(...nums) : 0;
-    }
-    return formula; // unknown formula → keep raw
-  } catch {
-    return formula;
+function colIndexToLetter(c: number): string {
+  let s = "";
+  let n = c + 1;
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
   }
+  return s;
 }
 
 // ── Editor component ──────────────────────────────────────────────────────────
@@ -137,6 +115,7 @@ export default function EditorPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { resolvedMode } = useTheme();
 
   // Determine mode from URL: ?source=chat lets us post a chat card on save.
   const search = typeof window !== "undefined" ? window.location.hash.split("?")[1] || "" : "";
@@ -158,6 +137,9 @@ export default function EditorPage() {
   const [savedId, setSavedId] = useState<string | undefined>(existingId);
   const [dirty, setDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  // Sheet active cell + formula bar state.
+  const [activeCell, setActiveCell] = useState<{ row: number; column: number } | null>(null);
+  const [formulaBarValue, setFormulaBarValue] = useState<string>("");
   const [docHtml, setDocHtml] = useState<string>("");
   const [sheet, setSheet] = useState<SheetData>(emptySheet());
   const inflightAbort = useRef<AbortController | null>(null);
@@ -382,6 +364,26 @@ export default function EditorPage() {
   }, [docHtml, type]);
   const sheetStats = useMemo(() => Object.keys(sheet.cells).length, [sheet]);
 
+  // Commit formula-bar edits back into the sheet at activeCell.
+  const commitFormulaBar = useCallback(() => {
+    if (!activeCell) return;
+    const key = `${activeCell.row},${activeCell.column}`;
+    const raw = formulaBarValue;
+    setSheet(prev => {
+      const cells = { ...prev.cells };
+      if (raw === "") {
+        delete cells[key];
+      } else if (raw.startsWith("=")) {
+        cells[key] = { f: raw };
+      } else {
+        const n = Number(raw);
+        cells[key] = { v: isFinite(n) && raw.trim() !== "" ? n : raw };
+      }
+      return { ...prev, cells };
+    });
+    setDirty(true);
+  }, [activeCell, formulaBarValue]);
+
   const [nowTick, setNowTick] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 30000);
@@ -474,25 +476,55 @@ export default function EditorPage() {
             <div className="w-px h-5 bg-border mx-1" />
             <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, cols: Math.min(200, s.cols + 2) })); setDirty(true); }} data-testid="button-sheet-add-cols"><Plus className="h-3 w-3 mr-1" /> 2 cols</Button>
             <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, cols: Math.max(1, s.cols - 2) })); setDirty(true); }} data-testid="button-sheet-rm-cols"><Minus className="h-3 w-3 mr-1" /> 2 cols</Button>
-            <span className="text-xs text-muted-foreground ml-3">{sheet.rows} × {sheet.cols} · formulas: =SUM, =AVG, =COUNT, =MIN, =MAX</span>
+            <span className="text-xs text-muted-foreground ml-3">{sheet.rows} × {sheet.cols}</span>
+          </div>
+          {/* Formula bar (Excel-style: shows raw formula/value of active cell, lets you edit) */}
+          <div className="border-b bg-muted/10 px-3 py-1 flex items-center gap-2 shrink-0">
+            <span className="text-xs font-mono text-muted-foreground w-12 shrink-0">
+              {activeCell ? `${colIndexToLetter(activeCell.column)}${activeCell.row + 1}` : "—"}
+            </span>
+            <span className="text-xs text-muted-foreground">fx</span>
+            <Input
+              value={formulaBarValue}
+              onChange={(e) => setFormulaBarValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitFormulaBar();
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  // revert to current cell value
+                  if (activeCell) {
+                    const cell = sheet.cells[`${activeCell.row},${activeCell.column}`];
+                    setFormulaBarValue(cell?.f || (cell?.v !== undefined && cell.v !== null ? String(cell.v) : ""));
+                  }
+                }
+              }}
+              onBlur={commitFormulaBar}
+              placeholder="Type a value or =FORMULA(…)"
+              className="h-7 text-sm font-mono"
+              data-testid="input-formula-bar"
+              disabled={!activeCell}
+            />
           </div>
           {/* Sheet grid */}
           <div className="flex-1 overflow-auto p-3">
-            <Spreadsheet
-              data={matrix}
-              onChange={(m: any) => {
-                const next = matrixToSheet(m, sheet.rows, sheet.cols, sheet.cells);
-                // Re-evaluate any formulas so cached v matches f.
-                for (const [k, cell] of Object.entries(next.cells)) {
-                  if (cell.f) {
-                    const v = evalFormula(cell.f, next.cells);
-                    cell.v = typeof v === "number" ? Number(v.toFixed(6)) : v;
-                  }
-                }
-                setSheet(next);
-                setDirty(true);
-              }}
-            />
+            <div className="portol-sheet" data-darkmode={resolvedMode === "dark" ? "true" : "false"}>
+              <Spreadsheet
+                data={matrix}
+                darkMode={resolvedMode === "dark"}
+                onChange={(m: any) => {
+                  setSheet(matrixToSheet(m, sheet.rows, sheet.cols));
+                  setDirty(true);
+                }}
+                onActivate={(point: { row: number; column: number }) => {
+                  setActiveCell(point);
+                  const cell = sheet.cells[`${point.row},${point.column}`];
+                  setFormulaBarValue(cell?.f || (cell?.v !== undefined && cell.v !== null ? String(cell.v) : ""));
+                }}
+              />
+            </div>
           </div>
         </div>
       )}

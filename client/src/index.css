@@ -544,3 +544,42 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
   text-overflow: ellipsis;
   max-width: 120px;
 }
+
+/* ── Portol spreadsheet styling overrides ────────────────────────────────────
+   react-spreadsheet ships with thin default styles. We boost cell size, sharpen
+   borders, and harmonize colors with our theme tokens so it feels like Excel.
+*/
+.portol-sheet .Spreadsheet__cell,
+.portol-sheet .Spreadsheet__header {
+  min-width: 7em;
+  min-height: 2em;
+  height: 2em;
+  max-height: 2em;
+  font-size: 0.875rem;
+  border-color: hsl(var(--border));
+}
+.portol-sheet .Spreadsheet__header {
+  background: hsl(var(--muted) / 0.6);
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+.portol-sheet .Spreadsheet__header--selected {
+  background: hsl(var(--primary) / 0.18);
+  color: hsl(var(--primary-foreground, var(--foreground)));
+}
+.portol-sheet .Spreadsheet {
+  --background-color: hsl(var(--background));
+  --text-color: hsl(var(--foreground));
+  --readonly-text-color: hsl(var(--muted-foreground));
+  --outline-color: hsl(var(--primary));
+  --outline-background-color: hsl(var(--primary) / 0.12);
+  --border-color: hsl(var(--border));
+  --header-background-color: hsl(var(--muted) / 0.6);
+}
+.portol-sheet .Spreadsheet--dark-mode {
+  --background-color: hsl(var(--background));
+  --text-color: hsl(var(--foreground));
+  --readonly-text-color: hsl(var(--muted-foreground));
+  --header-background-color: hsl(var(--muted) / 0.4);
+  --border-color: hsl(var(--border));
+}
