@@ -93,6 +93,12 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // Public share endpoints — read-only, identified by random share token.
+  // The handler looks up artifacts by metadata->>shareToken (no user filter).
+  if (req.path.startsWith("/public/")) {
+    return next();
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Authentication required", code: "AUTH_REQUIRED" });

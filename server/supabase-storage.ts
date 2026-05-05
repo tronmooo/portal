@@ -422,6 +422,7 @@ export class SupabaseStorage implements IStorage {
       // Doc/Sheet additions stored inside metadata JSON — no SQL migration needed.
       sheetData: metadata.sheetData,
       source: metadata.source,
+      shareToken: metadata.shareToken,
       createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -2482,6 +2483,20 @@ export class SupabaseStorage implements IStorage {
     return this.rowToArtifact(data);
   }
 
+  // Public share lookup — does NOT filter by user_id. Used by /api/public-artifacts/:slug.
+  // Service-role key bypasses RLS so we can find any user's artifact by its share token.
+  // Caller must treat the result as PUBLIC and strip private fields before serving.
+  async getArtifactByShareToken(token: string): Promise<Artifact | undefined> {
+    if (!token) return undefined;
+    const { data, error } = await this.supabase
+      .from("artifacts")
+      .select("*")
+      .filter("metadata->>shareToken", "eq", token)
+      .limit(1);
+    if (error || !data || data.length === 0) return undefined;
+    return this.rowToArtifact(data[0]);
+  }
+
   async createArtifact(data: InsertArtifact): Promise<Artifact> {
     const now = new Date().toISOString();
     const id = randomUUID();
@@ -2501,6 +2516,7 @@ export class SupabaseStorage implements IStorage {
     if ((data as any).chartData) metadata.chartData = (data as any).chartData;
     if ((data as any).sheetData) metadata.sheetData = (data as any).sheetData;
     if ((data as any).source) metadata.source = (data as any).source;
+    if ((data as any).shareToken) metadata.shareToken = (data as any).shareToken;
     const { error } = await this.supabase.from("artifacts").insert({
       id, user_id: this.userId, type: data.type, title: data.title,
       content: data.content || "", items, tags: data.tags || [],
@@ -2511,6 +2527,31 @@ export class SupabaseStorage implements IStorage {
     if (error) throw error;
     this.logActivity("artifact", `Created ${data.type}: ${data.title}`);
     return (await this.getArtifact(id))!;
+  }
+
+  // Generate or revoke a public share token for an artifact.
+  // Pass null to revoke. Returns updated artifact (with new shareToken) or undefined if not found.
+  async setArtifactShareToken(id: string, token: string | null): Promise<Artifact | undefined> {
+    const existing = await this.getArtifact(id);
+    if (!existing) return undefined;
+    // Read current metadata blob directly to preserve any unknown keys.
+    const { data: row } = await this.supabase
+      .from("artifacts")
+      .select("metadata")
+      .eq("id", id)
+      .eq("user_id", this.userId)
+      .single();
+    const currentMeta: Record<string, any> = (row?.metadata as any) || {};
+    if (token) currentMeta.shareToken = token;
+    else delete currentMeta.shareToken;
+    const now = new Date().toISOString();
+    const { error } = await this.supabase
+      .from("artifacts")
+      .update({ metadata: currentMeta, updated_at: now })
+      .eq("id", id)
+      .eq("user_id", this.userId);
+    if (error) throw error;
+    return this.getArtifact(id);
   }
 
   async updateArtifact(id: string, data: Partial<Artifact>): Promise<Artifact | undefined> {
@@ -2525,6 +2566,7 @@ export class SupabaseStorage implements IStorage {
     if (merged.chartData) metadata.chartData = merged.chartData;
     if (merged.sheetData) metadata.sheetData = merged.sheetData;
     if (merged.source) metadata.source = merged.source;
+    if (merged.shareToken) metadata.shareToken = merged.shareToken;
     const { error } = await this.supabase.from("artifacts").update({
       type: merged.type, title: merged.title, content: merged.content,
       items: merged.items, tags: merged.tags, linked_profiles: merged.linkedProfiles,

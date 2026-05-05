@@ -433,6 +433,7 @@ export interface Artifact {
   chartData?: any[];        // Pre-computed chart data (fallback if dataBindings query fails)
   sheetData?: SheetData;    // For "sheet" type only
   source?: "chat" | "manual" | "ai"; // where the artifact was created from
+  shareToken?: string;     // Optional public share token. When set, /share/:token shows a read-only view.
   createdAt: string;
   updatedAt: string;
 }

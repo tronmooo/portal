@@ -26,7 +26,11 @@ import { Input } from "@/components/ui/input";
 import {
   ArrowLeft, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered,
   Heading1, Heading2, LinkIcon, Code, Save, Download, Trash2, Copy, Loader2, Plus, Minus,
+  Share2, Printer, Check,
 } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import type { Artifact, SheetData, SheetCell } from "@shared/schema";
 import { getTemplatesByType, type EditorTemplate } from "@/lib/editor-templates";
 import {
@@ -162,6 +166,10 @@ export default function EditorPage() {
     selectedIndex: number;
   }>({ open: false, top: 0, left: 0, query: "", selectedIndex: 0 });
   const [aiBusy, setAiBusy] = useState(false);
+  // Share dialog state (Wave 5).
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareToken, setShareToken] = useState<string | undefined>(undefined);
+  const [copied, setCopied] = useState(false);
 
   // Hydrate state from loaded artifact.
   useEffect(() => {
@@ -174,6 +182,7 @@ export default function EditorPage() {
         setSheet(sd && sd.rows > 0 && sd.cols > 0 ? sd : emptySheet());
       }
       setSavedId(existing.id);
+      setShareToken(existing.shareToken);
       setDirty(false);
     }
   }, [existing]);
@@ -473,6 +482,51 @@ export default function EditorPage() {
     onError: (err: any) => toast({ title: "Copy failed", description: err?.message, variant: "destructive" }),
   });
 
+  // ── Public share link (Wave 5) ──────────────────────────────────────────────
+  const enableShareMut = useMutation({
+    mutationFn: async () => {
+      // Save first if needed so the artifact has an id.
+      let id = savedId;
+      if (!id) {
+        const saved = await saveMut.mutateAsync();
+        id = saved?.id || savedId;
+      }
+      if (!id) throw new Error("Save first to enable sharing");
+      const r = await apiRequest("POST", `/api/artifacts/${id}/share`);
+      return r.json() as Promise<{ token: string; path: string }>;
+    },
+    onSuccess: (data) => {
+      setShareToken(data.token);
+      qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
+    },
+    onError: (err: any) => toast({ title: "Share failed", description: err?.message, variant: "destructive" }),
+  });
+  const revokeShareMut = useMutation({
+    mutationFn: async () => {
+      if (!savedId) return;
+      await apiRequest("DELETE", `/api/artifacts/${savedId}/share`);
+    },
+    onSuccess: () => {
+      setShareToken(undefined);
+      qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      toast({ title: "Share link revoked" });
+    },
+    onError: (err: any) => toast({ title: "Revoke failed", description: err?.message, variant: "destructive" }),
+  });
+  const shareUrl = shareToken
+    ? `${window.location.origin}/#/share/${shareToken}`
+    : "";
+  const copyShareUrl = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast({ title: "Copy failed", description: "Select the URL manually", variant: "destructive" });
+    }
+  };
+
   // ── Download (.docx / .xlsx) ────────────────────────────────────────────────
   const downloadDoc = async () => {
     const { Document, Packer, Paragraph, HeadingLevel, TextRun } = await import("docx");
@@ -496,6 +550,87 @@ export default function EditorPage() {
     a.href = url; a.download = `${(title || "doc").replace(/[^\w\-]+/g, "_")}.docx`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
+  };
+
+  // PDF export for docs — uses jsPDF + html2canvas. Renders the EditorContent in an
+  // off-screen, fixed-width A4 wrapper so layout is independent of the live viewport,
+  // then slices the resulting canvas into A4-sized pages.
+  const downloadDocPdf = async () => {
+    const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
+      import("jspdf"),
+      import("html2canvas"),
+    ]);
+    // Build an off-screen render target. Match Tiptap's prose styling so output looks
+    // like the editor surface. 794px ≈ A4 width @ 96dpi (210mm).
+    const wrap = document.createElement("div");
+    wrap.style.position = "fixed";
+    wrap.style.left = "-10000px";
+    wrap.style.top = "0";
+    wrap.style.width = "794px";
+    wrap.style.padding = "48px 56px";
+    wrap.style.background = "#ffffff";
+    wrap.style.color = "#111111";
+    wrap.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const heading = document.createElement("h1");
+    heading.textContent = title || "Untitled doc";
+    heading.style.fontSize = "24px";
+    heading.style.fontWeight = "700";
+    heading.style.marginBottom = "16px";
+    wrap.appendChild(heading);
+    const body = document.createElement("div");
+    body.className = "prose prose-sm max-w-none";
+    // Sanitize the HTML again before injecting into the DOM tree we'll rasterize.
+    body.innerHTML = DOMPurify.sanitize(docHtml || "", { ADD_ATTR: ["target", "rel"] });
+    wrap.appendChild(body);
+    document.body.appendChild(wrap);
+    try {
+      const canvas = await html2canvas(wrap, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        useCORS: true,
+        logging: false,
+      });
+      const pdf = new jsPDF({ unit: "pt", format: "a4" });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgW = pageW;
+      const imgH = (canvas.height * imgW) / canvas.width;
+      // If single-page fits, drop it in. Otherwise slice the source canvas across pages.
+      if (imgH <= pageH) {
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, imgW, imgH);
+      } else {
+        const scale = imgW / canvas.width;        // px → pt
+        const pageHeightInSrcPx = pageH / scale;   // how many source pixels fit per page
+        let yOffset = 0;
+        let first = true;
+        while (yOffset < canvas.height) {
+          const sliceH = Math.min(pageHeightInSrcPx, canvas.height - yOffset);
+          const slice = document.createElement("canvas");
+          slice.width = canvas.width;
+          slice.height = Math.ceil(sliceH);
+          const ctx = slice.getContext("2d");
+          if (ctx) {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, slice.width, slice.height);
+            ctx.drawImage(canvas, 0, -yOffset);
+          }
+          if (!first) pdf.addPage();
+          first = false;
+          pdf.addImage(
+            slice.toDataURL("image/jpeg", 0.92),
+            "JPEG",
+            0,
+            0,
+            imgW,
+            sliceH * scale,
+          );
+          yOffset += sliceH;
+        }
+      }
+      pdf.save(`${(title || "doc").replace(/[^\w\-]+/g, "_")}.pdf`);
+    } finally {
+      wrap.remove();
+    }
   };
 
   const downloadSheet = async () => {
@@ -620,9 +755,39 @@ export default function EditorPage() {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button variant="ghost" size="sm" onClick={() => type === "doc" ? downloadDoc() : downloadSheet()} data-testid="button-editor-download">
-          <Download className="h-4 w-4 mr-1" /> Download
-        </Button>
+        {type === "doc" ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" data-testid="button-editor-download">
+                <Download className="h-4 w-4 mr-1" /> Download
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={downloadDocPdf} data-testid="menu-download-pdf">
+                <span className="font-medium">Download as PDF</span>
+                <span className="ml-2 text-xs text-muted-foreground">.pdf</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={downloadDoc} data-testid="menu-download-docx">
+                <span className="font-medium">Download as Word</span>
+                <span className="ml-2 text-xs text-muted-foreground">.docx</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <Button variant="ghost" size="sm" onClick={downloadSheet} data-testid="button-editor-download">
+            <Download className="h-4 w-4 mr-1" /> Download
+          </Button>
+        )}
+        {type === "doc" && (
+          <Button variant="ghost" size="sm" onClick={() => window.print()} data-testid="button-editor-print">
+            <Printer className="h-4 w-4 mr-1" /> Print
+          </Button>
+        )}
+        {savedId && (
+          <Button variant="ghost" size="sm" onClick={() => setShareOpen(true)} data-testid="button-editor-share">
+            <Share2 className="h-4 w-4 mr-1" /> Share
+          </Button>
+        )}
         {savedId && (
           <Button variant="ghost" size="sm" onClick={() => duplicateMut.mutate()} data-testid="button-editor-duplicate">
             <Copy className="h-4 w-4 mr-1" /> Copy
@@ -773,6 +938,74 @@ export default function EditorPage() {
           </div>
         </div>
       )}
+
+      {/* Share dialog (Wave 5) */}
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Share this {type === "doc" ? "document" : "sheet"}</DialogTitle>
+            <DialogDescription>
+              Anyone with the link can view a read-only copy. Revoke any time to disable access.
+            </DialogDescription>
+          </DialogHeader>
+          {!shareToken ? (
+            <div className="py-2 text-sm text-muted-foreground">
+              Sharing is off. Generate a public link to let others view this artifact without signing in.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">Public link</label>
+              <div className="flex items-center gap-2">
+                <Input
+                  readOnly
+                  value={shareUrl}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="font-mono text-xs"
+                  data-testid="input-share-url"
+                />
+                <Button variant="secondary" size="sm" onClick={copyShareUrl} data-testid="button-share-copy">
+                  {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              <a
+                href={shareUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary underline"
+              >
+                Open in new tab
+              </a>
+            </div>
+          )}
+          <DialogFooter className="gap-2 sm:gap-2">
+            {!shareToken ? (
+              <Button
+                onClick={() => enableShareMut.mutate()}
+                disabled={enableShareMut.isPending}
+                data-testid="button-share-enable"
+              >
+                {enableShareMut.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <Share2 className="h-4 w-4 mr-1" />
+                )}
+                Generate link
+              </Button>
+            ) : (
+              <Button
+                variant="destructive"
+                onClick={() => revokeShareMut.mutate()}
+                disabled={revokeShareMut.isPending}
+                data-testid="button-share-revoke"
+              >
+                {revokeShareMut.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                Revoke link
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

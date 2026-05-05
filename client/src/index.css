@@ -583,3 +583,38 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
   --header-background-color: hsl(var(--muted) / 0.4);
   --border-color: hsl(var(--border));
 }
+
+/* ── Print styles (Wave 5) ─────────────────────────────────────────────────
+   When the user prints (or saves as PDF) a doc-type artifact or the public
+   share view, hide the chrome (sidebars, headers, toolbars, mobile nav) and
+   render content with sane page margins. */
+@media print {
+  /* App shell */
+  aside[data-sidebar],
+  [data-sidebar="sidebar"],
+  .print\:hidden,
+  header.flex.items-center.justify-between,
+  /* Editor toolbars (top + format) */
+  .border-b.bg-muted\/30,
+  /* Mobile bottom nav */
+  nav[aria-label="Mobile navigation"] {
+    display: none !important;
+  }
+  /* Strip viewport caps so content flows naturally on paper */
+  html, body, #root, main, .h-dvh, .max-w-\[90rem\] {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: white !important;
+    color: black !important;
+  }
+  .prose, .prose-sm, .ProseMirror {
+    max-width: none !important;
+    color: black !important;
+  }
+  /* Avoid awkward breaks inside headings */
+  h1, h2, h3 { break-inside: avoid; page-break-after: avoid; }
+  /* Drop background tints + shadows */
+  * { box-shadow: none !important; }
+  @page { margin: 0.6in; }
+}

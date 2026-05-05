@@ -110,6 +110,9 @@ export interface IStorage {
   updateArtifact(id: string, data: Partial<Artifact>): Promise<Artifact | undefined>;
   toggleChecklistItem(artifactId: string, itemId: string): Promise<Artifact | undefined>;
   deleteArtifact(id: string): Promise<boolean>;
+  // Optional public-share helpers (only implemented by SupabaseStorage; in-memory falls back to updateArtifact).
+  getArtifactByShareToken?(token: string): Promise<Artifact | undefined>;
+  setArtifactShareToken?(id: string, token: string | null): Promise<Artifact | undefined>;
 
   // Journal
   getJournalEntries(): Promise<JournalEntry[]>;

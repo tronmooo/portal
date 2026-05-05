@@ -57,6 +57,7 @@ const _privImport  = () => import("@/pages/privacy");
 const _termsImport = () => import("@/pages/terms");
 const _editImport  = () => import("@/pages/editor");
 const _insightsImport = () => import("@/pages/insights");
+const _shareViewImport = () => import("@/pages/share-view");
 
 const DashboardPage    = lazy(_dashImport);
 const TrackersPage     = lazy(_trackImport);
@@ -77,6 +78,7 @@ const PrivacyPage      = lazy(_privImport);
 const TermsPage        = lazy(_termsImport);
 const EditorPage       = lazy(_editImport);
 const InsightsPage     = lazy(_insightsImport);
+const ShareViewPage    = lazy(_shareViewImport);
 
 // Preload ALL main tab pages immediately so switching tabs is instant — no spinner on first visit.
 // This fires the bundle fetches in parallel as soon as the app JS loads.
@@ -173,6 +175,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }
   if (window.location.hash.startsWith("#/terms")) {
     return <Suspense fallback={<PageLoader />}><TermsPage /></Suspense>;
+  }
+  // Public share viewer — read-only, no sidebar/header chrome, no auth required.
+  if (window.location.hash.startsWith("#/share/")) {
+    return <Suspense fallback={<PageLoader />}><ShareViewPage /></Suspense>;
   }
 
   if (loading) {
@@ -428,6 +434,7 @@ function AppRouter() {
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />
+        <Route path="/share/:token" component={ShareViewPage} />
         <Route path="/dashboard/finance" component={FinancePage} />
         <Route path="/dashboard/habits" component={HabitsPage} />
         <Route path="/dashboard/journal" component={JournalPage} />
