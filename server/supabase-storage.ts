@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import { getUserToday, parseLocalDate } from "../shared/timezone";
+import { passesProfileFilter } from "../shared/profile-filter";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -2929,18 +2930,20 @@ export class SupabaseStorage implements IStorage {
   // DASHBOARD
   // ============================================================
   async getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats> {
-    const [allTasks, allExpenses, allTrackers, allHabits, allObligations, journalEntries] = await Promise.all([
+    const [allTasks, allExpenses, allTrackers, allHabits, allObligations, journalEntries, allProfiles] = await Promise.all([
       this.getTasks(), this.getExpenses(), this.getTrackers(),
       this.getHabits(), this.getObligations(), this.getJournalEntries(),
+      this.getProfiles(),
     ]);
 
     // Multi-select filter support: filterProfileIds takes precedence
     const fpIds = filterProfileIds || (filterProfileId ? [filterProfileId] : undefined);
-    // Strict profile filter — no orphan fallback. All items must be explicitly linked.
-    const matchesProfile = (linkedProfiles: string[]) => {
-      if (!fpIds || fpIds.length === 0) return true;
-      return linkedProfiles.some(id => fpIds.includes(id));
-    };
+    // Use the unified rule (shared/profile-filter.ts) so server stats agree
+    // with the client's Finance/Calendar views — see getDashboardEnhanced for
+    // the full rationale.
+    const filterCtxStats = { selectedIds: fpIds || [], allProfiles };
+    const matchesProfile = (linkedProfiles: string[]) =>
+      passesProfileFilter(linkedProfiles, filterCtxStats);
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const expenses = allExpenses.filter(e => matchesProfile(e.linkedProfiles));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
@@ -3116,11 +3119,16 @@ export class SupabaseStorage implements IStorage {
       this.getDocuments(), this.getTrackers(), this.getProfiles(),
       this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
     ]);
-    // Strict profile filter — no orphan fallback. All items must be explicitly linked.
-    const matchesProfileEnhanced = (linkedProfiles: string[]) => {
-      if (!fpIds || fpIds.length === 0) return true;
-      return linkedProfiles.some(id => fpIds.includes(id));
-    };
+    // Use the SAME unified rule the client uses (shared/profile-filter.ts).
+    // The previous strict-only rule diverged from the Finance / Calendar /
+    // dashboard popup logic, which is why the user saw "Monthly Spend $0"
+    // on the dashboard but "Total Spent $375" on the Finance page when
+    // selecting the same Me filter — the client was including orphan
+    // expenses (no linkedProfiles) under the self profile while the server
+    // silently dropped them.
+    const filterCtx = { selectedIds: fpIds || [], allProfiles };
+    const matchesProfileEnhanced = (linkedProfiles: string[]) =>
+      passesProfileFilter(linkedProfiles, filterCtx);
     const allTrackers = rawTrackers.filter(t => matchesProfileEnhanced(t.linkedProfiles));
     const allExpenses = rawExpenses.filter(e => matchesProfileEnhanced(e.linkedProfiles));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));

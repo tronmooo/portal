@@ -1,5 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
 import { useState, useMemo } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { stopProp } from "@/lib/event-utils";
@@ -648,7 +649,7 @@ function EventDetailDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          {item.type === "event" && (
+          {(item.type === "event" || item.type === "task" || item.type === "obligation") && (
             <Button
               variant="outline"
               size="sm"
@@ -765,6 +766,7 @@ interface CalendarViewProps {
 }
 
 export default function CalendarView({ externalFilterIds, externalFilterMode }: CalendarViewProps = {}) {
+  const [, setLocation] = useLocation();
   const today = new Date();
   const todayStr = toLocalDateStr(today);
   const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
@@ -901,15 +903,31 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   };
 
   const handleEditFromDetail = () => {
-    if (!detailItem || detailItem.type !== "event") return;
-    // Fetch the actual event to populate form
-    apiRequest("GET", `/api/events/${detailItem.sourceId}`)
-      .then(r => r.json())
-      .then((ev: CalendarEvent) => {
-        setDetailItem(null);
-        setEditEvent(ev);
-      })
-      .catch(() => {});
+    if (!detailItem) return;
+    if (detailItem.type === "event") {
+      // Fetch the actual event to populate form (inline edit dialog)
+      apiRequest("GET", `/api/events/${detailItem.sourceId}`)
+        .then(r => r.json())
+        .then((ev: CalendarEvent) => {
+          setDetailItem(null);
+          setEditEvent(ev);
+        })
+        .catch(() => {});
+      return;
+    }
+    // Obligations and tasks don't have an inline edit dialog inside the calendar
+    // (the full edit form lives on the dedicated page). Navigate there so the
+    // user can edit instead of leaving them stranded with only a Delete button.
+    if (detailItem.type === "obligation") {
+      setDetailItem(null);
+      setLocation("/dashboard/obligations");
+      return;
+    }
+    if (detailItem.type === "task") {
+      setDetailItem(null);
+      setLocation("/dashboard/tasks");
+      return;
+    }
   };
 
   // Filtered items for the selected date

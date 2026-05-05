@@ -368,10 +368,29 @@ export default function FinancePage() {
           // F150 directly should still surface its value).
           return filterIds.includes(p.id);
         });
-        const totalAssetValue = assetProfiles.reduce((s, p) => {
-          const val = p.fields?.purchasePrice || p.fields?.cost || p.fields?.value || p.fields?.amount || 0;
-          return s + Number(val);
-        }, 0);
+        // Robust value resolver — reads camelCase, snake_case, and nested namespaces
+        // (fields.finance.balance, fields.other.purchase_price, etc.). Without this
+        // the top KPI would silently report $0 even though the live data has values.
+        const toNumLocal = (c: any): number => {
+          if (c == null || c === '') return 0;
+          const n = typeof c === 'number' ? c : parseFloat(String(c).replace(/[^0-9.\-]/g, ''));
+          return Number.isFinite(n) && n > 0 ? n : 0;
+        };
+        const NS = ['', 'finance', 'other', 'housing', 'vehicle', 'vehicles', 'investment', 'investments', 'asset', 'assets', 'property', 'properties', 'account', 'accounts'];
+        const KEYS = ['currentValue', 'current_value', 'value', 'purchasePrice', 'purchase_price', 'balance', 'amount', 'cost', 'price'];
+        const readVal = (fields: any): number => {
+          if (!fields || typeof fields !== 'object') return 0;
+          for (const ns of NS) {
+            const root = ns ? fields[ns] : fields;
+            if (!root || typeof root !== 'object') continue;
+            for (const k of KEYS) {
+              const n = toNumLocal((root as any)[k]);
+              if (n > 0) return n;
+            }
+          }
+          return 0;
+        };
+        const totalAssetValue = assetProfiles.reduce((s, p) => s + readVal(p.fields), 0);
 
         // Liabilities from obligations. Use the unified rule so this view
         // matches expense filtering (previously this lane silently included

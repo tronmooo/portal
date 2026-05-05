@@ -4285,7 +4285,7 @@ export default function TrackersPage() {
                         <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
                           {currentVal != null && currentVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-xl font-black tabular-nums text-foreground">${currentVal.toLocaleString()}</span></div>
                           : purchaseVal != null && purchaseVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-lg font-black tabular-nums text-foreground">${purchaseVal.toLocaleString()}</span><span className="text-[8px] text-muted-foreground">purchase</span></div>
-                          : <span className="text-[10px] text-muted-foreground/50 italic">No value set</span>}
+                          : <span className="text-[10px] text-muted-foreground/40">Tap to add value</span>}
                           {(make || model) && <KpiLine label="Make/Model" value={[make, model].filter(Boolean).join(' ')} />}
                           {year && <KpiLine label="Year" value={year} />}
                           {mileage && <KpiLine label="Mileage" value={`${Number(mileage).toLocaleString()} mi`} />}

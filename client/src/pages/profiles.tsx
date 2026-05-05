@@ -1223,19 +1223,29 @@ export default function ProfilesPage() {
   const primaryTypes = new Set(["person", "pet", "self", "medical"]);
   const primaryProfiles = (profiles || []).filter(p => primaryTypes.has(p.type));
 
-  // Filter by search query
-  const filteredProfiles = searchQuery.trim()
-    ? primaryProfiles.filter(p => {
-        const q = searchQuery.toLowerCase();
-        if (p.name.toLowerCase().includes(q)) return true;
-        if (p.type.toLowerCase().includes(q)) return true;
-        if (p.fields) {
-          return Object.values(p.fields).some(v =>
-            v !== null && v !== undefined && String(v).toLowerCase().includes(q)
-          );
+  // Filter by search query — when searching, expand to ALL profile types so the user can
+  // find financial profiles (Roth IRA, Auto Loan, Tesla, Netflix, etc.) from the Profiles page.
+  // Without this, searching 'Roth' returns 'No matching profiles' even when the profile exists.
+  const matchProfile = (p: Profile, q: string): boolean => {
+    if (p.name.toLowerCase().includes(q)) return true;
+    if (p.type.toLowerCase().includes(q)) return true;
+    if (p.fields) {
+      const walk = (val: any): boolean => {
+        if (val == null) return false;
+        if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
+          return String(val).toLowerCase().includes(q);
         }
+        if (Array.isArray(val)) return val.some(walk);
+        if (typeof val === "object") return Object.values(val).some(walk);
         return false;
-      })
+      };
+      return walk(p.fields);
+    }
+    return false;
+  };
+
+  const filteredProfiles = searchQuery.trim()
+    ? (profiles || []).filter(p => matchProfile(p, searchQuery.toLowerCase()))
     : primaryProfiles;
 
   // Group by type
