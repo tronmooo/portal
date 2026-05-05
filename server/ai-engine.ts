@@ -6852,3 +6852,86 @@ export async function transformText(
   const block = resp.content?.find((b: any) => b.type === "text") as any;
   return (block?.text || "").trim();
 }
+
+// ============================================================
+// RECEIPT OCR — focused expense extraction from a photo
+// ============================================================
+//
+// Lightweight, single-pass receipt extractor. Returns just the fields needed to
+// create an expense: vendor, amount, date, category, items. Faster than the
+// general processFileUpload because it skips document classification and full
+// vision pipeline branching.
+
+export type ReceiptExtraction = {
+  vendor: string | null;
+  amount: number | null;
+  date: string | null;       // YYYY-MM-DD
+  category: string | null;   // user-friendly: "groceries", "dining", "fuel", etc.
+  items?: Array<{ name: string; price: number }>;
+  rawText?: string;
+};
+
+const RECEIPT_PROMPT = `You are a receipt scanner. Extract the following fields from this receipt image and return ONLY valid JSON (no preamble, no code fence):
+
+{
+  "vendor": "<merchant name, lowercase title case, no all-caps>",
+  "amount": <total amount paid as a number, no $ sign>,
+  "date": "<YYYY-MM-DD>",
+  "category": "<one of: groceries | dining | fuel | shopping | transport | utilities | health | entertainment | services | other>",
+  "items": [{"name": "<line item>", "price": <number>}]
+}
+
+Rules:
+- amount = the FINAL total paid (after tax), not subtotal.
+- If the year is missing, assume the current year.
+- items is optional — include up to 10 of the largest line items.
+- If a field cannot be read, use null.
+- Do not invent values. Only return what you can read.`;
+
+export async function extractReceipt(
+  base64Image: string,
+  mimeType: string,
+): Promise<ReceiptExtraction> {
+  const mediaType = (mimeType.startsWith("image/") ? mimeType : "image/jpeg") as
+    "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+  // Strip data URL prefix and whitespace.
+  let clean = base64Image;
+  if (clean.includes(",")) clean = clean.split(",").pop() || clean;
+  clean = clean.replace(/\s/g, "");
+
+  const client = getClient();
+  const resp = await client.messages.create({
+    model: "claude-haiku-4-5-20251001", // Haiku has good vision and is fast
+    max_tokens: 1500,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: mediaType, data: clean } },
+        { type: "text", text: RECEIPT_PROMPT },
+      ],
+    }],
+  });
+
+  const text = resp.content?.[0]?.type === "text" ? (resp.content[0] as any).text : "{}";
+  let parsed: any = {};
+  try {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) parsed = JSON.parse(m[0]);
+  } catch { parsed = {}; }
+
+  const out: ReceiptExtraction = {
+    vendor: parsed.vendor && typeof parsed.vendor === "string" ? parsed.vendor.trim() : null,
+    amount: typeof parsed.amount === "number" && isFinite(parsed.amount) ? parsed.amount : null,
+    date: parsed.date && typeof parsed.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null,
+    category: parsed.category && typeof parsed.category === "string" ? parsed.category.trim().toLowerCase() : null,
+    items: Array.isArray(parsed.items) ? parsed.items
+      .filter((i: any) => i && typeof i.name === "string" && typeof i.price === "number")
+      .slice(0, 20) : undefined,
+  };
+
+  // Default date to today if missing.
+  if (!out.date) out.date = new Date().toISOString().slice(0, 10);
+
+  return out;
+}

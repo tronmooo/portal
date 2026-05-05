@@ -13,7 +13,8 @@ interface AuthenticatedRequest extends Request {
   userId?: string;
 }
 import { storage } from "./storage";
-import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt } from "./ai-engine";
+import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   insertProfileSchema,
@@ -358,6 +359,101 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to transform text" });
     }
   }));
+
+  // ---- Receipt OCR ---- (drag a receipt photo, get expense fields)
+  app.post("/api/receipt-extract", asyncHandler(async (req, res) => {
+    const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+    if (rateLimit(`receipt:${userId}`, 15)) {
+      return res.status(429).json({ error: "Too many receipt scans. Please wait." });
+    }
+    try {
+      const { fileData, mimeType } = req.body || {};
+      if (!fileData || typeof fileData !== "string") {
+        return res.status(400).json({ error: "fileData (base64 image) required" });
+      }
+      const mime = typeof mimeType === "string" ? mimeType : "image/jpeg";
+      if (!mime.startsWith("image/")) {
+        return res.status(400).json({ error: "mimeType must be an image type" });
+      }
+      const result = await extractReceipt(fileData, mime);
+      res.json(result);
+    } catch (err: any) {
+      const msg = err?.message || "unknown error";
+      log.error("[Receipt Extract]", msg);
+      res.status(500).json({ error: "Failed to extract receipt" });
+    }
+  }));
+
+  // ---- Anomaly Detection ----
+  app.get("/api/anomalies", asyncHandler(async (_req, res) => {
+    try {
+      const anomalies = await detectAnomalies(storage);
+      res.json({ anomalies });
+    } catch (err: any) {
+      log.error("[Anomalies]", err?.message || err);
+      res.status(500).json({ error: "Failed to detect anomalies" });
+    }
+  }));
+
+  // ---- Weekly Review (manual trigger) ----
+  app.post("/api/weekly-review/generate", asyncHandler(async (req, res) => {
+    const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+    if (rateLimit(`weekly-review:${userId}`, 5)) {
+      return res.status(429).json({ error: "Weekly review already being generated. Please wait." });
+    }
+    try {
+      const result = await generateWeeklyReview(storage);
+      res.json(result);
+    } catch (err: any) {
+      log.error("[Weekly Review]", err?.message || err);
+      res.status(500).json({ error: "Failed to generate weekly review" });
+    }
+  }));
+
+  // ---- Cron: Weekly Review for all users ----
+  // Hit by Vercel cron every Sunday at 14:00 UTC (configured in vercel.json).
+  // Vercel cron uses GET by default. Auth via CRON_SECRET bearer token.
+  // Iterates all Supabase auth users and generates a review for each.
+  const cronWeeklyReview: any = asyncHandler(async (req: any, res: any) => {
+    const secret = process.env.CRON_SECRET;
+    const provided = (req.headers.authorization || "").replace("Bearer ", "");
+    if (!secret || provided !== secret) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      // Use admin Supabase client to list users.
+      const { createClient } = await import("@supabase/supabase-js");
+      const url = process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) return res.status(500).json({ error: "Supabase admin env vars missing" });
+      const admin = createClient(url, key);
+      const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
+      if (listErr) throw listErr;
+      const users = usersList?.users || [];
+      const { createScopedStorage, requestStorageContext } = await import("./storage");
+
+      const results: Array<{ userId: string; ok: boolean; artifactId?: string; error?: string }> = [];
+      for (const u of users) {
+        try {
+          const scoped = createScopedStorage(u.id);
+          const result = await new Promise<any>((resolve, reject) => {
+            requestStorageContext.run(scoped, async () => {
+              try { resolve(await generateWeeklyReview(scoped)); } catch (e) { reject(e); }
+            });
+          });
+          results.push({ userId: u.id, ok: true, artifactId: result.artifactId });
+        } catch (e: any) {
+          results.push({ userId: u.id, ok: false, error: e?.message || String(e) });
+        }
+      }
+      res.json({ generated: results.filter(r => r.ok).length, total: results.length, results });
+    } catch (err: any) {
+      log.error("[Cron Weekly Review]", err?.message || err);
+      res.status(500).json({ error: "Cron failed" });
+    }
+  });
+  app.get("/api/cron/weekly-review", cronWeeklyReview);
+  app.post("/api/cron/weekly-review", cronWeeklyReview);
 
   // ---- Activity Feed ----
   app.get("/api/activity", asyncHandler(async (req, res) => {

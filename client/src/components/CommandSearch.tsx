@@ -34,6 +34,7 @@ import {
   Wallet,
   Settings as SettingsIcon,
   Bell,
+  Sparkles,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -126,6 +127,7 @@ const QUICK_ACTIONS = [
   { label: "Go to Artifacts", icon: FileText,        path: "/artifacts", shortcut: "A" },
   { label: "Go to Obligations", icon: Bell,          path: "/obligations", shortcut: "O" },
   { label: "Go to Settings",  icon: SettingsIcon,    path: "/settings", shortcut: "S" },
+  { label: "Insights",        icon: Sparkles,        path: "/insights", shortcut: "I" },
 ];
 
 // Actions that create a new artifact/entity. Shown as their own group above
@@ -138,6 +140,8 @@ const CREATE_ACTIONS = [
   { label: "New task",        icon: ListTodo,   path: "/tasks?new=1",      color: "text-orange-500" },
   { label: "New habit",       icon: Flame,      path: "/habits?new=1",     color: "text-red-500" },
   { label: "New tracker",     icon: BarChart2,  path: "/trackers?new=1",   color: "text-cyan-500" },
+  { label: "Scan receipt",    icon: Sparkles,   path: "/insights",        color: "text-pink-500" },
+  { label: "Generate weekly review", icon: Sparkles, path: "/insights",   color: "text-indigo-500" },
 ];
 
 // ─── Shared CommandSearch context (open state lives here) ─────────────────────
