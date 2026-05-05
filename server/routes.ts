@@ -13,7 +13,7 @@ interface AuthenticatedRequest extends Request {
   userId?: string;
 }
 import { storage } from "./storage";
-import { processMessage, processFileUpload, getActionLog } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand } from "./ai-engine";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   insertProfileSchema,
@@ -329,6 +329,33 @@ export async function registerRoutes(
       }
       const detail = process.env.NODE_ENV !== 'production' ? msg : undefined;
       res.status(500).json({ error: "Failed to process message", reply: "Something went wrong. Please try again.", ...(detail !== undefined && { detail }) });
+    }
+  }));
+
+  // ---- AI Text Transform (doc editor /ai commands) ----
+  app.post("/api/ai-transform", asyncHandler(async (req, res) => {
+    const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+    if (rateLimit(`ai-transform:${userId}`, 30)) {
+      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
+    }
+    try {
+      const { command, text } = req.body || {};
+      const allowed: TextTransformCommand[] = ["improve", "summarize", "continue", "shorten", "expand", "grammar"];
+      if (!command || !allowed.includes(command)) {
+        return res.status(400).json({ error: `command must be one of: ${allowed.join(", ")}` });
+      }
+      if (typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({ error: "text required" });
+      }
+      if (text.length > 5000) {
+        return res.status(400).json({ error: "text too long (max 5000 characters)" });
+      }
+      const result = await transformText(command, sanitize(text));
+      res.json({ text: result });
+    } catch (err: any) {
+      const msg = err?.message || "unknown error";
+      log.error("[AI Transform]", msg);
+      res.status(500).json({ error: "Failed to transform text" });
     }
   }));
 

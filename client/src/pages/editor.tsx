@@ -15,7 +15,9 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Underline from "@tiptap/extension-underline";
-import Spreadsheet from "react-spreadsheet";
+import Spreadsheet, { createFormulaParser as defaultCreateFormulaParser } from "react-spreadsheet";
+import { useSheetSnapshot, buildSheetFunctions } from "@/lib/sheet-functions";
+import { SLASH_ITEMS, filterSlashItems, type SlashItem } from "@/lib/editor-slash-commands";
 import DOMPurify from "dompurify";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -151,6 +153,16 @@ export default function EditorPage() {
   const [sheet, setSheet] = useState<SheetData>(emptySheet());
   const inflightAbort = useRef<AbortController | null>(null);
 
+  // Slash command menu state (doc mode only).
+  const [slashMenu, setSlashMenu] = useState<{
+    open: boolean;
+    top: number;
+    left: number;
+    query: string;
+    selectedIndex: number;
+  }>({ open: false, top: 0, left: 0, query: "", selectedIndex: 0 });
+  const [aiBusy, setAiBusy] = useState(false);
+
   // Hydrate state from loaded artifact.
   useEffect(() => {
     if (existing) {
@@ -205,6 +217,47 @@ export default function EditorPage() {
     onUpdate: ({ editor }) => {
       setDocHtml(editor.getHTML());
       setDirty(true);
+      // If the slash menu is open, refresh its query from the text between the
+      // trigger and the caret. Close it if the trigger is gone.
+      setSlashMenu(prev => {
+        if (!prev.open) return prev;
+        const { from } = editor.state.selection;
+        const $from = editor.state.doc.resolve(from);
+        const lineText = $from.parent.textContent;
+        const offset = $from.parentOffset;
+        let triggerOffset = -1;
+        for (let i = offset - 1; i >= 0; i--) {
+          const ch = lineText[i];
+          if (ch === "/") { triggerOffset = i; break; }
+          if (ch === " " || ch === "\t" || ch === "\n") break;
+        }
+        if (triggerOffset === -1) return { ...prev, open: false };
+        const query = lineText.slice(triggerOffset + 1, offset);
+        return { ...prev, query, selectedIndex: 0 };
+      });
+    },
+    editorProps: {
+      handleKeyDown: (_view, event) => {
+        if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          // Defer to next tick so the "/" character is inserted before we measure caret.
+          setTimeout(() => {
+            try {
+              const sel = window.getSelection();
+              if (!sel || sel.rangeCount === 0) return;
+              const rect = sel.getRangeAt(0).cloneRange().getBoundingClientRect();
+              setSlashMenu({
+                open: true,
+                top: rect.bottom + window.scrollY + 4,
+                left: rect.left + window.scrollX,
+                query: "",
+                selectedIndex: 0,
+              });
+            } catch { /* ignore */ }
+          }, 0);
+          return false;
+        }
+        return false;
+      },
     },
   }, [type === "doc"]);
 
@@ -214,6 +267,97 @@ export default function EditorPage() {
       editor.commands.setContent(existing.content || "<p></p>");
     }
   }, [editor, existing]);
+
+  // Filtered slash items, recomputed on each query change.
+  const slashFiltered: SlashItem[] = useMemo(
+    () => slashMenu.open ? filterSlashItems(slashMenu.query) : [],
+    [slashMenu.open, slashMenu.query],
+  );
+
+  // Keyboard navigation for the slash menu (ArrowUp/Down/Enter/Escape).
+  useEffect(() => {
+    if (!slashMenu.open || !editor) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashMenu(p => ({ ...p, open: false }));
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashMenu(p => ({ ...p, selectedIndex: Math.min(slashFiltered.length - 1, p.selectedIndex + 1) }));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashMenu(p => ({ ...p, selectedIndex: Math.max(0, p.selectedIndex - 1) }));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const item = slashFiltered[slashMenu.selectedIndex];
+        if (item) item.run(editor);
+        setSlashMenu(p => ({ ...p, open: false }));
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [slashMenu.open, slashMenu.selectedIndex, slashFiltered, editor]);
+
+  // AI command listener — dispatched by slash items "/ai improve", etc.
+  // Calls /api/ai-transform and replaces the selection (or current paragraph)
+  // with the transformed text.
+  useEffect(() => {
+    if (!editor) return;
+    const handler = async (ev: Event) => {
+      const e = ev as CustomEvent<{ command: string; selection: string; from: number; to: number }>;
+      const { command, selection, from, to } = e.detail;
+      if (!command || !selection) return;
+      setAiBusy(true);
+      try {
+        const r = await apiRequest("POST", "/api/ai-transform", { command, text: selection });
+        const json = await r.json();
+        const newText: string = json?.text || "";
+        if (!newText) {
+          toast({ title: "AI returned empty result", variant: "destructive" });
+          return;
+        }
+        if (command === "continue") {
+          // Append a new paragraph after the current cursor position.
+          editor.chain().focus().insertContent(`<p>${newText.replace(/</g, "&lt;").replace(/\n/g, "</p><p>")}</p>`).run();
+        } else if (command === "summarize") {
+          // Replace selection with a bulleted list.
+          const lines = newText.split("\n").map(l => l.replace(/^[\u2022\-\*]\s*/, "").trim()).filter(Boolean);
+          const html = `<ul>${lines.map(l => `<li>${l.replace(/</g, "&lt;")}</li>`).join("")}</ul>`;
+          if (to > from) {
+            editor.chain().focus().setTextSelection({ from, to }).deleteSelection().insertContent(html).run();
+          } else {
+            editor.chain().focus().insertContent(html).run();
+          }
+        } else {
+          // Replace selection (or paragraph) with the transformed text.
+          const escaped = newText.replace(/</g, "&lt;").replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br/>");
+          const html = `<p>${escaped}</p>`;
+          if (to > from) {
+            editor.chain().focus().setTextSelection({ from, to }).deleteSelection().insertContent(html).run();
+          } else {
+            // No selection — replace current paragraph.
+            const $from = editor.state.doc.resolve(from);
+            const start = from - $from.parentOffset;
+            const end = start + $from.parent.content.size;
+            editor.chain().focus().setTextSelection({ from: start, to: end }).deleteSelection().insertContent(html).run();
+          }
+        }
+      } catch (err: any) {
+        toast({ title: "AI request failed", description: err?.message || String(err), variant: "destructive" });
+      } finally {
+        setAiBusy(false);
+      }
+    };
+    window.addEventListener("portol:ai-command", handler);
+    return () => window.removeEventListener("portol:ai-command", handler);
+  }, [editor, toast]);
 
   // ── Save logic ──────────────────────────────────────────────────────────────
   const buildPayload = () => {
@@ -379,6 +523,14 @@ export default function EditorPage() {
   // ── Derived state (BEFORE any conditional return — hook order) ─────────────
   const matrix = useMemo(() => sheetToMatrix(sheet), [sheet]);
 
+  // Live data snapshot — only fetched when in sheet mode. Powers =NETWORTH(),
+  // =BUDGET("Groceries"), =TRACKER("Weight"), =DAYSUNTIL("2026-12-31"), etc.
+  const sheetSnapshot = useSheetSnapshot(type === "sheet");
+  const sheetCreateFormulaParser = useMemo(() => {
+    const customFns = buildSheetFunctions(sheetSnapshot);
+    return (data: any) => defaultCreateFormulaParser(data, { functions: customFns } as any);
+  }, [sheetSnapshot]);
+
   const docStats = useMemo(() => {
     if (type !== "doc") return "";
     const tmp = typeof document !== "undefined" ? document.createElement("div") : null;
@@ -514,6 +666,50 @@ export default function EditorPage() {
               <EditorContent editor={editor} className="prose prose-sm max-w-none focus:outline-none [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none" />
             </div>
           </div>
+          {/* Slash command menu */}
+          {slashMenu.open && slashFiltered.length > 0 && (
+            <div
+              className="fixed z-50 w-72 max-h-80 overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg p-1"
+              style={{ top: slashMenu.top, left: slashMenu.left }}
+              data-testid="slash-menu"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {(() => {
+                let lastGroup: string | null = null;
+                return slashFiltered.map((item, i) => {
+                  const showHeader = item.group !== lastGroup;
+                  lastGroup = item.group;
+                  return (
+                    <div key={item.id}>
+                      {showHeader && (
+                        <div className="px-2 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {item.group === "basic" ? "Basic blocks" : "AI commands"}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        className={`w-full text-left px-2 py-1.5 rounded text-sm ${i === slashMenu.selectedIndex ? "bg-accent" : "hover:bg-accent/50"}`}
+                        onClick={() => {
+                          if (editor) item.run(editor);
+                          setSlashMenu(p => ({ ...p, open: false }));
+                        }}
+                        onMouseEnter={() => setSlashMenu(p => ({ ...p, selectedIndex: i }))}
+                      >
+                        <div className="font-medium">{item.label}</div>
+                        {item.hint && <div className="text-xs text-muted-foreground">{item.hint}</div>}
+                      </button>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+          {/* AI busy indicator */}
+          {aiBusy && (
+            <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-md border bg-popover text-popover-foreground shadow-lg px-3 py-2 text-sm">
+              <Loader2 className="h-4 w-4 animate-spin" /> AI thinking…
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -562,6 +758,7 @@ export default function EditorPage() {
               <Spreadsheet
                 data={matrix}
                 darkMode={resolvedMode === "dark"}
+                createFormulaParser={sheetCreateFormulaParser}
                 onChange={(m: any) => {
                   setSheet(matrixToSheet(m, sheet.rows, sheet.cols));
                   setDirty(true);

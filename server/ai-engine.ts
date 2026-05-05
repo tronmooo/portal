@@ -6809,3 +6809,46 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
 
   return { reply, actions, results };
 }
+
+// ============================================================
+// TEXT TRANSFORM — quick AI rewrites for the doc editor (/ai commands)
+// ============================================================
+//
+// Lightweight, single-shot text transformation. Used by the doc editor's slash
+// commands ("/ai improve", "/ai summarize", etc.). Returns just transformed
+// text — no tools, no agent loop, no actions. Should respond in 1–3s for short
+// passages so the inline UX feels snappy.
+
+export type TextTransformCommand =
+  | "improve" | "summarize" | "continue"
+  | "shorten" | "expand"   | "grammar";
+
+const TRANSFORM_PROMPTS: Record<TextTransformCommand, string> = {
+  improve:   "Rewrite the user's text below to make it clearer, more polished, and easier to read. Preserve the original meaning, tone, and language. Output only the rewritten text — no preamble, explanations, or quote marks.",
+  summarize: "Summarize the user's text below as 3–5 concise bullet points. Output ONLY the bullets, one per line, each starting with '• '. No preamble.",
+  continue:  "The user is writing a document. Continue from where they left off, adding ONE more paragraph (2–4 sentences) in the same voice and style. Output only the new paragraph — no preamble, no quotes.",
+  shorten:   "Rewrite the user's text below as concisely as possible while keeping all key information. Aim for ~50% the length. Preserve language and tone. Output only the shortened text.",
+  expand:    "Expand the user's text below by adding helpful detail, examples, or clarification. Roughly double the length. Preserve the voice and language. Output only the expanded text.",
+  grammar:   "Fix any grammar, spelling, and punctuation errors in the text below. Make minimal stylistic changes — preserve the author's voice. Output only the corrected text.",
+};
+
+export async function transformText(
+  command: TextTransformCommand,
+  text: string,
+): Promise<string> {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return "";
+  const prompt = TRANSFORM_PROMPTS[command] || TRANSFORM_PROMPTS.improve;
+
+  const client = getClient();
+  // Haiku for speed — these are short, formula-driven transforms.
+  const resp = await client.messages.create({
+    model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+    max_tokens: 1024,
+    system: prompt,
+    messages: [{ role: "user", content: trimmed }],
+  });
+
+  const block = resp.content?.find((b: any) => b.type === "text") as any;
+  return (block?.text || "").trim();
+}
