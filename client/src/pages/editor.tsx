@@ -27,6 +27,7 @@ import {
   ArrowLeft, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered,
   Heading1, Heading2, LinkIcon, Code, Save, Download, Trash2, Copy, Loader2, Plus, Minus,
   Share2, Printer, Check, BarChart3, LineChart as LineChartIcon, AreaChart as AreaChartIcon, PieChart as PieChartIcon,
+  Link2, User as UserIcon, Activity, FileText, ListChecks, CheckCircle2, BookOpen, Receipt, ExternalLink, PanelRightOpen, PanelRightClose,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
@@ -42,8 +43,14 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { LayoutTemplate } from "lucide-react";
+import {
+  extractMentionTokens, htmlToPlainText, searchRowToEntity, rankAndDedupe,
+  type MentionEntity,
+} from "@/lib/editor-mentions";
 
 // ── Misc helpers ──
+
+const CHART_PALETTE = ["hsl(188 55% 50%)","#6366f1","#f59e0b","#10b981","#ef4444","#8b5cf6","#06b6d4","#84cc16"];
 
 function formatRelative(ts: number, now: number): string {
   const sec = Math.max(0, Math.round((now - ts) / 1000));
@@ -180,6 +187,15 @@ export default function EditorPage() {
   const [chartHasHeader, setChartHasHeader] = useState(true);
   const [chartType, setChartType] = useState<"bar" | "line" | "area" | "pie">("bar");
   const [chartTitle, setChartTitle] = useState("");
+  // Cross-link sidebar state (Wave 7) — doc mode only.
+  const [linksOpen, setLinksOpen] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem("portol_editor_links_sidebar");
+      return v === null ? true : v === "1";
+    } catch { return true; }
+  });
+  const [mentionEntities, setMentionEntities] = useState<MentionEntity[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
 
   // Hydrate state from loaded artifact.
   useEffect(() => {
@@ -292,6 +308,61 @@ export default function EditorPage() {
     () => slashMenu.open ? filterSlashItems(slashMenu.query) : [],
     [slashMenu.open, slashMenu.query],
   );
+
+  // ── Wave 7: cross-link mentions ────────────────────────────────────────────
+  // Watch the doc body for `@mention` tokens, resolve each to entities via
+  // /api/search, and surface them in the right sidebar. Debounced 600ms so we
+  // don't hammer the API while the user is typing.
+  const mentionTokens = useMemo(() => {
+    if (type !== "doc") return [] as ReturnType<typeof extractMentionTokens>;
+    const plain = htmlToPlainText(docHtml);
+    return extractMentionTokens(plain);
+  }, [type, docHtml]);
+  const mentionTokensKey = useMemo(
+    () => mentionTokens.map(t => t.query).sort().join("\u0001"),
+    [mentionTokens],
+  );
+
+  useEffect(() => {
+    if (type !== "doc") { setMentionEntities([]); return; }
+    if (!mentionTokens.length) { setMentionEntities([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setMentionLoading(true);
+      try {
+        // Issue one /api/search call per unique token (capped at 8 to stay polite).
+        const tokens = mentionTokens.slice(0, 8);
+        const results = await Promise.all(tokens.map(async tok => {
+          try {
+            const res = await apiRequest("GET", `/api/search?q=${encodeURIComponent(tok.query)}`);
+            const rows = await res.json();
+            return Array.isArray(rows) ? rows : [];
+          } catch {
+            return [];
+          }
+        }));
+        if (cancelled) return;
+        const allRows = results.flat();
+        const entities: MentionEntity[] = [];
+        for (const row of allRows) {
+          const e = searchRowToEntity(row);
+          if (e) entities.push(e);
+        }
+        const ranked = rankAndDedupe(entities, tokens.map(t => t.query)).slice(0, 24);
+        setMentionEntities(ranked);
+      } finally {
+        if (!cancelled) setMentionLoading(false);
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+  // mentionTokensKey is the dedup’d signal; explicit dep ensures stable runs
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, mentionTokensKey]);
+
+  // Persist sidebar open/closed preference.
+  useEffect(() => {
+    try { localStorage.setItem("portol_editor_links_sidebar", linksOpen ? "1" : "0"); } catch { /* ignore */ }
+  }, [linksOpen]);
 
   // Keyboard navigation for the slash menu (ArrowUp/Down/Enter/Escape).
   useEffect(() => {
@@ -920,7 +991,8 @@ export default function EditorPage() {
 
       {/* Body */}
       {type === "doc" ? (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Toolbar */}
           <div className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1 flex-wrap shrink-0">
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} data-testid="button-doc-bold"><Bold className="h-4 w-4" /></Button>
@@ -989,6 +1061,16 @@ export default function EditorPage() {
               <Loader2 className="h-4 w-4 animate-spin" /> AI thinking…
             </div>
           )}
+        </div>
+        {/* Wave 7: Cross-link sidebar */}
+        <CrossLinkSidebar
+          open={linksOpen}
+          onToggle={() => setLinksOpen(v => !v)}
+          tokenCount={mentionTokens.length}
+          loading={mentionLoading}
+          entities={mentionEntities}
+          currentArtifactId={savedId}
+        />
         </div>
       ) : (
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -1415,6 +1497,139 @@ export default function EditorPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ── Wave 7: Cross-link sidebar ────────────────────────────────────────────────
+// Right rail in the doc editor that surfaces entities the doc references via
+// `@mentions`. Click to open in a new tab. Collapsible (preference persisted).
+
+function entityIcon(t: MentionEntity["type"]) {
+  switch (t) {
+    case "profile":    return <UserIcon className="h-4 w-4" />;
+    case "tracker":    return <Activity className="h-4 w-4" />;
+    case "artifact":   return <FileText className="h-4 w-4" />;
+    case "task":       return <ListChecks className="h-4 w-4" />;
+    case "habit":      return <CheckCircle2 className="h-4 w-4" />;
+    case "obligation": return <Receipt className="h-4 w-4" />;
+    case "journal":    return <BookOpen className="h-4 w-4" />;
+    default:           return <Link2 className="h-4 w-4" />;
+  }
+}
+
+function CrossLinkSidebar({
+  open, onToggle, tokenCount, loading, entities, currentArtifactId,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  tokenCount: number;
+  loading: boolean;
+  entities: MentionEntity[];
+  currentArtifactId?: string;
+}) {
+  // Don't surface the doc currently being edited.
+  const filtered = entities.filter(e => !(e.type === "artifact" && e.id === currentArtifactId));
+  // Group by type for readability.
+  const groups: Record<string, MentionEntity[]> = {};
+  for (const e of filtered) {
+    if (!groups[e.type]) groups[e.type] = [];
+    groups[e.type].push(e);
+  }
+  const groupOrder: MentionEntity["type"][] = [
+    "profile", "tracker", "artifact", "task", "habit", "obligation", "journal", "expense",
+  ];
+  const groupLabel = (t: MentionEntity["type"]) => ({
+    profile: "Profiles", tracker: "Trackers", artifact: "Artifacts", task: "Tasks",
+    habit: "Habits", obligation: "Bills", journal: "Journal", expense: "Expenses",
+  }[t]);
+
+  if (!open) {
+    return (
+      <div className="border-l bg-muted/20 flex flex-col items-center w-9 shrink-0">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 mt-2"
+          onClick={onToggle}
+          title="Show linked entities"
+          data-testid="button-toggle-links-sidebar"
+        >
+          <PanelRightOpen className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-l bg-muted/20 flex flex-col w-72 shrink-0 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b shrink-0">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
+          <Link2 className="h-4 w-4" /> Linked
+          {tokenCount > 0 && (
+            <span className="text-xs text-muted-foreground">({tokenCount})</span>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={onToggle}
+          title="Hide sidebar"
+          data-testid="button-toggle-links-sidebar"
+        >
+          <PanelRightClose className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-2 py-2">
+        {tokenCount === 0 ? (
+          <div className="text-xs text-muted-foreground p-3 leading-snug">
+            Type <span className="font-mono bg-muted px-1 rounded">@name</span> to reference a
+            profile, tracker, artifact, task, habit, bill, or journal entry. Matches show up here
+            as clickable links.
+          </div>
+        ) : loading && filtered.length === 0 ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground p-3">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Resolving mentions…
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="text-xs text-muted-foreground p-3 leading-snug">
+            No matches found for the {tokenCount} mention{tokenCount === 1 ? "" : "s"} in this doc.
+          </div>
+        ) : (
+          groupOrder.map(t => {
+            const list = groups[t];
+            if (!list || list.length === 0) return null;
+            return (
+              <div key={t} className="mb-3">
+                <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {groupLabel(t)}
+                </div>
+                <div className="space-y-0.5">
+                  {list.map(e => (
+                    <a
+                      key={e.id}
+                      href={e.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-start gap-2 px-2 py-1.5 rounded hover:bg-accent/60 text-sm group"
+                      data-testid={`link-entity-${e.type}-${e.id}`}
+                    >
+                      <span className="mt-0.5 text-muted-foreground shrink-0">{entityIcon(e.type)}</span>
+                      <span className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{e.label}</div>
+                        {e.hint && <div className="text-[11px] text-muted-foreground truncate">{e.hint}</div>}
+                      </span>
+                      <ExternalLink className="h-3 w-3 mt-1 text-muted-foreground opacity-0 group-hover:opacity-100 shrink-0" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
