@@ -253,7 +253,7 @@ export interface TrackerEntry {
   values: Record<string, any>;
   computed: ComputedData;
   notes?: string;
-  mood?: "great" | "good" | "okay" | "bad" | "terrible";
+  mood?: MoodLevel;
   tags?: string[];
   forProfile?: string; // Legacy: profile context for entry display
   profileId?: string;  // Profile ID this entry belongs to (for ownership + cascade delete)
@@ -296,7 +296,10 @@ export const insertTrackerEntrySchema = z.object({
   trackerId: z.string(),
   values: z.record(z.any()),
   notes: z.string().optional(),
-  mood: z.enum(["great", "good", "okay", "bad", "terrible"]).optional(),
+  // Bug #37: aligned with the master journal MoodLevel so AI-emitted moods
+  // (amazing/neutral/awful) don't get rejected by Zod when logged to a
+  // tracker entry. Both schemas now share the same 8-level vocabulary.
+  mood: z.enum(["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"]).optional(),
   tags: z.array(z.string()).optional(),
   forProfile: z.string().optional(),
   profileId: z.string().optional(),

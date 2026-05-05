@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
-import { getUserToday, parseLocalDate } from "../shared/timezone";
+import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { passesProfileFilter } from "../shared/profile-filter";
 import {
   type Profile, type InsertProfile,
@@ -190,14 +190,22 @@ function generateInsights(
 
   const fitnessTrackers = trackers.filter(t => t.category === "fitness");
   if (fitnessTrackers.length > 0) {
-    const allFE = fitnessTrackers.flatMap(t => t.entries).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const allFE = fitnessTrackers.flatMap(t => t.entries);
+    // Bug #23: bucket entries into local YYYY-MM-DD and walk backwards with
+    // addDays() (noon UTC anchor) so day arithmetic never drifts on DST days.
+    // generateInsights() doesn't have access to the user's timezone, so we
+    // fall back to America/Los_Angeles — same default the rest of the app uses.
+    const fitTz = 'America/Los_Angeles';
+    const fitDays = new Set<string>();
+    for (const e of allFE) {
+      try { fitDays.add(toLocalDateStr(new Date(e.timestamp), fitTz)); }
+      catch { fitDays.add(e.timestamp.slice(0, 10)); }
+    }
     let streak = 0;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    let fitCursor = getUserToday(fitTz);
     for (let i = 0; i < 30; i++) {
-      const checkDate = new Date(today); checkDate.setDate(checkDate.getDate() - i);
-      const dayStr = checkDate.toISOString().slice(0, 10);
-      const hasEntry = allFE.some(e => e.timestamp.slice(0, 10) === dayStr);
-      if (hasEntry) streak++; else if (i > 0) break;
+      if (fitDays.has(fitCursor)) streak++; else if (i > 0) break;
+      fitCursor = tzAddDays(fitCursor, -1);
     }
     if (streak >= 2) {
       insights.push({ id: randomUUID(), type: "streak", title: `${streak}-day fitness streak`, description: `You've worked out ${streak} days in a row. ${streak >= 7 ? "Incredible consistency!" : streak >= 3 ? "Building great momentum." : "Keep it going!"}`, severity: "positive", data: { streak }, createdAt: now.toISOString() });
@@ -2957,19 +2965,32 @@ export class SupabaseStorage implements IStorage {
     for (const t of trackers) weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length;
 
     const streaks: { name: string; days: number }[] = [];
-    // Tracker streaks: walk back from "today in user's timezone". Previously
-    // used UTC midnight which mismatched stored timestamp slices for users
-    // east of UTC and skewed late-evening entries west of UTC.
-    const trackerTodayStr = getUserToday(this._timezone);
-    const trackerTodayDate = parseLocalDate(trackerTodayStr);
+    // Tracker streaks: walk back from "today in user's timezone".
+    //
+    // Bug #23 (DST/timezone): the previous walk did
+    //   parseLocalDate(today) → setDate(-i) → toISOString().slice(0,10)
+    // which always returns the UTC date. Tracker entries store ISO timestamps
+    // (UTC), so a 11pm-Pacific entry on Apr 30 lands on May 1 UTC — the streak
+    // walk would compare local dates to UTC slices and miss days. We now
+    // bucket BOTH sides into the user's local calendar date.
+    const trackerTz = this._timezone || 'America/Los_Angeles';
+    const trackerTodayStr = getUserToday(trackerTz);
     for (const t of trackers) {
       if (t.entries.length < 2) continue;
+      // Pre-bucket entries into local YYYY-MM-DD once — avoids O(N·30) work and
+      // makes DST-day arithmetic trivial.
+      const localDays = new Set<string>();
+      for (const e of t.entries) {
+        try { localDays.add(toLocalDateStr(new Date(e.timestamp), trackerTz)); }
+        catch { localDays.add(e.timestamp.slice(0, 10)); }
+      }
       let streak = 0;
+      // Use addDays() (timezone-safe — noon UTC anchor) to step backward through
+      // the calendar without DST drift.
+      let cursor = trackerTodayStr;
       for (let i = 0; i < 30; i++) {
-        const checkDate = new Date(trackerTodayDate);
-        checkDate.setDate(checkDate.getDate() - i);
-        const dayStr = checkDate.toISOString().slice(0, 10);
-        if (t.entries.some(e => e.timestamp.slice(0, 10) === dayStr)) streak++; else if (i > 0) break;
+        if (localDays.has(cursor)) streak++; else if (i > 0) break;
+        cursor = tzAddDays(cursor, -1);
       }
       if (streak >= 2) streaks.push({ name: t.name, days: streak });
     }
@@ -3013,18 +3034,17 @@ export class SupabaseStorage implements IStorage {
     }, 0);
 
     // Journal streak: walk backwards from today in the user's timezone.
-    // The previous implementation used `today.toISOString().slice(0,10)`
-    // which returns the UTC date, so a user writing at 11pm Pacific on
-    // April 30 (May 1 UTC) would record `date=2026-04-30` but the streak
-    // walk would compare against `2026-05-01` and miss the entry.
+    // Bug #23: even with parseLocalDate(today), the inner setDate/-i +
+    // toISOString().slice(0,10) shortcut still emits UTC dates, breaking the
+    // walk on DST days and for users east of UTC. Use addDays() which is
+    // anchored at T12:00:00 UTC so day arithmetic never drifts.
     let journalStreak = 0;
     const todayUserStr = getUserToday(this._timezone);
-    const todayUserDate = parseLocalDate(todayUserStr);
+    const journalDays = new Set(journalEntries.map(j => j.date));
+    let jCursor = todayUserStr;
     for (let i = 0; i < 30; i++) {
-      const d = new Date(todayUserDate);
-      d.setDate(d.getDate() - i);
-      const dayStr = d.toISOString().slice(0, 10);
-      if (journalEntries.some(j => j.date === dayStr)) journalStreak++; else if (i > 0) break;
+      if (journalDays.has(jCursor)) journalStreak++; else if (i > 0) break;
+      jCursor = tzAddDays(jCursor, -1);
     }
 
     const recentJournal = [...journalEntries].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

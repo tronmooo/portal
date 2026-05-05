@@ -3,6 +3,7 @@ import type {
   Insight, Profile, Tracker, Task, Expense, Habit, Obligation,
   JournalEntry, Document, Goal, CalendarEvent,
 } from "@shared/schema";
+import { MOOD_SCORES } from "@shared/schema";
 import { getUserToday, addDays as tzAddDays, DEFAULT_TIMEZONE } from "@shared/timezone";
 
 // ============================================================
@@ -449,9 +450,18 @@ function analyzeHealth(trackers: Tracker[], todayStr: string, now: Date, insight
 function analyzeMood(journal: JournalEntry[], now: Date, insights: Insight[]) {
   const recentJournal = journal.filter(j => (now.getTime() - new Date(j.createdAt).getTime()) < 7 * 86400000);
   if (recentJournal.length >= 3) {
-    const moodScores: Record<string, number> = { amazing: 5, good: 4, neutral: 3, bad: 2, awful: 1 };
-    const avg = recentJournal.reduce((s, j) => s + (moodScores[j.mood] || 3), 0) / recentJournal.length;
-    if (avg <= 2.5) {
+    // Bug #33: insights-engine had its OWN 1-5 mood-score table that disagreed
+    // with the canonical MOOD_SCORES (1-8 scale, includes 'great', 'okay',
+    // 'terrible'). Two consequences:
+    //   - Moods like 'great', 'okay', 'terrible' silently scored 0 → default 3
+    //     → wrongly dragged the weekly average toward neutral.
+    //   - The thresholds (≤2.5 low / ≥4 great) were tuned for 1-5 scale and
+    //     would never fire correctly with 1-8 inputs.
+    // We now use the shared MOOD_SCORES and rescale the trigger thresholds to
+    // the 1-8 range: low ≤ 3.5 (≈ 2.2 on the old 1-5 scale) and great ≥ 6
+    // (≈ 4.0 on the old 1-5 scale).
+    const avg = recentJournal.reduce((s, j) => s + (MOOD_SCORES[j.mood] || 4), 0) / recentJournal.length;
+    if (avg <= 3.5) {
       insights.push({
         id: randomUUID(),
         type: "mood_trend",
@@ -461,7 +471,7 @@ function analyzeMood(journal: JournalEntry[], now: Date, insights: Insight[]) {
         data: { avgMood: avg, entries: recentJournal.length },
         createdAt: now.toISOString(),
       });
-    } else if (avg >= 4) {
+    } else if (avg >= 6) {
       insights.push({
         id: randomUUID(),
         type: "mood_trend",

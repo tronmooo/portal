@@ -516,12 +516,58 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
       const weightTracker = weightTrackers[0] || trackers.find(t => t.name.toLowerCase() === "weight");
       if (weightTracker) {
         const weightProfiles = await storage.getProfiles();
-        const weightSelfId = weightProfiles.find(p => p.type === "self")?.id;
+        const selfProfile = weightProfiles.find(p => p.type === "self");
+        const weightSelfId = selfProfile?.id;
         const entry = await storage.logEntry({ trackerId: weightTracker.id, values: { weight }, profileId: weightSelfId });
         actions.push({ type: "log_entry", category: "health", data: { trackerName: "weight", weight } });
         if (entry) results.push(entry);
-        const bmi = entry?.computed?.bmi;
-        return { matched: true, reply: `Logged weight: ${weight} lbs${bmi ? ` (BMI: ${bmi})` : ""}`, actions, results };
+        // Bug #24: BMI was hardcoded to 5'10". Now compute it ONLY when the
+        // self profile actually has a height stored, in inches or cm. We
+        // accept several common shapes the profile may store: a numeric
+        // 'heightInches', a 'height' string like "5'10\"" or "178 cm",
+        // or separate 'heightFt' + 'heightIn'. If we can't parse a real
+        // height, omit BMI entirely — never fall back to a guessed value.
+        let bmi: number | undefined;
+        try {
+          const fields: any = (selfProfile as any)?.fields || {};
+          const heightInches: number | undefined = (() => {
+            if (typeof fields.heightInches === "number" && fields.heightInches > 30 && fields.heightInches < 100) return fields.heightInches;
+            if (typeof fields.heightFt === "number" && typeof fields.heightIn === "number") {
+              const total = fields.heightFt * 12 + fields.heightIn;
+              if (total > 30 && total < 100) return total;
+            }
+            const raw = (fields.height ?? fields.heightString ?? "").toString().trim();
+            if (!raw) return undefined;
+            // "5'10\"" or "5 ft 10 in"
+            const ftIn = raw.match(/(\d+)\s*(?:'|ft|\s)\s*(\d{1,2})/i);
+            if (ftIn) {
+              const total = parseInt(ftIn[1]) * 12 + parseInt(ftIn[2]);
+              if (total > 30 && total < 100) return total;
+            }
+            // "178 cm" or "178cm"
+            const cm = raw.match(/(\d{2,3}(?:\.\d+)?)\s*cm/i);
+            if (cm) {
+              const inches = parseFloat(cm[1]) / 2.54;
+              if (inches > 30 && inches < 100) return inches;
+            }
+            // "70 in" or "70 inches"
+            const inOnly = raw.match(/^(\d{2,3}(?:\.\d+)?)\s*(?:in|inch|inches)?$/i);
+            if (inOnly) {
+              const inches = parseFloat(inOnly[1]);
+              if (inches > 30 && inches < 100) return inches;
+            }
+            return undefined;
+          })();
+          if (heightInches) {
+            // BMI = (weight_lbs / height_in^2) * 703
+            bmi = Math.round(((weight / (heightInches * heightInches)) * 703) * 10) / 10;
+          }
+        } catch { /* non-fatal */ }
+        return {
+          matched: true,
+          reply: `Logged weight: ${weight} lbs${bmi ? ` (BMI: ${bmi})` : ""}`,
+          actions, results,
+        };
       }
     }
   }
