@@ -2101,9 +2101,15 @@ export class SupabaseStorage implements IStorage {
       tags: data.tags || [], created_at: now,
     });
     if (error) throw error;
-    for (const pid of (data.linkedProfiles || [])) {
-      await this.linkProfileTo(pid, "document", id);
-    }
+    // PERF FIX: was sequential linkProfileTo per profile — N round trips for
+    // a multi-profile upload. Parallelize so a 5-profile link is one burst.
+    await Promise.all(
+      (data.linkedProfiles || []).map((pid: string) =>
+        this.linkProfileTo(pid, "document", id).catch((e: any) => {
+          console.warn(`[createDocument] linkProfileTo failed for ${pid}:`, e?.message);
+        })
+      )
+    );
     this.logActivity("document", `Stored document: ${data.name}`);
     return (await this.getDocument(id))!;
   }
@@ -2112,20 +2118,28 @@ export class SupabaseStorage implements IStorage {
     const existing = await this.getDocument(id);
     if (!existing) return undefined;
     if (data.linkedProfiles) {
-      for (const pid of existing.linkedProfiles) {
-        if (!data.linkedProfiles.includes(pid)) {
+      // PERF FIX: was sequential getProfile + update per removed profile, then
+      // sequential linkProfileTo per added profile — up to 2N round trips.
+      const removedPids = existing.linkedProfiles.filter(pid => !data.linkedProfiles!.includes(pid));
+      const addedPids = data.linkedProfiles.filter(pid => !existing.linkedProfiles.includes(pid));
+      // Unlink removed profiles in parallel
+      await Promise.all(removedPids.map(async pid => {
+        try {
           const profile = await this.getProfile(pid);
           if (profile) {
             const newDocs = profile.documents.filter(did => did !== id);
             await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
           }
+        } catch (e: any) {
+          console.warn(`[updateDocument] unlink failed for ${pid}:`, e?.message);
         }
-      }
-      for (const pid of data.linkedProfiles) {
-        if (!existing.linkedProfiles.includes(pid)) {
-          await this.linkProfileTo(pid, "document", id);
-        }
-      }
+      }));
+      // Link added profiles in parallel
+      await Promise.all(addedPids.map(pid =>
+        this.linkProfileTo(pid, "document", id).catch((e: any) => {
+          console.warn(`[updateDocument] linkProfileTo failed for ${pid}:`, e?.message);
+        })
+      ));
     }
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("documents").update({
@@ -2148,13 +2162,18 @@ export class SupabaseStorage implements IStorage {
       const doc = await this.getDocument(id);
       if (doc) {
         storagePathToRemove = doc.storagePath;
-        for (const pid of doc.linkedProfiles) {
-          const profile = await this.getProfile(pid);
-          if (profile) {
-            const newDocs = profile.documents.filter(did => did !== id);
-            await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+        // PERF FIX: was sequential getProfile + update per linked profile.
+        await Promise.all(doc.linkedProfiles.map(async pid => {
+          try {
+            const profile = await this.getProfile(pid);
+            if (profile) {
+              const newDocs = profile.documents.filter(did => did !== id);
+              await this.supabase.from("profiles").update({ documents: newDocs }).eq("id", pid).eq("user_id", this.userId);
+            }
+          } catch (innerErr: any) {
+            console.warn(`[deleteDocument] cleanup failed for profile ${pid}:`, innerErr?.message);
           }
-        }
+        }));
       }
     } catch (e: any) {
       console.error(`[deleteDocument] Profile cleanup error for ${id}:`, e.message);

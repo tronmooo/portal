@@ -827,11 +827,12 @@ Return ONLY the JSON array, nothing else.`;
     if (profileId) {
       // Support comma-separated profile IDs for multi-select linking
       const profileIds = profileId.split(",").filter(Boolean);
-      const validIds: string[] = [];
-      for (const pid of profileIds) {
-        const p = await storage.getProfile(pid);
-        if (p) validIds.push(pid);
-      }
+      // PERF FIX: was a sequential getProfile per id — N round trips for a
+      // multi-select upload. Resolve all in parallel.
+      const profileResults = await Promise.all(
+        profileIds.map(pid => storage.getProfile(pid).catch(() => null))
+      );
+      const validIds: string[] = profileIds.filter((_, i) => !!profileResults[i]);
       if (validIds.length > 0) {
         linkedProfiles = validIds;
         existingProfileId = validIds[0];
@@ -4706,9 +4707,14 @@ async function executeTool(name: string, input: any): Promise<any> {
         }
 
         const existingEvents = await storage.getEvents();
+        // PERF FIX: was awaiting storage.getPreference once per event — N round
+        // trips to Supabase per sync (could be hundreds). Parallelize with
+        // Promise.all so this completes in a single network burst.
         const gcalMappings = new Set<string>();
-        for (const e of existingEvents) {
-          const mapped = await storage.getPreference(`gcal_map_${e.id}`);
+        const mappingResults = await Promise.all(
+          existingEvents.map(e => storage.getPreference(`gcal_map_${e.id}`).catch(() => null))
+        );
+        for (const mapped of mappingResults) {
           if (mapped) gcalMappings.add(mapped);
         }
 

@@ -921,11 +921,15 @@ export async function registerRoutes(
   // ---- Calendar Status ----
   app.get("/api/calendar/status", asyncHandler(async (_req, res) => {
     try {
-      const lastSync = await storage.getPreference("gcal_last_sync");
-      const events = await storage.getEvents();
+      // PERF FIX: was 3 sequential round trips. Parallelize — dashboard
+      // pings this endpoint on every page load and on visibility recovery.
+      const [lastSync, events, gcalRefreshToken] = await Promise.all([
+        storage.getPreference("gcal_last_sync"),
+        storage.getEvents(),
+        storage.getPreference("gcal_refresh_token"),
+      ]);
       const gcalEvents = events.filter((e: any) => e.tags?.includes("google-calendar"));
-      // Check if Google Calendar is actually configured (not hardcoded)
-      const gcalConfigured = !!(await storage.getPreference("gcal_refresh_token"));
+      const gcalConfigured = !!gcalRefreshToken;
       res.json({
         connected: gcalConfigured,
         lastSync: gcalConfigured ? lastSync : null,
@@ -2897,21 +2901,32 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Export / Import ----
   app.get("/api/export", asyncHandler(async (req, res) => {
     try {
+      // PERF FIX: was 12 sequential awaits — each one a Supabase round trip
+      // serialized after the previous. On a typical user this means ~1.5s of
+      // pure latency stacked up. Resolve all in parallel so the export
+      // completes in O(1) round-trip time instead of O(n).
+      const [
+        profiles, trackers, tasks, expenses, events, documents,
+        habits, obligations, artifacts, journalEntries, memories, domains,
+      ] = await Promise.all([
+        storage.getProfiles(),
+        storage.getTrackers(),
+        storage.getTasks(),
+        storage.getExpenses(),
+        storage.getEvents(),
+        storage.getDocuments(),
+        storage.getHabits(),
+        storage.getObligations(),
+        storage.getArtifacts(),
+        storage.getJournalEntries(),
+        storage.getMemories(),
+        storage.getDomains(),
+      ]);
       const data = {
         version: 1,
         exportedAt: new Date().toISOString(),
-        profiles: await storage.getProfiles(),
-        trackers: await storage.getTrackers(),
-        tasks: await storage.getTasks(),
-        expenses: await storage.getExpenses(),
-        events: await storage.getEvents(),
-        documents: await storage.getDocuments(),
-        habits: await storage.getHabits(),
-        obligations: await storage.getObligations(),
-        artifacts: await storage.getArtifacts(),
-        journalEntries: await storage.getJournalEntries(),
-        memories: await storage.getMemories(),
-        domains: await storage.getDomains(),
+        profiles, trackers, tasks, expenses, events, documents,
+        habits, obligations, artifacts, journalEntries, memories, domains,
       };
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
@@ -3164,21 +3179,30 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/analytics/spending", asyncHandler(async (req, res) => {
     try {
       const monthsBack = Math.min(Math.max(parseInt(req.query.months as string) || 6, 1), 24);
-      const now = new Date();
-      const thisYear = now.getFullYear();
-      const thisMonth = now.getMonth();
-      const todayDate = now.getDate();
+      // Use the user's timezone for month boundaries — server runs in UTC and
+      // rolls past midnight roughly 5pm PT, which would otherwise show the user
+      // "next month" data hours before their actual month change.
+      const userTz = (storage as any)._timezone || 'America/Los_Angeles';
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTz }); // YYYY-MM-DD in user TZ
+      const [thisYearStr, thisMonthStr, todayDayStr] = todayStr.split('-');
+      const thisYear = parseInt(thisYearStr);
+      const thisMonth = parseInt(thisMonthStr) - 1; // 0-indexed for Date math
+      const todayDate = parseInt(todayDayStr);
       const daysInCurrentMonth = new Date(thisYear, thisMonth + 1, 0).getDate();
       const daysElapsed = todayDate;
       const daysRemaining = daysInCurrentMonth - todayDate;
+      const currentMonthPrefix = `${thisYearStr}-${thisMonthStr}`; // 'YYYY-MM' for string-prefix matching
 
       const allExpenses = await storage.getExpenses();
       const obligations = await storage.getObligations();
 
       // --- Current month data ---
+      // Match by YYYY-MM string prefix on the stored date string. expense.date
+      // is stored as 'YYYY-MM-DD' in the user's TZ — string match is both
+      // faster and immune to UTC-rollover skew that `new Date(date).getMonth()`
+      // would introduce when the server is in UTC.
       const currentMonthExpenses = allExpenses.filter(e => {
-        const d = new Date(e.date);
-        return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
+        return typeof e.date === 'string' && e.date.startsWith(currentMonthPrefix);
       });
 
       const currentTotal = currentMonthExpenses.reduce((s, e) => s + e.amount, 0);
@@ -3237,8 +3261,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         const y = d.getFullYear();
         const monthStr = `${y}-${String(m + 1).padStart(2, "0")}`;
         const monthExpenses = allExpenses.filter(e => {
-          const ed = new Date(e.date);
-          return ed.getMonth() === m && ed.getFullYear() === y;
+          return typeof e.date === 'string' && e.date.startsWith(monthStr);
         });
         const total = Math.round(monthExpenses.reduce((s, e) => s + e.amount, 0) * 100) / 100;
         const byCat: Record<string, number> = {};
@@ -3297,9 +3320,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       // vs last month
       const lastMonthDate = new Date(thisYear, thisMonth - 1, 1);
+      const lastMonthPrefix = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, "0")}`;
       const lastMonthExpenses = allExpenses.filter(e => {
-        const d = new Date(e.date);
-        return d.getMonth() === lastMonthDate.getMonth() && d.getFullYear() === lastMonthDate.getFullYear();
+        return typeof e.date === 'string' && e.date.startsWith(lastMonthPrefix);
       });
       const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
       const change = Math.round((currentTotal - lastMonthTotal) * 100) / 100;
@@ -3825,10 +3848,13 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     if (completed === "true") {
       return res.json({ completed: true });
     }
-    // Check if user has created any data (implicit onboarding)
-    const profiles = await storage.getProfiles();
-    const trackers = await storage.getTrackers();
-    const tasks = await storage.getTasks();
+    // PERF FIX: was 3 sequential round trips on the cold path that runs on
+    // every fresh login. Parallelize so onboarding-check is one round-trip.
+    const [profiles, trackers, tasks] = await Promise.all([
+      storage.getProfiles(),
+      storage.getTrackers(),
+      storage.getTasks(),
+    ]);
     const hasData = profiles.length > 1 || trackers.length > 0 || tasks.length > 0; // >1 because self profile is auto-created
     res.json({
       completed: hasData, // If they already have data, skip onboarding
@@ -3895,9 +3921,14 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       // Get existing Portol events to avoid duplicates
       const existingEvents = await storage.getEvents();
+      // PERF FIX: was sequential getPreference per existing event — sync would
+      // serialize N Supabase round trips. Parallelize so the bulk lookup is
+      // a single round-trip burst.
       const gcalMappings = new Set<string>();
-      for (const e of existingEvents) {
-        const mapped = await storage.getPreference(`gcal_map_${e.id}`);
+      const mappingResults = await Promise.all(
+        existingEvents.map(e => storage.getPreference(`gcal_map_${e.id}`).catch(() => null))
+      );
+      for (const mapped of mappingResults) {
         if (mapped) gcalMappings.add(mapped);
       }
 
@@ -4061,10 +4092,14 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // Get sync status
   app.get("/api/calendar/sync-status", asyncHandler(async (_req, res) => {
     try {
-      const lastSync = await storage.getPreference("gcal_last_sync");
-      const events = await storage.getEvents();
+      // PERF FIX: was 3 sequential round trips.
+      const [lastSync, events, gcalRefreshToken] = await Promise.all([
+        storage.getPreference("gcal_last_sync"),
+        storage.getEvents(),
+        storage.getPreference("gcal_refresh_token"),
+      ]);
       const gcalEvents = events.filter((e: any) => e.tags?.includes("google-calendar"));
-      const gcalConfigured = !!(await storage.getPreference("gcal_refresh_token"));
+      const gcalConfigured = !!gcalRefreshToken;
       res.json({
         connected: gcalConfigured,
         lastSync: gcalConfigured ? lastSync : null,

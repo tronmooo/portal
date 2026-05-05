@@ -3578,7 +3578,18 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
 };
 
 export default function TrackersPage() {
-  useEffect(() => { document.title = "Linked — Portol"; }, []);
+  // Title reflects the actual route the user landed on. Both /trackers and
+  // /linked render this same component, but the previous hard-coded "Linked"
+  // showed the wrong title in the browser tab when navigating to /trackers.
+  useEffect(() => {
+    const setTitle = () => {
+      const isLinkedRoute = window.location.hash.includes('/linked');
+      document.title = isLinkedRoute ? "Linked — Portol" : "Trackers — Portol";
+    };
+    setTitle();
+    window.addEventListener('hashchange', setTitle);
+    return () => window.removeEventListener('hashchange', setTitle);
+  }, []);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   // Always keep page-local filter state in lockstep with the global filter store,
