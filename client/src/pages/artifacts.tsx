@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { getProfileFilter } from "@/lib/profileFilter";
 import {
   Archive, FileText, BookOpen, Brain, Camera, File, Heart,
   Shield, CreditCard, Scale, Folder, Search, X, Copy, Check as CheckIcon,
+  Pin, PinOff, Tag,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -36,6 +37,12 @@ interface UnifiedArtifact {
   preview: string;
   profileName: string;
   source: any;
+  // Wave 8: pin + tag metadata. Only artifacts (not Documents) carry these;
+  // for Document rows pinned is always false and tags is empty.
+  pinned?: boolean;
+  tags?: string[];
+  /** True for Artifact rows (where we can call PATCH /api/artifacts/:id). */
+  isArtifact?: boolean;
 }
 
 // ─── Filter tabs ─────────────────────────────────────────────
@@ -344,12 +351,16 @@ function ChartRenderer({ content, dataBindings, chartType }: { content: string; 
 }
 
 // ─── Artifact card ───────────────────────────────────────────
-function ArtifactCard({ item, onSelect }: { item: UnifiedArtifact; onSelect?: (item: UnifiedArtifact) => void }) {
+function ArtifactCard({ item, onSelect, onTogglePin }: { item: UnifiedArtifact; onSelect?: (item: UnifiedArtifact) => void; onTogglePin?: () => void }) {
   const handleClick = () => {
+    // Doc/sheet Artifact rows route through parent's handleSelect (which sends
+    // them to /editor/:id). Legacy Document rows go to /documents/:id. AI
+    // reports open the dialog. Notes route to the journal page.
     if (item.type === "ai_report") {
       onSelect?.(item);
     } else if (item.type === "document") {
-      window.location.hash = `#/documents/${item.id}`;
+      if (item.isArtifact) onSelect?.(item);
+      else window.location.hash = `#/documents/${item.id}`;
     } else if (item.type === "note") {
       window.location.hash = "#/dashboard/journal";
     }
@@ -357,7 +368,7 @@ function ArtifactCard({ item, onSelect }: { item: UnifiedArtifact; onSelect?: (i
 
   return (
     <div
-      className="p-3 rounded-lg border border-border/50 bg-card hover:bg-accent/5 cursor-pointer transition-colors"
+      className="p-3 rounded-lg border border-border/50 bg-card hover:bg-accent/5 cursor-pointer transition-colors group"
       onClick={handleClick}
       data-testid={`artifact-card-${item.id}`}
     >
@@ -373,19 +384,44 @@ function ArtifactCard({ item, onSelect }: { item: UnifiedArtifact; onSelect?: (i
           {item.preview && (
             <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{item.preview}</p>
           )}
+          {item.tags && item.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {item.tags.slice(0, 3).map(t => (
+                <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground">#{t}</span>
+              ))}
+              {item.tags.length > 3 && (
+                <span className="text-[10px] text-muted-foreground">+{item.tags.length - 3}</span>
+              )}
+            </div>
+          )}
         </div>
-        {item.profileName && (
-          <Badge variant="outline" className="text-xs shrink-0 ml-1">
-            {item.profileName}
-          </Badge>
-        )}
+        <div className="flex flex-col items-end gap-1 shrink-0 ml-1">
+          {item.profileName && (
+            <Badge variant="outline" className="text-xs">
+              {item.profileName}
+            </Badge>
+          )}
+          {onTogglePin && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+              className={`p-1 rounded transition-opacity ${
+                item.pinned ? "text-primary opacity-100" : "opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted-foreground"
+              }`}
+              title={item.pinned ? "Unpin" : "Pin"}
+              data-testid={`button-pin-${item.id}`}
+            >
+              {item.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
 // ─── Document group section ──────────────────────────────────
-function DocumentGroup({ label, icon: Icon, items, onSelect }: { label: string; icon: React.ElementType; items: UnifiedArtifact[]; onSelect?: (item: UnifiedArtifact) => void }) {
+function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin }: { label: string; icon: React.ElementType; items: UnifiedArtifact[]; onSelect?: (item: UnifiedArtifact) => void; onTogglePin?: (item: UnifiedArtifact) => void }) {
   if (items.length === 0) return null;
   return (
     <div className="space-y-2">
@@ -395,7 +431,14 @@ function DocumentGroup({ label, icon: Icon, items, onSelect }: { label: string; 
         <span className="text-xs text-muted-foreground">({items.length})</span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map(item => <ArtifactCard key={`${item.type}-${item.id}`} item={item} onSelect={onSelect} />)}
+        {items.map(item => (
+          <ArtifactCard
+            key={`${item.type}-${item.id}`}
+            item={item}
+            onSelect={onSelect}
+            onTogglePin={item.isArtifact && onTogglePin ? () => onTogglePin(item) : undefined}
+          />
+        ))}
       </div>
     </div>
   );
@@ -421,6 +464,32 @@ export default function ArtifactsPage() {
   // Profile filter state
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+
+  // Wave 8: tag filter (acts as virtual folders).
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+
+  // Wave 8: pin/unpin mutation. Optimistic update against the artifacts cache.
+  const qc = useQueryClient();
+  const pinMut = useMutation({
+    mutationFn: async ({ id, pinned }: { id: string; pinned: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/artifacts/${id}`, { pinned });
+      return res.json();
+    },
+    onMutate: async ({ id, pinned }) => {
+      await qc.cancelQueries({ queryKey: ["/api/artifacts"] });
+      const prev = qc.getQueryData<Artifact[]>(["/api/artifacts"]);
+      qc.setQueryData<Artifact[]>(["/api/artifacts"], (old) =>
+        (old || []).map(a => a.id === id ? { ...a, pinned } : a)
+      );
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["/api/artifacts"], ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
+    },
+  });
 
   // Fetch all three data sources in parallel
   const { data: documents = [], isLoading: docsLoading } = useQuery<Document[]>({
@@ -470,6 +539,9 @@ export default function ArtifactsPage() {
             : "",
           profileName: resolveProfile(d.linkedProfiles),
           source: d,
+          pinned: false,
+          tags: Array.isArray((d as any).tags) ? ((d as any).tags as string[]) : [],
+          isArtifact: false,
         })),
       ...artifacts.map(a => ({
         id: a.id,
@@ -489,6 +561,9 @@ export default function ArtifactsPage() {
             : (a.content?.slice(0, 100) || (a.items?.length > 0 ? a.items.map(i => i.text).join(", ").slice(0, 100) : "")),
         profileName: resolveProfile(a.linkedProfiles),
         source: a,
+        pinned: !!a.pinned,
+        tags: Array.isArray(a.tags) ? a.tags : [],
+        isArtifact: true,
       })),
     ];
     return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -513,17 +588,50 @@ export default function ArtifactsPage() {
     }
   }, [profileFiltered, activeTab]);
 
+  // Wave 8: apply tag filter (case-insensitive). When a tag is selected we
+  // restrict to items carrying that tag — acts as a virtual folder.
+  const tagFiltered = useMemo(() => {
+    if (!activeTag) return tabFiltered;
+    const t = activeTag.toLowerCase();
+    return tabFiltered.filter(i => (i.tags || []).some(x => x.toLowerCase() === t));
+  }, [tabFiltered, activeTag]);
+
   // Apply search filter
   const filtered = useMemo(() => {
-    if (!search.trim()) return tabFiltered;
+    if (!search.trim()) return tagFiltered;
     const q = search.toLowerCase();
-    return tabFiltered.filter(i =>
+    return tagFiltered.filter(i =>
       i.title.toLowerCase().includes(q) ||
       i.typeLabel.toLowerCase().includes(q) ||
       i.preview.toLowerCase().includes(q) ||
-      i.profileName.toLowerCase().includes(q)
+      i.profileName.toLowerCase().includes(q) ||
+      (i.tags || []).some(t => t.toLowerCase().includes(q))
     );
-  }, [tabFiltered, search]);
+  }, [tagFiltered, search]);
+
+  // Wave 8: pinned shelf items — always drawn from the post-profile list so it
+  // honors the active profile filter, but ignores tab/tag/search so users can
+  // always see their pins.
+  const pinnedItems = useMemo(
+    () => profileFiltered.filter(i => i.pinned),
+    [profileFiltered],
+  );
+
+  // Wave 8: aggregate the tag universe (sorted by frequency desc) for the
+  // filter chip strip. Drawn from profile-filtered items so chip counts match
+  // what's actually selectable.
+  const allTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const i of profileFiltered) {
+      for (const t of (i.tags || [])) {
+        if (!t) continue;
+        counts.set(t, (counts.get(t) || 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([tag, count]) => ({ tag, count }));
+  }, [profileFiltered]);
 
   const isLoading = docsLoading || artifactsLoading;
 
@@ -615,6 +723,64 @@ export default function ArtifactsPage() {
         })}
       </div>
 
+      {/* Wave 8: Tag filter chip strip (virtual folders) */}
+      {allTags.length > 0 && (
+        <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide items-center">
+          <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
+          <button
+            onClick={() => setActiveTag(null)}
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+              activeTag === null
+                ? "bg-primary/10 text-primary border border-primary/30"
+                : "bg-muted/40 text-muted-foreground hover:bg-muted/70 border border-transparent"
+            }`}
+            data-testid="tag-filter-all"
+          >
+            All tags
+          </button>
+          {allTags.slice(0, 24).map(({ tag, count }) => {
+            const isActive = activeTag?.toLowerCase() === tag.toLowerCase();
+            return (
+              <button
+                key={tag}
+                onClick={() => setActiveTag(isActive ? null : tag)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                  isActive
+                    ? "bg-primary/10 text-primary border border-primary/30"
+                    : "bg-muted/40 text-muted-foreground hover:bg-muted/70 border border-transparent"
+                }`}
+                data-testid={`tag-filter-${tag}`}
+              >
+                #{tag}
+                <span className="text-muted-foreground/70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Wave 8: Pinned artifacts shelf (horizontal scroll) */}
+      {pinnedItems.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 px-1">
+            <Pin className="h-3 w-3 text-muted-foreground" />
+            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Pinned</span>
+            <span className="text-[11px] text-muted-foreground">({pinnedItems.length})</span>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide">
+            {pinnedItems.map(item => (
+              <div key={`pinned-${item.id}`} className="shrink-0 w-64">
+                <ArtifactCard
+                  item={item}
+                  onSelect={handleSelect}
+                  onTogglePin={item.isArtifact ? () => pinMut.mutate({ id: item.id, pinned: !item.pinned }) : undefined}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       {isLoading ? (
         <div className="space-y-3">
@@ -636,14 +802,26 @@ export default function ArtifactsPage() {
         // Documents tab: grouped by type
         <div className="space-y-5">
           {documentGroups.map(g => (
-            <DocumentGroup key={g.label} label={g.label} icon={g.icon} items={g.items} onSelect={handleSelect} />
+            <DocumentGroup
+              key={g.label}
+              label={g.label}
+              icon={g.icon}
+              items={g.items}
+              onSelect={handleSelect}
+              onTogglePin={(item) => pinMut.mutate({ id: item.id, pinned: !item.pinned })}
+            />
           ))}
         </div>
       ) : (
         // All other tabs: flat grid sorted by date
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map(item => (
-            <ArtifactCard key={`${item.type}-${item.id}`} item={item} onSelect={handleSelect} />
+            <ArtifactCard
+              key={`${item.type}-${item.id}`}
+              item={item}
+              onSelect={handleSelect}
+              onTogglePin={item.isArtifact ? () => pinMut.mutate({ id: item.id, pinned: !item.pinned }) : undefined}
+            />
           ))}
         </div>
       )}
