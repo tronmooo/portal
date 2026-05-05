@@ -43,16 +43,26 @@ const log = {
 
 // Simple rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_MAX_ENTRIES = 10000;
+const RATE_LIMIT_TARGET_AFTER_EVICT = 8000;
 function rateLimit(key: string, maxRequests: number = 60, windowMs: number = 60000): boolean {
   const now = Date.now();
   const entry = rateLimitMap.get(key);
   if (!entry || now > entry.resetAt) {
-    // Cap map size to prevent unbounded growth under high traffic
-    if (rateLimitMap.size > 10000) {
-      const cutoff = now - windowMs;
+    // Cap map size to prevent unbounded growth under high traffic.
+    if (rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES) {
+      // 1) Drop expired entries first.
       for (const [k, v] of rateLimitMap) {
-        if (v.resetAt < cutoff) rateLimitMap.delete(k);
-        if (rateLimitMap.size <= 8000) break;
+        if (now > v.resetAt) rateLimitMap.delete(k);
+        if (rateLimitMap.size <= RATE_LIMIT_TARGET_AFTER_EVICT) break;
+      }
+      // 2) If still over target (all entries are fresh), evict oldest by
+      //    insertion order. Without this, a flood of unique IPs in a
+      //    single window could push the map past the cap indefinitely.
+      while (rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES) {
+        const oldestKey = rateLimitMap.keys().next().value;
+        if (oldestKey === undefined) break;
+        rateLimitMap.delete(oldestKey);
       }
     }
     rateLimitMap.set(key, { count: 1, resetAt: now + windowMs });

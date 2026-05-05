@@ -3312,80 +3312,117 @@ export class SupabaseStorage implements IStorage {
     const has = (val: any) => val && typeof val === 'string' && val.toLowerCase().includes(q);
     const tagsMatch = (tags: any) => Array.isArray(tags) && tags.some(t => has(t));
 
-    const profiles = await this.getProfiles();
+    // PERF: Fetch all top-level tables in parallel instead of 9 sequential awaits.
+    // Previously this was ~9 round trips taking ~90–300ms each before any
+    // filtering even started.
+    const [profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories] = await Promise.all([
+      this.getProfiles(),
+      this.getTrackers(),
+      this.getTasks(),
+      this.getExpenses(),
+      this.getHabits(),
+      this.getObligations(),
+      this.getArtifacts(),
+      this.getJournalEntries(),
+      this.getMemories(),
+    ]);
+
     for (const p of profiles) {
       if (has(p.name) || has(p.type) || tagsMatch(p.tags)) results.push({ ...p, _type: "profile" });
     }
-    const trackers = await this.getTrackers();
     for (const t of trackers) {
       if (has(t.name) || has(t.category)) results.push({ ...t, _type: "tracker" });
     }
-    const tasks = await this.getTasks();
     for (const t of tasks) {
       if (has(t.title) || tagsMatch(t.tags)) results.push({ ...t, _type: "task" });
     }
-    const expenses = await this.getExpenses();
     for (const e of expenses) {
       if (has(e.description) || has(e.category) || has(e.vendor)) results.push({ ...e, _type: "expense" });
     }
-    const habits = await this.getHabits();
     for (const h of habits) {
       if (has(h.name)) results.push({ ...h, _type: "habit" });
     }
-    const obligations = await this.getObligations();
     for (const o of obligations) {
       if (has(o.name) || has(o.category)) results.push({ ...o, _type: "obligation" });
     }
-    const artifacts = await this.getArtifacts();
     for (const a of artifacts) {
       if (has(a.title) || has(a.content) || tagsMatch(a.tags)) results.push({ ...a, _type: "artifact" });
     }
-    const journal = await this.getJournalEntries();
     for (const j of journal) {
       if (has(j.content) || tagsMatch(j.tags)) results.push({ ...j, _type: "journal" });
     }
-    const memories = await this.getMemories();
     for (const m of memories) {
       if (has(m.key) || has(m.value)) results.push({ ...m, _type: "memory" });
     }
 
-    // Enhance with entity links — limit to first 10 results to avoid N+1 explosion
+    // Enhance with entity links — limit to first 10 results to avoid N+1 explosion.
+    // Pre-build lookup maps from the already-fetched tables so we don't
+    // re-query them for every linked entity (the previous version called
+    // getExpenses() inside the inner loop, plus a fresh round trip per link).
+    const profileById = new Map(profiles.map(p => [p.id, p]));
+    const trackerById = new Map(trackers.map(t => [t.id, t]));
+    const taskById = new Map(tasks.map(t => [t.id, t]));
+    const habitById = new Map(habits.map(h => [h.id, h]));
+    const obligationById = new Map(obligations.map(o => [o.id, o]));
+    const expenseById = new Map(expenses.map(e => [e.id, e]));
+
     const enrichSlice = results.slice(0, 10);
     const existingIds = new Set(results.map((r: any) => r.id));
-    for (const result of enrichSlice) {
-      const type = result._type;
-      if (!type || !result.id) continue;
-      try {
-        const links = await this.getEntityLinks(type, result.id);
-        for (const link of links) {
-          const otherType = (link.sourceType === type && link.sourceId === result.id) ? link.targetType : link.sourceType;
-          const otherId = (link.sourceType === type && link.sourceId === result.id) ? link.targetId : link.sourceId;
-          if (existingIds.has(otherId)) continue;
-          existingIds.add(otherId);
-          let entity: any = null;
-          switch (otherType) {
-            case "profile": entity = await this.getProfile(otherId); break;
-            case "task": entity = await this.getTask(otherId); break;
-            case "event": entity = await this.getEvent(otherId); break;
-            case "habit": entity = await this.getHabit(otherId); break;
-            case "obligation": entity = await this.getObligation(otherId); break;
-            case "tracker": entity = await this.getTracker(otherId); break;
-            case "expense": {
-              const exps = await this.getExpenses();
-              entity = exps.find(e => e.id === otherId) || null;
-              break;
-            }
-            case "document": {
-              const doc = await this.getDocument(otherId);
-              if (doc) { const { fileData, ...rest } = doc; entity = rest; }
-              break;
-            }
-          }
-          if (entity) {
-            results.push({ ...entity, _type: otherType, _related: true, _relationship: link.relationship, _confidence: link.confidence });
-          }
+
+    // Fetch all entity-link rows for the enrich slice in parallel.
+    const linkBatches = await Promise.all(
+      enrichSlice.map(r => (r._type && r.id) ? this.getEntityLinks(r._type, r.id).catch(() => []) : Promise.resolve([])),
+    );
+
+    // Collect IDs we still need to fetch (events/documents aren't bulk-fetched
+    // above), grouped by type, then fetch each type's batch concurrently.
+    const needed = { event: new Set<string>(), document: new Set<string>() };
+    const linkRefs: { result: any; otherType: string; otherId: string; link: any }[] = [];
+    enrichSlice.forEach((result, i) => {
+      const links = linkBatches[i] || [];
+      for (const link of links) {
+        const otherType = (link.sourceType === result._type && link.sourceId === result.id) ? link.targetType : link.sourceType;
+        const otherId = (link.sourceType === result._type && link.sourceId === result.id) ? link.targetId : link.sourceId;
+        if (!otherId || existingIds.has(otherId)) continue;
+        existingIds.add(otherId);
+        linkRefs.push({ result, otherType, otherId, link });
+        if (otherType === "event") needed.event.add(otherId);
+        else if (otherType === "document") needed.document.add(otherId);
+      }
+    });
+
+    const [eventEntities, documentEntities] = await Promise.all([
+      needed.event.size > 0
+        ? Promise.all([...needed.event].map(id => this.getEvent(id).catch(() => null)))
+        : Promise.resolve([] as any[]),
+      needed.document.size > 0
+        ? Promise.all([...needed.document].map(id => this.getDocument(id).catch(() => null).then(d => d ? { ...d, fileData: undefined } : null)))
+        : Promise.resolve([] as any[]),
+    ]);
+    const eventById = new Map<string, any>();
+    for (const e of eventEntities) if (e && e.id) eventById.set(e.id, e);
+    const documentById = new Map<string, any>();
+    for (const d of documentEntities) if (d && d.id) documentById.set(d.id, d);
+
+    for (const ref of linkRefs) {
+      let entity: any = null;
+      switch (ref.otherType) {
+        case "profile": entity = profileById.get(ref.otherId) || null; break;
+        case "task": entity = taskById.get(ref.otherId) || null; break;
+        case "event": entity = eventById.get(ref.otherId) || null; break;
+        case "habit": entity = habitById.get(ref.otherId) || null; break;
+        case "obligation": entity = obligationById.get(ref.otherId) || null; break;
+        case "tracker": entity = trackerById.get(ref.otherId) || null; break;
+        case "expense": entity = expenseById.get(ref.otherId) || null; break;
+        case "document": {
+          const d = documentById.get(ref.otherId);
+          if (d) { const { fileData, ...rest } = d; entity = rest; }
+          break;
         }
-      } catch { /* skip on error */ }
+      }
+      if (entity) {
+        results.push({ ...entity, _type: ref.otherType, _related: true, _relationship: ref.link.relationship, _confidence: ref.link.confidence });
+      }
     }
 
     return results;

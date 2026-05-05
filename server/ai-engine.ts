@@ -169,9 +169,13 @@ const CONTEXT_CACHE_TTL = 5000; // 5 seconds
 function invalidateContextCache(userId?: string) {
   if (userId) {
     contextCacheMap.delete(userId);
-  } else {
-    contextCacheMap.clear();
+    return;
   }
+  // Defense: refuse to bulk-clear all users' caches just because a caller
+  // forgot to pass userId. Only clear the anonymous/_global slot. This
+  // prevents one user's mutation from invalidating EVERY user's cache,
+  // which used to spike DB load whenever userId was undefined.
+  contextCacheMap.delete("_global");
 }
 
 async function getCachedContextData(userId?: string): Promise<any[]> {

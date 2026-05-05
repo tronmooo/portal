@@ -15,22 +15,38 @@ async function seedStorageIfEmpty(): Promise<void> {
   }
 }
 
-// Track which users have had their self profile checked this session (auto-evict after 1 hour)
+// Track which users have had their self profile checked this session (auto-evict after 1 hour).
+// Map insertion order is preserved, so the oldest entry is map.keys().next().value.
 const autoProfileCreated = new Map<string, number>();
+const AUTO_PROFILE_TTL_MS = 3_600_000; // 1 hour
+const AUTO_PROFILE_MAX = 5000;
 function hasAutoProfile(userId: string): boolean {
   const ts = autoProfileCreated.get(userId);
   if (!ts) return false;
-  if (Date.now() - ts > 3600000) { autoProfileCreated.delete(userId); return false; }
+  if (Date.now() - ts > AUTO_PROFILE_TTL_MS) { autoProfileCreated.delete(userId); return false; }
   return true;
 }
 function markAutoProfile(userId: string): void {
-  // Evict old entries if map grows too large
-  if (autoProfileCreated.size > 5000) {
+  // 1) Sweep expired entries first.
+  if (autoProfileCreated.size >= AUTO_PROFILE_MAX) {
     const now = Date.now();
     for (const [k, v] of autoProfileCreated) {
-      if (now - v > 3600000) autoProfileCreated.delete(k);
+      if (now - v > AUTO_PROFILE_TTL_MS) autoProfileCreated.delete(k);
+    }
+    // 2) If still over the cap (all entries are fresh), evict the oldest
+    //    insertion-order entries until we're back under the limit. This
+    //    guarantees the map is bounded even under sustained load — the
+    //    previous version only purged old entries, so a flood of unique
+    //    fresh users could keep the map growing without limit.
+    while (autoProfileCreated.size >= AUTO_PROFILE_MAX) {
+      const oldestKey = autoProfileCreated.keys().next().value;
+      if (oldestKey === undefined) break;
+      autoProfileCreated.delete(oldestKey);
     }
   }
+  // Re-insert (delete then set) so the user moves to the end of the
+  // insertion order, making LRU eviction work correctly.
+  autoProfileCreated.delete(userId);
   autoProfileCreated.set(userId, Date.now());
 }
 
@@ -146,12 +162,32 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
  * Register auth-related API endpoints
  */
 export function registerAuthRoutes(app: Express) {
-  // Per-IP rate limiter for auth endpoints
+  // Per-IP rate limiter for auth endpoints. Bounded so a flood of unique
+  // IPs (e.g. a botnet probing /api/auth/login) cannot grow this map
+  // without limit.
   const authRateLimits = new Map<string, { count: number; resetAt: number }>();
+  const AUTH_RATE_LIMIT_MAX = 5000;
   function checkAuthRateLimit(ip: string, max = 10, windowMs = 60000): boolean {
     const now = Date.now();
     const entry = authRateLimits.get(ip);
-    if (!entry || now > entry.resetAt) { authRateLimits.set(ip, { count: 1, resetAt: now + windowMs }); return false; }
+    if (!entry || now > entry.resetAt) {
+      if (authRateLimits.size >= AUTH_RATE_LIMIT_MAX) {
+        // Drop expired entries first.
+        for (const [k, v] of authRateLimits) {
+          if (now > v.resetAt) authRateLimits.delete(k);
+          if (authRateLimits.size < AUTH_RATE_LIMIT_MAX) break;
+        }
+        // If still at the cap (all entries fresh), evict oldest by
+        // insertion order until back under the cap.
+        while (authRateLimits.size >= AUTH_RATE_LIMIT_MAX) {
+          const oldestKey = authRateLimits.keys().next().value;
+          if (oldestKey === undefined) break;
+          authRateLimits.delete(oldestKey);
+        }
+      }
+      authRateLimits.set(ip, { count: 1, resetAt: now + windowMs });
+      return false;
+    }
     entry.count++;
     return entry.count > max;
   }
