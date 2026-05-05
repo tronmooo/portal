@@ -647,6 +647,15 @@ function generateInsights(
 // STORAGE IMPLEMENTATION
 // ============================================================
 
+/**
+ * @deprecated MemStorage is NOT used in production or tests. The runtime
+ * storage is SupabaseStorage (see getStorage() at the bottom of this file),
+ * which is hard-required by an env-var assertion. This class is kept only
+ * as a reference implementation of the IStorage interface — do NOT add
+ * production logic to it. Bugs #34/#35/#36 against MemStorage parity are
+ * therefore unreachable; if you ever wire MemStorage back in, audit the
+ * full IStorage surface against SupabaseStorage first.
+ */
 export class MemStorage implements IStorage {
   private profiles: Map<string, Profile> = new Map();
   private trackers: Map<string, Tracker> = new Map();
