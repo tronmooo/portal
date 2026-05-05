@@ -26,8 +26,12 @@ import { Input } from "@/components/ui/input";
 import {
   ArrowLeft, Bold, Italic, Underline as UnderlineIcon, List, ListOrdered,
   Heading1, Heading2, LinkIcon, Code, Save, Download, Trash2, Copy, Loader2, Plus, Minus,
-  Share2, Printer, Check,
+  Share2, Printer, Check, BarChart3, LineChart as LineChartIcon, AreaChart as AreaChartIcon, PieChart as PieChartIcon,
 } from "lucide-react";
+import {
+  BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
+  XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid, Legend,
+} from "recharts";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -170,6 +174,12 @@ export default function EditorPage() {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareToken, setShareToken] = useState<string | undefined>(undefined);
   const [copied, setCopied] = useState(false);
+  // Insert-Chart dialog state (Wave 6).
+  const [chartOpen, setChartOpen] = useState(false);
+  const [chartRange, setChartRange] = useState("");
+  const [chartHasHeader, setChartHasHeader] = useState(true);
+  const [chartType, setChartType] = useState<"bar" | "line" | "area" | "pie">("bar");
+  const [chartTitle, setChartTitle] = useState("");
 
   // Hydrate state from loaded artifact.
   useEffect(() => {
@@ -633,6 +643,110 @@ export default function EditorPage() {
     }
   };
 
+  // ── Insert chart from sheet range (Wave 6) ─────────────────────────────────
+  // Parse a 1-based A1 range like "A1:C10" or "A:C" into [startRow, startCol, endRow, endCol] (0-based).
+  // Returns null on bad input. Empty range or unbounded means full sheet bounds.
+  const parseRange = useCallback((s: string): [number, number, number, number] | null => {
+    const trimmed = (s || "").trim().toUpperCase().replace(/\s+/g, "");
+    if (!trimmed) return [0, 0, sheet.rows - 1, sheet.cols - 1];
+    const m = trimmed.match(/^([A-Z]+)(\d*):([A-Z]+)(\d*)$/);
+    if (!m) return null;
+    const c1 = colLetterToIndex(m[1]);
+    const c2 = colLetterToIndex(m[3]);
+    const r1 = m[2] ? parseInt(m[2], 10) - 1 : 0;
+    const r2 = m[4] ? parseInt(m[4], 10) - 1 : sheet.rows - 1;
+    if (c1 < 0 || c2 < 0 || r1 < 0 || r2 < 0) return null;
+    return [Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2)];
+  }, [sheet.rows, sheet.cols]);
+
+  // Resolve a cell to its displayed value. Formulas: pull the parser-evaluated
+  // result from the rendered <Spreadsheet> if available; otherwise fall back to raw.
+  const resolveCellValue = useCallback((r: number, c: number): any => {
+    const cell = sheet.cells[`${r},${c}`];
+    if (!cell) return "";
+    if (cell.v !== undefined && cell.v !== null) return cell.v;
+    if (cell.f) {
+      // Formulas haven't been pre-evaluated server-side. Try a best-effort numeric parse if
+      // the formula is a literal like "=42". For complex formulas, the user should chart the
+      // computed values directly. We do NOT execute arbitrary formula text here — unsafe.
+      const stripped = cell.f.replace(/^=/, "").trim();
+      const n = Number(stripped);
+      return isFinite(n) ? n : stripped;
+    }
+    return "";
+  }, [sheet.cells]);
+
+  // Build chart-friendly rows: { name, <series>: number, ... } from the selected range.
+  const buildChartRows = useCallback((range: [number, number, number, number], hasHeader: boolean) => {
+    const [r1, c1, r2, c2] = range;
+    const headerKeys: string[] = [];
+    const cols = c2 - c1 + 1;
+    if (hasHeader) {
+      for (let cc = c1; cc <= c2; cc++) {
+        const v = resolveCellValue(r1, cc);
+        headerKeys.push(String(v || `col${cc - c1 + 1}`));
+      }
+    } else {
+      for (let i = 0; i < cols; i++) headerKeys.push(i === 0 ? "name" : `series${i}`);
+    }
+    // Force first column header to "name" for Recharts' XAxis dataKey.
+    const nameKey = headerKeys[0] || "name";
+    const seriesKeys = headerKeys.slice(1);
+    const dataStartRow = hasHeader ? r1 + 1 : r1;
+    const rows: Array<Record<string, any>> = [];
+    for (let r = dataStartRow; r <= r2; r++) {
+      const row: Record<string, any> = {};
+      const nameVal = resolveCellValue(r, c1);
+      if (nameVal === "" || nameVal === null || nameVal === undefined) continue; // skip blank x-values
+      row.name = String(nameVal);
+      for (let i = 0; i < seriesKeys.length; i++) {
+        const raw = resolveCellValue(r, c1 + 1 + i);
+        const num = typeof raw === "number" ? raw : Number(String(raw).replace(/[$,\s]/g, ""));
+        row[seriesKeys[i]] = isFinite(num) ? num : 0;
+      }
+      rows.push(row);
+    }
+    return { rows, seriesKeys, nameKey };
+  }, [resolveCellValue]);
+
+  // Live preview rows for the dialog (only valid when range parses).
+  const chartPreview = useMemo(() => {
+    if (!chartOpen) return null;
+    const range = parseRange(chartRange);
+    if (!range) return null;
+    const { rows, seriesKeys } = buildChartRows(range, chartHasHeader);
+    return { rows: rows.slice(0, 50), seriesKeys, total: rows.length };
+  }, [chartOpen, chartRange, chartHasHeader, parseRange, buildChartRows]);
+
+  const insertChartMut = useMutation({
+    mutationFn: async () => {
+      const range = parseRange(chartRange);
+      if (!range) throw new Error("Invalid range. Use A1 notation like A1:C10");
+      const { rows, seriesKeys } = buildChartRows(range, chartHasHeader);
+      if (rows.length === 0) throw new Error("Selected range has no usable rows.");
+      if (chartType === "pie" && seriesKeys.length === 0) throw new Error("Pie charts need a value column.");
+      const payload: any = {
+        type: "chart",
+        title: chartTitle.trim() || `${title || "Sheet"} chart`,
+        content: JSON.stringify(rows),     // legacy fallback path uses content as JSON
+        chartData: rows,
+        chartType,
+        tags: ["sheet-chart"],
+        linkedProfiles: existing?.linkedProfiles || [],
+      };
+      const r = await apiRequest("POST", "/api/artifacts", payload);
+      return r.json() as Promise<Artifact>;
+    },
+    onSuccess: (created) => {
+      qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      toast({ title: "Chart created", description: `Saved as "${created.title}".` });
+      setChartOpen(false);
+      setChartRange("");
+      setChartTitle("");
+    },
+    onError: (err: any) => toast({ title: "Couldn't create chart", description: err?.message, variant: "destructive" }),
+  });
+
   const downloadSheet = async () => {
     const ExcelJS = (await import("exceljs")).default;
     const wb = new ExcelJS.Workbook();
@@ -885,6 +999,15 @@ export default function EditorPage() {
             <div className="w-px h-5 bg-border mx-1" />
             <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, cols: Math.min(200, s.cols + 2) })); setDirty(true); }} data-testid="button-sheet-add-cols"><Plus className="h-3 w-3 mr-1" /> 2 cols</Button>
             <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, cols: Math.max(1, s.cols - 2) })); setDirty(true); }} data-testid="button-sheet-rm-cols"><Minus className="h-3 w-3 mr-1" /> 2 cols</Button>
+            <div className="w-px h-5 bg-border mx-1" />
+            <Button variant="ghost" size="sm" onClick={() => {
+              // Pre-fill range from active cell selection if user has clicked into the sheet.
+              if (activeCell && !chartRange) {
+                const a = `${colIndexToLetter(activeCell.column)}${activeCell.row + 1}`;
+                setChartRange(`${a}:${colIndexToLetter(Math.min(sheet.cols - 1, activeCell.column + 2))}${Math.min(sheet.rows, activeCell.row + 10)}`);
+              }
+              setChartOpen(true);
+            }} data-testid="button-sheet-insert-chart"><BarChart3 className="h-3 w-3 mr-1" /> Insert chart</Button>
             <span className="text-xs text-muted-foreground ml-3">{sheet.rows} × {sheet.cols}</span>
           </div>
           {/* Formula bar (Excel-style: shows raw formula/value of active cell, lets you edit) */}
@@ -1003,6 +1126,292 @@ export default function EditorPage() {
                 Revoke link
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Insert-chart dialog (Wave 6) — turns a sheet range into a saved chart artifact. */}
+      <Dialog open={chartOpen} onOpenChange={setChartOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Insert chart from range</DialogTitle>
+            <DialogDescription>
+              Pick a range like <span className="font-mono">A1:C10</span>. The first column becomes the X axis. Each
+              additional column is a series.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <Input
+                value={chartRange}
+                onChange={(e) => setChartRange(e.target.value)}
+                placeholder="A1:C10 (leave empty for full sheet)"
+                className="font-mono text-sm"
+                data-testid="input-chart-range"
+              />
+              <Input
+                value={chartTitle}
+                onChange={(e) => setChartTitle(e.target.value)}
+                placeholder="Chart title"
+                className="text-sm"
+                data-testid="input-chart-title"
+              />
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input type="checkbox" checked={chartHasHeader} onChange={(e) => setChartHasHeader(e.target.checked)} />
+                <span>First row is headers</span>
+              </label>
+              <div className="flex gap-1">
+                {([
+                  { id: "bar" as const, label: "Bar", icon: BarChart3 },
+                  { id: "line" as const, label: "Line", icon: LineChartIcon },
+                  { id: "area" as const, label: "Area", icon: AreaChartIcon },
+                  { id: "pie" as const, label: "Pie", icon: PieChartIcon },
+                ]).map(t => {
+                  const Icon = t.icon;
+                  return (
+                    <Button
+                      key={t.id}
+                      type="button"
+                      variant={chartType === t.id ? "default" : "ghost"}
+                      size="sm"
+                      onClick={() => setChartType(t.id)}
+                      data-testid={`button-chart-type-${t.id}`}
+                    >
+                      <Icon className="h-3 w-3 mr-1" /> {t.label}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Live preview */}
+            <div className="rounded-md border bg-muted/30 p-3">
+              {!chartRange.trim() && (
+                <div className="text-xs text-muted-foreground">Type a range to see a preview.</div>
+              )}
+              {chartRange.trim() && !chartPreview && (
+                <div className="text-xs text-destructive">Invalid range. Use A1 notation like A1:C10.</div>
+              )}
+              {chartPreview && chartPreview.rows.length === 0 && (
+                <div className="text-xs text-muted-foreground">Selected range has no data rows.</div>
+              )}
+              {chartPreview && chartPreview.rows.length > 0 && (
+                <div>
+                  <div className="text-xs text-muted-foreground mb-2">
+                    Preview · {chartPreview.total} row{chartPreview.total === 1 ? "" : "s"} · {chartPreview.seriesKeys.length || 1} series
+                  </div>
+                  <div className="h-56">
+                    <ResponsiveContainer width="100%" height="100%">
+                      {chartType === "line" ? (
+                        <LineChart data={chartPreview.rows}>
+                          <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                          <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                          <YAxis tick={{ fontSize: 11 }} />
+                          <RTooltip />
+                          {(chartPreview.seriesKeys.length > 0 ? chartPreview.seriesKeys : ["value"]).map((k, i) => (
+                            <Line key={k} type="monotone" dataKey={k} stroke={["#6366f1","#22c55e","#f59e0b","#ef4444"][i % 4]} strokeWidth={2} dot={{ r: 2 }} />
+                          ))}
+                        </LineChart>
+                      ) : chartType === "area" ? (
+                        <AreaChart data={chartPreview.rows}>
+                          <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                          <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                          <YAxis tick={{ fontSize: 11 }} />
+                          <RTooltip />
+                          {(chartPreview.seriesKeys.length > 0 ? chartPreview.seriesKeys : ["value"]).map((k, i) => (
+                            <Area key={k} type="monotone" dataKey={k} stroke={["#6366f1","#22c55e","#f59e0b","#ef4444"][i % 4]} fill={["#6366f1","#22c55e","#f59e0b","#ef4444"][i % 4]} fillOpacity={0.3} />
+                          ))}
+                        </AreaChart>
+                      ) : chartType === "pie" ? (
+                        <PieChart>
+                          <RTooltip />
+                          <Pie data={chartPreview.rows} dataKey={chartPreview.seriesKeys[0] || "value"} nameKey="name" cx="50%" cy="50%" outerRadius={70} label={{ fontSize: 10 }}>
+                            {chartPreview.rows.map((_, i) => <Cell key={i} fill={["#6366f1","#22c55e","#f59e0b","#ef4444","#a855f7","#06b6d4"][i % 6]} />)}
+                          </Pie>
+                        </PieChart>
+                      ) : (
+                        <BarChart data={chartPreview.rows}>
+                          <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                          <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                          <YAxis tick={{ fontSize: 11 }} />
+                          <RTooltip />
+                          {(chartPreview.seriesKeys.length > 0 ? chartPreview.seriesKeys : ["value"]).map((k, i) => (
+                            <Bar key={k} dataKey={k} fill={["#6366f1","#22c55e","#f59e0b","#ef4444"][i % 4]} radius={[3, 3, 0, 0]} />
+                          ))}
+                        </BarChart>
+                      )}
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setChartOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => insertChartMut.mutate()}
+              disabled={insertChartMut.isPending || !chartPreview || chartPreview.rows.length === 0}
+              data-testid="button-chart-create"
+            >
+              {insertChartMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <BarChart3 className="h-4 w-4 mr-1" />}
+              Save chart
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Insert-Chart dialog (Wave 6) — sheet-only, builds a chart artifact from a range. */}
+      <Dialog open={chartOpen} onOpenChange={setChartOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Insert chart from range</DialogTitle>
+            <DialogDescription>
+              Pick a chart type and an A1 range. The chart is saved as a new artifact you can pin or share.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {/* Chart type buttons */}
+            <div className="flex items-center gap-2">
+              {([
+                { v: "bar", label: "Bar", Icon: BarChart3 },
+                { v: "line", label: "Line", Icon: LineChartIcon },
+                { v: "area", label: "Area", Icon: AreaChartIcon },
+                { v: "pie", label: "Pie", Icon: PieChartIcon },
+              ] as const).map(({ v, label, Icon }) => (
+                <Button
+                  key={v}
+                  type="button"
+                  variant={chartType === v ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setChartType(v)}
+                  data-testid={`button-chart-type-${v}`}
+                >
+                  <Icon className="h-4 w-4 mr-1" /> {label}
+                </Button>
+              ))}
+            </div>
+            {/* Range + header toggle + title */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Range</label>
+                <Input
+                  value={chartRange}
+                  onChange={(e) => setChartRange(e.target.value)}
+                  placeholder="e.g. A1:C10"
+                  className="font-mono"
+                  data-testid="input-chart-range"
+                />
+                <button
+                  type="button"
+                  className="text-[11px] text-primary underline"
+                  onClick={() => setChartRange(`A1:${colIndexToLetter(Math.min(sheet.cols - 1, 4))}${Math.min(sheet.rows, 10)}`)}
+                >
+                  Use first {Math.min(10, sheet.rows)} rows
+                </button>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Chart title</label>
+                <Input
+                  value={chartTitle}
+                  onChange={(e) => setChartTitle(e.target.value)}
+                  placeholder={`${title || "Sheet"} chart`}
+                  data-testid="input-chart-title"
+                />
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={chartHasHeader}
+                onChange={(e) => setChartHasHeader(e.target.checked)}
+                className="rounded"
+                data-testid="checkbox-chart-header"
+              />
+              First row is the header (column names)
+            </label>
+            {/* Live preview */}
+            <div className="rounded border bg-muted/20 p-3">
+              <div className="text-xs font-medium text-muted-foreground mb-2">Preview</div>
+              {!chartPreview ? (
+                <div className="text-xs text-muted-foreground italic h-[180px] flex items-center justify-center">
+                  Enter a valid A1 range to preview.
+                </div>
+              ) : chartPreview.rows.length === 0 ? (
+                <div className="text-xs text-muted-foreground italic h-[180px] flex items-center justify-center">
+                  Range has no usable rows.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={220}>
+                  {chartType === "line" ? (
+                    <LineChart data={chartPreview.rows}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} />
+                      <RTooltip />
+                      {chartPreview.seriesKeys.length > 1 && <Legend />}
+                      {chartPreview.seriesKeys.map((k, i) => (
+                        <Line key={k} type="monotone" dataKey={k} stroke={CHART_PALETTE[i % CHART_PALETTE.length]} strokeWidth={2} dot={{ r: 3 }} />
+                      ))}
+                    </LineChart>
+                  ) : chartType === "area" ? (
+                    <AreaChart data={chartPreview.rows}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} />
+                      <RTooltip />
+                      {chartPreview.seriesKeys.length > 1 && <Legend />}
+                      {chartPreview.seriesKeys.map((k, i) => (
+                        <Area key={k} type="monotone" dataKey={k} stroke={CHART_PALETTE[i % CHART_PALETTE.length]} fill={CHART_PALETTE[i % CHART_PALETTE.length]} fillOpacity={0.18} />
+                      ))}
+                    </AreaChart>
+                  ) : chartType === "pie" ? (
+                    <PieChart>
+                      <Pie
+                        data={chartPreview.rows}
+                        dataKey={chartPreview.seriesKeys[0] || "value"}
+                        nameKey="name"
+                        cx="50%" cy="50%" outerRadius={80}
+                        label
+                      >
+                        {chartPreview.rows.map((_, i) => (
+                          <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
+                        ))}
+                      </Pie>
+                      <RTooltip />
+                    </PieChart>
+                  ) : (
+                    <BarChart data={chartPreview.rows}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} />
+                      <RTooltip />
+                      {chartPreview.seriesKeys.length > 1 && <Legend />}
+                      {chartPreview.seriesKeys.map((k, i) => (
+                        <Bar key={k} dataKey={k} fill={CHART_PALETTE[i % CHART_PALETTE.length]} radius={[4, 4, 0, 0]} />
+                      ))}
+                    </BarChart>
+                  )}
+                </ResponsiveContainer>
+              )}
+              {chartPreview && chartPreview.total > chartPreview.rows.length && (
+                <div className="text-[11px] text-muted-foreground mt-1">
+                  Showing first {chartPreview.rows.length} of {chartPreview.total} rows in preview.
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setChartOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => insertChartMut.mutate()}
+              disabled={insertChartMut.isPending || !chartPreview || chartPreview.rows.length === 0}
+              data-testid="button-chart-save"
+            >
+              {insertChartMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <BarChart3 className="h-4 w-4 mr-1" />}
+              Save chart
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

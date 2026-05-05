@@ -431,6 +431,7 @@ export interface Artifact {
     params: Record<string, any>;  // e.g. { period: "month", profileId: "abc" }
   };
   chartData?: any[];        // Pre-computed chart data (fallback if dataBindings query fails)
+  chartType?: "bar" | "line" | "area" | "pie";  // For "chart" type — picks Recharts component. Defaults to "bar".
   sheetData?: SheetData;    // For "sheet" type only
   source?: "chat" | "manual" | "ai"; // where the artifact was created from
   shareToken?: string;     // Optional public share token. When set, /share/:token shows a read-only view.
@@ -464,6 +465,7 @@ export const insertArtifactSchema = z.object({
     params: z.record(z.any()).default({}),
   }).optional(),
   chartData: z.array(z.any()).optional(),
+  chartType: z.enum(["bar", "line", "area", "pie"]).optional(),
   // Sheet payload — only used when type === "sheet". Hard caps protect the DB.
   sheetData: z.object({
     rows: z.number().int().min(1).max(10000),

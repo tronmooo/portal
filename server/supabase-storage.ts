@@ -419,6 +419,7 @@ export class SupabaseStorage implements IStorage {
       language: metadata.language,
       dataBindings: metadata.dataBindings,
       chartData: metadata.chartData,
+      chartType: metadata.chartType,
       // Doc/Sheet additions stored inside metadata JSON — no SQL migration needed.
       sheetData: metadata.sheetData,
       source: metadata.source,
@@ -2514,6 +2515,7 @@ export class SupabaseStorage implements IStorage {
     if ((data as any).language) metadata.language = (data as any).language;
     if ((data as any).dataBindings) metadata.dataBindings = (data as any).dataBindings;
     if ((data as any).chartData) metadata.chartData = (data as any).chartData;
+    if ((data as any).chartType) metadata.chartType = (data as any).chartType;
     if ((data as any).sheetData) metadata.sheetData = (data as any).sheetData;
     if ((data as any).source) metadata.source = (data as any).source;
     if ((data as any).shareToken) metadata.shareToken = (data as any).shareToken;
@@ -2564,6 +2566,7 @@ export class SupabaseStorage implements IStorage {
     if (merged.language) metadata.language = merged.language;
     if (merged.dataBindings) metadata.dataBindings = merged.dataBindings;
     if (merged.chartData) metadata.chartData = merged.chartData;
+    if ((merged as any).chartType) metadata.chartType = (merged as any).chartType;
     if (merged.sheetData) metadata.sheetData = merged.sheetData;
     if (merged.source) metadata.source = merged.source;
     if (merged.shareToken) metadata.shareToken = merged.shareToken;

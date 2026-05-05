@@ -18,7 +18,8 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import DOMPurify from "dompurify";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
+  XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from "recharts";
 import type { Artifact } from "@shared/schema";
 import type { JournalEntry } from "@shared/schema";
@@ -113,6 +114,7 @@ const MOOD_EMOJI: Record<string, string> = {
 function ArtifactRenderer({ artifact }: { artifact: any }) {
   if (!artifact) return null;
   const { type, content, language, dataBindings, items } = artifact;
+  const chartType = (artifact as any).chartType as "bar" | "line" | "area" | "pie" | undefined;
 
   // Handle checklist items array (from Artifact.items)
   if (type === "checklist" && items?.length > 0) {
@@ -159,7 +161,7 @@ function ArtifactRenderer({ artifact }: { artifact: any }) {
       return <MermaidRenderer content={content || ""} />;
 
     case "chart":
-      return <ChartRenderer content={content || ""} dataBindings={dataBindings} />;
+      return <ChartRenderer content={content || ""} dataBindings={dataBindings} chartType={chartType} />;
 
     case "checklist":
       return (
@@ -218,7 +220,17 @@ function MermaidRenderer({ content }: { content: string }) {
   return <div ref={ref} className="flex justify-center" />;
 }
 
-function ChartRenderer({ content, dataBindings }: { content: string; dataBindings?: any }) {
+// Palette used for multi-series charts and pie slices. Tailwind-tinted to match the app.
+const CHART_COLORS = [
+  "hsl(var(--primary))",
+  "hsl(217 91% 60%)",
+  "hsl(142 71% 45%)",
+  "hsl(38 92% 50%)",
+  "hsl(0 84% 60%)",
+  "hsl(280 70% 60%)",
+];
+
+function ChartRenderer({ content, dataBindings, chartType }: { content: string; dataBindings?: any; chartType?: "bar" | "line" | "area" | "pie" }) {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -260,13 +272,72 @@ function ChartRenderer({ content, dataBindings }: { content: string; dataBinding
   if (loading) return <div className="text-sm text-muted-foreground animate-pulse">Loading chart data...</div>;
   if (data.length === 0) return <div className="text-sm text-muted-foreground">No chart data</div>;
 
+  // Detect series keys: every key on the first row that isn't `name` is a numeric series.
+  const first = data[0] || {};
+  const seriesKeys = Object.keys(first).filter(k => k !== "name" && typeof first[k] !== "object");
+  // If no series keys found (older data with just name/value), fall back to value.
+  const series = seriesKeys.length > 0 ? seriesKeys : ["value"];
+  const ct = chartType || "bar";
+
+  if (ct === "line") {
+    return (
+      <ResponsiveContainer width="100%" height={300}>
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+          <XAxis dataKey="name" />
+          <YAxis />
+          <Tooltip />
+          {series.length > 1 && <Legend />}
+          {series.map((k, i) => (
+            <Line key={k} type="monotone" dataKey={k} stroke={CHART_COLORS[i % CHART_COLORS.length]} strokeWidth={2} dot={{ r: 3 }} />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+    );
+  }
+  if (ct === "area") {
+    return (
+      <ResponsiveContainer width="100%" height={300}>
+        <AreaChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+          <XAxis dataKey="name" />
+          <YAxis />
+          <Tooltip />
+          {series.length > 1 && <Legend />}
+          {series.map((k, i) => (
+            <Area key={k} type="monotone" dataKey={k} stroke={CHART_COLORS[i % CHART_COLORS.length]} fill={CHART_COLORS[i % CHART_COLORS.length]} fillOpacity={0.3} />
+          ))}
+        </AreaChart>
+      </ResponsiveContainer>
+    );
+  }
+  if (ct === "pie") {
+    // Pie expects a single series; use the first numeric key.
+    const key = series[0];
+    return (
+      <ResponsiveContainer width="100%" height={300}>
+        <PieChart>
+          <Tooltip />
+          <Legend />
+          <Pie data={data} dataKey={key} nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+            {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+          </Pie>
+        </PieChart>
+      </ResponsiveContainer>
+    );
+  }
+  // Default: bar (supports multi-series too).
   return (
     <ResponsiveContainer width="100%" height={300}>
       <BarChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
         <XAxis dataKey="name" />
         <YAxis />
         <Tooltip />
-        <Bar dataKey="value" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+        {series.length > 1 && <Legend />}
+        {series.map((k, i) => (
+          <Bar key={k} dataKey={k} fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[4, 4, 0, 0]} />
+        ))}
       </BarChart>
     </ResponsiveContainer>
   );
