@@ -38,12 +38,13 @@ interface UnifiedArtifact {
 }
 
 // ─── Filter tabs ─────────────────────────────────────────────
-type FilterTab = "all" | "documents" | "notes" | "ai_reports" | "scans";
+// "notes" tab removed — journal entries live on their own page (/dashboard/journal)
+// and don't belong in the Artifacts list.
+type FilterTab = "all" | "documents" | "ai_reports" | "scans";
 
 const FILTER_TABS: { key: FilterTab; label: string; icon: React.ElementType }[] = [
   { key: "all",        label: "All",        icon: Archive },
   { key: "documents",  label: "Documents",  icon: FileText },
-  { key: "notes",      label: "Notes",      icon: BookOpen },
   { key: "ai_reports", label: "AI Reports", icon: Brain },
   { key: "scans",      label: "Scans",      icon: Camera },
 ];
@@ -347,11 +348,7 @@ export default function ArtifactsPage() {
     queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
   });
 
-  const { data: journal = [], isLoading: journalLoading } = useQuery<JournalEntry[]>({
-    queryKey: ["/api/journal"],
-    queryFn: () => apiRequest("GET", "/api/journal").then(r => r.json()),
-  });
-
+  // Journal entries deliberately NOT fetched here — they have their own page.
   const { data: artifacts = [], isLoading: artifactsLoading } = useQuery<Artifact[]>({
     queryKey: ["/api/artifacts"],
     queryFn: () => apiRequest("GET", "/api/artifacts").then(r => r.json()),
@@ -394,18 +391,6 @@ export default function ArtifactsPage() {
           profileName: resolveProfile(d.linkedProfiles),
           source: d,
         })),
-      ...journal.map(j => ({
-        id: j.id,
-        title: j.mood
-          ? `${MOOD_EMOJI[j.mood] || ""} ${j.mood.charAt(0).toUpperCase() + j.mood.slice(1)} · ${formatDate(j.date)}`
-          : formatDate(j.date),
-        type: "note" as const,
-        typeLabel: "Journal Entry",
-        date: j.date || j.createdAt,
-        preview: j.content?.slice(0, 100) || "",
-        profileName: resolveProfile(j.linkedProfiles),
-        source: j,
-      })),
       ...artifacts.map(a => ({
         id: a.id,
         title: a.title,
@@ -418,7 +403,7 @@ export default function ArtifactsPage() {
       })),
     ];
     return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [documents, journal, artifacts, profileMap]);
+  }, [documents, artifacts, profileMap]);
 
   // Apply profile filter
   const profileFiltered = useMemo(() => {
@@ -433,7 +418,6 @@ export default function ArtifactsPage() {
   const tabFiltered = useMemo(() => {
     switch (activeTab) {
       case "documents": return profileFiltered.filter(i => i.type === "document");
-      case "notes":     return profileFiltered.filter(i => i.type === "note");
       case "ai_reports": return profileFiltered.filter(i => i.type === "ai_report");
       case "scans":     return profileFiltered.filter(i => i.type === "scan");
       default:          return profileFiltered;
@@ -452,7 +436,7 @@ export default function ArtifactsPage() {
     );
   }, [tabFiltered, search]);
 
-  const isLoading = docsLoading || journalLoading || artifactsLoading;
+  const isLoading = docsLoading || artifactsLoading;
 
   // Group documents by type when Documents tab is active
   const documentGroups = useMemo(() => {
@@ -518,7 +502,6 @@ export default function ArtifactsPage() {
             ? profileFiltered.length
             : profileFiltered.filter(i =>
                 tab.key === "documents" ? i.type === "document" :
-                tab.key === "notes" ? i.type === "note" :
                 tab.key === "ai_reports" ? i.type === "ai_report" :
                 tab.key === "scans" ? i.type === "scan" : true
               ).length;
