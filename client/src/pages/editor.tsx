@@ -13,6 +13,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
+import Underline from "@tiptap/extension-underline";
 import Spreadsheet from "react-spreadsheet";
 import DOMPurify from "dompurify";
 import { apiRequest } from "@/lib/queryClient";
@@ -25,6 +26,20 @@ import {
 } from "lucide-react";
 import type { Artifact, SheetData, SheetCell } from "@shared/schema";
 
+// ── Misc helpers ──
+
+function formatRelative(ts: number, now: number): string {
+  const sec = Math.max(0, Math.round((now - ts) / 1000));
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.round(hr / 24);
+  return `${d}d ago`;
+}
+
 // ── Sheet helpers ─────────────────────────────────────────────────────────────
 
 const DEFAULT_ROWS = 30;
@@ -35,6 +50,9 @@ function emptySheet(rows = DEFAULT_ROWS, cols = DEFAULT_COLS): SheetData {
 }
 
 // react-spreadsheet uses [{ value }][] matrix. Convert sparse map ↔ matrix.
+// For formulas we display the evaluated value (v) — the formula text is preserved
+// in state and surfaced via the active-cell formula bar. When the user types into
+// a cell and the new raw text starts with "=", we re-detect it as a formula.
 function sheetToMatrix(s: SheetData): { value: string }[][] {
   const m: { value: string }[][] = [];
   for (let r = 0; r < s.rows; r++) {
@@ -42,8 +60,8 @@ function sheetToMatrix(s: SheetData): { value: string }[][] {
     for (let c = 0; c < s.cols; c++) {
       const cell = s.cells[`${r},${c}`];
       let v = "";
-      if (cell?.f) v = cell.f;
-      else if (cell?.v !== undefined && cell.v !== null) v = String(cell.v);
+      if (cell?.v !== undefined && cell.v !== null) v = String(cell.v);
+      else if (cell?.f) v = cell.f;
       row.push({ value: v });
     }
     m.push(row);
@@ -51,19 +69,23 @@ function sheetToMatrix(s: SheetData): { value: string }[][] {
   return m;
 }
 
-function matrixToSheet(m: any[][], rows: number, cols: number): SheetData {
+function matrixToSheet(m: any[][], rows: number, cols: number, prev: Record<string, SheetCell>): SheetData {
   const cells: Record<string, SheetCell> = {};
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const raw = m[r]?.[c]?.value;
+      const key = `${r},${c}`;
+      const prevCell = prev[key];
       if (raw === undefined || raw === null || raw === "") continue;
       const s = String(raw);
       if (s.startsWith("=")) {
-        cells[`${r},${c}`] = { f: s };
+        cells[key] = { f: s };
+      } else if (prevCell?.f && (prevCell.v !== undefined ? String(prevCell.v) === s : false)) {
+        // User did not modify — keep formula as-is so the cell stays formulaic.
+        cells[key] = { f: prevCell.f, v: prevCell.v };
       } else {
-        // Try numeric
         const n = Number(s);
-        cells[`${r},${c}`] = { v: isFinite(n) && s.trim() !== "" ? n : s };
+        cells[key] = { v: isFinite(n) && s.trim() !== "" ? n : s };
       }
     }
   }
@@ -168,6 +190,7 @@ export default function EditorPage() {
   const editor = useEditor({
     extensions: [
       StarterKit,
+      Underline,
       Link.configure({ openOnClick: false, HTMLAttributes: { class: "text-primary underline" } }),
     ],
     content: docHtml || "<p></p>",
@@ -189,7 +212,7 @@ export default function EditorPage() {
     const t = (title || "").trim() || (type === "doc" ? "Untitled doc" : "Untitled sheet");
     if (type === "doc") {
       const cleanHtml = DOMPurify.sanitize(docHtml || "", {
-        ALLOWED_TAGS: ["p", "br", "strong", "em", "u", "s", "code", "pre", "h1", "h2", "h3", "ul", "ol", "li", "a", "blockquote"],
+        ALLOWED_TAGS: ["p", "br", "strong", "em", "u", "s", "code", "pre", "h1", "h2", "h3", "h4", "ul", "ol", "li", "a", "blockquote", "hr"],
         ALLOWED_ATTR: ["href", "target", "rel"],
       });
       return { type: "doc" as const, title: t, content: cleanHtml, source: fromChat ? "chat" : "manual" };
@@ -345,13 +368,30 @@ export default function EditorPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Derived state (BEFORE any conditional return — hook order) ─────────────
+  const matrix = useMemo(() => sheetToMatrix(sheet), [sheet]);
+
+  const docStats = useMemo(() => {
+    if (type !== "doc") return "";
+    const tmp = typeof document !== "undefined" ? document.createElement("div") : null;
+    if (!tmp) return "";
+    tmp.innerHTML = docHtml || "";
+    const text = (tmp.textContent || "").trim();
+    const words = text ? text.split(/\s+/).length : 0;
+    return `${words} word${words === 1 ? "" : "s"}`;
+  }, [docHtml, type]);
+  const sheetStats = useMemo(() => Object.keys(sheet.cells).length, [sheet]);
+
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   if (loadingExisting && !isNew) {
     return <div className="h-screen flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
   }
-
-  // Sheet helpers — convert state ↔ matrix once per render.
-  const matrix = useMemo(() => sheetToMatrix(sheet), [sheet]);
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -371,9 +411,11 @@ export default function EditorPage() {
           className="h-9 max-w-md font-medium"
           data-testid="input-editor-title"
         />
-        <span className="text-xs text-muted-foreground ml-2">
+        <span className="text-xs text-muted-foreground ml-2" data-testid="text-editor-status">
           {type === "doc" ? "Doc" : "Sheet"}
-          {saveMut.isPending ? " · Saving…" : (dirty ? " · Unsaved" : (lastSavedAt ? " · Saved" : ""))}
+          {saveMut.isPending ? " · Saving…" : (dirty ? " · Unsaved" : (lastSavedAt ? ` · Saved ${formatRelative(lastSavedAt, nowTick)}` : ""))}
+          {type === "doc" && docStats ? ` · ${docStats}` : ""}
+          {type === "sheet" ? ` · ${sheetStats} filled` : ""}
         </span>
         <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={() => type === "doc" ? downloadDoc() : downloadSheet()} data-testid="button-editor-download">
@@ -402,7 +444,7 @@ export default function EditorPage() {
           <div className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1 flex-wrap shrink-0">
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} data-testid="button-doc-bold"><Bold className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} data-testid="button-doc-italic"><Italic className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleStrike().run()} data-testid="button-doc-strike"><UnderlineIcon className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleUnderline().run()} aria-pressed={editor?.isActive("underline")} data-testid="button-doc-underline"><UnderlineIcon className="h-4 w-4" /></Button>
             <div className="w-px h-5 bg-border mx-1" />
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} data-testid="button-doc-h1"><Heading1 className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} data-testid="button-doc-h2"><Heading2 className="h-4 w-4" /></Button>
@@ -439,7 +481,7 @@ export default function EditorPage() {
             <Spreadsheet
               data={matrix}
               onChange={(m: any) => {
-                const next = matrixToSheet(m, sheet.rows, sheet.cols);
+                const next = matrixToSheet(m, sheet.rows, sheet.cols, sheet.cells);
                 // Re-evaluate any formulas so cached v matches f.
                 for (const [k, cell] of Object.entries(next.cells)) {
                   if (cell.f) {
