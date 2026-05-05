@@ -2593,7 +2593,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!token) {
       const { randomBytes } = await import("crypto");
       token = randomBytes(16).toString("hex");
-      await storage.updateArtifact(req.params.id, { shareToken: token });
+      if (typeof storage.setArtifactShareToken === "function") {
+        await storage.setArtifactShareToken(req.params.id, token);
+      } else {
+        await storage.updateArtifact(req.params.id, { shareToken: token });
+      }
     }
     const uid_sh = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`artifacts:${uid_sh}`);
@@ -2602,18 +2606,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.delete("/api/artifacts/:id/share", asyncHandler(async (req, res) => {
     const existing = await storage.getArtifact(req.params.id);
     if (!existing) return res.status(404).json({ error: "Not found" });
-    if (existing.shareToken) {
-      // Manually wipe the field via service role since updateArtifact won't clear falsy metadata keys.
-      const { createClient } = await import("@supabase/supabase-js");
-      const url = process.env.VITE_SUPABASE_URL;
-      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (url && key) {
-        const admin = createClient(url, key);
-        const { data: row } = await admin.from("artifacts").select("metadata").eq("id", req.params.id).single();
-        const md = (row?.metadata as Record<string, any>) || {};
-        delete md.shareToken;
-        await admin.from("artifacts").update({ metadata: md, updated_at: new Date().toISOString() }).eq("id", req.params.id);
-      }
+    if (typeof storage.setArtifactShareToken === "function") {
+      await storage.setArtifactShareToken(req.params.id, null);
     }
     const uid_sh2 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`artifacts:${uid_sh2}`);
@@ -2627,15 +2621,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!token || token.length < 16 || token.length > 128) {
       return res.status(400).json({ error: "Invalid token" });
     }
-    const { createClient } = await import("@supabase/supabase-js");
+    // Use a service-role storage instance (no userId scoping) so we can look
+    // up the artifact regardless of which user owns it.
     const url = process.env.VITE_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) return res.status(500).json({ error: "Supabase env vars missing" });
+    const { createClient } = await import("@supabase/supabase-js");
     const admin = createClient(url, key);
     const { data, error } = await admin
       .from("artifacts")
       .select("id, type, title, content, items, metadata, created_at, updated_at")
-      .eq("metadata->>shareToken", token)
+      .filter("metadata->>shareToken", "eq", token)
       .limit(1);
     if (error) return res.status(500).json({ error: error.message });
     const row = (data || [])[0];
