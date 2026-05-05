@@ -2517,6 +2517,8 @@ All 3 must execute. Report: ✅ Water habit checked in for Joe, ✅ Stretching d
 PROFILE CONTEXT INHERITANCE: If the user sets a profile context ("Joe completed..., his task..., his habit..."),
 apply forProfile:"Joe" to ALL subsequent actions in the same message until profile changes.
 
+MULTI-ACTION EXPENSE PRESERVATION (CRITICAL): When a message mixes an expense with other actions (e.g. "spent $40 at the vet for Max AND schedule a checkup next week"), you MUST emit a SEPARATE create_expense tool call for the money portion — never merge it into the event/task/note. The amount, vendor, and description from the expense clause must be preserved verbatim in create_expense; do not replace the expense with a generic task or summary. If you cannot tell which clause is the expense, emit create_expense with the most specific dollar amount + description from the message and ask a clarifying question only AFTER the expense is saved.
+
 ━━━ AMBIGUITY RESOLUTION ━━━
 If "delete Joe's running thing" could match habit OR tracker OR event:
 1. Look at the data context above — see what actually exists for Joe with "running" in the name
@@ -2655,6 +2657,10 @@ ACTION EXAMPLES:
 - "Schedule a vet appointment for Max" → create_event with forProfile: "Max"
 - "Schedule an oil change for my Tesla" → create_event with forProfile: "Tesla" (vehicle profile)
 - "My car needs maintenance next month" → create_event with forProfile matching the vehicle profile name
+- "Doctor appointment with Dr. Park on Friday" → create_event with forProfile: "Dr. James Park" (or whatever the medical profile is named) and category: "medical"
+- "Dentist appointment Tuesday" → create_event with forProfile matching the dentist's medical profile name (if one exists), category: "medical"
+- "Therapy session with Dr. Smith" → create_event with forProfile: "Dr. Smith", category: "medical"
+MEDICAL EVENTS: When the user mentions a doctor, dentist, therapist, specialist, or any healthcare provider by name ("Dr. X", "Dr. Y's office", "appointment with [provider]"), ALWAYS set forProfile to that provider's profile name and category to "medical". Check existing profiles for medical-type entries first. If no medical profile exists for the named provider, also call create_profile with type="medical" first.
 - "What are Rex's upcoming events?" → get_summary type: "events" forProfile: "Rex"
 - "Tell me about Luna" → get_profile_data profileName: "Luna"
 
@@ -3739,6 +3745,28 @@ async function executeTool(name: string, input: any): Promise<any> {
         else if (/movie|game|concert|ticket|bar|drinks|bowling|arcade/.test(combined)) inferredCategory = "entertainment";
         else if (/school|tuition|textbook|course|udemy/.test(combined)) inferredCategory = "education";
         else if (/insurance|geico|allstate|progressive|state farm/.test(combined)) inferredCategory = "insurance";
+        // Bug #43: if text inference still came up empty but we have a forProfile,
+        // use the profile's TYPE as a strong hint (pet → pet, vehicle → vehicle, etc.).
+        if (inferredCategory === "general" && input.forProfile) {
+          try {
+            const profilesForCat = await storage.getProfiles();
+            const lc = safeLC(input.forProfile).trim();
+            const profMatch = profilesForCat.find(p => p.name.toLowerCase() === lc)
+              || profilesForCat.find(p => p.name.toLowerCase().includes(lc));
+            if (profMatch) {
+              const typeMap: Record<string, string> = {
+                pet: "pet",
+                vehicle: "vehicle",
+                medical: "health",
+                subscription: "subscription",
+                property: "housing",
+                insurance: "insurance",
+              };
+              const fromType = typeMap[(profMatch.type || "").toLowerCase()];
+              if (fromType) inferredCategory = fromType;
+            }
+          } catch { /* non-fatal */ }
+        }
       }
       // Resolve the target profile BEFORE creating the expense so
       // linkedProfiles is set correctly. Match priority:
@@ -3825,6 +3853,36 @@ async function executeTool(name: string, input: any): Promise<any> {
         const target = profiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
           || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
         if (target) eventLinkedProfiles.push(target.id);
+      }
+      // Bug #42: when AI omits forProfile for a medical-looking event, try to
+      // pull the doctor/dentist/therapist name out of the title/description and
+      // match it against any existing medical profile. This keeps doctor
+      // appointments correctly linked to the provider's profile timeline.
+      if (eventLinkedProfiles.length === 0) {
+        const evtText = `${input.title || ""} ${input.description || ""}`;
+        const isMedical = /\b(doctor|dr\.?|dentist|therapist|therapy|appointment|checkup|clinic|hospital|specialist|optometrist|physician|surgeon|chiropract|psychiatr|psycholog)\b/i.test(evtText);
+        if (isMedical) {
+          const allProfs = await storage.getProfiles();
+          // Prefer medical-typed profiles, fall back to person profiles whose
+          // name appears in the event text (e.g. "appointment with James Park").
+          const medicalProfs = allProfs.filter(p => p.type === "medical");
+          const evtLower = evtText.toLowerCase();
+          // Match any medical profile whose name (or last token) appears in the event text
+          let matched = medicalProfs.find(p => {
+            const n = p.name.toLowerCase();
+            return evtLower.includes(n) || n.split(/\s+/).some(tok => tok.length >= 4 && evtLower.includes(tok));
+          });
+          if (!matched) {
+            // Also accept person profiles with "dr" prefix in their stored name
+            matched = allProfs.find(p => /^dr\.?\s/i.test(p.name) && evtLower.includes(p.name.toLowerCase()));
+          }
+          if (matched) {
+            eventLinkedProfiles.push(matched.id);
+            logger.info("ai", `Inferred medical profile "${matched.name}" for event "${input.title}"`);
+            // Also normalize category to medical for consistency
+            if (!input.category || input.category === "personal") input.category = "medical";
+          }
+        }
       }
       const newEvent = await storage.createEvent({
         title: input.title.trim(),
@@ -6395,9 +6453,32 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       messages.push({ role: "user", content: toolResults });
     }
 
+    // Bug #48: track tool-level failures from this entire chat turn so we can
+    // (a) avoid an over-confident "Done" summary when some calls failed and
+    // (b) surface the failure count in the synthetic reply.
+    const failedToolCount = (() => {
+      let n = 0;
+      for (const m of messages) {
+        if (m.role !== "user" || !Array.isArray(m.content)) continue;
+        for (const block of m.content as any[]) {
+          if (block?.type === "tool_result" && block?.is_error === true) n++;
+        }
+      }
+      return n;
+    })();
+
     // If no text reply was generated but we did actions, create a summary
     if (!textReply && allActions.length > 0) {
-      textReply = `Done — executed ${allActions.length} action${allActions.length > 1 ? "s" : ""}.`;
+      const succeeded = allActions.length;
+      if (failedToolCount > 0) {
+        textReply = `Saved ${succeeded} action${succeeded > 1 ? "s" : ""}, but ${failedToolCount} other${failedToolCount > 1 ? "s" : ""} failed — please double-check what got through.`;
+      } else {
+        textReply = `Done — executed ${succeeded} action${succeeded > 1 ? "s" : ""}.`;
+      }
+    } else if (!textReply && allActions.length === 0 && failedToolCount > 0) {
+      // All tool calls failed and AI didn't generate a reply — make sure the
+      // user is told instead of getting a blank message.
+      textReply = `I tried to handle that but ${failedToolCount} action${failedToolCount > 1 ? "s" : ""} failed. Nothing was saved — please try again or rephrase.`;
     }
 
     // SAFETY NET: If document previews are attached, the image viewer will show the doc.
