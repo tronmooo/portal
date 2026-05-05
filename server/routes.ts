@@ -1528,7 +1528,13 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // Pass linkedProfiles through to createTracker (schema strips it, so add it back)
     const trackerData = { ...parsed.data, linkedProfiles: requestedProfiles } as any;
-    res.status(201).json(await storage.createTracker(trackerData));
+    const created = await storage.createTracker(trackerData);
+    // Bug fix: trackers list cache had a 5-min TTL but no busting on create —
+    // newly added trackers wouldn't appear on dashboard / linked page until
+    // the cache expired.
+    const uid_tr1 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`trackers:${uid_tr1}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr1}`); bustCache(`enhanced:`);
+    res.status(201).json(created);
   }));
   app.patch("/api/trackers/:id", asyncHandler(async (req, res) => {
     if (req.body.name !== undefined) {
@@ -1539,6 +1545,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     const updated = await storage.updateTracker(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    // Bug fix: same as POST — patches were silently invisible until cache
+    // expired (e.g. renaming a tracker would still show the old name on the
+    // dashboard for up to 5 minutes).
+    const uid_tr2 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`trackers:${uid_tr2}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.post("/api/trackers/:id/entries", asyncHandler(async (req, res) => {
@@ -1630,6 +1641,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const existing = await storage.getTracker(req.params.id);
     if (!existing) return res.status(404).json({ error: "Tracker not found" });
     await storage.deleteTracker(req.params.id);
+    // Bug fix: deleted trackers stayed visible for up to 5 minutes because
+    // the trackers list cache wasn't busted.
+    const uid_tr3 = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`trackers:${uid_tr3}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr3}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
 
@@ -1677,7 +1692,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`);
+    bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
     res.status(201).json(newTask);
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
@@ -1691,21 +1706,21 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_t2 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`);
+    bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`); bustCache(`notifications:${uid_t2}`);
     res.json(updated);
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteTask(req.params.id);
     const uid_t3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t3}`);
+    bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t3}`); bustCache(`notifications:${uid_t3}`);
     res.json({ success: true });
   }));
   app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreTask(req.params.id);
     if (!ok) return res.status(404).json({ error: "Task not found" });
     const uid_t4 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`tasks:${uid_t4}`); bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t4}`);
+    bustCache(`tasks:${uid_t4}`); bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t4}`); bustCache(`notifications:${uid_t4}`);
     const task = await storage.getTask(req.params.id);
     res.json(task || { id: req.params.id, restored: true });
   }));
@@ -1853,7 +1868,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!source || !amount || !expected_date) return res.status(400).json({ error: "source, amount, expected_date required" });
     const created = await storage.createPaycheck({ source, amount, expected_date, notes });
     const uid_pc1 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`stats:${uid_pc1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc1}`);
+    // Bug fix: paychecks list cache had a 3-min TTL but no busting on create —
+    // newly added paychecks wouldn't appear on the Finance page until expiry.
+    bustCache(`paychecks:${uid_pc1}`); bustCache(`stats:${uid_pc1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc1}`);
     res.json(created);
   }));
 
@@ -1861,14 +1878,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const { actual_amount } = req.body;
     const updated = await storage.confirmPaycheck(req.params.id, actual_amount);
     const uid_pc2 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`stats:${uid_pc2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc2}`);
+    bustCache(`paychecks:${uid_pc2}`); bustCache(`stats:${uid_pc2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc2}`);
     res.json(updated);
   }));
 
   app.delete("/api/paychecks/:id", asyncHandler(async (req, res) => {
     await storage.deletePaycheck(req.params.id);
     const uid_pc3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`stats:${uid_pc3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc3}`);
+    bustCache(`paychecks:${uid_pc3}`); bustCache(`stats:${uid_pc3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc3}`);
     res.json({ success: true });
   }));
 
@@ -2014,7 +2031,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     try {
       const doc = await storage.createDocument(req.body);
       const uid_d1 = (req as AuthenticatedRequest).userId || "anon";
-      bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d1}:`);
+      bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d1}:`); bustCache(`notifications:${uid_d1}`);
       res.status(201).json(doc);
     } catch (err: any) {
       console.error("[documents]", err?.message || err);
@@ -2029,14 +2046,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_d2 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`);
+    bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteDocument(req.params.id);
     const uid_d3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`);
+    bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
     res.json({ success: true });
   }));
   app.get("/api/profiles/:id/documents", asyncHandler(async (req, res) => {
@@ -2165,7 +2182,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (updated) newHabit = updated;
     }
     const uid_h3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`enhanced:`);
+    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h3}`);
     res.status(201).json(newHabit);
   }));
   app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
@@ -2175,14 +2192,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     // Return the full updated habit (with recalculated streak) instead of just the checkin
     const updatedHabit = await storage.getHabit(req.params.id);
     const uid_h1 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`);
+    bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h1}`);
     res.status(201).json(updatedHabit || checkin);
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
     const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
     if (!ok) return res.status(404).json({ error: "Checkin not found" });
     const uid_h2 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`enhanced:`);
+    bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h2}`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
@@ -2206,7 +2223,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const ok = await storage.restoreHabit(req.params.id);
     if (!ok) return res.status(404).json({ error: "Habit not found" });
     const uid_h6 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`habits:${uid_h6}`); bustCache(`stats:${uid_h6}`);
+    // Bug fix: missing `enhanced:` bust meant a restored habit could remain
+    // missing from the dashboard until the 15-second cache expired.
+    bustCache(`habits:${uid_h6}`); bustCache(`stats:${uid_h6}`); bustCache(`enhanced:`);
     const habit = await storage.getHabit(req.params.id);
     res.json(habit || { id: req.params.id, restored: true });
   }));
@@ -2243,7 +2262,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const created = await storage.createObligation(parsed.data);
     const uid_o1 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`);
+    bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`); bustCache(`notifications:${uid_o1}`);
     res.status(201).json(created);
   }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
@@ -2257,7 +2276,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const updated = await storage.updateObligation(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_o2 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`);
+    bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`); bustCache(`notifications:${uid_o2}`);
     res.json(updated);
   }));
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
@@ -2278,7 +2297,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
     const uid_o3 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`);
+    bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
   }));
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
@@ -2286,7 +2305,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
     await storage.deleteObligation(req.params.id);
     const uid_o4 = (req as AuthenticatedRequest).userId || "anon";
-    bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`);
+    bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`); bustCache(`notifications:${uid_o4}`);
     res.json({ success: true });
   }));
 

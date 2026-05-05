@@ -182,13 +182,13 @@ export function NotificationBell() {
       switch (notification.type) {
         case "task_overdue":
         case "task_due_today":
-          setLocation("/tasks");
+          setLocation("/dashboard/tasks");
           break;
         case "bill_due":
           setLocation("/dashboard/finance");
           break;
         case "habit_at_risk":
-          setLocation("/habits");
+          setLocation("/dashboard/habits");
           break;
         case "streak_milestone":
         case "goal_at_risk":

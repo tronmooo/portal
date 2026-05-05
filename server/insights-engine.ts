@@ -29,7 +29,7 @@ export function generateSmartInsights(data: InsightsInput, timezone: string = DE
   const todayStr = getUserToday(timezone);
 
   // --- Spending Alerts ---
-  analyzeSpending(data.expenses, now, insights);
+  analyzeSpending(data.expenses, now, insights, timezone);
 
   // --- Streak Warnings ---
   analyzeStreaks(data.habits, todayStr, insights);
@@ -67,13 +67,14 @@ export function generateSmartInsights(data: InsightsInput, timezone: string = DE
 
 // ─── Spending ────────────────────────────────────────────────────────────────
 
-function analyzeSpending(expenses: Expense[], now: Date, insights: Insight[]) {
-  const thisMonth = now.getMonth();
-  const thisYear = now.getFullYear();
-  const monthlyExpenses = expenses.filter(e => {
-    const d = new Date(e.date);
-    return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
-  });
+function analyzeSpending(expenses: Expense[], now: Date, insights: Insight[], timezone: string = DEFAULT_TIMEZONE) {
+  // Bug fix: month boundaries must be evaluated in the user's timezone, not
+  // server UTC. After 5pm PDT on the last day of the month, server UTC has
+  // already rolled over and "this month" insights would silently drop today's
+  // expenses. We compare YYYY-MM strings (timezone-stable since expenses
+  // store local YYYY-MM-DD).
+  const userYM = new Date().toLocaleDateString('en-CA', { timeZone: timezone }).slice(0, 7);
+  const monthlyExpenses = expenses.filter(e => (e.date || '').slice(0, 7) === userYM);
   const monthTotal = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
 
   if (monthTotal > 0) {
@@ -95,8 +96,12 @@ function analyzeSpending(expenses: Expense[], now: Date, insights: Insight[]) {
       createdAt: now.toISOString(),
     });
 
-    // Day-of-month spending pace
-    const dayOfMonth = now.getDate();
+    // Day-of-month spending pace — use the user's local YYYY-MM (not server
+    // UTC) so the projection doesn't reset at midnight UTC for non-UTC users.
+    const [yyStr, mmStr, ddStr] = (new Date().toLocaleDateString('en-CA', { timeZone: timezone })).split('-');
+    const thisYear = parseInt(yyStr, 10);
+    const thisMonth = parseInt(mmStr, 10) - 1;
+    const dayOfMonth = parseInt(ddStr, 10);
     const daysInMonth = new Date(thisYear, thisMonth + 1, 0).getDate();
     const pace = (monthTotal / dayOfMonth) * daysInMonth;
     if (pace > 3000) {
