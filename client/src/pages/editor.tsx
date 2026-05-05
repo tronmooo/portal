@@ -26,6 +26,12 @@ import {
   Heading1, Heading2, LinkIcon, Code, Save, Download, Trash2, Copy, Loader2, Plus, Minus,
 } from "lucide-react";
 import type { Artifact, SheetData, SheetCell } from "@shared/schema";
+import { getTemplatesByType, type EditorTemplate } from "@/lib/editor-templates";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
+  DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { LayoutTemplate } from "lucide-react";
 
 // ── Misc helpers ──
 
@@ -121,6 +127,7 @@ export default function EditorPage() {
   const search = typeof window !== "undefined" ? window.location.hash.split("?")[1] || "" : "";
   const params = new URLSearchParams(search);
   const fromChat = params.get("source") === "chat";
+  const initialTemplateId = params.get("template");
 
   const isNew = !!matchNew;
   const newType = (paramsNew?.type === "sheet" ? "sheet" : "doc") as "doc" | "sheet";
@@ -159,14 +166,33 @@ export default function EditorPage() {
     }
   }, [existing]);
 
-  // Initialize blank doc/sheet for new artifacts.
+  // Apply a template to the current editor state. Marks dirty so autosave kicks in.
+  const applyTemplate = (tpl: EditorTemplate) => {
+    setTitle(tpl.title);
+    if (tpl.type === "doc") {
+      setDocHtml(tpl.html);
+    } else {
+      setSheet({ rows: tpl.rows, cols: tpl.cols, cells: tpl.cells });
+    }
+    setDirty(true);
+    toast({ title: `Template applied: ${tpl.label}` });
+  };
+
+  // Initialize blank doc/sheet for new artifacts — or apply template if requested.
   useEffect(() => {
     if (isNew && !title) {
+      const templates = getTemplatesByType(newType);
+      const tpl = initialTemplateId ? templates.find(t => t.id === initialTemplateId) : null;
+      if (tpl) {
+        applyTemplate(tpl);
+        return;
+      }
       setTitle(newType === "doc" ? "Untitled doc" : "Untitled sheet");
       if (newType === "doc") setDocHtml("<p></p>");
       else setSheet(emptySheet());
     }
-  }, [isNew, newType, title]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, newType, title, initialTemplateId]);
 
   // ── Tiptap editor (doc mode only) ───────────────────────────────────────────
   const editor = useEditor({
@@ -420,6 +446,28 @@ export default function EditorPage() {
           {type === "sheet" ? ` · ${sheetStats} filled` : ""}
         </span>
         <div className="flex-1" />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" data-testid="button-editor-template">
+              <LayoutTemplate className="h-4 w-4 mr-1" /> Template
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-72">
+            <DropdownMenuLabel>Insert {type === "doc" ? "document" : "spreadsheet"} template</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {getTemplatesByType(type).map((tpl) => (
+              <DropdownMenuItem
+                key={tpl.id}
+                onClick={() => applyTemplate(tpl)}
+                className="flex flex-col items-start gap-0.5 py-2"
+                data-testid={`menu-template-${tpl.id}`}
+              >
+                <span className="font-medium">{tpl.label}</span>
+                <span className="text-xs text-muted-foreground">{tpl.description}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button variant="ghost" size="sm" onClick={() => type === "doc" ? downloadDoc() : downloadSheet()} data-testid="button-editor-download">
           <Download className="h-4 w-4 mr-1" /> Download
         </Button>

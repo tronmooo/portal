@@ -27,6 +27,13 @@ import {
   BarChart2,
   Clock,
   Search,
+  FilePlus2,
+  Table as TableIcon,
+  Plus,
+  BookOpen,
+  Wallet,
+  Settings as SettingsIcon,
+  Bell,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -111,6 +118,26 @@ const QUICK_ACTIONS = [
   { label: "Go to Chat",      icon: MessageSquare,   path: "/",         shortcut: "C" },
   { label: "Go to Trackers",  icon: BarChart2,       path: "/trackers", shortcut: "T" },
   { label: "Go to Profiles",  icon: Users,           path: "/profiles", shortcut: "P" },
+  { label: "Go to Finance",   icon: Wallet,          path: "/finance",  shortcut: "F" },
+  { label: "Go to Tasks",     icon: ListTodo,        path: "/tasks",    shortcut: "K" },
+  { label: "Go to Habits",    icon: Flame,           path: "/habits",   shortcut: "H" },
+  { label: "Go to Journal",   icon: BookOpen,        path: "/dashboard/journal", shortcut: "J" },
+  { label: "Go to Calendar",  icon: Calendar,        path: "/calendar", shortcut: "L" },
+  { label: "Go to Artifacts", icon: FileText,        path: "/artifacts", shortcut: "A" },
+  { label: "Go to Obligations", icon: Bell,          path: "/obligations", shortcut: "O" },
+  { label: "Go to Settings",  icon: SettingsIcon,    path: "/settings", shortcut: "S" },
+];
+
+// Actions that create a new artifact/entity. Shown as their own group above
+// Quick Actions for fast access.
+const CREATE_ACTIONS = [
+  { label: "New document",    icon: FilePlus2,  path: "/editor/new/doc",   color: "text-blue-500" },
+  { label: "New spreadsheet", icon: TableIcon,  path: "/editor/new/sheet", color: "text-green-600" },
+  { label: "New journal entry", icon: BookOpen, path: "/dashboard/journal?new=1", color: "text-purple-500" },
+  { label: "Log an expense",  icon: Wallet,     path: "/finance?new=expense", color: "text-emerald-500" },
+  { label: "New task",        icon: ListTodo,   path: "/tasks?new=1",      color: "text-orange-500" },
+  { label: "New habit",       icon: Flame,      path: "/habits?new=1",     color: "text-red-500" },
+  { label: "New tracker",     icon: BarChart2,  path: "/trackers?new=1",   color: "text-cyan-500" },
 ];
 
 // ─── Shared CommandSearch context (open state lives here) ─────────────────────
@@ -554,6 +581,21 @@ export function CommandSearch() {
                 <CommandSeparator />
               </>
             )}
+
+            <CommandGroup heading="Create">
+              {CREATE_ACTIONS.map((action) => (
+                <CommandItem
+                  key={action.path}
+                  value={`create-${action.label}`}
+                  onSelect={() => handleSelect(action.path)}
+                  data-testid={`item-create-${action.label.toLowerCase().replace(/\s+/g, "-")}`}
+                >
+                  <action.icon className={`shrink-0 ${action.color}`} />
+                  <span className="text-sm">{action.label}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            <CommandSeparator />
 
             <CommandGroup heading="Quick Actions">
               {QUICK_ACTIONS.map((action) => (
