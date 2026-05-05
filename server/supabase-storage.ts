@@ -3060,7 +3060,9 @@ export class SupabaseStorage implements IStorage {
       totalProfiles: profiles.length,
       totalTrackers: trackers.length,
       totalTasks: tasks.length,
-      activeTasks: tasks.filter(t => t.status !== "done").length,
+      // Audit fix: case/whitespace-normalize so the KPI tile and the popup
+      // (which uses normalizeFilter) agree on what counts as 'done'.
+      activeTasks: tasks.filter(t => (t.status || "").trim().toLowerCase() !== "done").length,
       totalExpenses: expenses.reduce((sum, e) => sum + e.amount, 0),
       totalEvents: events.length,
       monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),

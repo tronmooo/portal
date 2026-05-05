@@ -103,10 +103,13 @@ const DISMISSED_PREF_KEY = "dismissed_notifications";
 
 async function loadDismissedIds(): Promise<string[]> {
   try {
-    const res = await fetch(`/api/preferences/${DISMISSED_PREF_KEY}`);
-    if (!res.ok) return [];
-    const json = await res.json();
-    if (!json.value) return [];
+    // Audit fix: this used raw fetch() which bypassed the auth interceptor,
+    // so the request went unauthenticated, returned 401, and dismissed IDs
+    // were never restored on reload — making 'Dismiss all' look broken.
+    // apiRequest() runs through the auth interceptor with the bearer token.
+    const res = await apiRequest("GET", `/api/preferences/${DISMISSED_PREF_KEY}`);
+    const json = await res.json().catch(() => null);
+    if (!json?.value) return [];
     const parsed = JSON.parse(json.value);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -116,10 +119,11 @@ async function loadDismissedIds(): Promise<string[]> {
 
 async function saveDismissedIds(ids: string[]): Promise<void> {
   try {
-    await fetch(`/api/preferences/${DISMISSED_PREF_KEY}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value: JSON.stringify(ids) }),
+    // Audit fix: same auth issue as loadDismissedIds — raw fetch bypassed
+    // the bearer-token interceptor and the PUT silently 401'd, so dismissals
+    // never persisted across reloads.
+    await apiRequest("PUT", `/api/preferences/${DISMISSED_PREF_KEY}`, {
+      value: JSON.stringify(ids),
     });
   } catch {
     // Silently fail — local state is still correct

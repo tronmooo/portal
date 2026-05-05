@@ -346,7 +346,7 @@ export default function FinancePage() {
                       }
                       addExpenseMutation.mutate();
                     }}
-                    disabled={!newExpense.description.trim() || !newExpense.amount || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending}
+                    disabled={!newExpense.description.trim() || !newExpense.amount || !Number.isFinite(parseFloat(newExpense.amount)) || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending}
                     data-testid="button-save-expense"
                   >
                     {addExpenseMutation.isPending ? "Saving..." : "Save Expense"}

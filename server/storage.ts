@@ -1587,7 +1587,7 @@ export class MemStorage implements IStorage {
       totalProfiles: filterActive ? ids.length : this.profiles.size,
       totalTrackers: trackers.length,
       totalTasks: tasks.length,
-      activeTasks: tasks.filter(t => t.status !== "done").length,
+      activeTasks: tasks.filter(t => (t.status || "").trim().toLowerCase() !== "done").length,
       totalExpenses: expenses.reduce((sum, e) => sum + e.amount, 0),
       totalEvents: filterActive
         ? Array.from(this.events.values()).filter(e => matchesFilter((e as any).linkedProfiles)).length

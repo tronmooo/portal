@@ -2894,15 +2894,25 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
 
   const generateSummary = async () => {
     setLoading(true);
+    // Audit fix: dashboard summary used to hang on "Generating…" forever when
+    // the chat endpoint returned an empty/malformed body. apiRequest already
+    // owns its own timeout (CHAT_TIMEOUT_MS), so we just need to be defensive
+    // about the response shape and ALWAYS show feedback.
     try {
       const resp = await apiRequest("POST", "/api/chat", {
         message: "Give me a brief daily summary of my current status. Include: tasks due today, habits completion, upcoming events, and any health or finance highlights. Keep it under 4 sentences. Be direct and specific with numbers.",
       });
-      const data = await resp.json();
-      setSummary(data.reply || "No summary available.");
+      const data = await resp.json().catch(() => ({} as any));
+      const text = (data?.reply || "").toString().trim();
+      setSummary(text || "I couldn't generate a summary right now — try again in a moment.");
       setLastGenerated(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
-    } catch {
-      setSummary("Unable to generate summary right now.");
+    } catch (err: any) {
+      const msg = (err?.message || "").toString();
+      if (msg.toLowerCase().includes("timed out")) {
+        setSummary("Summary request timed out. The AI may be busy — please try again.");
+      } else {
+        setSummary("Unable to generate summary right now.");
+      }
     } finally {
       setLoading(false);
     }

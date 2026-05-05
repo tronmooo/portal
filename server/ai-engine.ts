@@ -5155,7 +5155,7 @@ async function executeTool(name: string, input: any): Promise<any> {
           totalBudgeted: Math.round(totalBudgeted * 100) / 100,
           remaining: Math.round((totalBudgeted - totalSpent) * 100) / 100,
           expenseCount: thisMonthExpenses.length,
-          activeTasks: tasks.filter(t => t.status !== "done").length,
+          activeTasks: tasks.filter(t => (t.status || "").trim().toLowerCase() !== "done").length,
           completedTasks: tasks.filter(t => t.status === "done").length,
           profileCount: profiles.length,
           trackerCount: trackers.length,
