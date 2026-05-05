@@ -70,6 +70,15 @@ export const getQueryFn: <T>(options: {
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+      // Bug #14/#41: a 401 here means the auth interceptor's refresh attempt
+      // also failed (or this query bypassed it). Notify the app so the
+      // AuthProvider can clear React state and the UI can redirect to /auth
+      // instead of staying stuck rendering with null/empty data.
+      try {
+        window.dispatchEvent(new CustomEvent("portol:auth-cleared", {
+          detail: { reason: "query-401", url },
+        }));
+      } catch { /* ignore */ }
       return null;
     }
 

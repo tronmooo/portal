@@ -101,6 +101,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [session]);
 
+  // Bug #16: react when the fetch interceptor clears the session due to a failed
+  // refresh. Without this, React state still holds a stale user/session and the
+  // UI keeps trying authenticated requests in a 401 loop.
+  useEffect(() => {
+    const onAuthCleared = () => {
+      setUser(null);
+      setSession(null);
+      try { queryClient.clear(); } catch { /* ignore */ }
+      try { clearChatCache(); } catch { /* ignore */ }
+    };
+    window.addEventListener("portol:auth-cleared", onAuthCleared as EventListener);
+    return () => window.removeEventListener("portol:auth-cleared", onAuthCleared as EventListener);
+  }, []);
+
   async function checkAuthConfig() {
     try {
       const res = await fetch(`${API_BASE}/api/auth/config`);
@@ -339,17 +353,32 @@ export function installAuthInterceptor() {
             body: JSON.stringify({ refresh_token: memoryTokens.refresh_token }),
           });
           if (refreshRes.ok) {
-            const refreshData = await refreshRes.json();
-            persistTokens(refreshData.session);
-            // Retry the original request with new token
-            const retryHeaders = new Headers(init?.headers);
-            retryHeaders.set("Authorization", `Bearer ${memoryTokens?.access_token}`);
-            return originalFetch!(input, { ...init, headers: retryHeaders });
+            const refreshData = await refreshRes.json().catch(() => null);
+            // Bug #15: validate refresh response shape before persisting.
+            // If body is malformed (no access_token), persistTokens(undefined) would
+            // wipe memoryTokens and we'd retry with a stale/empty Authorization header.
+            const newSession = refreshData?.session;
+            if (newSession?.access_token && newSession?.refresh_token) {
+              persistTokens(newSession);
+              // Retry the original request with the freshly-persisted token
+              const retryHeaders = new Headers(init?.headers);
+              retryHeaders.set("Authorization", `Bearer ${newSession.access_token}`);
+              return originalFetch!(input, { ...init, headers: retryHeaders });
+            }
+            // Malformed refresh response — fall through to clear session
           }
         } catch { /* fall through */ }
       }
-      // Refresh failed — clear session
+      // Refresh failed — clear session and notify the app so it can redirect.
+      // Bug #16: previously this cleared tokens silently, leaving the UI stuck
+      // in a 401-loop with no feedback. Dispatch an event so AuthProvider/UI
+      // can react (show toast, redirect to /auth, etc.).
       persistTokens(null);
+      try {
+        window.dispatchEvent(new CustomEvent("portol:auth-cleared", {
+          detail: { reason: "refresh-failed", url },
+        }));
+      } catch { /* ignore */ }
     }
 
     return response;
