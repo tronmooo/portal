@@ -3566,8 +3566,14 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // PAYCHECKS
   // ============================================================
+  // ⚠️  CRITICAL: every query in this section MUST filter by user_id.
+  // The server uses the Supabase SERVICE_ROLE_KEY which BYPASSES Row
+  // Level Security — so the database will happily return / mutate other
+  // users' rows if we don't constrain by user_id ourselves.
   async getPaychecks(): Promise<any[]> {
-    const { data } = await this.supabase.from('paychecks').select('*').order('expected_date', { ascending: false });
+    const { data } = await this.supabase.from('paychecks').select('*')
+      .eq('user_id', this.userId)
+      .order('expected_date', { ascending: false });
     return data || [];
   }
 
@@ -3580,25 +3586,30 @@ export class SupabaseStorage implements IStorage {
   async confirmPaycheck(id: string, actual_amount?: number): Promise<any> {
     const update: any = { confirmed: true, received_date: new Date().toISOString().slice(0, 10) };
     if (actual_amount != null) update.actual_amount = actual_amount;
-    const { data, error } = await this.supabase.from('paychecks').update(update).eq('id', id).select().single();
+    const { data, error } = await this.supabase.from('paychecks').update(update)
+      .eq('id', id).eq('user_id', this.userId).select().single();
     if (error) throw error;
     return data;
   }
 
   async deletePaycheck(id: string): Promise<void> {
-    await this.supabase.from('paychecks').delete().eq('id', id);
+    await this.supabase.from('paychecks').delete()
+      .eq('id', id).eq('user_id', this.userId);
   }
 
   // ============================================================
   // LOAN AMORTIZATION
   // ============================================================
+  // ⚠️  Same RLS-bypass concern as PAYCHECKS — always filter by user_id.
   async getLoanSchedule(loanId: string): Promise<any[]> {
-    const { data } = await this.supabase.from('loan_amortization').select('*').eq('loan_id', loanId).order('payment_number');
+    const { data } = await this.supabase.from('loan_amortization').select('*')
+      .eq('loan_id', loanId).eq('user_id', this.userId).order('payment_number');
     return data || [];
   }
 
   async getAllLoanSchedules(): Promise<any[]> {
-    const { data } = await this.supabase.from('loan_amortization').select('*').order('loan_name').order('payment_number');
+    const { data } = await this.supabase.from('loan_amortization').select('*')
+      .eq('user_id', this.userId).order('loan_name').order('payment_number');
     return data || [];
   }
 
@@ -3610,7 +3621,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async markLoanPayment(id: string): Promise<any> {
-    const { data, error } = await this.supabase.from('loan_amortization').update({ paid: true }).eq('id', id).select().single();
+    const { data, error } = await this.supabase.from('loan_amortization').update({ paid: true })
+      .eq('id', id).eq('user_id', this.userId).select().single();
     if (error) throw error;
     return data;
   }
@@ -3618,9 +3630,11 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // CASHFLOW PROJECTIONS
   // ============================================================
+  // ⚠️  Same RLS-bypass concern — always filter by user_id.
   async getCashflow(month?: string): Promise<any[]> {
     const m = month || new Date().toISOString().slice(0, 7);
-    const { data } = await this.supabase.from('cashflow_projections').select('*').eq('month', m).order('week');
+    const { data } = await this.supabase.from('cashflow_projections').select('*')
+      .eq('month', m).eq('user_id', this.userId).order('week');
     const projections = (data as any[]) || [];
 
     // Layer in unpaid loan amortization payments scheduled for this month.

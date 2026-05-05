@@ -1738,14 +1738,47 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   app.post("/api/budgets", asyncHandler(async (req, res) => {
     const { month, category, amount, notes } = req.body;
-    if (!category || amount === undefined) return res.status(400).json({ error: "category and amount required" });
+    if (!category || typeof category !== "string" || !category.trim()) {
+      return res.status(400).json({ error: "category is required and must be a non-empty string" });
+    }
+    if (amount === undefined || amount === null) {
+      return res.status(400).json({ error: "amount is required" });
+    }
+    // Bug fix: previously used Number(amount) which silently converts "abc"
+    // (or any junk) to NaN and then writes NaN into the budget JSON, breaking
+    // every aggregation that uses it. Reject non-finite / non-positive values
+    // at the gateway.
+    const parsedAmount = Number(amount);
+    if (!isFinite(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({ error: "amount must be a finite non-negative number" });
+    }
+    if (notes !== undefined && typeof notes !== "string") {
+      return res.status(400).json({ error: "notes must be a string" });
+    }
     const m = month || getUserCurrentMonth(getTimezone(req));
-    const budget = await storage.addBudget(m, category, Number(amount), notes);
+    const budget = await storage.addBudget(m, category.trim(), parsedAmount, notes);
     res.json(budget);
   }));
 
   app.patch("/api/budgets/:id", asyncHandler(async (req, res) => {
     const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
+    // Bug fix: PATCH body was forwarded raw to storage.updateBudget which then
+    // spread it onto the budget. A bad amount would silently land in DB.
+    if (req.body && typeof req.body === "object") {
+      if (req.body.amount !== undefined && req.body.amount !== null) {
+        const n = typeof req.body.amount === "number" ? req.body.amount : Number(req.body.amount);
+        if (!isFinite(n) || n < 0) {
+          return res.status(400).json({ error: "amount must be a finite non-negative number" });
+        }
+        req.body.amount = n;
+      }
+      if (req.body.category !== undefined && (typeof req.body.category !== "string" || !req.body.category.trim())) {
+        return res.status(400).json({ error: "category must be a non-empty string" });
+      }
+      if (req.body.notes !== undefined && req.body.notes !== null && typeof req.body.notes !== "string") {
+        return res.status(400).json({ error: "notes must be a string" });
+      }
+    }
     const ok = await storage.updateBudget(month, req.params.id, req.body);
     if (!ok) return res.status(404).json({ error: "Budget not found" });
     res.json({ success: true });
@@ -1869,8 +1902,27 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   app.post("/api/paychecks", asyncHandler(async (req, res) => {
     const { source, amount, expected_date, notes } = req.body;
-    if (!source || !amount || !expected_date) return res.status(400).json({ error: "source, amount, expected_date required" });
-    const created = await storage.createPaycheck({ source, amount, expected_date, notes });
+    if (!source || typeof source !== "string" || !source.trim()) {
+      return res.status(400).json({ error: "source is required and must be a non-empty string" });
+    }
+    if (amount === undefined || amount === null) {
+      return res.status(400).json({ error: "amount is required" });
+    }
+    // Bug fix: amount was not type-checked, so a payload with amount: "abc"
+    // would pass !amount (truthy string) and end up writing a non-numeric
+    // value to the paychecks table, breaking the sum-of-paychecks dashboard.
+    const numAmount = typeof amount === "number" ? amount : Number(amount);
+    if (!isFinite(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: "amount must be a finite positive number" });
+    }
+    if (!expected_date || typeof expected_date !== "string") {
+      return res.status(400).json({ error: "expected_date is required" });
+    }
+    const dParsed = new Date(expected_date);
+    if (isNaN(dParsed.getTime())) {
+      return res.status(400).json({ error: "expected_date must be a valid date" });
+    }
+    const created = await storage.createPaycheck({ source: source.trim(), amount: numAmount, expected_date, notes });
     const uid_pc1 = (req as AuthenticatedRequest).userId || "anon";
     // Bug fix: paychecks list cache had a 3-min TTL but no busting on create —
     // newly added paychecks wouldn't appear on the Finance page until expiry.
@@ -1948,8 +2000,23 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   app.post("/api/cashflow", asyncHandler(async (req, res) => {
     const { month, week, projected_income, projected_expenses, actual_income, actual_expenses } = req.body;
-    if (!month || !week) return res.status(400).json({ error: "month and week required" });
-    res.json(await storage.upsertCashflow({ month, week, projected_income, projected_expenses, actual_income, actual_expenses }));
+    if (!month || typeof month !== "string") return res.status(400).json({ error: "month is required" });
+    if (week === undefined || week === null) return res.status(400).json({ error: "week is required" });
+    // Bug fix: previously the four numeric fields were written through with no
+    // validation. A bad payload could insert non-numeric values into the
+    // cashflow_projections table and corrupt every downstream net-cashflow
+    // calculation. Coerce + validate each that's provided.
+    const numFields: Record<string, any> = { projected_income, projected_expenses, actual_income, actual_expenses };
+    const cleaned: Record<string, number | undefined> = {};
+    for (const [k, v] of Object.entries(numFields)) {
+      if (v === undefined || v === null) continue;
+      const n = typeof v === "number" ? v : Number(v);
+      if (!isFinite(n)) {
+        return res.status(400).json({ error: `${k} must be a finite number` });
+      }
+      cleaned[k] = n;
+    }
+    res.json(await storage.upsertCashflow({ month, week, ...cleaned } as any));
   }));
 
   // ---- Events ----
@@ -3769,6 +3836,24 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   app.post("/api/incomes", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    // Bug fix: this route used to call storage.createIncome(req.body) with no
+    // validation at all. A POST { amount: "abc" } would NaN out every monthly
+    // income computation. Validate amount + description + sanitize inputs.
+    if (!req.body || typeof req.body !== "object") {
+      return res.status(400).json({ error: "Request body must be a JSON object" });
+    }
+    if (!req.body.description || typeof req.body.description !== "string" || !req.body.description.trim()) {
+      return res.status(400).json({ error: "description is required" });
+    }
+    if (req.body.amount === undefined || req.body.amount === null) {
+      return res.status(400).json({ error: "amount is required" });
+    }
+    const amt = typeof req.body.amount === "number" ? req.body.amount : Number(req.body.amount);
+    if (!isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be a finite positive number" });
+    }
+    req.body.amount = amt;
+    req.body.description = sanitize(req.body.description);
     const income = await storage.createIncome(req.body);
     bustIncomeCaches(uid);
     res.status(201).json(income);
@@ -3776,6 +3861,22 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   app.patch("/api/incomes/:id", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    if (!req.body || typeof req.body !== "object") {
+      return res.status(400).json({ error: "Request body must be a JSON object" });
+    }
+    if (req.body.amount !== undefined) {
+      const amt = typeof req.body.amount === "number" ? req.body.amount : Number(req.body.amount);
+      if (!isFinite(amt) || amt <= 0) {
+        return res.status(400).json({ error: "amount must be a finite positive number" });
+      }
+      req.body.amount = amt;
+    }
+    if (req.body.description !== undefined) {
+      if (typeof req.body.description !== "string" || !req.body.description.trim()) {
+        return res.status(400).json({ error: "description must be a non-empty string" });
+      }
+      req.body.description = sanitize(req.body.description);
+    }
     const income = await storage.updateIncome(req.params.id, req.body);
     if (!income) return res.status(404).json({ error: "Not found" });
     bustIncomeCaches(uid);
