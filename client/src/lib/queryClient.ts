@@ -148,13 +148,25 @@ export const queryClient = new QueryClient({
         queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
         queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
         queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/budgets"] });
         queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
         queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
         queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
         queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
         queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
         queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
         queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/insights"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/ai-digest"] });
       },
       onError: (error: Error) => {
         console.error("Mutation failed:", error.message);
