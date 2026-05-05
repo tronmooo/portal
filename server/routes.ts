@@ -2432,6 +2432,33 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
 
+  // Duplicate an artifact — used by the editor's "Save as copy" affordance for
+  // doc/sheet types. Server-side copy avoids round-tripping the full payload.
+  app.post("/api/artifacts/:id/duplicate", asyncHandler(async (req, res) => {
+    const src = await storage.getArtifact(req.params.id);
+    if (!src) return res.status(404).json({ error: "Artifact not found" });
+    const newTitle = (req.body?.title && typeof req.body.title === "string" && req.body.title.trim())
+      ? sanitize(req.body.title.trim())
+      : `${src.title} (copy)`;
+    const created = await storage.createArtifact({
+      type: src.type,
+      title: newTitle,
+      content: src.content || "",
+      items: (src.items || []).map(i => ({ text: i.text, checked: i.checked })),
+      tags: src.tags || [],
+      pinned: false,
+      linkedProfiles: src.linkedProfiles || [],
+      language: src.language,
+      dataBindings: src.dataBindings,
+      chartData: src.chartData,
+      sheetData: src.sheetData,
+      source: src.source,
+    } as any);
+    const uid_adup = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`artifacts:${uid_adup}`); bustCache(`stats:${uid_adup}`); bustCache(`enhanced:`);
+    res.status(201).json(created);
+  }));
+
   // ---- Journal ----
   app.get("/api/journal", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || "anon";

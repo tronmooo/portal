@@ -400,13 +400,27 @@ export type InsertObligation = z.input<typeof insertObligationSchema>;
 
 export type ArtifactType = 
   | "checklist" | "note"
-  | "markdown" | "code" | "html" | "react" | "svg" | "mermaid" | "chart";
+  | "markdown" | "code" | "html" | "react" | "svg" | "mermaid" | "chart"
+  | "doc" | "sheet"; // doc = rich-text Word-style; sheet = Excel-style grid
+
+export interface SheetCell {
+  v?: string | number | null; // raw value
+  f?: string;                 // formula (starts with "="); v is the cached eval
+}
+
+export interface SheetData {
+  rows: number;                       // grid height
+  cols: number;                       // grid width
+  cells: Record<string, SheetCell>;   // sparse map keyed by "r,c" (e.g. "0,0")
+  colWidths?: Record<number, number>; // optional column width overrides
+  rowHeights?: Record<number, number>;
+}
 
 export interface Artifact {
   id: string;
   type: ArtifactType;
   title: string;
-  content: string; // For notes: the body text. For code: the code. For chart: JSON data.
+  content: string; // For notes: body text. For code: the code. For chart: JSON. For doc: HTML.
   items: ChecklistItem[]; // For checklists
   tags: string[];
   linkedProfiles: string[];
@@ -417,6 +431,8 @@ export interface Artifact {
     params: Record<string, any>;  // e.g. { period: "month", profileId: "abc" }
   };
   chartData?: any[];        // Pre-computed chart data (fallback if dataBindings query fails)
+  sheetData?: SheetData;    // For "sheet" type only
+  source?: "chat" | "manual" | "ai"; // where the artifact was created from
   createdAt: string;
   updatedAt: string;
 }
@@ -429,9 +445,11 @@ export interface ChecklistItem {
 }
 
 export const insertArtifactSchema = z.object({
-  type: z.enum(["checklist", "note", "markdown", "code", "html", "react", "svg", "mermaid", "chart"]),
+  type: z.enum(["checklist", "note", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"]),
   title: z.string().min(1),
-  content: z.string().default(""),
+  // Cap at ~2 MB of HTML/markdown/code to prevent runaway docs from filling the
+  // artifacts table. Most legitimate docs are well under 200 KB.
+  content: z.string().max(2_000_000).default(""),
   items: z.array(z.object({
     text: z.string(),
     checked: z.boolean().default(false),
@@ -445,6 +463,18 @@ export const insertArtifactSchema = z.object({
     params: z.record(z.any()).default({}),
   }).optional(),
   chartData: z.array(z.any()).optional(),
+  // Sheet payload — only used when type === "sheet". Hard caps protect the DB.
+  sheetData: z.object({
+    rows: z.number().int().min(1).max(10000),
+    cols: z.number().int().min(1).max(200),
+    cells: z.record(z.object({
+      v: z.union([z.string(), z.number(), z.null()]).optional(),
+      f: z.string().max(2000).optional(),
+    })),
+    colWidths: z.record(z.number()).optional(),
+    rowHeights: z.record(z.number()).optional(),
+  }).optional(),
+  source: z.enum(["chat", "manual", "ai"]).optional(),
 });
 
 export type InsertArtifact = z.infer<typeof insertArtifactSchema>;

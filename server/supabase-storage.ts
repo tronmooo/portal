@@ -419,6 +419,9 @@ export class SupabaseStorage implements IStorage {
       language: metadata.language,
       dataBindings: metadata.dataBindings,
       chartData: metadata.chartData,
+      // Doc/Sheet additions stored inside metadata JSON — no SQL migration needed.
+      sheetData: metadata.sheetData,
+      source: metadata.source,
       createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -2489,11 +2492,15 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
-    // Build metadata for new artifact fields (language, dataBindings, chartData)
+    // Build metadata for non-column artifact fields (language, dataBindings,
+    // chartData, sheetData, source). All live inside the metadata JSONB column
+    // so adding new fields stays migration-free.
     const metadata: Record<string, any> = {};
     if ((data as any).language) metadata.language = (data as any).language;
     if ((data as any).dataBindings) metadata.dataBindings = (data as any).dataBindings;
     if ((data as any).chartData) metadata.chartData = (data as any).chartData;
+    if ((data as any).sheetData) metadata.sheetData = (data as any).sheetData;
+    if ((data as any).source) metadata.source = (data as any).source;
     const { error } = await this.supabase.from("artifacts").insert({
       id, user_id: this.userId, type: data.type, title: data.title,
       content: data.content || "", items, tags: data.tags || [],
@@ -2511,11 +2518,13 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     const merged = { ...existing, ...data };
     const now = new Date().toISOString();
-    // Build metadata from merged fields
+    // Build metadata from merged fields — keep all non-column attributes here.
     const metadata: Record<string, any> = {};
     if (merged.language) metadata.language = merged.language;
     if (merged.dataBindings) metadata.dataBindings = merged.dataBindings;
     if (merged.chartData) metadata.chartData = merged.chartData;
+    if (merged.sheetData) metadata.sheetData = merged.sheetData;
+    if (merged.source) metadata.source = merged.source;
     const { error } = await this.supabase.from("artifacts").update({
       type: merged.type, title: merged.title, content: merged.content,
       items: merged.items, tags: merged.tags, linked_profiles: merged.linkedProfiles,
