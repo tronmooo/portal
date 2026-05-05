@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { CreateProfileDialog } from "@/pages/profiles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -43,6 +44,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -3617,6 +3619,11 @@ export default function TrackersPage() {
   });
 
   const [createOpen, setCreateOpen] = useState(false);
+  // Profile creation dialog (used for Asset/Loan/Subscription tabs)
+  const [createProfileOpen, setCreateProfileOpen] = useState(false);
+  const [createProfileFilter, setCreateProfileFilter] = useState<string | string[] | undefined>(undefined);
+  const [createProfileTitle, setCreateProfileTitle] = useState<string | undefined>(undefined);
+  const [, navigate] = useLocation();
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
@@ -3940,9 +3947,79 @@ export default function TrackersPage() {
               <LayoutGrid className="w-3.5 h-3.5" />
             </button>
           </div>
-          <Button onClick={() => setCreateOpen(true)} size="icon" className="h-7 w-7" data-testid="button-create-tracker">
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
+          {(() => {
+            // ─── Smart + button: routes to the right creation flow based on the active section ───
+            const openAssetDialog = () => { setCreateProfileFilter(["assets", "investments", "property"]); setCreateProfileTitle("Add Asset"); setCreateProfileOpen(true); };
+            const openLoanDialog = () => { setCreateProfileFilter("liabilities"); setCreateProfileTitle("Add Loan"); setCreateProfileOpen(true); };
+            const openSubDialog = () => { setCreateProfileFilter("subscriptions"); setCreateProfileTitle("Add Subscription"); setCreateProfileOpen(true); };
+            const openTrackerDialog = () => setCreateOpen(true);
+            const openDocumentUpload = () => navigate("/dashboard/artifacts");
+
+            // Direct routes for tab-specific filters
+            if (sectionFilter === "profiles") {
+              return (
+                <Button onClick={openAssetDialog} size="icon" className="h-7 w-7" data-testid="button-create-asset" aria-label="Add Asset">
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              );
+            }
+            if (sectionFilter === "loans") {
+              return (
+                <Button onClick={openLoanDialog} size="icon" className="h-7 w-7" data-testid="button-create-loan" aria-label="Add Loan">
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              );
+            }
+            if (sectionFilter === "subscriptions") {
+              return (
+                <Button onClick={openSubDialog} size="icon" className="h-7 w-7" data-testid="button-create-subscription" aria-label="Add Subscription">
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              );
+            }
+            if (sectionFilter === "trackers") {
+              return (
+                <Button onClick={openTrackerDialog} size="icon" className="h-7 w-7" data-testid="button-create-tracker" aria-label="Create Tracker">
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              );
+            }
+            if (sectionFilter === "documents") {
+              return (
+                <Button onClick={openDocumentUpload} size="icon" className="h-7 w-7" data-testid="button-add-document" aria-label="Upload Document">
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              );
+            }
+            // "all" — show a chooser so the user picks what to create
+            return (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon" className="h-7 w-7" data-testid="button-create-menu" aria-label="Create">
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem onClick={openAssetDialog} data-testid="menu-add-asset">
+                    <Building2 className="h-3.5 w-3.5 mr-2" /> Asset
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={openLoanDialog} data-testid="menu-add-loan">
+                    <CreditCard className="h-3.5 w-3.5 mr-2" /> Loan
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={openSubDialog} data-testid="menu-add-subscription">
+                    <Clock className="h-3.5 w-3.5 mr-2" /> Subscription
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={openTrackerDialog} data-testid="menu-add-tracker">
+                    <BarChart2 className="h-3.5 w-3.5 mr-2" /> Custom Tracker
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={openDocumentUpload} data-testid="menu-add-document">
+                    <FileText className="h-3.5 w-3.5 mr-2" /> Document
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          })()}
         </div>
       </div>
 
@@ -4190,6 +4267,15 @@ export default function TrackersPage() {
             <Star className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No assets or vehicles yet</p>
             <p className="text-xs text-muted-foreground mt-1">Add vehicles, property, or investments to track them here</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 h-8 text-xs"
+              onClick={() => { setCreateProfileFilter(["assets", "investments", "property"]); setCreateProfileTitle("Add Asset"); setCreateProfileOpen(true); }}
+              data-testid="btn-empty-add-asset"
+            >
+              <Plus className="h-3 w-3 mr-1" /> Add Asset
+            </Button>
           </div>
         );
 
@@ -4334,6 +4420,15 @@ export default function TrackersPage() {
             <CreditCard className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No loans yet</p>
             <p className="text-xs text-muted-foreground mt-1">Add a loan profile to track lender, APR, term, payments and balance</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 h-8 text-xs"
+              onClick={() => { setCreateProfileFilter("liabilities"); setCreateProfileTitle("Add Loan"); setCreateProfileOpen(true); }}
+              data-testid="btn-empty-add-loan"
+            >
+              <Plus className="h-3 w-3 mr-1" /> Add Loan
+            </Button>
           </div>
         );
         const sortedLoans = loans.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -4470,6 +4565,15 @@ export default function TrackersPage() {
             <CreditCard className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No subscriptions or bills yet</p>
             <p className="text-xs text-muted-foreground mt-1">Add recurring payments to track them here</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 h-8 text-xs"
+              onClick={() => { setCreateProfileFilter("subscriptions"); setCreateProfileTitle("Add Subscription"); setCreateProfileOpen(true); }}
+              data-testid="btn-empty-add-subscription"
+            >
+              <Plus className="h-3 w-3 mr-1" /> Add Subscription
+            </Button>
           </div>
         );
         return (
@@ -5084,6 +5188,12 @@ export default function TrackersPage() {
 
       {/* Create tracker dialog */}
       <CreateTrackerDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <CreateProfileDialog
+        open={createProfileOpen}
+        onClose={() => setCreateProfileOpen(false)}
+        initialCategoryFilter={createProfileFilter}
+        titleOverride={createProfileTitle}
+      />
 
       {/* Delete tracker confirmation */}
       {deleteTarget && (

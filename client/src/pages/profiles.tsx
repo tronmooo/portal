@@ -739,12 +739,18 @@ function mapTypeKeyToLegacyType(typeKey: string, category: string): ProfileType 
 
 // ─── Create Profile Dialog ───────────────────────────────────────────────────
 
-function CreateProfileDialog({
+export function CreateProfileDialog({
   open,
   onClose,
+  initialCategoryFilter,
+  titleOverride,
 }: {
   open: boolean;
   onClose: () => void;
+  /** If set, the type-picker only shows types in this category (e.g. "assets", "liabilities", "subscriptions"). */
+  initialCategoryFilter?: string | string[];
+  /** Optional override for the step-1 dialog title. */
+  titleOverride?: string;
 }) {
   const { toast } = useToast();
   // Step 1: pick a type; Step 2: fill details
@@ -860,7 +866,7 @@ function CreateProfileDialog({
       >
         <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
           <DialogTitle>
-            {step === 1 ? "Choose Profile Type" : "Create Profile"}
+            {step === 1 ? (titleOverride || "Choose Profile Type") : "Create Profile"}
           </DialogTitle>
           {step === 2 && selectedTypeDef && (
             <p className="text-sm text-muted-foreground">{selectedTypeDef.label}</p>
@@ -873,6 +879,7 @@ function CreateProfileDialog({
               <ProfileTypeSelector
                 onSelect={handleTypeSelect}
                 selectedKey={selectedTypeKey}
+                categoryFilter={initialCategoryFilter}
               />
             </div>
             <DialogFooter className="px-6 py-3 border-t shrink-0">

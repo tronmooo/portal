@@ -73,6 +73,12 @@ export interface TypeDefinition {
 export interface ProfileTypeSelectorProps {
   onSelect: (typeKey: string, typeDef: TypeDefinition) => void;
   selectedKey?: string;
+  /**
+   * If set, only show types whose normalized category matches.
+   * e.g. "assets" → hides liabilities/subscriptions/people.
+   * Pass an array to allow multiple categories.
+   */
+  categoryFilter?: string | string[];
 }
 
 // ─────────────────────────────────────────────
@@ -224,6 +230,7 @@ function TypeCard({ typeDef, selected, onSelect }: TypeCardProps) {
 export default function ProfileTypeSelector({
   onSelect,
   selectedKey,
+  categoryFilter,
 }: ProfileTypeSelectorProps) {
   const [search, setSearch] = useState("");
 
@@ -235,16 +242,26 @@ export default function ProfileTypeSelector({
   const grouped = useMemo(() => {
     if (!typeDefs) return new Map<string, TypeDefinition[]>();
 
+    const allowedCategories = categoryFilter
+      ? new Set((Array.isArray(categoryFilter) ? categoryFilter : [categoryFilter]).map((c) => c.toLowerCase()))
+      : null;
+
     const q = search.trim().toLowerCase();
-    const filtered = q
-      ? typeDefs.filter(
-          (t) =>
-            t.label.toLowerCase().includes(q) ||
-            t.description?.toLowerCase().includes(q) ||
-            t.category?.toLowerCase().includes(q) ||
-            t.type_key.toLowerCase().includes(q)
-        )
-      : typeDefs;
+    const filtered = typeDefs.filter((t) => {
+      // Category gate
+      if (allowedCategories) {
+        const norm = normalizeCategory(t.category ?? "assets");
+        if (!allowedCategories.has(norm)) return false;
+      }
+      // Search gate
+      if (!q) return true;
+      return (
+        t.label.toLowerCase().includes(q) ||
+        t.description?.toLowerCase().includes(q) ||
+        t.category?.toLowerCase().includes(q) ||
+        t.type_key.toLowerCase().includes(q)
+      );
+    });
 
     const map = new Map<string, TypeDefinition[]>();
     for (const t of filtered) {
@@ -253,7 +270,7 @@ export default function ProfileTypeSelector({
       map.get(cat)!.push(t);
     }
     return map;
-  }, [typeDefs, search]);
+  }, [typeDefs, search, categoryFilter]);
 
   const sortedCategories = useMemo(
     () => sortCategories(Array.from(grouped.keys())),

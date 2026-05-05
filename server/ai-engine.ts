@@ -6095,12 +6095,64 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   const selfProfileId = profiles.find((p: any) => p.type === "self")?.id || '';
   const systemPrompt = buildSystemPrompt(context, selfProfileId, (storage as any)._timezone);
 
-  // Read user's preferred chat model from preferences
+  // ─── Smart model routing: Haiku by default, auto-escalate to Sonnet for complex queries ───
+  // Rules:
+  //   • If user has set an explicit preference, honor it (user is boss).
+  //   • Else: default to Haiku 4.5 (fast/cheap).
+  //   • Escalate to Sonnet 4.5 when complexity signals are detected (long input,
+  //     multi-step intent verbs, analytical/planning/comparison queries, large
+  //     conversation history, or attached documents/images via referenced uploads).
+  //   • At loop-time, if Haiku produces 4+ tool calls on the first turn, the next
+  //     iteration is upgraded to Sonnet (handled below in the loop).
+  const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+  const SONNET_MODEL = "claude-sonnet-4-5-20250929";
   let preferredModel: string | null = null;
   try {
     preferredModel = await storage.getPreference("ai_chat_model");
   } catch { /* ignore — use default */ }
-  const chatModel = preferredModel || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5-20250929";
+
+  function classifyComplexity(text: string, history: typeof conversationHistory): "simple" | "complex" {
+    const t = (text || "").trim();
+    const lc = t.toLowerCase();
+    // Length-based: long prompts almost always benefit from Sonnet's reasoning
+    if (t.length > 320) return "complex";
+    if (t.split(/\s+/).length > 55) return "complex";
+    // Multi-clause / multi-question signals
+    const questionMarks = (t.match(/\?/g) || []).length;
+    if (questionMarks >= 2) return "complex";
+    if (/[;]|\sand also\s|\sthen\s|\bafter that\b|\balso\s/.test(lc) && t.length > 120) return "complex";
+    // Multi-step / analytical intent verbs
+    const complexIntents = [
+      "analyze", "analyse", "compare", "comparison", "forecast", "project ", "projection",
+      "plan ", "strategy", "strategize", "recommend", "recommendation", "optimize",
+      "summarize", "summary of", "report on", "deep dive", "break down", "breakdown",
+      "explain why", "why is", "why are", "why did", "why does",
+      "how should", "what should", "should i", "help me decide", "trade-off", "tradeoff",
+      "pros and cons", "diagnose", "investigate", "audit", "review my", "evaluate",
+      "refinance", "amortiz", "net worth trend", "cash flow", "cashflow",
+      "rebalance", "insight", "insights", "trend", "trends", "visualize", "chart", "graph",
+      "table of", "list all", "every", "compose", "draft a", "write a",
+    ];
+    if (complexIntents.some(k => lc.includes(k))) return "complex";
+    // Document / file references (uploads come through as image/pdf instructions)
+    if (/\b(uploaded|attached|this (document|file|image|pdf|receipt|statement))\b/.test(lc)) return "complex";
+    // Long conversation history → likely a follow-up that needs context reasoning
+    if (history && history.length >= 6) return "complex";
+    return "simple";
+  }
+
+  let chatModel: string;
+  if (preferredModel) {
+    chatModel = preferredModel;
+  } else if (process.env.ANTHROPIC_MODEL) {
+    // Env override takes precedence over auto-routing (deployment-level pin)
+    chatModel = process.env.ANTHROPIC_MODEL;
+  } else {
+    const complexity = classifyComplexity(userMessage, conversationHistory);
+    chatModel = complexity === "complex" ? SONNET_MODEL : HAIKU_MODEL;
+  }
+  const initialModel = chatModel;
+  const allowAutoEscalate = !preferredModel && !process.env.ANTHROPIC_MODEL;
 
   try {
     // Build the tool_use conversation loop — prepend up to 5 history pairs for multi-step context
@@ -6164,6 +6216,26 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       const toolUses = response.content.filter(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use"
       );
+
+      // ─── Loop-time escalation: Haiku → Sonnet on first turn if it spawned many tools ───
+      // Sign of an actually-complex multi-step query that the heuristic missed.
+      if (
+        allowAutoEscalate &&
+        chatModel === HAIKU_MODEL &&
+        iterations === 1 &&
+        toolUses.length >= 4
+      ) {
+        chatModel = SONNET_MODEL;
+      }
+      // Also escalate if Haiku has been stuck in a long tool-loop (likely flailing)
+      if (
+        allowAutoEscalate &&
+        chatModel === HAIKU_MODEL &&
+        iterations >= 4 &&
+        totalToolCalls >= 8
+      ) {
+        chatModel = SONNET_MODEL;
+      }
 
       // If no tool calls or stop_reason is end_turn with no pending tools, we're done
       if (toolUses.length === 0 || response.stop_reason === "end_turn") {

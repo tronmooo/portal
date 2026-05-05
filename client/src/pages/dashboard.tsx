@@ -720,6 +720,8 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       <button
         onClick={() => toggleMutation.mutate({ id: t.id, status: dimmed ? 'todo' : 'done' })}
         className="shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center touch-manipulation"
+        aria-label={dimmed ? "Mark as not done" : "Mark as done"}
+        title={dimmed ? "Mark as not done" : "Mark as done"}
       >
         <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-muted-foreground/20 border-muted-foreground/30' : 'border-muted-foreground/40 hover:border-primary'}`}>
           {dimmed && <Check className="h-3 w-3 text-muted-foreground/50" strokeWidth={3} />}
@@ -736,7 +738,13 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
         )}
       </div>
       {dimmed && (
-        <button onClick={() => deleteMutation.mutate({ id: t.id })} className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-muted-foreground touch-manipulation">
+        <button
+          onClick={() => deleteMutation.mutate({ id: t.id })}
+          className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-destructive touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+          aria-label="Delete task permanently"
+          title="Delete task permanently"
+          data-testid={`btn-delete-task-${t.id}`}
+        >
           <X className="h-3.5 w-3.5" />
         </button>
       )}
@@ -3210,6 +3218,8 @@ export default function DashboardPage() {
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
+    // Always refetch on mount: dashboard KPI tiles must never show stale aggregates
+    refetchOnMount: "always",
   });
   // Delay dashboard skeleton — instant if data is cached
   const [showDashSkeleton, setShowDashSkeleton] = useState(false);
@@ -3228,6 +3238,7 @@ export default function DashboardPage() {
       } catch { return null; }
     },
     retry: false,
+    refetchOnMount: "always",
   });
 
   // Load saved dashboard layout from preferences API

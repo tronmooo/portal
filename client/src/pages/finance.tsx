@@ -71,10 +71,13 @@ export default function FinancePage() {
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()),
+    // Always refetch on mount so KPI tiles never show stale aggregates after navigating here
+    refetchOnMount: "always",
   });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
+    refetchOnMount: "always",
   });
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);

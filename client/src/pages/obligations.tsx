@@ -447,7 +447,7 @@ export default function ObligationsPage() {
           <p className="text-lg font-bold">${monthlyTotal.toFixed(0)}</p>
         </Card>
         <Card className="p-3">
-          <p className="text-xs text-muted-foreground uppercase tracking-wide">Active</p>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Bills</p>
           <p className="text-lg font-bold">{obligations.length}</p>
         </Card>
         <Card className="p-3">
