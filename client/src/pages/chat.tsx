@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Send,
   Activity,
@@ -24,6 +25,7 @@ import {
   Bot,
   Paperclip,
   FileText,
+  FilePlus2,
   X,
   Plus,
   Loader2,
@@ -358,7 +360,60 @@ function actionLabel(type: string) {
   return ACTION_LABELS[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ── Inline artifact preview in chat messages ─────────────────────────────────
+// ── "+ New" doc/sheet button in the chat composer ────────────────────────────
+// Lives next to the paperclip. Opens a small popover with two tiles; clicking
+// either navigates to /editor/new/<type>?source=chat. The editor itself saves
+// to /api/artifacts and (on save) surfaces both as a chat preview card and on
+// the Artifacts page.
+function NewDocSheetButton({ disabled }: { disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const go = (type: "doc" | "sheet") => {
+    setOpen(false);
+    window.location.hash = `#/editor/new/${type}?source=chat`;
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          disabled={disabled}
+          title="Create document or spreadsheet"
+          aria-label="Create document or spreadsheet"
+          data-testid="button-new-doc-sheet"
+          className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+        >
+          <FilePlus2 className="h-4 w-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="w-56 p-2">
+        <div className="text-xs font-medium text-muted-foreground px-2 pt-1 pb-2">Create new…</div>
+        <button
+          onClick={() => go("doc")}
+          data-testid="button-new-doc"
+          className="w-full flex items-center gap-3 px-2 py-2 rounded-md text-sm hover:bg-muted/60 transition-colors text-left"
+        >
+          <FileText className="h-4 w-4 text-blue-500 shrink-0" />
+          <div>
+            <div className="font-medium">Document</div>
+            <div className="text-xs text-muted-foreground">Rich-text Word-style</div>
+          </div>
+        </button>
+        <button
+          onClick={() => go("sheet")}
+          data-testid="button-new-sheet"
+          className="w-full flex items-center gap-3 px-2 py-2 rounded-md text-sm hover:bg-muted/60 transition-colors text-left"
+        >
+          <TableIcon className="h-4 w-4 text-green-600 shrink-0" />
+          <div>
+            <div className="font-medium">Spreadsheet</div>
+            <div className="text-xs text-muted-foreground">Excel-style grid</div>
+          </div>
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ── Inline artifact preview in chat messages ─────────────────────────────
 function ArtifactPreview({ data }: { data: any }) {
   if (!data) return null;
   const { type, content, items, language } = data;
@@ -2524,6 +2579,11 @@ export default function ChatPage() {
                   >
                     <Paperclip className="h-4 w-4" />
                   </button>
+                  {/* Doc/Sheet creator — opens a popover with two tiles, then
+                      navigates to /editor/new/<type>?source=chat. The editor
+                      saves to the existing artifacts table; on save it surfaces
+                      both as a chat preview card and on the Artifacts page. */}
+                  <NewDocSheetButton disabled={isPending} />
                   <button
                     className="h-8 w-8 rounded-lg md:hidden flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
                     onClick={() => document.getElementById('camera-capture')?.click()}

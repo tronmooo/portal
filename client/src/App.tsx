@@ -55,6 +55,7 @@ const _oblImport   = () => import("@/pages/obligations");
 const _taskImport  = () => import("@/pages/tasks");
 const _privImport  = () => import("@/pages/privacy");
 const _termsImport = () => import("@/pages/terms");
+const _editImport  = () => import("@/pages/editor");
 
 const DashboardPage    = lazy(_dashImport);
 const TrackersPage     = lazy(_trackImport);
@@ -73,6 +74,7 @@ const ObligationsPage  = lazy(_oblImport);
 const TasksPage        = lazy(_taskImport);
 const PrivacyPage      = lazy(_privImport);
 const TermsPage        = lazy(_termsImport);
+const EditorPage       = lazy(_editImport);
 
 // Preload ALL main tab pages immediately so switching tabs is instant — no spinner on first visit.
 // This fires the bundle fetches in parallel as soon as the app JS loads.
@@ -421,6 +423,8 @@ function AppRouter() {
         <Route path="/terms" component={TermsPage} />
         <Route path="/artifacts" component={ArtifactsPage} />
         <Route path="/dashboard/documents" component={ArtifactsPage} />
+        <Route path="/editor/new/:type" component={EditorPage} />
+        <Route path="/editor/:id" component={EditorPage} />
         <Route path="/dashboard/finance" component={FinancePage} />
         <Route path="/dashboard/habits" component={HabitsPage} />
         <Route path="/dashboard/journal" component={JournalPage} />

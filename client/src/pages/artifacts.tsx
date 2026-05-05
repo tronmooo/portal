@@ -337,6 +337,15 @@ export default function ArtifactsPage() {
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [selectedArtifact, setSelectedArtifact] = useState<UnifiedArtifact | null>(null);
+  // For doc/sheet artifacts, route to /editor/:id instead of opening the dialog.
+  const handleSelect = (item: UnifiedArtifact) => {
+    const t = item.source?.type;
+    if (t === "doc" || t === "sheet") {
+      window.location.hash = `#/editor/${item.id}`;
+      return;
+    }
+    setSelectedArtifact(item);
+  };
 
   // Profile filter state
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
@@ -394,10 +403,19 @@ export default function ArtifactsPage() {
       ...artifacts.map(a => ({
         id: a.id,
         title: a.title,
-        type: "ai_report" as const,
-        typeLabel: a.type === "checklist" ? "Checklist" : "AI Note",
+        // Doc/Sheet behave more like documents than "AI Reports"; tag them so
+        // they show up in the Documents tab too.
+        type: (a.type === "doc" || a.type === "sheet" ? "document" : "ai_report") as "document" | "ai_report",
+        typeLabel: a.type === "checklist" ? "Checklist"
+                 : a.type === "doc" ? "Document"
+                 : a.type === "sheet" ? "Spreadsheet"
+                 : "AI Note",
         date: a.createdAt,
-        preview: a.content?.slice(0, 100) || (a.items?.length > 0 ? a.items.map(i => i.text).join(", ").slice(0, 100) : ""),
+        preview: a.type === "doc"
+          ? (a.content?.replace(/<[^>]+>/g, " ").trim().slice(0, 100) || "")
+          : a.type === "sheet"
+            ? `${a.sheetData?.rows ?? 0} × ${a.sheetData?.cols ?? 0} grid`
+            : (a.content?.slice(0, 100) || (a.items?.length > 0 ? a.items.map(i => i.text).join(", ").slice(0, 100) : "")),
         profileName: resolveProfile(a.linkedProfiles),
         source: a,
       })),
@@ -547,14 +565,14 @@ export default function ArtifactsPage() {
         // Documents tab: grouped by type
         <div className="space-y-5">
           {documentGroups.map(g => (
-            <DocumentGroup key={g.label} label={g.label} icon={g.icon} items={g.items} onSelect={setSelectedArtifact} />
+            <DocumentGroup key={g.label} label={g.label} icon={g.icon} items={g.items} onSelect={handleSelect} />
           ))}
         </div>
       ) : (
         // All other tabs: flat grid sorted by date
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map(item => (
-            <ArtifactCard key={`${item.type}-${item.id}`} item={item} onSelect={setSelectedArtifact} />
+            <ArtifactCard key={`${item.type}-${item.id}`} item={item} onSelect={handleSelect} />
           ))}
         </div>
       )}
