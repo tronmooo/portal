@@ -3358,17 +3358,45 @@ async function executeTool(name: string, input: any): Promise<any> {
         if (target) taskLinkedProfiles.push(target.id);
       }
 
-      // Dedup: skip if a very similar active task exists FOR THE SAME PROFILE
+      // Dedup: skip if a very similar active task exists FOR THE SAME PROFILE.
+      // Normalize: lowercase, strip punctuation, collapse whitespace, drop
+      // common filler words. Then check exact-normalized match OR token-set
+      // overlap >= 0.85. This catches things like:
+      //   "Get Max groomed" ≈ "Get Max groomed!" ≈ "get max groomed."
+      //   "Buy gift for Sarah" ≈ "Buy a gift for Sarah"
+      const normalizeTitle = (s: string): string => s
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .replace(/\b(a|an|the|to|for|please|pls)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const tokenSet = (s: string): Set<string> => new Set(normalizeTitle(s).split(" ").filter(Boolean));
+      const jaccard = (a: Set<string>, b: Set<string>): number => {
+        if (a.size === 0 && b.size === 0) return 1;
+        let inter = 0;
+        a.forEach(t => { if (b.has(t)) inter++; });
+        const union = a.size + b.size - inter;
+        return union === 0 ? 0 : inter / union;
+      };
+      const incomingNorm = normalizeTitle(input.title || "");
+      const incomingTokens = tokenSet(input.title || "");
       const existingTasks = await storage.getTasks();
-      const dupTask = existingTasks.find(t =>
-        t.status !== "done" &&
-        t.title.toLowerCase().trim() === (input.title || "").toLowerCase().trim() &&
-        (taskLinkedProfiles.length === 0 || t.linkedProfiles.some(p => taskLinkedProfiles.includes(p)))
-      );
+      const dupTask = existingTasks.find(t => {
+        if (t.status === "done") return false;
+        const profileOk = taskLinkedProfiles.length === 0 || t.linkedProfiles.some(p => taskLinkedProfiles.includes(p));
+        if (!profileOk) return false;
+        const tNorm = normalizeTitle(t.title);
+        if (tNorm === incomingNorm) return true;
+        // Fuzzy fallback for near-duplicates
+        if (incomingTokens.size >= 2 && jaccard(tokenSet(t.title), incomingTokens) >= 0.85) return true;
+        return false;
+      });
       if (dupTask) return dupTask; // Return existing instead of creating duplicate
 
       // In-memory dedup lock (includes profile for cross-profile dedup safety)
-      const taskDedupKey = `task:${safeLC(input.title)}:${taskLinkedProfiles.join(",")}`;
+      // Use the normalized title so trivial punctuation/casing differences
+      // hit the same key within a short time window.
+      const taskDedupKey = `task:${incomingNorm}:${taskLinkedProfiles.join(",")}`;
       if (isDuplicateCreation("_global", taskDedupKey)) {
         logger.info("ai", `Dedup lock: skipped duplicate task "${input.title}"`);
         return { error: "Duplicate task detected — skipped" };

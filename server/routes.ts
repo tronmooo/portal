@@ -523,6 +523,10 @@ export async function registerRoutes(
       }
 
       const saved: string[] = [];
+      // Track per-step failures so the response surfaces them instead of
+      // pretending everything worked. Previously these errors were caught
+      // and only logged, then the route returned `success: true`.
+      const failures: string[] = [];
 
       // Helper: unwrap {value, confidence} objects into plain values
       const unwrap = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
@@ -545,6 +549,7 @@ export async function registerRoutes(
           }
         } catch (e: any) {
           console.error("Failed to save fields to document:", e.message);
+          failures.push(`document fields: ${e?.message || "unknown error"}`);
         }
       }
 
@@ -669,6 +674,7 @@ export async function registerRoutes(
             saved.push(`Created event: ${event.title || event.field}`);
           } catch (evErr: any) {
             console.error("Failed to create calendar event from extraction:", evErr.message);
+            failures.push(`calendar event "${event.title || event.field}": ${evErr?.message || "unknown error"}`);
           }
         }
       }
@@ -726,50 +732,88 @@ export async function registerRoutes(
             saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
           } catch (tErr: any) {
             console.error("Failed to log tracker entry from extraction:", tErr.message);
+            failures.push(`tracker entry "${entry.trackerName}": ${tErr?.message || "unknown error"}`);
           }
         }
       }
 
       // Create expense if user confirmed
       if (req.body.createExpense) {
-        const exp = req.body.createExpense;
-        const expense = await storage.createExpense({
-          description: exp.description,
-          amount: parseFloat(exp.amount),
-          category: exp.category || 'general',
-          vendor: exp.vendor,
-          date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-          tags: [],
-          linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
-        });
-        saved.push(`Created expense: $${exp.amount} ${exp.description}`);
-        // Link document to expense
-        try { await storage.linkProfileTo(expense.id, "document", extractionId); } catch {}
+        try {
+          const exp = req.body.createExpense;
+          const amt = parseFloat(exp.amount);
+          if (!isFinite(amt) || amt <= 0) {
+            throw new Error("Expense amount must be a positive number");
+          }
+          const expense = await storage.createExpense({
+            description: exp.description,
+            amount: amt,
+            category: exp.category || 'general',
+            vendor: exp.vendor,
+            date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+            tags: [],
+            linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+          });
+          saved.push(`Created expense: $${amt.toFixed(2)} ${exp.description}`);
+          // Link document to expense
+          try { await storage.linkProfileTo(expense.id, "document", extractionId); } catch {}
+        } catch (eErr: any) {
+          console.error("Failed to create expense from extraction:", eErr?.message);
+          failures.push(`expense: ${eErr?.message || "unknown error"}`);
+        }
       }
 
       // Create obligation if user confirmed
       if (req.body.createObligation) {
-        const obl = req.body.createObligation;
-        const obligation = await storage.createObligation({
-          name: obl.name,
-          amount: parseFloat(obl.amount),
-          frequency: obl.frequency || 'monthly',
-          category: obl.category || 'general',
-          nextDueDate: obl.nextDueDate,
-          autopay: false,
-          linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
-        });
-        saved.push(`Created bill: $${obl.amount}/mo ${obl.name}`);
+        try {
+          const obl = req.body.createObligation;
+          const amt = parseFloat(obl.amount);
+          if (!isFinite(amt) || amt <= 0) {
+            throw new Error("Obligation amount must be a positive number");
+          }
+          if (!obl.nextDueDate) {
+            throw new Error("Obligation requires a next due date");
+          }
+          await storage.createObligation({
+            name: obl.name,
+            amount: amt,
+            frequency: obl.frequency || 'monthly',
+            category: obl.category || 'general',
+            nextDueDate: obl.nextDueDate,
+            autopay: false,
+            linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+          });
+          saved.push(`Created bill: $${amt.toFixed(2)}/${obl.frequency || 'mo'} ${obl.name}`);
+        } catch (oErr: any) {
+          console.error("Failed to create obligation from extraction:", oErr?.message);
+          failures.push(`obligation: ${oErr?.message || "unknown error"}`);
+        }
       }
 
       // Bust caches BEFORE responding so client's invalidate-and-refetch sees fresh state.
       clearAllCache();
+
+      // If nothing succeeded but at least one thing was attempted-and-failed,
+      // surface as 500 so the client shows a real error.
+      const attempted = (confirmedFields?.length || 0) + (createCalendarEvents?.length || 0) + (trackerEntries?.length || 0) + (req.body.createExpense ? 1 : 0) + (req.body.createObligation ? 1 : 0);
+      if (attempted > 0 && saved.length === 0 && failures.length > 0) {
+        return res.status(500).json({
+          success: false,
+          error: "Confirmation failed",
+          message: failures.join("; "),
+          failures,
+        });
+      }
+
+      // Partial success: 207-style — return success but include failures so the
+      // client can warn the user that some pieces didn't save.
       res.json({
-        success: true,
+        success: failures.length === 0,
         message: saved.length > 0
-          ? `Confirmed: ${saved.join("; ")}`
-          : "No fields to save",
+          ? `Confirmed: ${saved.join("; ")}${failures.length > 0 ? ` — but ${failures.length} step(s) failed: ${failures.join("; ")}` : ""}`
+          : (failures.length > 0 ? `All steps failed: ${failures.join("; ")}` : "No fields to save"),
         saved,
+        failures,
       });
     } catch (err: any) {
       log.error("[ConfirmExtraction]", err?.message || "unknown error");
@@ -1129,8 +1173,14 @@ export async function registerRoutes(
     const uid_p3 = (req as AuthenticatedRequest).userId || "anon";
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
-    await storage.deleteProfile(req.params.id);
+    const ok = await storage.deleteProfile(req.params.id);
     bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
+    if (!ok) {
+      // Cascade had partial failures or the final row delete failed.
+      // Surface as 500 so the client can show a real error instead of a
+      // misleading success toast while orphan rows linger.
+      return res.status(500).json({ error: "Profile deletion partially failed. Some linked items may remain." });
+    }
     res.json({ success: true });
   }));
 

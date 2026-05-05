@@ -290,7 +290,10 @@ export default function ObligationsPage() {
   const [newAmount, setNewAmount] = useState("");
   const [newFrequency, setNewFrequency] = useState("monthly");
   const [newCategory, setNewCategory] = useState("housing");
-  const [newDueDate, setNewDueDate] = useState(new Date().toISOString().slice(0, 10));
+  // Start empty so the user must explicitly choose a due date.
+  // Previously this defaulted to today, which silently created a bill
+  // that appeared overdue or due immediately if the user forgot to set it.
+  const [newDueDate, setNewDueDate] = useState("");
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   useEffect(() => {
@@ -369,7 +372,7 @@ export default function ObligationsPage() {
       </div>
 
       {/* Add Obligation Dialog */}
-      <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(new Date().toISOString().slice(0, 10)); } setAddOpen(v); }}>
+      <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(""); } setAddOpen(v); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-sm">New Obligation</DialogTitle>
@@ -429,11 +432,17 @@ export default function ObligationsPage() {
           )}
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button size="sm" disabled={!newName.trim() || !newAmount || parseFloat(newAmount) <= 0 || createMutation.isPending}
-              onClick={() => createMutation.mutate({
-                name: newName.trim(), amount: parseFloat(newAmount), frequency: newFrequency,
-                category: newCategory, nextDueDate: newDueDate, autopay: false,
-              })} data-testid="button-save-obligation">
+            <Button size="sm" disabled={!newName.trim() || !newAmount || parseFloat(newAmount) <= 0 || !newDueDate || createMutation.isPending}
+              onClick={() => {
+                if (!newDueDate) {
+                  toast({ title: "Please pick a due date", variant: "destructive" });
+                  return;
+                }
+                createMutation.mutate({
+                  name: newName.trim(), amount: parseFloat(newAmount), frequency: newFrequency,
+                  category: newCategory, nextDueDate: newDueDate, autopay: false,
+                });
+              }} data-testid="button-save-obligation">
               {createMutation.isPending ? "Creating..." : "Create"}
             </Button>
           </DialogFooter>

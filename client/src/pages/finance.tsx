@@ -96,17 +96,29 @@ export default function FinancePage() {
 
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
+      // Defense-in-depth: validate amount before sending. The submit button
+      // already guards this, but if mutation is invoked any other way we
+      // refuse to send a non-finite amount that would coerce to $0 server-side.
+      const amt = parseFloat(newExpense.amount);
+      if (!isFinite(amt) || amt <= 0) {
+        throw new Error("Amount must be a positive number");
+      }
+      const desc = (newExpense.description || "").trim();
+      if (!desc) {
+        throw new Error("Description is required");
+      }
       await apiRequest("POST", "/api/expenses", {
-        description: newExpense.description,
-        amount: parseFloat(newExpense.amount),
+        description: desc,
+        amount: amt,
         category: newExpense.category,
         vendor: newExpense.vendor || undefined,
         date: new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
         tags: [],
         ...(expenseProfileId ? { linkedProfiles: [expenseProfileId] } : {}),
       });
+      return { amount: amt, description: desc };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
@@ -114,7 +126,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
       setAddOpen(false);
       setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
-      toast({ title: `$${Number(newExpense.amount).toFixed(2)} expense added`, description: newExpense.description });
+      toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
     },
     onError: (err: Error) => {
       toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" });

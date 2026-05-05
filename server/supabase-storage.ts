@@ -873,7 +873,11 @@ export class SupabaseStorage implements IStorage {
     if (error) {
       console.warn(`[deleteProfile] Failed to delete profile ${id}:`, error.message);
     }
-    return !error;
+    // Return false if EITHER the final profile-row delete failed OR any cascade
+    // step failed. Previously we returned `!error` even when child cascade
+    // operations failed, so the route reported success while orphan rows
+    // (expenses, obligations, etc.) remained linked to the deleted profile.
+    return !error && errors.length === 0;
   }
 
   // Junction table name mapping for each entity type
@@ -2684,6 +2688,24 @@ export class SupabaseStorage implements IStorage {
     if (data.status !== undefined) updates.status = data.status;
     if ((data as any).linkedProfiles !== undefined) updates.linked_profiles = (data as any).linkedProfiles;
     if (data.milestones !== undefined) updates.milestones = data.milestones;
+
+    // Auto-complete: if the new (or existing) `current` is >= target and the
+    // caller did not explicitly set status, mark the goal completed. Without
+    // this, goals that hit 100% via UI edits (or any non-AI path) stayed
+    // "active" forever and never showed up in completed lists.
+    const effectiveCurrent = data.current !== undefined ? data.current : existing.current;
+    const effectiveTarget = data.target !== undefined ? data.target : existing.target;
+    if (
+      data.status === undefined &&
+      existing.status === "active" &&
+      typeof effectiveCurrent === "number" &&
+      typeof effectiveTarget === "number" &&
+      effectiveTarget > 0 &&
+      effectiveCurrent >= effectiveTarget
+    ) {
+      updates.status = "completed";
+    }
+
     const { error } = await this.supabase.from("goals").update(updates).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     return this.getGoal(id);
