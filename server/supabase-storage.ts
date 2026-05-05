@@ -56,15 +56,27 @@ function resolveAssetValue(fields: any): number {
   const housing = fields.housing || {};
   const other = fields.other || {};
   const finance = fields.finance || {};
+  const vehicle = fields.vehicle || {};
+  const vehicles = fields.vehicles || {};
+  const investment = fields.investment || {};
+  // Walk every known nested + snake_case storage path. Different code paths
+  // (form save, AI extraction, find-value, legacy migrations) wrote to different
+  // keys; this checks them all and returns the first positive number. Must stay
+  // in sync with client/src/pages/dashboard.tsx resolveAssetValue.
   const candidates = [
-    fields.currentValue, housing.currentValue, other.currentValue,
+    fields.currentValue, fields.current_value, housing.currentValue, housing.current_value, other.currentValue, other.current_value,
+    fields.marketValue, fields.market_value, housing.marketValue, housing.market_value, other.marketValue, other.market_value,
+    fields.estimatedValue, fields.estimated_value,
     fields.value, other.value,
-    fields.purchasePrice, other.purchasePrice, other.purchase_price, fields.purchase_price,
+    fields.purchasePrice, fields.purchase_price, other.purchasePrice, other.purchase_price, housing.purchasePrice, housing.purchase_price,
     fields.cost, other.cost,
     fields.amount, other.amount,
     fields.price, other.price,
-    fields.balance, finance.balance,
-    fields.accountBalance, finance.accountBalance,
+    fields.balance, finance.balance, finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
+    fields.accountBalance, finance.accountBalance, finance.account_balance,
+    vehicle.purchasePrice, vehicle.purchase_price, vehicle.currentValue, vehicle.current_value, vehicle.value,
+    vehicles.purchasePrice, vehicles.purchase_price, vehicles.currentValue, vehicles.current_value, vehicles.value,
+    investment.balance, investment.value, investment.currentValue, investment.current_value,
   ];
   for (const c of candidates) {
     const n = parseMoney(c);
@@ -78,15 +90,29 @@ function resolveAssetValue(fields: any): number {
 function resolveLiabilityValue(fields: any): number {
   if (!fields || typeof fields !== "object") return 0;
   const finance = fields.finance || {};
-  const direct = parseMoney(
-    fields.remainingBalance || fields.loanBalance || fields.outstandingBalance ||
-    finance.remainingBalance || finance.loanBalance || finance.outstandingBalance
-  );
-  if (direct > 0) return direct;
+  const loan = fields.loan || {};
+  const other = fields.other || {};
+  // Walk every known camelCase + snake_case + nested storage path. Must stay
+  // in sync with client/src/pages/dashboard.tsx resolveLiabilityBalance.
+  const candidates = [
+    fields.remainingBalance, fields.remaining_balance,
+    fields.loanBalance, fields.loan_balance,
+    fields.outstandingBalance, fields.outstanding_balance,
+    finance.remainingBalance, finance.remaining_balance,
+    finance.loanBalance, finance.loan_balance,
+    finance.outstandingBalance, finance.outstanding_balance, finance.balance,
+    loan.remainingBalance, loan.remaining_balance,
+    loan.balance, loan.outstandingBalance, loan.outstanding_balance,
+    other.remainingBalance, other.remaining_balance, other.balance,
+  ];
+  for (const c of candidates) {
+    const n = parseMoney(c);
+    if (n > 0) return n;
+  }
   // Sum nested loans[] balances if present
   const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
   if (loans.length > 0) {
-    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance), 0);
+    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
     if (sum > 0) return sum;
   }
   return 0;

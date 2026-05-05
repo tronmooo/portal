@@ -3672,10 +3672,10 @@ export default function TrackersPage() {
   };
 
   // Unified section filter: which sections to show
-  const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers">(() => {
+  const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "loans" | "subscriptions" | "documents" | "trackers">(() => {
     try { return (sessionStorage.getItem("portol_linked_filter") as any) || "all"; } catch { return "all"; }
   });
-  const setSectionFilter = (val: "all" | "profiles" | "subscriptions" | "documents" | "trackers") => {
+  const setSectionFilter = (val: "all" | "profiles" | "loans" | "subscriptions" | "documents" | "trackers") => {
     setSectionFilterRaw(val);
     try { sessionStorage.setItem("portol_linked_filter", val); } catch {}
   };
@@ -3927,6 +3927,7 @@ export default function TrackersPage() {
              : sectionFilter === "all" ? `${filteredTrackers.length + filteredDocuments.length} items`
              : sectionFilter === "subscriptions" ? "subscriptions"
              : sectionFilter === "profiles" ? "assets"
+             : sectionFilter === "loans" ? "loans"
              : `${filteredTrackers.length} trackers`}
           </span>
         </div>
@@ -3977,13 +3978,23 @@ export default function TrackersPage() {
               if (pParent && filterIds.includes(pParent)) return true;
               return false;
             }).length;
-            return (["all", "trackers", "documents", "profiles", "subscriptions"] as const).map(s => {
-            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", subscriptions: "Subscriptions" };
+            // Loan profiles count for the Loans pill
+            const filteredLoanCount = (profiles || []).filter(p => {
+              if (p.type !== "loan") return false;
+              if (isShowAllForCounts) return true;
+              const pParent = p.fields?._parentProfileId || p.parentProfileId;
+              if (pParent && filterIds.includes(pParent)) return true;
+              if (filterIds.includes(p.id)) return true;
+              return false;
+            }).length;
+            return (["all", "trackers", "documents", "profiles", "loans", "subscriptions"] as const).map(s => {
+            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", loans: "Loans", subscriptions: "Subscriptions" };
             const counts: Record<string, number> = {
-              all: filteredTrackers.length + filteredDocuments.length + filteredSubCount + filteredAssetCount,
+              all: filteredTrackers.length + filteredDocuments.length + filteredSubCount + filteredAssetCount + filteredLoanCount,
               trackers: filteredTrackers.length,
               documents: filteredDocuments.length,
               profiles: filteredAssetCount,
+              loans: filteredLoanCount,
               subscriptions: filteredSubCount,
             };
             return (
@@ -4283,6 +4294,147 @@ export default function TrackersPage() {
                         <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
                           <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{child.type}</span>
                           {year && <span className="text-[7px] text-muted-foreground">{year}</span>}
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── Loans Section ──
+          Surfaces loan-type profiles in a detailed view: lender, APR, term,
+          monthly payment, balances, payoff progress, and a link to the parent
+          asset (e.g. Auto Loan → Honda CRV) when present. Lives next to Assets
+          since every asset can have a loan against it. */}
+      {(sectionFilter === "all" || sectionFilter === "loans") && (() => {
+        const isShowAll = filterMode === "everyone";
+        const toNum = (v: any): number | null => {
+          if (v == null || v === '') return null;
+          if (typeof v === 'number' && isFinite(v)) return v;
+          if (typeof v === 'string') {
+            const n = parseFloat(v.replace(/[$,\s]/g, ''));
+            return isFinite(n) ? n : null;
+          }
+          return null;
+        };
+        const loans = (profiles || []).filter(p => {
+          if (p.type !== "loan") return false;
+          if (isShowAll) return true;
+          const pParent = p.fields?._parentProfileId || p.parentProfileId;
+          if (pParent && filterIds.includes(pParent)) return true;
+          if (filterIds.includes(p.id)) return true;
+          return false;
+        });
+        if (loans.length === 0) return (
+          <div className="rounded-lg border bg-card p-6 text-center">
+            <CreditCard className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No loans yet</p>
+            <p className="text-xs text-muted-foreground mt-1">Add a loan profile to track lender, APR, term, payments and balance</p>
+          </div>
+        );
+        const sortedLoans = loans.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        // Aggregate stats for the section header
+        const totalRemaining = sortedLoans.reduce((s, l) => {
+          const f = l.fields || {}; const fin = f.finance || {}; const ln = f.loan || {};
+          return s + (toNum(f.remainingBalance) ?? toNum((f as any).remaining_balance) ?? toNum(fin.remainingBalance) ?? toNum((fin as any).remaining_balance) ?? toNum(ln.remainingBalance) ?? toNum((ln as any).remaining_balance) ?? toNum(fin.balance) ?? toNum(ln.balance) ?? 0);
+        }, 0);
+        const totalMonthly = sortedLoans.reduce((s, l) => {
+          const f = l.fields || {}; const fin = f.finance || {}; const ln = f.loan || {};
+          return s + (toNum(f.monthlyPayment) ?? toNum((f as any).monthly_payment) ?? toNum(fin.monthlyPayment) ?? toNum((fin as any).monthly_payment) ?? toNum(ln.monthlyPayment) ?? toNum((ln as any).monthly_payment) ?? 0);
+        }, 0);
+        const accentHsl = '0 70% 55%'; // red — debt accent
+        return (
+          <div className="space-y-1.5">
+            <button onClick={() => toggleSection("loans")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: `linear-gradient(135deg, hsl(${accentHsl} / 0.06) 0%, transparent 50%)` }} data-testid="section-toggle-loans">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accentHsl} / 0.15)` }}>
+                <CreditCard className="h-4 w-4" style={{ color: `hsl(${accentHsl})` }} />
+              </div>
+              <div className="flex-1 text-left">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold" style={{ color: `hsl(${accentHsl})` }}>Loans</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: `hsl(${accentHsl} / 0.15)`, color: `hsl(${accentHsl})` }}>{sortedLoans.length}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {totalRemaining > 0 ? `$${totalRemaining.toLocaleString()} remaining` : 'Outstanding debt'}
+                  {totalMonthly > 0 ? ` · $${totalMonthly.toLocaleString()}/mo` : ''}
+                </p>
+              </div>
+              {collapsedSections.has("loans") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
+            </button>
+            {!collapsedSections.has("loans") && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {sortedLoans.map(loan => {
+                  const f = loan.fields || {};
+                  const fin = f.finance || {};
+                  const ln = (f as any).loan || {};
+                  // Resolve every numeric field across camelCase + snake_case + nested paths
+                  const remaining = toNum(f.remainingBalance) ?? toNum((f as any).remaining_balance) ?? toNum(fin.remainingBalance) ?? toNum((fin as any).remaining_balance) ?? toNum(ln.remainingBalance) ?? toNum((ln as any).remaining_balance) ?? toNum(fin.balance) ?? toNum(ln.balance) ?? 0;
+                  const original = toNum(f.originalAmount) ?? toNum((f as any).original_amount) ?? toNum(fin.originalAmount) ?? toNum((fin as any).original_amount) ?? toNum(f.principal) ?? toNum((f as any).loan_amount) ?? 0;
+                  const monthly = toNum(f.monthlyPayment) ?? toNum((f as any).monthly_payment) ?? toNum(fin.monthlyPayment) ?? toNum((fin as any).monthly_payment) ?? toNum(ln.monthlyPayment) ?? toNum((ln as any).monthly_payment) ?? 0;
+                  const apr = f.apr ?? (f as any).interestRate ?? (f as any).interest_rate ?? fin.apr ?? (fin as any).interestRate ?? (fin as any).interest_rate ?? ln.apr ?? '';
+                  const term = f.term ?? fin.term ?? ln.term ?? '';
+                  const lender = f.lender ?? fin.lender ?? ln.lender ?? f.bank ?? fin.bank ?? '';
+                  const startDate = f.startDate ?? (f as any).start_date ?? fin.startDate ?? (fin as any).start_date ?? '';
+                  // Payoff progress %
+                  const paidOff = original > 0 && remaining >= 0 ? Math.max(0, Math.min(100, Math.round(((original - remaining) / original) * 100))) : null;
+                  // Parent asset (e.g. Auto Loan -> the Vehicle profile it's tied to)
+                  const parentId = (f as any)._parentProfileId || (loan as any).parentProfileId;
+                  const parent = parentId ? (profiles || []).find(p => p.id === parentId) : null;
+                  const parentIsAsset = parent && ["vehicle", "property", "asset", "investment", "account"].includes(parent.type);
+                  return (
+                    <Link key={loan.id} href={`/profiles/${loan.id}`}>
+                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] flex flex-col h-full" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 12px hsl(${accentHsl} / 0.05)` }} data-testid={`loan-card-${loan.id}`}>
+                        {/* Header */}
+                        <div className="px-3 pt-2.5 pb-1.5 flex items-start gap-2">
+                          <div className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.18)`, color: `hsl(${accentHsl})` }}><CreditCard className="h-4 w-4" /></div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold text-foreground truncate">{loan.name}</p>
+                            {lender && <p className="text-[10px] text-muted-foreground truncate">{String(lender)}</p>}
+                          </div>
+                          {apr && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.15)`, color: `hsl(${accentHsl})` }}>{String(apr)}</span>}
+                        </div>
+                        {/* Big number — remaining balance */}
+                        <div className="px-3 pb-1">
+                          {remaining > 0 ? (
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-2xl font-black tabular-nums text-foreground">${remaining.toLocaleString()}</span>
+                              <span className="text-[10px] text-muted-foreground">remaining</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground/60 italic">No balance set</span>
+                          )}
+                        </div>
+                        {/* Payoff progress bar */}
+                        {paidOff != null && original > 0 && (
+                          <div className="px-3 pb-1.5">
+                            <div className="flex justify-between text-[9px] text-muted-foreground mb-0.5">
+                              <span>Paid off</span>
+                              <span className="font-semibold">{paidOff}%</span>
+                            </div>
+                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'hsl(var(--muted))' }}>
+                              <div className="h-full rounded-full transition-all" style={{ width: `${paidOff}%`, background: `hsl(${accentHsl})` }} />
+                            </div>
+                          </div>
+                        )}
+                        {/* Detail KPI rows */}
+                        <div className="px-3 pb-2 pt-0.5 flex-1 flex flex-col gap-0.5">
+                          {monthly > 0 && <KpiLine label="Monthly" value={`$${monthly.toLocaleString()}`} />}
+                          {original > 0 && <KpiLine label="Original" value={`$${original.toLocaleString()}`} />}
+                          {term && <KpiLine label="Term" value={String(term)} />}
+                          {startDate && <KpiLine label="Started" value={String(startDate).slice(0, 10)} />}
+                        </div>
+                        {/* Footer: type chip + parent asset link */}
+                        <div className="px-3 pb-2 pt-0.5 flex items-center justify-between gap-2">
+                          <span className="text-[8px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: `hsl(${accentHsl})` }}>Loan</span>
+                          {parentIsAsset && parent && (
+                            <span className="text-[9px] text-muted-foreground truncate" title={`Tied to ${parent.name}`}>
+                              → {parent.name}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </Link>

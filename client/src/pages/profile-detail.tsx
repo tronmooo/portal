@@ -287,12 +287,63 @@ interface TreeNode {
   children: TreeNode[];
 }
 
+// Walk every known camelCase + snake_case + nested storage path. Different
+// code paths (form save, AI extraction, find-value, legacy migrations) wrote
+// to different keys. Without nested coverage, profiles like Roth IRA (stored
+// at fields.finance.balance) or Honda CRV (fields.other.purchase_price) report
+// $0 in the rollup even though their values render in the Trackers grid.
+function parseMoneyVal(v: any): number {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = parseFloat(v.replace(/[$,\s]/g, ''));
+    return isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+function firstPositive(...vals: any[]): number {
+  for (const v of vals) {
+    const n = parseMoneyVal(v);
+    if (n > 0) return n;
+  }
+  return 0;
+}
 function getAssetBaseValue(fields: any): number {
-  return Number(fields?.currentValue || fields?.value || fields?.purchasePrice || fields?.balance || fields?.accountBalance || 0);
+  if (!fields) return 0;
+  const f = fields, h = f.housing || {}, o = f.other || {}, fin = f.finance || {}, v = f.vehicle || {}, vs = f.vehicles || {}, inv = f.investment || {};
+  return firstPositive(
+    f.currentValue, f.current_value, h.currentValue, h.current_value, o.currentValue, o.current_value,
+    f.marketValue, f.market_value, h.marketValue, h.market_value, o.marketValue, o.market_value,
+    f.estimatedValue, f.estimated_value,
+    f.value, o.value,
+    f.purchasePrice, f.purchase_price, o.purchasePrice, o.purchase_price, h.purchasePrice, h.purchase_price,
+    f.cost, o.cost, f.amount, o.amount, f.price, o.price,
+    f.balance, fin.balance, fin.currentValue, fin.current_value, fin.value, fin.marketValue, fin.market_value,
+    f.accountBalance, fin.accountBalance, fin.account_balance,
+    v.purchasePrice, v.purchase_price, v.currentValue, v.current_value, v.value,
+    vs.purchasePrice, vs.purchase_price, vs.currentValue, vs.current_value, vs.value,
+    inv.balance, inv.value, inv.currentValue, inv.current_value
+  );
 }
 
 function getAssetLoanValue(fields: any): number {
-  return Number(fields?.loanBalance || fields?.remainingBalance || fields?.mortgageBalance || 0);
+  if (!fields) return 0;
+  const f = fields, fin = f.finance || {}, ln = f.loan || {}, o = f.other || {};
+  const direct = firstPositive(
+    f.loanBalance, f.loan_balance, f.remainingBalance, f.remaining_balance,
+    f.outstandingBalance, f.outstanding_balance, f.mortgageBalance, f.mortgage_balance,
+    fin.loanBalance, fin.loan_balance, fin.remainingBalance, fin.remaining_balance,
+    fin.outstandingBalance, fin.outstanding_balance, fin.mortgageBalance, fin.mortgage_balance,
+    ln.balance, ln.remainingBalance, ln.remaining_balance, ln.outstandingBalance, ln.outstanding_balance,
+    o.remainingBalance, o.remaining_balance, o.balance
+  );
+  if (direct > 0) return direct;
+  // Sum nested loans[] entries created by AI extraction
+  const loans = Array.isArray(fin.loans) ? fin.loans : Array.isArray(f.loans) ? f.loans : [];
+  if (loans.length > 0) {
+    return loans.reduce((s: number, l: any) => s + parseMoneyVal(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
+  }
+  return 0;
 }
 
 function flattenTreeNodes(node: TreeNode): TreeNode[] {
@@ -5883,13 +5934,59 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
 // ─── Loan Tab ─────────────────────────────────────────────────────────
 function LoanTab({ profile, obligations }: { profile: any; obligations: any[] }) {
   const { toast } = useToast();
-  // Normalized field access — check all possible field names
-  const loanBalance = Number(profile.fields?.originalAmount || profile.fields?.loanBalance || profile.fields?.remainingBalance || profile.fields?.balance || 0);
-  const interestRate = Number(profile.fields?.interestRate || profile.fields?.rate || profile.fields?.apr || 0);
-  const monthlyPayment = Number(profile.fields?.monthlyPayment || 0);
-  const termMonths = Number(profile.fields?.termMonths || profile.fields?.loanTerm || profile.fields?.term || 0);
-  const lender = profile.fields?.lender || "";
-  const startDate = profile.fields?.loanStartDate || profile.fields?.startDate || profile.fields?.purchaseDate || "";
+  // Walk every known camelCase + snake_case + nested storage path. Loans created
+  // by the AI engine store at fields.finance.{lender,apr,term,monthlyPayment,...},
+  // not at the top level. Without nested coverage the LoanTab shows zeros.
+  const f = profile.fields || {};
+  const fin = f.finance || {};
+  const ln = f.loan || {};
+  // Strip $, commas, %, spaces and parse to number
+  const num = (v: any): number => {
+    if (v == null || v === '') return 0;
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const n = parseFloat(v.replace(/[$,%\s]/g, ''));
+      return isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+  const firstNum = (...vals: any[]): number => {
+    for (const v of vals) { const n = num(v); if (n > 0) return n; }
+    return 0;
+  };
+  const firstStr = (...vals: any[]): string => {
+    for (const v of vals) { if (v != null && v !== '') return String(v); }
+    return '';
+  };
+  // For loan balance, prefer remaining over original (so the displayed “balance” reflects payoff progress)
+  const loanBalance = firstNum(
+    f.remainingBalance, f.remaining_balance, fin.remainingBalance, fin.remaining_balance, ln.remainingBalance, ln.remaining_balance,
+    f.loanBalance, f.loan_balance, fin.loanBalance, fin.loan_balance,
+    f.outstandingBalance, f.outstanding_balance, fin.outstandingBalance, fin.outstanding_balance,
+    f.originalAmount, f.original_amount, fin.originalAmount, fin.original_amount,
+    f.balance, fin.balance, ln.balance
+  );
+  const interestRate = firstNum(
+    f.interestRate, f.interest_rate, f.rate, f.apr,
+    fin.interestRate, fin.interest_rate, fin.rate, fin.apr,
+    ln.interestRate, ln.interest_rate, ln.rate, ln.apr
+  );
+  const monthlyPayment = firstNum(
+    f.monthlyPayment, f.monthly_payment, fin.monthlyPayment, fin.monthly_payment, ln.monthlyPayment, ln.monthly_payment
+  );
+  const termMonths = firstNum(
+    f.termMonths, f.term_months, f.loanTerm, f.loan_term, f.term,
+    fin.termMonths, fin.term_months, fin.loanTerm, fin.loan_term, fin.term,
+    ln.termMonths, ln.term_months, ln.term
+  );
+  const lender = firstStr(
+    f.lender, f.bank, fin.lender, fin.bank, ln.lender, ln.bank
+  );
+  const startDate = firstStr(
+    f.loanStartDate, f.loan_start_date, f.startDate, f.start_date, f.purchaseDate, f.purchase_date,
+    fin.loanStartDate, fin.loan_start_date, fin.startDate, fin.start_date,
+    ln.startDate, ln.start_date
+  );
 
   const hasLoanData = loanBalance > 0 || interestRate > 0 || monthlyPayment > 0;
 

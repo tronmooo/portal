@@ -547,8 +547,8 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       <Dialog open={popup === "bills"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-sm">Overdue &amp; Upcoming Bills</DialogTitle>
-            <DialogDescription className="text-xs">Overdue bills + bills due in the next 7 days</DialogDescription>
+            <DialogTitle className="text-sm">Upcoming Bills</DialogTitle>
+            <DialogDescription className="text-xs">Bills due in the next 30 days</DialogDescription>
           </DialogHeader>
           <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
             <div className="space-y-1.5 py-2">
