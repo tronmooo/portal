@@ -997,7 +997,6 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           { key: "all", label: "All", activeClass: "bg-primary/20 text-primary border-primary/40" },
           { key: "obligation", label: "Bills", activeClass: "bg-amber-500/20 text-amber-400 border-amber-500/40" },
           { key: "event", label: "Events", activeClass: "bg-blue-500/20 text-blue-400 border-blue-500/40" },
-          { key: "habit", label: "Habits", activeClass: "bg-green-500/20 text-green-400 border-green-500/40" },
           { key: "task", label: "Tasks", activeClass: "bg-purple-500/20 text-purple-400 border-purple-500/40" },
         ].map(f => (
           <button

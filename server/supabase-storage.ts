@@ -1645,8 +1645,9 @@ export class SupabaseStorage implements IStorage {
   async getCalendarTimeline(startDate: string, endDate: string, profileIds?: string[]): Promise<CalendarTimelineItem[]> {
     const items: CalendarTimelineItem[] = [];
     // Fetch all data in parallel for speed
-    const [allEvents, allTasks, allObligations, allHabits, profiles] = await Promise.all([
-      this.getEvents(), this.getTasks(), this.getObligations(), this.getHabits(), this.getProfiles(),
+    // (Habits are intentionally excluded — they don't belong on the calendar.)
+    const [allEvents, allTasks, allObligations, profiles] = await Promise.all([
+      this.getEvents(), this.getTasks(), this.getObligations(), this.getProfiles(),
     ]);
     // Profile filtering: use the same rule the client uses so the calendar
     // doesn't silently drop legacy/orphan items when the user filters to
@@ -1666,7 +1667,6 @@ export class SupabaseStorage implements IStorage {
     const events = allEvents.filter(e => matchesProfile(e.linkedProfiles));
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
-    const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     for (const ev of events) {
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
       const baseDate = ev.date.slice(0, 10);
@@ -1732,38 +1732,9 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    // ── Add habits as repeating calendar items ──
-    for (const habit of habits) {
-      // Show daily habits on each day in the range, weekly habits on their target days
-      const start = parseLocalDate(startDate);
-      const end = parseLocalDate(endDate);
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const dateStr = d.toLocaleDateString('en-CA');
-        const dayOfWeek = d.getDay();
-        const showOnDay = habit.frequency === "daily" ||
-          (habit.frequency === "weekly" && (habit.targetDays?.includes(dayOfWeek) ?? dayOfWeek === 1)) ||
-          (habit.frequency === "custom" && habit.targetDays?.includes(dayOfWeek));
-        if (showOnDay) {
-          const checkedToday = habit.checkins.filter(c => c.date === dateStr).length;
-          const target = habit.targetPerDay || 1;
-          const isDone = checkedToday >= target;
-          items.push({
-            id: `habit-${habit.id}-${dateStr}`,
-            type: "habit" as any,
-            title: habit.name + (target > 1 ? ` (${checkedToday}/${target})` : ""),
-            date: dateStr,
-            allDay: true,
-            color: isDone ? "#10B981" : (habit.color || "#8B5CF6"),
-            category: "habit",
-            description: isDone ? "Completed" : `${checkedToday}/${target} done`,
-            completed: isDone,
-            linkedProfiles: habit.linkedProfiles || [],
-            sourceId: habit.id,
-            meta: { frequency: habit.frequency, streak: habit.currentStreak },
-          });
-        }
-      }
-    }
+    // Habits intentionally NOT emitted as calendar items — they live on their
+    // own page and clutter the calendar with repeating noise. Re-enable here
+    // if a future view wants them, but the calendar tab does not.
 
     // ── Dedup: remove events that duplicate an obligation on the same date ──
     // Build a set of obligation fingerprints (normalized title + date)

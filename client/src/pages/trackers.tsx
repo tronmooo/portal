@@ -4361,25 +4361,83 @@ export default function TrackersPage() {
                   const insurance = safeStr(fields.insuranceProvider) || safeStr(fields.insurance) || safeStr(insuranceFields.insurance) || safeStr(insuranceFields.insurer) || safeStr(insuranceFields.provider) || '';
                   const accentHsl = child.type === 'vehicle' ? '262 60% 62%' : child.type === 'investment' ? '142 60% 45%' : child.type === 'property' ? '220 60% 55%' : '262 60% 62%';
                   const ac = `hsl(${accentHsl})`;
+                  // ─── Build a UNIFIED 2-line meta strip so every card has identical height ───
+                  // Pick the two most relevant KPIs for this card. If a slot is empty,
+                  // we still render a placeholder div so heights line up across the grid.
+                  const metaLines: { label: string; value: string }[] = [];
+                  const pushMeta = (label: string, value: string | undefined | null) => {
+                    if (value != null && String(value).trim() !== '' && metaLines.length < 2) {
+                      metaLines.push({ label, value: String(value) });
+                    }
+                  };
+                  if (child.type === 'vehicle') {
+                    pushMeta('Make/Model', [make, model].filter(Boolean).join(' ') || undefined);
+                    pushMeta('Year', year ? String(year) : undefined);
+                    pushMeta('Mileage', mileage ? `${Number(mileage).toLocaleString()} mi` : undefined);
+                    pushMeta('Insurance', insurance ? insurance.slice(0, 16) : undefined);
+                  } else if (child.type === 'property') {
+                    pushMeta('Address', safeStr(fields.address) || safeStr(housing.address));
+                    pushMeta('Type', safeStr(fields.propertyType) || safeStr(housing.propertyType));
+                    pushMeta('Year', year ? String(year) : undefined);
+                  } else if (child.type === 'investment') {
+                    pushMeta('Account', safeStr(fields.accountType) || safeStr(finance.accountType));
+                    pushMeta('Ticker', safeStr(fields.ticker) || safeStr(finance.ticker));
+                    pushMeta('Institution', safeStr(fields.institution) || safeStr(finance.institution));
+                  } else {
+                    // Generic fallback (electronics, other)
+                    pushMeta('Make/Model', [make, model].filter(Boolean).join(' ') || undefined);
+                    pushMeta('Year', year ? String(year) : undefined);
+                  }
+
+                  const displayValue = (currentVal != null && currentVal > 0) ? currentVal
+                                     : (purchaseVal != null && purchaseVal > 0) ? purchaseVal
+                                     : null;
+                  const valueLabel = (currentVal == null || currentVal === 0) && purchaseVal != null && purchaseVal > 0 ? 'purchase' : null;
+
                   return (
                     <Link key={child.id} href={`/profiles/${child.id}`}>
-                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`button-view-child-${child.id}`}>
+                      <div
+                        className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] grid h-[140px]"
+                        style={{
+                          background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`,
+                          border: `1px solid hsl(${accentHsl} / 0.2)`,
+                          boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)`,
+                          gridTemplateRows: 'auto 1fr auto',
+                        }}
+                        data-testid={`button-view-child-${child.id}`}
+                      >
+                        {/* Header: icon + name */}
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><Icon className="h-3.5 w-3.5" /></div>
-                          <p className="text-[10px] font-bold text-foreground truncate">{child.name}</p>
+                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <p className="text-[11px] font-bold text-foreground truncate">{child.name}</p>
                         </div>
-                        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-                          {currentVal != null && currentVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-xl font-black tabular-nums text-foreground">${currentVal.toLocaleString()}</span></div>
-                          : purchaseVal != null && purchaseVal > 0 ? <div className="flex items-baseline gap-1"><span className="text-lg font-black tabular-nums text-foreground">${purchaseVal.toLocaleString()}</span><span className="text-[8px] text-muted-foreground">purchase</span></div>
-                          : <span className="text-[10px] text-muted-foreground/40">Tap to add value</span>}
-                          {(make || model) && <KpiLine label="Make/Model" value={[make, model].filter(Boolean).join(' ')} />}
-                          {year && <KpiLine label="Year" value={year} />}
-                          {mileage && <KpiLine label="Mileage" value={`${Number(mileage).toLocaleString()} mi`} />}
-                          {insurance && <KpiLine label="Insurance" value={insurance.slice(0, 16)} />}
+
+                        {/* Body: value + 2 fixed meta slots (empty slots reserve space so heights align) */}
+                        <div className="px-2.5 flex flex-col justify-start gap-1">
+                          <div className="h-7 flex items-baseline gap-1">
+                            {displayValue != null ? (
+                              <>
+                                <span className="text-xl font-black tabular-nums text-foreground leading-none">${displayValue.toLocaleString()}</span>
+                                {valueLabel && <span className="text-[8px] text-muted-foreground">{valueLabel}</span>}
+                              </>
+                            ) : (
+                              <span className="text-[11px] text-muted-foreground/60 italic">Tap to add value</span>
+                            )}
+                          </div>
+                          <div className="h-4">
+                            {metaLines[0] ? <KpiLine label={metaLines[0].label} value={metaLines[0].value} /> : <span className="block h-full" aria-hidden="true" />}
+                          </div>
+                          <div className="h-4">
+                            {metaLines[1] ? <KpiLine label={metaLines[1].label} value={metaLines[1].value} /> : <span className="block h-full" aria-hidden="true" />}
+                          </div>
                         </div>
-                        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
-                          <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{child.type}</span>
-                          {year && <span className="text-[7px] text-muted-foreground">{year}</span>}
+
+                        {/* Footer: type chip pinned bottom-left, year pinned bottom-right */}
+                        <div className="px-2.5 pb-2 pt-1 flex items-center justify-between">
+                          <span className="text-[8px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{child.type}</span>
+                          {year ? <span className="text-[8px] text-muted-foreground">{year}</span> : <span aria-hidden="true" />}
                         </div>
                       </div>
                     </Link>
