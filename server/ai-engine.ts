@@ -122,9 +122,11 @@ export async function estimateAssetValue(profile: { type: string; name: string; 
   }
 
   try {
-    const prompt = searchResults
-      ? `You have LIVE web search results for pricing this ${profile.type}. Use ONLY the search data to determine the value — do NOT guess or use outdated knowledge.\n\nAsset: "${profile.name}"\nDetails: ${fieldDesc}\n\n--- LIVE SEARCH RESULTS ---\n${searchResults}\n--- END SEARCH RESULTS ---\n\nBased on the search results above, return ONLY a JSON object:\n{"value": <number — the most accurate current value from search results>, "confidence": "high|medium|low", "method": "<source used, e.g. Zillow, Edmunds, KBB>", "range": "$X - $Y"}\n\nRules:\n- Use the EXACT prices from search results when available\n- For vehicles, use the fair market/trade-in range from the results\n- For homes, use the Zillow or Redfin estimate from search results\n- Return 0 only if search results have NO pricing data at all\n- confidence=high if exact match found, medium if similar model/area, low if rough estimate`
-      : `You are an expert appraiser. Provide your BEST current US market value estimate for this ${profile.type}: "${profile.name}". Details: ${fieldDesc || "(no extra details)"}.\n\nReturn ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<brief method>", "range": "<low-high range>"}\n\nRules:\n- ALWAYS return your best-effort numeric estimate based on training data, even with limited info — never return 0.\n- Use confidence="low" when info is sparse, "medium" for typical, "high" for well-specified items.\n- For vehicles, infer plausible value from year/make/model/mileage.\n- For property, infer from city/state/type.\n- For electronics/assets, use brand/model/condition.\n- Round to a sensible figure.`;
+    // Unified prompt: always require a numeric estimate. If search returned
+    // useful pricing, prefer those numbers; if it's just URLs/titles, fall
+    // back to expert-appraiser knowledge. NEVER return 0 — that surfaces
+    // "$0 / Unknown" in the UI which is useless to the user.
+    const prompt = `You are an expert asset appraiser. Estimate the current US market value of this ${profile.type}.\n\nAsset: "${profile.name}"\nDetails: ${fieldDesc || "(no extra details)"}\n${searchResults ? `\n--- LIVE WEB SEARCH RESULTS ---\n${searchResults}\n--- END SEARCH RESULTS ---\n` : ""}\nReturn ONLY a JSON object:\n{"value": <number>, "confidence": "high|medium|low", "method": "<brief source/method>", "range": "$X - $Y"}\n\nRules (CRITICAL):\n- ALWAYS return a positive numeric value — NEVER 0. If search results lack prices, fall back to your training knowledge for a reasonable used/resale value.\n- For Apple iPhones (e.g. iPhone 15), use typical used resale: iPhone 15 base ~$500-600 used, iPhone 15 Pro ~$700-800, iPhone 15 Pro Max ~$850-950.\n- For vehicles, use year/make/model/mileage to infer KBB-style value.\n- For homes, use city/state/type for a regional estimate.\n- For other electronics, use brand/model/condition.\n- Use confidence="high" only if you have an exact match; "medium" if similar; "low" if approximate.\n- method examples: "KBB", "Zillow", "AI estimate (used resale)", "Live search"\n- range must be a sensible band around value, e.g. "$450 - $650".`;
 
     const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
@@ -136,12 +138,11 @@ export async function estimateAssetValue(profile: { type: string; name: string; 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
-      const method = searchResults
-        ? `Live search: ${parsed.method || "web data"}`
-        : `AI estimate: ${parsed.method || "general knowledge"}`;
+      const v = Number(parsed.value) || 0;
+      const method = parsed.method || (searchResults ? "web data" : "AI estimate");
       return {
-        estimatedValue: Number(parsed.value) || 0,
-        confidence: parsed.confidence || "low",
+        estimatedValue: v,
+        confidence: parsed.confidence || (searchResults ? "medium" : "low"),
         method,
         details: parsed.range || "",
       };
