@@ -63,10 +63,11 @@ import { useToast } from "@/hooks/use-toast";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+// Phase 8: "loan" intentionally removed — loans live as fields inside an asset
+// or vehicle profile (e.g. Honda CRV → fields.loan), never as a standalone profile.
 const PROFILE_TYPES: ProfileType[] = [
   "asset",
   "investment",
-  "loan",
   "person",
   "pet",
   "subscription",

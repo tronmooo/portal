@@ -3276,8 +3276,12 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const obligations = profile.relatedObligations;
 
   // ── type flags ─────────────────────────────────────────────────
+  // Phase 8: loans live as fields inside an asset profile (not as their own type).
+  // Detect loan-shaped data either at top level OR in a nested fields.loan / fields.finance object.
+  const loanSub: Record<string, any> = (profile.fields as any)?.loan || (profile.fields as any)?.finance || {};
   const isLoan = profile.type === "loan" ||
-    !!(profile.fields.interestRate || profile.fields.loanBalance || profile.fields.monthlyPayment);
+    !!(profile.fields.interestRate || profile.fields.loanBalance || profile.fields.monthlyPayment ||
+       loanSub.interestRate || loanSub.apr || loanSub.originalAmount || loanSub.remainingBalance || loanSub.monthlyPayment);
   const isInvestment = profile.type === "investment";
   const isSubscription = profile.type === "subscription";
 
@@ -3358,10 +3362,17 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     return rows;
   }
 
-  const loanPrincipal = Number(profile.fields.originalAmount || profile.fields.loanBalance || profile.fields.remainingBalance || profile.fields.balance || 0);
-  const loanRate = Number(profile.fields.interestRate || profile.fields.rate || profile.fields.apr || 0);
-  const loanTerm = Number(profile.fields.termMonths || profile.fields.loanTerm || profile.fields.term || 0);
-  const loanMonthlyPayment = Number(profile.fields.monthlyPayment || 0);
+  // Helper: parse "4.29%" or "60 months" or 4.29 into a number.
+  const num = (v: any): number => {
+    if (v == null) return 0;
+    if (typeof v === "number") return v;
+    const m = String(v).match(/-?\d+(?:\.\d+)?/);
+    return m ? Number(m[0]) : 0;
+  };
+  const loanPrincipal = num(profile.fields.originalAmount || profile.fields.loanBalance || profile.fields.remainingBalance || profile.fields.balance || loanSub.originalAmount || loanSub.loanBalance || loanSub.remainingBalance || loanSub.balance);
+  const loanRate = num(profile.fields.interestRate || profile.fields.rate || profile.fields.apr || loanSub.interestRate || loanSub.rate || loanSub.apr);
+  const loanTerm = num(profile.fields.termMonths || profile.fields.loanTerm || profile.fields.term || loanSub.termMonths || loanSub.loanTerm || loanSub.term);
+  const loanMonthlyPayment = num(profile.fields.monthlyPayment || loanSub.monthlyPayment);
 
   // Derive term from monthly payment if not provided
   const derivedTerm = loanTerm || (() => {
