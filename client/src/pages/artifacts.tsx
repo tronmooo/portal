@@ -12,7 +12,7 @@ import { getProfileFilter } from "@/lib/profileFilter";
 import {
   Archive, FileText, BookOpen, Brain, Camera, File, Heart,
   Shield, CreditCard, Scale, Folder, Search, X, Copy, Check as CheckIcon,
-  Pin, PinOff, Tag,
+  Pin, PinOff, Tag, Trash2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -351,7 +351,7 @@ function ChartRenderer({ content, dataBindings, chartType }: { content: string; 
 }
 
 // ─── Artifact card ───────────────────────────────────────────
-function ArtifactCard({ item, onSelect, onTogglePin }: { item: UnifiedArtifact; onSelect?: (item: UnifiedArtifact) => void; onTogglePin?: () => void }) {
+function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: UnifiedArtifact; onSelect?: (item: UnifiedArtifact) => void; onTogglePin?: () => void; onDelete?: () => void }) {
   const handleClick = () => {
     // Doc/sheet Artifact rows route through parent's handleSelect (which sends
     // them to /editor/:id). Legacy Document/scan rows go to /documents/:id. AI
@@ -419,6 +419,20 @@ function ArtifactCard({ item, onSelect, onTogglePin }: { item: UnifiedArtifact; 
               {item.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
             </button>
           )}
+          {onDelete && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm(`Delete "${item.title}"? This cannot be undone.`)) onDelete();
+              }}
+              className="p-1 rounded opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all"
+              title="Delete"
+              data-testid={`button-delete-${item.id}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -426,7 +440,7 @@ function ArtifactCard({ item, onSelect, onTogglePin }: { item: UnifiedArtifact; 
 }
 
 // ─── Document group section ──────────────────────────────────
-function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin }: { label: string; icon: React.ElementType; items: UnifiedArtifact[]; onSelect?: (item: UnifiedArtifact) => void; onTogglePin?: (item: UnifiedArtifact) => void }) {
+function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin, onDelete }: { label: string; icon: React.ElementType; items: UnifiedArtifact[]; onSelect?: (item: UnifiedArtifact) => void; onTogglePin?: (item: UnifiedArtifact) => void; onDelete?: (item: UnifiedArtifact) => void }) {
   if (items.length === 0) return null;
   return (
     <div className="space-y-2">
@@ -442,6 +456,7 @@ function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin }: { la
             item={item}
             onSelect={onSelect}
             onTogglePin={item.isArtifact && onTogglePin ? () => onTogglePin(item) : undefined}
+            onDelete={onDelete ? () => onDelete(item) : undefined}
           />
         ))}
       </div>
@@ -495,6 +510,32 @@ export default function ArtifactsPage() {
       qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
     },
   });
+
+  // Wave 17.1: delete mutation. Routes to the right endpoint based on whether
+  // the row is an Artifact (notes/AI reports/docs/sheets/checklists) or a
+  // legacy Document/scan.
+  const deleteMut = useMutation({
+    mutationFn: async (item: UnifiedArtifact) => {
+      const url = item.isArtifact ? `/api/artifacts/${item.id}` : `/api/documents/${item.id}`;
+      await apiRequest("DELETE", url);
+      return item;
+    },
+    onMutate: async (item) => {
+      const key = item.isArtifact ? ["/api/artifacts"] : ["/api/documents"];
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<any[]>(key);
+      qc.setQueryData<any[]>(key, (old) => (old || []).filter(a => a.id !== item.id));
+      return { prev, key };
+    },
+    onError: (_err, _item, ctx) => {
+      if (ctx?.prev && ctx?.key) qc.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: (_d, _e, item) => {
+      qc.invalidateQueries({ queryKey: item?.isArtifact ? ["/api/artifacts"] : ["/api/documents"] });
+      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
+  });
+  const handleDelete = (item: UnifiedArtifact) => deleteMut.mutate(item);
 
   // Fetch all three data sources in parallel
   const { data: documents = [], isLoading: docsLoading } = useQuery<Document[]>({
@@ -779,6 +820,7 @@ export default function ArtifactsPage() {
                   item={item}
                   onSelect={handleSelect}
                   onTogglePin={item.isArtifact ? () => pinMut.mutate({ id: item.id, pinned: !item.pinned }) : undefined}
+                  onDelete={() => handleDelete(item)}
                 />
               </div>
             ))}
@@ -814,6 +856,7 @@ export default function ArtifactsPage() {
               items={g.items}
               onSelect={handleSelect}
               onTogglePin={(item) => pinMut.mutate({ id: item.id, pinned: !item.pinned })}
+              onDelete={handleDelete}
             />
           ))}
         </div>
@@ -826,6 +869,7 @@ export default function ArtifactsPage() {
               item={item}
               onSelect={handleSelect}
               onTogglePin={item.isArtifact ? () => pinMut.mutate({ id: item.id, pinned: !item.pinned }) : undefined}
+              onDelete={() => handleDelete(item)}
             />
           ))}
         </div>

@@ -2393,22 +2393,41 @@ export default function ChatPage() {
                             )}
                           </div>
                           {/* Inline artifact preview */}
-                          {isArtifact && (
-                            <div className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden">
+                          {isArtifact && (() => {
+                            // Find the saved artifact by id (server returns it on the
+                            // action) so clicks open the real artifact rather than just
+                            // bouncing to the Artifacts list. Fallback: navigate to /artifacts.
+                            const aid = (action.data as any)?.id || (action.data as any)?.artifactId;
+                            const atype = (action.data as any)?.type;
+                            const open = () => {
+                              if (atype === "doc" || atype === "sheet") {
+                                if (aid) window.location.hash = `#/editor/${aid}`;
+                                else window.location.hash = "#/artifacts";
+                                return;
+                              }
+                              // Other types: open the side panel viewer directly when we
+                              // have the full payload, else go to /artifacts.
+                              if (action.data) setActiveArtifact(action.data as any);
+                              else window.location.hash = "#/artifacts";
+                            };
+                            return (
+                            <div className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer" onClick={open}>
                               <div className="p-3 max-h-[200px] overflow-hidden relative bg-card">
                                 <ArtifactPreview data={action.data} />
                                 <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-card to-transparent" />
                               </div>
-                              <div className="px-3 py-1.5 bg-muted/30 border-t border-border/30">
+                              <div className="px-3 py-1.5 bg-muted/30 border-t border-border/30 flex items-center justify-between">
                                 <button
                                   className="text-xs text-primary hover:text-primary/80 font-medium transition-colors"
-                                  onClick={() => { window.location.hash = '#/artifacts'; }}
+                                  onClick={(e) => { e.stopPropagation(); open(); }}
                                 >
-                                  Open in Artifacts →
+                                  Open artifact →
                                 </button>
+                                <span className="text-[10px] text-muted-foreground">click anywhere to open</span>
                               </div>
                             </div>
-                          )}
+                            );
+                          })()}
                         </div>
                       );
                     })}
