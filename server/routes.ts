@@ -1542,6 +1542,7 @@ Respond ONLY in JSON format:
         asset: "Summarize this asset's value, maintenance needs, warranty status, documents, and expenses.",
         property: "Summarize this property's status: value, maintenance, documents, expenses, insurance, and upcoming obligations.",
         loan: "Analyze this loan: balance, payments, interest, payoff timeline, and linked documents.",
+        liability: "Analyze this liability (loan/credit card/mortgage/etc.): current balance, monthly payment, APR, payoff timeline, total interest paid, recent payment history, linked assets/co-signers, and any action items (e.g. high APR refinance opportunity, missed payments, autopay setup).",
         investment: "Analyze this investment: performance, value, linked documents, and any action items.",
         medical: "Summarize this medical profile: conditions, medications, appointments, documents, and upcoming care needs.",
       };

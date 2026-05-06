@@ -6,7 +6,7 @@
  * documents OCR, calendar auto-events, and subtype-specific UI on top of this.
  */
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
@@ -14,6 +14,8 @@ import {
   Wallet,
   Calendar as CalendarIcon,
   TrendingDown,
+  TrendingUp,
+  Minus,
   Percent,
   DollarSign,
   Plus,
@@ -28,6 +30,15 @@ import {
   Upload,
   Trash2,
   X,
+  RefreshCw,
+  Circle,
+  Clock,
+  Activity as ActivityIcon,
+  CreditCard,
+  Home,
+  Car,
+  GraduationCap,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Select,
@@ -53,7 +64,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import {
@@ -235,6 +246,51 @@ function readTerms(profile: LiabilityProfileLike) {
   const dueDay =
     pick(f.dueDay, f.due_day, f.paymentDueDay, f.payment_due_day) || undefined;
 
+  // Subtype-specific reads (Phase 5)
+  const creditLimit =
+    pick(
+      f.creditLimit, f.credit_limit,
+      finance.creditLimit, finance.credit_limit,
+    ) || 0;
+  const minimumPayment =
+    pick(
+      f.minimumPayment, f.minimum_payment, f.min_payment,
+      finance.minimumPayment, finance.minimum_payment,
+    ) || 0;
+  const propertyAddress = (
+    f.propertyAddress || f.property_address || f.address || ""
+  ).toString();
+  const escrowMonthly = pick(
+    f.escrowMonthly, f.escrow_monthly, f.escrow,
+  ) || 0;
+  const propertyTaxes = pick(
+    f.propertyTaxes, f.property_taxes, f.annualPropertyTaxes,
+  ) || 0;
+  const homeownersInsurance = pick(
+    f.homeownersInsurance, f.homeowners_insurance, f.insurance,
+  ) || 0;
+  const vehicleVin = (
+    f.vehicleVin || f.vehicle_vin || f.vin || ""
+  ).toString();
+  const vehicleYear = (
+    f.vehicleYear || f.vehicle_year || f.year || ""
+  ).toString();
+  const vehicleMake = (
+    f.vehicleMake || f.vehicle_make || f.make || ""
+  ).toString();
+  const vehicleModel = (
+    f.vehicleModel || f.vehicle_model || f.model || ""
+  ).toString();
+  const pslfEligible = !!(
+    f.pslfEligible ?? f.pslf_eligible ?? false
+  );
+  const idrPlan = (
+    f.idrPlan || f.idr_plan || ""
+  ).toString();
+  const forgivenessDate = (
+    f.forgivenessDate || f.forgiveness_date || ""
+  ).toString();
+
   return {
     currentBalance,
     originalBalance,
@@ -245,6 +301,20 @@ function readTerms(profile: LiabilityProfileLike) {
     lender,
     accountNumberLast4,
     dueDay,
+    // subtype-specific
+    creditLimit,
+    minimumPayment,
+    propertyAddress,
+    escrowMonthly,
+    propertyTaxes,
+    homeownersInsurance,
+    vehicleVin,
+    vehicleYear,
+    vehicleMake,
+    vehicleModel,
+    pslfEligible,
+    idrPlan,
+    forgivenessDate,
   };
 }
 
@@ -261,7 +331,8 @@ type TabKey =
   | "amortization"
   | "calculator"
   | "linked"
-  | "documents";
+  | "documents"
+  | "activity";
 
 const PROFILE_LINK_ROLES: { value: string; label: string }[] = [
   { value: "owner", label: "Owner" },
@@ -563,7 +634,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       {/* Tabs */}
       <div className="px-4 md:px-6 pt-4">
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} data-testid="liability-tabs">
-          <TabsList className="grid grid-cols-4 md:grid-cols-7 w-full max-w-4xl">
+          <TabsList className="grid grid-cols-4 md:grid-cols-8 w-full max-w-5xl">
             <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
             <TabsTrigger value="details" data-testid="tab-details">Details</TabsTrigger>
             <TabsTrigger value="payments" data-testid="tab-payments">Payments</TabsTrigger>
@@ -571,10 +642,22 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <TabsTrigger value="amortization" data-testid="tab-amortization">Schedule</TabsTrigger>
             <TabsTrigger value="linked" data-testid="tab-linked">Linked</TabsTrigger>
             <TabsTrigger value="documents" data-testid="tab-documents">Docs</TabsTrigger>
+            <TabsTrigger value="activity" data-testid="tab-activity">Activity</TabsTrigger>
           </TabsList>
 
           {/* OVERVIEW */}
           <TabsContent value="overview" className="mt-4 space-y-4">
+            {/* Phase 5: AI insights card */}
+            <AISummaryCard profileId={profile.id} />
+
+            {/* Phase 5: Subtype-specific overview */}
+            <SubtypeOverview
+              subtype={subtypeRaw}
+              terms={terms}
+              liabilityId={profile.id}
+              onJumpLinked={() => setTab("linked")}
+            />
+
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base">Quick actions</CardTitle>
@@ -752,6 +835,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <LiabilityDocumentsCard liabilityId={profile.id} />
           </TabsContent>
 
+          {/* ACTIVITY (Phase 5) */}
+          <TabsContent value="activity" className="mt-4">
+            <ActivityTimelineCard
+              profileId={profile.id}
+              payments={payments}
+            />
+          </TabsContent>
+
           {/* AMORTIZATION */}
           <TabsContent value="amortization" className="mt-4">
             <Card>
@@ -882,7 +973,7 @@ function KpiTile({
   label: string;
   value: string;
   sub?: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   testid?: string;
 }) {
   return (
@@ -1934,6 +2025,650 @@ function LiabilityDocumentsCard({ liabilityId }: { liabilityId: string }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Phase 5: AI Summary card ────────────────────────────────────────────────
+
+interface AISummaryData {
+  summary: string;
+  actionItems: string[];
+  highlights: Array<{
+    label: string;
+    value: string;
+    trend?: "up" | "down" | "stable";
+  }>;
+  generatedAt: string;
+}
+
+function AISummaryCard({ profileId }: { profileId: string }) {
+  const { data: aiSummary, isLoading, isError, isFetching } = useQuery<AISummaryData>({
+    queryKey: ["/api/profiles", profileId, "ai-summary"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary`);
+      return res.json();
+    },
+    enabled: !!profileId,
+    retry: false,
+  });
+
+  const handleRefresh = useCallback(async () => {
+    queryClient.setQueryData(["/api/profiles", profileId, "ai-summary"], undefined);
+    queryClient.fetchQuery({
+      queryKey: ["/api/profiles", profileId, "ai-summary"],
+      queryFn: async () => {
+        const res = await apiRequest(
+          "GET",
+          `/api/profiles/${profileId}/ai-summary?force=true`,
+        );
+        return res.json();
+      },
+    });
+  }, [profileId]);
+
+  if (isError) return null;
+
+  if (isLoading) {
+    return (
+      <Card data-testid="liability-ai-summary-loading">
+        <div className="h-1 bg-gradient-to-r from-rose-500/60 via-rose-500/30 to-transparent" />
+        <CardHeader className="pb-2">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-4 w-4 rounded" />
+            <Skeleton className="h-4 w-24" />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+          <div className="flex gap-2 mt-3">
+            <Skeleton className="h-14 flex-1 rounded-lg" />
+            <Skeleton className="h-14 flex-1 rounded-lg" />
+            <Skeleton className="h-14 flex-1 rounded-lg" />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!aiSummary) return null;
+
+  return (
+    <Card data-testid="liability-ai-summary">
+      <div className="h-1 bg-gradient-to-r from-rose-500/60 via-rose-500/30 to-transparent" />
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <CardTitle className="text-sm font-semibold">AI Summary</CardTitle>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+            onClick={handleRefresh}
+            disabled={isFetching}
+            data-testid="liability-ai-refresh"
+          >
+            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p
+          className="text-sm text-muted-foreground leading-relaxed"
+          data-testid="liability-ai-summary-text"
+        >
+          {aiSummary.summary}
+        </p>
+
+        {aiSummary.highlights && aiSummary.highlights.length > 0 && (
+          <div
+            className="flex flex-wrap gap-2"
+            data-testid="liability-ai-highlights"
+          >
+            {aiSummary.highlights.map((h, i) => (
+              <div
+                key={i}
+                className="flex-1 min-w-[100px] rounded-lg border border-border bg-muted/30 px-3 py-2 text-center"
+                data-testid={`liability-ai-highlight-${i}`}
+              >
+                <p className="text-xs text-muted-foreground">{h.label}</p>
+                <div className="flex items-center justify-center gap-1 mt-0.5">
+                  <p className="text-sm font-semibold tabular-nums">{h.value}</p>
+                  {h.trend === "up" && <TrendingUp className="h-3 w-3 text-green-500" />}
+                  {h.trend === "down" && <TrendingDown className="h-3 w-3 text-red-500" />}
+                  {h.trend === "stable" && <Minus className="h-3 w-3 text-muted-foreground" />}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {aiSummary.actionItems && aiSummary.actionItems.length > 0 && (
+          <div className="space-y-1.5" data-testid="liability-ai-actions">
+            <p className="text-xs font-medium text-muted-foreground">Action Items</p>
+            {aiSummary.actionItems.map((item, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-2"
+                data-testid={`liability-ai-action-${i}`}
+              >
+                <Circle className="h-3 w-3 mt-0.5 text-muted-foreground shrink-0" />
+                <p className="text-xs text-foreground">{item}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {aiSummary.generatedAt && (
+          <p className="text-xs text-muted-foreground pt-1">
+            Generated {fmtTimeAgo(new Date(aiSummary.generatedAt))}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function fmtTimeAgo(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
+
+// ─── Phase 5: Subtype-specific overview blocks ───────────────────────────────
+
+interface SubtypeOverviewProps {
+  subtype: string;
+  terms: ReturnType<typeof readTerms>;
+  liabilityId: string;
+  onJumpLinked: () => void;
+}
+
+function SubtypeOverview({
+  subtype,
+  terms,
+  liabilityId,
+  onJumpLinked,
+}: SubtypeOverviewProps) {
+  if (subtype === "credit_card") {
+    return <CreditCardOverview terms={terms} />;
+  }
+  if (subtype === "mortgage") {
+    return <MortgageOverview terms={terms} liabilityId={liabilityId} onJumpLinked={onJumpLinked} />;
+  }
+  if (subtype === "auto_loan") {
+    return <AutoLoanOverview terms={terms} liabilityId={liabilityId} onJumpLinked={onJumpLinked} />;
+  }
+  if (subtype === "student_loan") {
+    return <StudentLoanOverview terms={terms} />;
+  }
+  return null;
+}
+
+// Credit card: utilization gauge + minimum payment + no fixed term
+function CreditCardOverview({ terms }: { terms: ReturnType<typeof readTerms> }) {
+  const utilizationPct =
+    terms.creditLimit > 0
+      ? Math.min(100, (terms.currentBalance / terms.creditLimit) * 100)
+      : 0;
+  const utilizationStatus =
+    utilizationPct >= 80
+      ? { label: "Very high", color: "text-red-500", bg: "bg-red-500" }
+      : utilizationPct >= 30
+      ? { label: "Watch out", color: "text-orange-500", bg: "bg-orange-500" }
+      : { label: "Healthy", color: "text-emerald-500", bg: "bg-emerald-500" };
+  const availableCredit = Math.max(0, terms.creditLimit - terms.currentBalance);
+  const minPayment = terms.minimumPayment || (terms.currentBalance * 0.02);
+
+  return (
+    <Card data-testid="subtype-credit-card">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <CreditCard className="w-4 h-4 text-rose-600" />
+          <CardTitle className="text-base">Credit card snapshot</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {terms.creditLimit > 0 ? (
+          <div data-testid="cc-utilization">
+            <div className="flex items-center justify-between text-sm mb-1">
+              <span className="font-medium">Credit utilization</span>
+              <span className={`font-semibold ${utilizationStatus.color}`}>
+                {utilizationPct.toFixed(1)}% · {utilizationStatus.label}
+              </span>
+            </div>
+            <div className="h-3 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className={`h-full ${utilizationStatus.bg} transition-all`}
+                style={{ width: `${utilizationPct}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>{fmtUSD(terms.currentBalance)} used</span>
+              <span>{fmtUSD(terms.creditLimit)} limit</span>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 text-xs text-muted-foreground rounded-md border border-dashed p-3">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <span>Add a credit limit in Details to see utilization.</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-3 gap-2">
+          <KpiTile
+            label="Available"
+            value={terms.creditLimit > 0 ? fmtUSDShort(availableCredit) : "—"}
+            testid="cc-available"
+          />
+          <KpiTile
+            label="Min payment"
+            value={fmtUSDShort(minPayment)}
+            testid="cc-min-payment"
+          />
+          <KpiTile
+            label="APR"
+            value={fmtPct(terms.annualRate)}
+            testid="cc-apr"
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Credit cards are revolving — no fixed term. Pay above the minimum to avoid compounding interest.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Mortgage: property + escrow fields
+function MortgageOverview({
+  terms,
+  liabilityId,
+  onJumpLinked,
+}: {
+  terms: ReturnType<typeof readTerms>;
+  liabilityId: string;
+  onJumpLinked: () => void;
+}) {
+  const linkedAssetsQuery = useQuery<any[]>({
+    queryKey: [`/api/liabilities/${liabilityId}/assets`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/liabilities/${liabilityId}/assets`);
+      return res.json();
+    },
+    enabled: !!liabilityId,
+  });
+  const property = (linkedAssetsQuery.data || []).find(
+    (a: any) => a.profile?.type === "property" || a.profile?.type === "real_estate",
+  );
+
+  return (
+    <Card data-testid="subtype-mortgage">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <Home className="w-4 h-4 text-rose-600" />
+          <CardTitle className="text-base">Mortgage snapshot</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {property ? (
+          <button
+            type="button"
+            onClick={onJumpLinked}
+            className="w-full text-left rounded-lg border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition"
+            data-testid="mortgage-property-tile"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs text-muted-foreground">Linked property</div>
+                <div className="font-medium">{property.profile?.name || "Property"}</div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-muted-foreground" />
+            </div>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onJumpLinked}
+            className="w-full text-left rounded-lg border border-dashed px-3 py-2 hover:bg-muted/30 transition"
+            data-testid="mortgage-property-tile-empty"
+          >
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Link2 className="w-4 h-4" />
+              <span className="text-xs">Link the property this mortgage finances →</span>
+            </div>
+          </button>
+        )}
+        <div className="grid md:grid-cols-2 gap-x-6 gap-y-1">
+          <Row label="Property address" value={terms.propertyAddress || "—"} />
+          <Row label="Escrow / month" value={terms.escrowMonthly ? fmtUSD(terms.escrowMonthly) : "—"} />
+          <Row label="Property taxes (yr)" value={terms.propertyTaxes ? fmtUSD(terms.propertyTaxes) : "—"} />
+          <Row label="Homeowners insurance" value={terms.homeownersInsurance ? fmtUSD(terms.homeownersInsurance) : "—"} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Auto loan: vehicle tile prominent
+function AutoLoanOverview({
+  terms,
+  liabilityId,
+  onJumpLinked,
+}: {
+  terms: ReturnType<typeof readTerms>;
+  liabilityId: string;
+  onJumpLinked: () => void;
+}) {
+  const linkedAssetsQuery = useQuery<any[]>({
+    queryKey: [`/api/liabilities/${liabilityId}/assets`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/liabilities/${liabilityId}/assets`);
+      return res.json();
+    },
+    enabled: !!liabilityId,
+  });
+  const vehicle = (linkedAssetsQuery.data || []).find(
+    (a: any) => a.profile?.type === "vehicle",
+  );
+  const vehicleSummary = [terms.vehicleYear, terms.vehicleMake, terms.vehicleModel]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <Card data-testid="subtype-auto-loan">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <Car className="w-4 h-4 text-rose-600" />
+          <CardTitle className="text-base">Auto loan snapshot</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {vehicle ? (
+          <button
+            type="button"
+            onClick={onJumpLinked}
+            className="w-full text-left rounded-lg border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition"
+            data-testid="auto-vehicle-tile"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs text-muted-foreground">Linked vehicle</div>
+                <div className="font-medium">{vehicle.profile?.name || vehicleSummary || "Vehicle"}</div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-muted-foreground" />
+            </div>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onJumpLinked}
+            className="w-full text-left rounded-lg border border-dashed px-3 py-2 hover:bg-muted/30 transition"
+            data-testid="auto-vehicle-tile-empty"
+          >
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Link2 className="w-4 h-4" />
+              <span className="text-xs">Link the vehicle this loan financed →</span>
+            </div>
+          </button>
+        )}
+        <div className="grid md:grid-cols-2 gap-x-6 gap-y-1">
+          <Row label="Vehicle" value={vehicleSummary || "—"} />
+          <Row label="VIN" value={terms.vehicleVin || "—"} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Student loan: forgiveness fields
+function StudentLoanOverview({ terms }: { terms: ReturnType<typeof readTerms> }) {
+  return (
+    <Card data-testid="subtype-student-loan">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <GraduationCap className="w-4 h-4 text-rose-600" />
+          <CardTitle className="text-base">Student loan snapshot</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <div className="grid md:grid-cols-2 gap-x-6 gap-y-1">
+          <Row
+            label="PSLF eligible"
+            value={
+              terms.pslfEligible ? (
+                <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600">
+                  Yes
+                </Badge>
+              ) : (
+                "No"
+              )
+            }
+          />
+          <Row label="IDR plan" value={terms.idrPlan || "—"} />
+          <Row label="Forgiveness date" value={terms.forgivenessDate ? fmtDate(terms.forgivenessDate) : "—"} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          PSLF (Public Service Loan Forgiveness) and income-driven repayment plans can dramatically alter your payoff timeline. Track eligibility here.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Phase 5: Activity timeline tab ──────────────────────────────────────────
+
+interface ActivityEntry {
+  id: string;
+  type: "payment" | "document" | "event" | "task" | "obligation" | "note";
+  title: string;
+  description?: string;
+  timestamp: string; // ISO
+}
+
+function ActivityTimelineCard({
+  profileId,
+  payments,
+}: {
+  profileId: string;
+  payments: LiabilityPayment[];
+}) {
+  // Pull the standard profile detail (which already collects related events,
+  // tasks, obligations, documents, etc.).
+  const detailQuery = useQuery<any>({
+    queryKey: ["/api/profiles", profileId, "detail"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profileId}`);
+      return res.json();
+    },
+    enabled: !!profileId,
+  });
+
+  const entries = useMemo<ActivityEntry[]>(() => {
+    const out: ActivityEntry[] = [];
+
+    for (const p of payments) {
+      const ts = p.paymentDate || p.createdAt;
+      if (!ts) continue;
+      out.push({
+        id: `pay-${p.id}`,
+        type: "payment",
+        title: `Payment ${fmtUSD(Number(p.amount) || 0)}`,
+        description: `${fmtUSD(Number(p.principal) || 0)} principal · ${fmtUSD(Number(p.interest) || 0)} interest${p.notes ? ` · ${p.notes}` : ""}`,
+        timestamp: new Date(ts).toISOString(),
+      });
+    }
+
+    const detail = detailQuery.data;
+    if (detail) {
+      for (const d of detail.relatedDocuments || []) {
+        out.push({
+          id: `doc-${d.id}`,
+          type: "document",
+          title: d.title || d.filename || "Document",
+          description: d.summary || d.kind || undefined,
+          timestamp: new Date(d.createdAt || d.uploadedAt || Date.now()).toISOString(),
+        });
+      }
+      for (const e of detail.relatedEvents || []) {
+        out.push({
+          id: `evt-${e.id}`,
+          type: "event",
+          title: e.title || "Event",
+          description: e.description || undefined,
+          timestamp: new Date(e.startTime || e.start || e.createdAt || Date.now()).toISOString(),
+        });
+      }
+      for (const t of detail.relatedTasks || []) {
+        out.push({
+          id: `task-${t.id}`,
+          type: "task",
+          title: t.title || "Task",
+          description: t.description || undefined,
+          timestamp: new Date(t.dueDate || t.createdAt || Date.now()).toISOString(),
+        });
+      }
+      for (const o of detail.relatedObligations || []) {
+        out.push({
+          id: `obl-${o.id}`,
+          type: "obligation",
+          title: o.title || "Obligation",
+          description: o.description || undefined,
+          timestamp: new Date(o.dueDate || o.createdAt || Date.now()).toISOString(),
+        });
+      }
+    }
+
+    out.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+    return out;
+  }, [payments, detailQuery.data]);
+
+  if (detailQuery.isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-4 space-y-2">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (entries.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center" data-testid="liability-activity-empty">
+          <Clock className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No activity yet</p>
+          <p className="text-xs text-muted-foreground/70 mt-1">
+            Payments, documents, events and tasks tied to this liability will appear here.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Group by Today / Yesterday / This Week / Earlier
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const weekAgo = new Date(now.getTime() - 7 * 86400000).getTime();
+  const groups: { label: string; items: ActivityEntry[] }[] = [
+    { label: "Today", items: [] },
+    { label: "Yesterday", items: [] },
+    { label: "This Week", items: [] },
+    { label: "Earlier", items: [] },
+  ];
+  for (const e of entries.slice(0, 100)) {
+    const d = e.timestamp.slice(0, 10);
+    const t = new Date(e.timestamp).getTime();
+    if (d === todayStr) groups[0].items.push(e);
+    else if (d === yesterday) groups[1].items.push(e);
+    else if (t >= weekAgo) groups[2].items.push(e);
+    else groups[3].items.push(e);
+  }
+
+  return (
+    <Card data-testid="liability-activity-card">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <ActivityIcon className="w-4 h-4 text-primary" />
+          <CardTitle className="text-base">Activity</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {groups.map((g) =>
+          g.items.length === 0 ? null : (
+            <div key={g.label} data-testid={`activity-group-${g.label.toLowerCase().replace(/\s+/g, "-")}`}>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                {g.label}
+              </p>
+              <div className="divide-y">
+                {g.items.map((e) => (
+                  <ActivityRow key={e.id} entry={e} />
+                ))}
+              </div>
+            </div>
+          ),
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ActivityRow({ entry }: { entry: ActivityEntry }) {
+  const colors: Record<string, string> = {
+    payment: "bg-emerald-500/10 text-emerald-600",
+    document: "bg-primary/10 text-primary",
+    event: "bg-chart-2/10 text-chart-2",
+    task: "bg-chart-3/10 text-chart-3",
+    obligation: "bg-orange-500/10 text-orange-500",
+    note: "bg-muted text-muted-foreground",
+  };
+  const icons: Record<string, any> = {
+    payment: DollarSign,
+    document: FileText,
+    event: CalendarIcon,
+    task: ActivityIcon,
+    obligation: CreditCard,
+    note: FileText,
+  };
+  const Icon = icons[entry.type] || Clock;
+  const color = colors[entry.type] || "bg-muted text-muted-foreground";
+
+  return (
+    <div className="flex gap-3 py-3" data-testid={`activity-row-${entry.type}`}>
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${color}`}>
+        <Icon className="h-3.5 w-3.5" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium">{entry.title}</p>
+        {entry.description && (
+          <p className="text-xs text-muted-foreground mt-0.5">{entry.description}</p>
+        )}
+        <p className="text-xs text-muted-foreground mt-1">
+          {new Date(entry.timestamp).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      </div>
+      <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">
+        {entry.type}
+      </Badge>
+    </div>
   );
 }
 
