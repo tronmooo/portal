@@ -7,7 +7,10 @@
 // Saves to /api/artifacts. Autosaves every 5s after the first manual save.
 // Posts a chat preview card when launched from chat (via ?source=chat).
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties } from "react";
+// Wave 16: Univer-powered Sheets-equivalent editor for newly-created sheets.
+// Lazy-loaded so doc-mode users don't pay the bundle cost.
+const UniverSheet = lazy(() => import("@/components/UniverSheet"));
 import { useTheme } from "@/components/theme-provider";
 import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -894,6 +897,16 @@ export default function EditorPage() {
   // ── Derived state (BEFORE any conditional return — hook order) ─────────────
   const matrix = useMemo(() => sheetToMatrix(sheet), [sheet]);
 
+  // Wave 16: detect a Univer-encoded payload inside SheetData.cells.
+  // We stash the full workbook snapshot under cells.__univer__.v as a JSON string
+  // so the existing artifact storage path keeps working without a schema change.
+  const univerPayload = (sheet.cells as any)?.__univer__?.v;
+  const isUniverSheet = type === "sheet" && typeof univerPayload === "string" && univerPayload.length > 0;
+  const initialUniverSnapshot = useMemo(() => {
+    if (!univerPayload || typeof univerPayload !== "string") return undefined;
+    try { return JSON.parse(univerPayload); } catch { return undefined; }
+  }, [univerPayload]);
+
   // Live data snapshot — only fetched when in sheet mode. Powers =NETWORTH(),
   // =BUDGET("Groceries"), =TRACKER("Weight"), =DAYSUNTIL("2026-12-31"), etc.
   const sheetSnapshot = useSheetSnapshot(type === "sheet");
@@ -1124,7 +1137,33 @@ export default function EditorPage() {
       </div>
 
       {/* Body */}
-      {type === "doc" ? (
+      {/* Wave 16: New sheets (and any sheet previously saved with Univer payload)
+          render in the Univer engine — Google-Sheets-equivalent UX.
+          Pre-Univer artifacts keep rendering in the legacy view. */}
+      {type === "sheet" && (isNew || isUniverSheet) ? (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-2 shrink-0 text-xs text-muted-foreground">
+            <Save className="h-3.5 w-3.5" />
+            <span>{isNew ? "New sheet — changes auto-save while you type." : "Sheets engine — changes auto-save."}</span>
+          </div>
+          <div className="flex-1 min-h-0">
+            <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm"><Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading spreadsheet engine…</div>}>
+              <UniverSheet
+                key={savedId || "new"}
+                initialSnapshot={initialUniverSnapshot}
+                sheetName={title || "Sheet1"}
+                darkMode={resolvedMode === "dark"}
+                onChange={(snap) => {
+                  // Persist Univer snapshot inside SheetData.cells under a special key
+                  // so existing artifact storage works without schema changes.
+                  setSheet(s => ({ ...s, cells: { __univer__: { v: JSON.stringify(snap) } as any } }));
+                  setDirty(true);
+                }}
+              />
+            </Suspense>
+          </div>
+        </div>
+      ) : type === "doc" ? (
         <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Toolbar */}

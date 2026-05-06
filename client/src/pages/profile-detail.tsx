@@ -6020,6 +6020,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
 // Fallback for any type not explicitly defined
 const DEFAULT_TABS: TabDef[] = [
   { value: "info", label: "Overview", testId: "tab-info" },
+  { value: "loan-detail", label: "Loan", testId: "tab-loan" },
   { value: "finances", label: "Finance", testId: "tab-finances" },
   { value: "trackers", label: "Documents", testId: "tab-trackers" },
   { value: "activity", label: "Activity", testId: "tab-activity" },
@@ -6028,9 +6029,13 @@ const DEFAULT_TABS: TabDef[] = [
 ];
 
 // ── Asset subtype tab configs ──
+// Phase 8: every asset subtype includes a Loan tab. Anything you own —
+// iPhone, refrigerator, laptop, collectible, business, even a bank account —
+// can be financed, so the Loan tab is universal.
 const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   bank_account: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
@@ -6038,6 +6043,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   credit_card: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
@@ -6045,6 +6051,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   digital_asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "access", label: "Access", testId: "tab-access" },
     { value: "billing", label: "Billing", testId: "tab-billing" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6052,6 +6059,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   business: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "finances", label: "Financials", testId: "tab-finances" },
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6059,6 +6067,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   collectible: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "valuation", label: "Valuation", testId: "tab-valuation" },
     { value: "finances", label: "History", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6073,6 +6082,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   high_value_item: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },

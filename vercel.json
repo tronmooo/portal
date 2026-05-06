@@ -28,11 +28,5 @@
       "maxDuration": 60,
       "memory": 1024
     }
-  },
-  "crons": [
-    {
-      "path": "/api/cron/weekly-review",
-      "schedule": "0 14 * * 0"
-    }
-  ]
+  }
 }
