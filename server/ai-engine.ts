@@ -1523,6 +1523,120 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: ["loan_id"]
     }
   },
+
+  // ─── LIABILITY TOOLS (Phase 5+) ──────────────────────────────────────────────────────
+  {
+    name: "create_liability",
+    description: "Create a first-class LIABILITY profile (a debt the user owes). Use for credit cards, mortgages, auto loans, student loans, personal loans, HELOC, business loans, medical debt, IRS/tax debt, BNPL (buy now pay later), and any other debt instrument. PREFER this over create_profile(type:'loan') because it sets the new liability subtype, structured fields, and unlocks the Payments / Payoff / Schedule / Linked / Docs / Activity tabs. Use create_obligation ONLY for recurring bills/subscriptions (rent, Netflix, electricity) — not for actual debt principal.\n\nSupported subtype values (use these EXACT keys): credit_card, mortgage, auto_loan, student_loan, personal_loan, heloc, business_loan, medical_debt, tax_debt, bnpl, other.\n\nCommon recognition phrases: 'I have a credit card', 'opened a Visa', 'mortgage on my house', 'car loan with Chase', 'student loans from Sallie Mae', 'personal loan from SoFi', 'HELOC', 'business loan', 'medical bill on a payment plan', 'I owe the IRS', 'Affirm/Klarna/Afterpay'. The lender / bank / servicer name goes in the lender field.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Display name. Be specific: 'Chase Sapphire Visa', '123 Main St Mortgage', '2022 Honda Civic Loan', 'Sallie Mae Federal Loans'." },
+        subtype: { type: "string", enum: ["credit_card", "mortgage", "auto_loan", "student_loan", "personal_loan", "heloc", "business_loan", "medical_debt", "tax_debt", "bnpl", "other"], description: "Liability subtype — REQUIRED. Pick the closest match. credit_card for any revolving card. mortgage for home loans / refis. auto_loan for car/truck/motorcycle/boat loans. student_loan for federal or private education debt. personal_loan for unsecured installment loans. heloc for home equity lines. business_loan for SBA / merchant cash advance / business credit. medical_debt for hospital payment plans. tax_debt for IRS/state. bnpl for Affirm/Klarna/Afterpay/Sezzle. other if unclear." },
+        currentBalance: { type: "number", description: "Current outstanding balance owed (principal). REQUIRED if known." },
+        originalBalance: { type: "number", description: "Original loan amount / starting principal at origination. Defaults to currentBalance." },
+        annualRate: { type: "number", description: "APR as a decimal (e.g. 0.065 for 6.5%) OR as a percent (e.g. 6.5) — either is accepted. For credit cards default ~0.21 if unknown; for mortgages ~0.07; for auto loans ~0.075. NEVER fabricate — leave blank if unknown." },
+        monthlyPayment: { type: "number", description: "Required monthly payment amount." },
+        minimumPayment: { type: "number", description: "Minimum payment due (credit_card / bnpl). Often the floor before late fees kick in." },
+        creditLimit: { type: "number", description: "Credit limit (credit_card / heloc only). Used to compute utilization on the Overview tab." },
+        remainingTermMonths: { type: "number", description: "Months remaining on a fixed-term loan. Omit for revolving (credit_card)." },
+        firstPaymentDate: { type: "string", description: "YYYY-MM-DD of the first scheduled payment." },
+        dueDay: { type: "number", description: "Day-of-month the payment is due (1-31). Drives auto-generated calendar reminders." },
+        lender: { type: "string", description: "Lender / bank / servicer name. e.g. 'Chase', 'Sallie Mae', 'Wells Fargo', 'Affirm', 'IRS'." },
+        accountNumberLast4: { type: "string", description: "Last 4 digits of the account/loan number (NEVER store the full number)." },
+        // Mortgage-specific
+        propertyAddress: { type: "string", description: "Mortgage only: street address of the financed property." },
+        escrowMonthly: { type: "number", description: "Mortgage only: monthly escrow amount (taxes + insurance bundled)." },
+        propertyTaxes: { type: "number", description: "Mortgage only: annual property taxes." },
+        homeownersInsurance: { type: "number", description: "Mortgage only: annual homeowners insurance premium." },
+        // Auto-specific
+        vehicleVin: { type: "string", description: "Auto loan only: VIN of the financed vehicle." },
+        vehicleYear: { type: "string", description: "Auto loan only: year (e.g. '2022')." },
+        vehicleMake: { type: "string", description: "Auto loan only: make (e.g. 'Honda')." },
+        vehicleModel: { type: "string", description: "Auto loan only: model (e.g. 'Civic')." },
+        // Student loan-specific
+        pslfEligible: { type: "boolean", description: "Student loan only: PSLF (Public Service Loan Forgiveness) eligible." },
+        idrPlan: { type: "string", description: "Student loan only: income-driven repayment plan name (SAVE, PAYE, IBR, ICR)." },
+        forgivenessDate: { type: "string", description: "Student loan only: YYYY-MM-DD of expected forgiveness date." },
+        // Cross-cutting
+        forProfile: { type: "string", description: "Owner profile name. Defaults to the self profile. Set to a person's name (e.g. 'Mom', 'Sarah') to nest the liability under that person, OR set to an asset name (e.g. 'My House', 'Honda Civic') to nest under that collateral asset. To assign multiple owners with shared %, use link_liability_owner after creation." },
+        linkAssetName: { type: "string", description: "Optional: name of an existing asset to auto-link as collateral after creation (mortgage → the property; auto loan → the vehicle). Equivalent to calling link_liability_asset right after." },
+        notes: { type: "string", description: "Free-form notes." },
+      },
+      required: ["name", "subtype"],
+    },
+  },
+  {
+    name: "update_liability",
+    description: "Update fields on an existing liability profile. Use for: balance corrections ('my mortgage balance is now $410k'), rate changes ('refinanced to 5.25%'), payment-amount changes, lender changes after a loan sale, refinancing (also pass refinance:true to bump originalBalance), restructuring, and any subtype-specific field updates (creditLimit, escrowMonthly, pslfEligible, etc.). Find by name (partial match).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Liability name to find (partial match)." },
+        changes: { type: "object", description: "Fields to update. Any of: currentBalance, originalBalance, annualRate, monthlyPayment, minimumPayment, creditLimit, remainingTermMonths, dueDay, lender, accountNumberLast4, propertyAddress, escrowMonthly, propertyTaxes, homeownersInsurance, vehicleVin, vehicleYear, vehicleMake, vehicleModel, pslfEligible, idrPlan, forgivenessDate, subtype." },
+        refinance: { type: "boolean", description: "Set true when the user is REFINANCING (new lender, new rate, fresh term). Resets originalBalance to currentBalance and clears stale amortization caches." },
+      },
+      required: ["name", "changes"],
+    },
+  },
+  {
+    name: "add_liability_payment",
+    description: "Record an actual payment made against a liability. Use for: 'paid $500 on my car loan', 'made the mortgage payment', 'sent $2000 extra principal on the student loan', 'paid off $1500 of the credit card'. Splits into principal + interest automatically when not specified. For extra/lump-sum principal payments, set principal explicitly and interest=0. Decreases currentBalance immediately and shows on the Payments + Activity tabs.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability name (partial match). e.g. 'car loan', 'mortgage', 'Visa', 'student loans'." },
+        amount: { type: "number", description: "Total payment amount (principal + interest + escrow). REQUIRED." },
+        principal: { type: "number", description: "Principal portion. If omitted, computed from amortization (interest = balance * monthlyRate, principal = amount - interest)." },
+        interest: { type: "number", description: "Interest portion." },
+        escrow: { type: "number", description: "Escrow portion (mortgage only)." },
+        fees: { type: "number", description: "Fees portion (late fees, origination, etc.)." },
+        paymentDate: { type: "string", description: "YYYY-MM-DD. Defaults to today." },
+        method: { type: "string", description: "Payment method: 'auto-pay', 'manual ACH', 'check', 'card', etc." },
+        confirmationNumber: { type: "string", description: "Bank/lender confirmation number." },
+        notes: { type: "string", description: "Free-form notes (e.g. 'extra principal', 'February payment')." },
+      },
+      required: ["liabilityName", "amount"],
+    },
+  },
+  {
+    name: "link_liability_asset",
+    description: "Link a liability to a collateral asset. Use for: 'this mortgage is on my house', 'the auto loan is for my Civic', 'HELOC against the property'. Creates a liability_asset_link row so the asset's profile shows the liability and vice versa. Multiple assets can be linked to one liability (e.g. cross-collateralized).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability name (partial match)." },
+        assetName: { type: "string", description: "Asset profile name (partial match). Must be a vehicle, property, account, or asset profile." },
+        role: { type: "string", enum: ["collateral", "financed", "secured_by"], description: "Relationship role. Defaults to 'collateral'." },
+      },
+      required: ["liabilityName", "assetName"],
+    },
+  },
+  {
+    name: "link_liability_owner",
+    description: "Assign an owner / co-signer / guarantor to a liability with an ownership percentage. Use for: 'this loan is split 50/50 with my wife', 'my dad co-signed this', 'mom is the guarantor'. Multiple parties can be linked; ownership_pct should sum to 100 across all owners. For a single sole owner, you usually don't need to call this — the forProfile on create_liability already nests under the owner.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability name (partial match)." },
+        partyName: { type: "string", description: "Person profile name (partial match). Use 'Me' or 'Self' for the user themself." },
+        role: { type: "string", enum: ["owner", "co_signer", "guarantor", "responsible_party", "authorized_user"], description: "Role. Defaults to 'owner'." },
+        ownershipPct: { type: "number", description: "Ownership percentage (0-100). Defaults to 100 for a single owner, 50 for two-party splits." },
+      },
+      required: ["liabilityName", "partyName"],
+    },
+  },
+  {
+    name: "get_liability_summary",
+    description: "Get a complete summary of one liability OR all liabilities: balances, payoff timeline, total interest paid + projected, recent payments, linked assets, linked parties. Use when the user asks 'how much do I owe?', 'when will my mortgage be paid off?', 'show all my debts', 'what's my total debt?', or for any debt-payoff question.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Liability name (partial match). Omit to summarize ALL liabilities." },
+      },
+      required: [],
+    },
+  },
   {
     name: "get_cashflow",
     description: "Get weekly cash flow projections vs actuals for a given month. Shows projected and actual income/expenses by week.",
@@ -2653,6 +2767,72 @@ DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
 - HABITS vs TRACKERS: Habits are binary daily actions (did it / didn't). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
+
+LIABILITIES — FIRST-CLASS DEBT INSTRUMENTS (CRITICAL — read carefully):
+Liabilities are real debts the user owes (principal balance + interest + payoff schedule). They are FIRST-CLASS entities — they have detail pages, dashboards, payments, ownership, asset links, documents, and activity timelines, just like assets do. Always prefer the new liability tools over generic profile/obligation tools when the user is talking about an actual debt instrument.
+
+WHEN TO USE WHICH TOOL:
+- create_liability → ANY actual debt instrument (credit card, mortgage, auto loan, student loan, personal loan, HELOC, business loan, medical debt on payment plan, IRS/tax debt, BNPL like Affirm/Klarna/Afterpay, line of credit, etc.). PREFER over create_profile(type:"loan") and over create_obligation.
+- create_obligation → ONLY for recurring bills/subscriptions where the user does not owe a principal balance (rent, Netflix, Spotify, electricity, gym membership, insurance premium). Use this when the spend is purely recurring usage, not paying down debt.
+- add_liability_payment → user paid down a debt ("paid $500 on my credit card", "made my mortgage payment", "sent $1000 extra to principal on the student loan", "paid off the auto loan"). Do NOT use create_expense or pay_obligation for liability payments.
+- update_liability → editing a liability (rate change, balance correction, term change, lender change, refinance — set refinance:true to reset originalBalance + log refinancedAt).
+- link_liability_asset → connect a debt to the asset it secures ("my mortgage is on 123 Maple", "the auto loan is on the Tesla", "HELOC against the house"). role: collateral | financed | secured_by.
+- link_liability_owner → assign ownership / responsibility / co-signers ("my wife and I share the mortgage 50/50", "my dad co-signed the student loan", "add my brother as authorized user on the Visa"). "Me"/"Self"/"I"/"myself"/"my" → resolves to the self profile.
+- get_liability_summary → user asks "what do I owe?", "how much debt do I have?", "show me my liabilities", "how long until I pay off X?", "what's my mortgage balance?".
+
+SUBTYPE RECOGNITION TABLE (use these EXACT subtype keys):
+- credit_card → Visa, MasterCard, Mastercard, Amex, American Express, Discover, Chase Sapphire/Freedom/Slate, Capital One, Citi, store cards (Amazon Card, Apple Card, Target REDcard), "opened a credit card", "my card balance".
+- mortgage → "mortgage", "home loan", "house loan", "FHA loan", "VA loan", "conventional loan", "30-year fixed", "15-year fixed", lenders: Wells Fargo Home, Rocket Mortgage, Quicken, Chase Home Lending.
+- auto_loan → "car loan", "auto loan", "car payment", "financed my Tesla/Honda/Toyota", lenders: Chase Auto, Ally Auto, Capital One Auto, Carvana, Toyota Financial, Honda Financial, Ford Credit.
+- student_loan → "student loans", "college loans", "Sallie Mae", "Nelnet", "Great Lakes", "FedLoan", "MOHELA", "FAFSA loan", "Parent PLUS", "Grad PLUS", "SoFi student", "Earnest student", "PSLF", "SAVE plan", "IDR", "income-driven".
+- personal_loan → "personal loan", "signature loan", "unsecured loan", lenders: SoFi, LendingClub, Marcus, Upstart, Prosper, LightStream, Best Egg, Avant.
+- heloc → "HELOC", "home equity line of credit", "home equity loan", "second mortgage", "equity line".
+- business_loan → "business loan", "SBA loan", "commercial loan", "line of credit" (when business), "merchant cash advance", "equipment financing".
+- medical_debt → "medical bill on a payment plan", "hospital bill", "medical debt", "surgery payment plan", "dental financing", "CareCredit".
+- tax_debt → "I owe the IRS", "IRS payment plan", "installment agreement with IRS", "state tax debt", "back taxes", "FTB debt".
+- bnpl → "Affirm", "Klarna", "Afterpay", "PayPal Pay in 4", "Zip", "Sezzle", "buy now pay later", "financed at checkout", "4 interest-free payments".
+- other → anything debt-like that doesn't fit above ("I owe my dad $5000" → other, with lender:"Dad").
+
+FIELD POPULATION RULES:
+- lender = bank/servicer/issuer name. "Chase Sapphire credit card" → name:"Chase Sapphire", lender:"Chase". "Wells Fargo mortgage" → name:"Wells Fargo Mortgage", lender:"Wells Fargo".
+- annualRate: accept BOTH "6.5%" and 0.065 — the tool auto-normalizes. Always pass the number the user said.
+- For credit_card: set creditLimit if mentioned ("$10,000 limit"), currentBalance from "balance is $X" / "I owe $X".
+- For mortgage: set propertyAddress when user mentions a street, set termMonths from "30-year"=360, "15-year"=180.
+- For auto_loan: set vehicleVin or vehicleDescription when user names the car ("2022 Tesla Model Y").
+- For student_loan: set pslfEligible:true when user mentions PSLF / public service, set repaymentPlan from SAVE/PAYE/IBR/REPAYE/standard/income-driven.
+- For bnpl: set numberOfInstallments from "4 payments" / "6 payments".
+- forProfile: pass when the debt belongs to a non-self person ("my wife's car loan" → forProfile:"Wife"). Omit / leave undefined for self debts.
+- linkAssetName: pass when the user mentions a securing asset in the same sentence ("mortgage on 123 Maple" → linkAssetName:"123 Maple"; "car loan on the Tesla" → linkAssetName:"Tesla").
+
+PAYMENT PHRASING → add_liability_payment:
+- "paid $500 on my Chase card" → add_liability_payment(liabilityName:"Chase", amount:500). Tool auto-splits via amortization.
+- "sent $1000 extra to principal on the student loan" → add_liability_payment(liabilityName:"student loan", amount:1000, principal:1000, interest:0). Auto-classified extra_principal.
+- "made my mortgage payment, $300 went to escrow" → add_liability_payment(liabilityName:"mortgage", amount:<monthly>, escrow:300).
+- "paid off the auto loan" → add_liability_payment(liabilityName:"auto loan", amount:<currentBalance>). Auto-classified payoff (sets balance to 0).
+- "minimum payment on Visa, $35" → add_liability_payment(liabilityName:"Visa", amount:35).
+
+REFINANCE / RESTRUCTURE:
+- "I refinanced my mortgage at 5.5%, new balance is $410k, 30 years" → update_liability(name:"mortgage", changes:{annualRate:5.5, currentBalance:410000, originalBalance:410000, termMonths:360}, refinance:true).
+- "my student loan got consolidated into one balance of $48k at 6%" → update_liability with refinance:true.
+- "raised my credit limit to $15k on the Visa" → update_liability(name:"Visa", changes:{creditLimit:15000}). NOT a refinance.
+
+OWNERSHIP / LINKING:
+- "my wife and I share the mortgage 50/50" → call link_liability_owner TWICE: once for "Me" 50%, once for "Wife" 50%, both role:"owner".
+- "my dad co-signed my student loan" → link_liability_owner(liabilityName:"student loan", partyName:"Dad", role:"co_signer").
+- "add my brother as authorized user on the Amex" → link_liability_owner(liabilityName:"Amex", partyName:"Brother", role:"authorized_user").
+- "the HELOC is against the house at 123 Maple" → link_liability_asset(liabilityName:"HELOC", assetName:"123 Maple", role:"secured_by").
+
+MULTI-ACTION CHAINS — when the user packs multiple facts in one sentence, FIRE MULTIPLE TOOLS in the same response:
+- "I have a $420k mortgage on 123 Maple at 6.5% with Wells Fargo, my wife and I split it 50/50" → create_liability + (link is auto if linkAssetName given) + link_liability_owner(Me, 50) + link_liability_owner(Wife, 50).
+- "opened a Chase Sapphire with $10k limit, current balance $3500, paid $200 today" → create_liability + add_liability_payment.
+- "refinanced my mortgage to 5.5% / $410k / 30yr and paid the first payment of $2300" → update_liability(refinance:true) + add_liability_payment.
+
+NEVER:
+- Never use create_profile(type:"loan") for new debts — always create_liability.
+- Never use create_expense for paying down a debt — always add_liability_payment.
+- Never use create_obligation for a credit card balance, mortgage principal, or any debt with a payoff balance — only for pure recurring bills.
+- Never ask the user for clarification on subtype if the phrasing is unambiguous — pick the right subtype from the recognition table and proceed.
+- Never split a self-owned liability into multiple ownership rows unless the user explicitly says they share it. Default = single owner = self at 100%, recorded implicitly via the parent profile.
 - GOALS + HABITS: When creating a daily or recurring goal tied to a tracker (e.g., "run every day", "drink 8 glasses of water daily", "meditate 10 min daily"), ALSO create a companion habit via create_habit so the user gets daily check-in tracking. The goal tracks progress toward the target; the habit tracks daily consistency. Always do BOTH calls when the goal implies a daily action.
 
 CRITICAL ROUTING RULES (NEVER VIOLATE):
@@ -3799,6 +3979,284 @@ async function executeTool(name: string, input: any): Promise<any> {
       const schedule = await storage.getLoanSchedule(input.loan_id);
       return { result: { loan_id: input.loan_id, payments: schedule.length, schedule: schedule.slice(0, 60) } };
     }
+
+    // ─── Liability tools (Phase 5+) ───────────────────────────────────────────────
+    case "create_liability": {
+      const profiles = await storage.getProfiles();
+      // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
+      let rate = Number(input.annualRate);
+      if (!isNaN(rate) && rate > 1) rate = rate / 100;
+      // Resolve parent (forProfile)
+      let parentProfileId: string | undefined;
+      if (input.forProfile) {
+        const fp = String(input.forProfile).toLowerCase().trim();
+        const parent = profiles.find((p: any) => p.name.toLowerCase() === fp)
+          || profiles.find((p: any) => p.name.toLowerCase().includes(fp));
+        if (parent) parentProfileId = parent.id;
+      }
+      if (!parentProfileId) {
+        const selfP = profiles.find((p: any) => p.type === "self");
+        if (selfP) parentProfileId = selfP.id;
+      }
+      // Dedup by name + same parent
+      const nameLC = String(input.name || "").toLowerCase().trim();
+      const existing = profiles.find((p: any) =>
+        p.name.toLowerCase() === nameLC &&
+        (p.type === "liability" || p.type === "loan") &&
+        (parentProfileId ? p.parentProfileId === parentProfileId : true)
+      );
+      const fields: Record<string, any> = {};
+      if (input.currentBalance != null) fields.currentBalance = Number(input.currentBalance);
+      if (input.originalBalance != null) fields.originalBalance = Number(input.originalBalance);
+      else if (input.currentBalance != null) fields.originalBalance = Number(input.currentBalance);
+      if (!isNaN(rate)) fields.annualInterestRate = rate;
+      if (input.monthlyPayment != null) fields.monthlyPayment = Number(input.monthlyPayment);
+      if (input.minimumPayment != null) fields.minimumPayment = Number(input.minimumPayment);
+      if (input.creditLimit != null) fields.creditLimit = Number(input.creditLimit);
+      if (input.remainingTermMonths != null) fields.remainingTermMonths = Number(input.remainingTermMonths);
+      if (input.firstPaymentDate) fields.firstPaymentDate = input.firstPaymentDate;
+      if (input.dueDay != null) fields.dueDay = Number(input.dueDay);
+      if (input.lender) fields.lender = input.lender;
+      if (input.accountNumberLast4) fields.accountNumberLast4 = String(input.accountNumberLast4);
+      // Subtype-specific
+      if (input.propertyAddress) fields.propertyAddress = input.propertyAddress;
+      if (input.escrowMonthly != null) fields.escrowMonthly = Number(input.escrowMonthly);
+      if (input.propertyTaxes != null) fields.propertyTaxes = Number(input.propertyTaxes);
+      if (input.homeownersInsurance != null) fields.homeownersInsurance = Number(input.homeownersInsurance);
+      if (input.vehicleVin) fields.vehicleVin = input.vehicleVin;
+      if (input.vehicleYear) fields.vehicleYear = String(input.vehicleYear);
+      if (input.vehicleMake) fields.vehicleMake = input.vehicleMake;
+      if (input.vehicleModel) fields.vehicleModel = input.vehicleModel;
+      if (input.pslfEligible != null) fields.pslfEligible = !!input.pslfEligible;
+      if (input.idrPlan) fields.idrPlan = input.idrPlan;
+      if (input.forgivenessDate) fields.forgivenessDate = input.forgivenessDate;
+
+      let liability: any;
+      if (existing) {
+        const merged = { ...(existing.fields || {}), ...fields };
+        liability = await storage.updateProfile(existing.id, {
+          fields: merged,
+          notes: input.notes ?? existing.notes,
+          type: "liability",
+          type_key: input.subtype,
+        } as any);
+        if (!liability) liability = existing;
+      } else {
+        liability = await storage.createProfile({
+          type: "liability",
+          type_key: input.subtype,
+          name: input.name,
+          fields,
+          notes: input.notes || "",
+          tags: [],
+          parentProfileId,
+        } as any);
+      }
+      // Optional: auto-link an asset as collateral right after creation
+      if (input.linkAssetName && liability?.id) {
+        const asset = profiles.find((p: any) => p.name.toLowerCase() === String(input.linkAssetName).toLowerCase().trim())
+          || profiles.find((p: any) => p.name.toLowerCase().includes(String(input.linkAssetName).toLowerCase()));
+        if (asset && asset.id !== liability.id) {
+          try {
+            await storage.createLiabilityAssetLink({
+              liabilityProfileId: liability.id,
+              assetProfileId: asset.id,
+              ownershipPercentage: 100,
+              role: "collateral",
+            } as any);
+          } catch (e: any) { logger.warn("ai", `auto link asset failed: ${e?.message}`); }
+        }
+      }
+      return { result: liability, actions: [{ type: "create", category: "liability", data: liability }] };
+    }
+
+    case "update_liability": {
+      const profiles = await storage.getProfiles();
+      const nameLC = String(input.name || "").toLowerCase().trim();
+      const target = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === nameLC)
+        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(nameLC));
+      if (!target) return { error: `Liability not found: ${input.name}` };
+      const ch = input.changes || {};
+      // Normalize annualRate
+      if (ch.annualRate != null) {
+        let r = Number(ch.annualRate);
+        if (!isNaN(r) && r > 1) r = r / 100;
+        ch.annualInterestRate = r;
+        delete ch.annualRate;
+      }
+      const updates: any = {};
+      if (ch.subtype) updates.type_key = ch.subtype;
+      const newFields = { ...(target.fields || {}) };
+      // Refinance flow: bump originalBalance to currentBalance, clear cached schedule
+      if (input.refinance) {
+        const newBal = ch.currentBalance != null ? Number(ch.currentBalance) : Number(newFields.currentBalance) || 0;
+        newFields.originalBalance = newBal;
+        newFields.refinancedAt = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      }
+      // Apply all field changes
+      for (const [k, v] of Object.entries(ch)) {
+        if (k === "subtype") continue;
+        newFields[k] = v;
+      }
+      updates.fields = newFields;
+      const updated = await storage.updateProfile(target.id, updates as any);
+      return { result: updated, actions: [{ type: "update", category: "liability", data: updated }] };
+    }
+
+    case "add_liability_payment": {
+      const profiles = await storage.getProfiles();
+      const nameLC = String(input.liabilityName || "").toLowerCase().trim();
+      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === nameLC)
+        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(nameLC));
+      if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      const f = liability.fields || {};
+      const balance = Number(f.currentBalance) || 0;
+      const monthlyRate = (Number(f.annualInterestRate) || 0) / 12;
+      const amount = Number(input.amount) || 0;
+      let principal = input.principal != null ? Number(input.principal) : NaN;
+      let interest = input.interest != null ? Number(input.interest) : NaN;
+      const escrow = Number(input.escrow) || 0;
+      const fees = Number(input.fees) || 0;
+      const cashTowardLoan = amount - escrow - fees;
+      // Auto-split if not provided
+      if (isNaN(principal) && isNaN(interest)) {
+        const intPortion = Math.min(balance * monthlyRate, cashTowardLoan);
+        interest = Math.max(0, intPortion);
+        principal = Math.max(0, cashTowardLoan - interest);
+      } else if (isNaN(principal)) {
+        principal = Math.max(0, cashTowardLoan - (interest || 0));
+      } else if (isNaN(interest)) {
+        interest = Math.max(0, cashTowardLoan - (principal || 0));
+      }
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const newBalance = Math.max(0, balance - principal);
+      // Determine paymentType
+      let paymentType: any = "standard";
+      const monthly = Number(f.monthlyPayment) || 0;
+      if (input.principal != null && interest === 0 && principal > 0) paymentType = "extra_principal";
+      else if (newBalance === 0) paymentType = "payoff";
+      else if (monthly > 0 && Math.abs(amount - monthly) < 1) paymentType = "standard";
+      else if (monthly > 0 && amount < monthly) paymentType = "partial";
+      else if (monthly > 0 && amount > monthly) paymentType = "custom";
+      const payment = await storage.createLiabilityPayment({
+        liabilityProfileId: liability.id,
+        paymentDate: input.paymentDate || today,
+        amount,
+        principalPortion: principal,
+        interestPortion: interest,
+        fees: fees + escrow,
+        remainingBalanceAfter: newBalance,
+        paymentType,
+        sourceAccount: input.method || null,
+        notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
+      } as any);
+      // Update balance on the liability profile
+      await storage.updateProfile(liability.id, {
+        fields: { ...f, currentBalance: newBalance },
+      } as any);
+      return {
+        result: { payment, newBalance, principal, interest },
+        actions: [{ type: "create", category: "liability_payment", data: payment }],
+      };
+    }
+
+    case "link_liability_asset": {
+      const profiles = await storage.getProfiles();
+      const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
+      const aNameLC = String(input.assetName || "").toLowerCase().trim();
+      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === lNameLC)
+        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(lNameLC));
+      if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      const asset = profiles.find((p: any) => p.name.toLowerCase() === aNameLC && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self")
+        || profiles.find((p: any) => p.name.toLowerCase().includes(aNameLC) && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self");
+      if (!asset) return { error: `Asset not found: ${input.assetName}` };
+      try {
+        const link = await storage.createLiabilityAssetLink({
+          liabilityProfileId: liability.id,
+          assetProfileId: asset.id,
+          ownershipPercentage: 100,
+          role: input.role || "collateral",
+        } as any);
+        return { result: link, actions: [{ type: "link", category: "liability_asset", data: link }] };
+      } catch (e: any) {
+        return { error: `Link failed: ${e?.message || "unknown"}` };
+      }
+    }
+
+    case "link_liability_owner": {
+      const profiles = await storage.getProfiles();
+      const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
+      let pNameLC = String(input.partyName || "").toLowerCase().trim();
+      if (pNameLC === "me" || pNameLC === "myself" || pNameLC === "i" || pNameLC === "self") {
+        const selfP = profiles.find((p: any) => p.type === "self");
+        if (selfP) pNameLC = selfP.name.toLowerCase();
+      }
+      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === lNameLC)
+        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(lNameLC));
+      if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      const party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
+        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase().includes(pNameLC));
+      if (!party) return { error: `Person not found: ${input.partyName}` };
+      try {
+        const link = await storage.createLiabilityProfileLink({
+          liabilityProfileId: liability.id,
+          partyProfileId: party.id,
+          ownershipPercentage: input.ownershipPct != null ? Number(input.ownershipPct) : 100,
+          role: (input.role || "owner") as any,
+        } as any);
+        return { result: link, actions: [{ type: "link", category: "liability_owner", data: link }] };
+      } catch (e: any) {
+        return { error: `Link failed: ${e?.message || "unknown"}` };
+      }
+    }
+
+    case "get_liability_summary": {
+      const profiles = await storage.getProfiles();
+      const liabilities = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      const summarize = async (lp: any) => {
+        const f = lp.fields || {};
+        const currentBalance = Number(f.currentBalance) || 0;
+        const monthlyPayment = Number(f.monthlyPayment) || 0;
+        const annualRate = Number(f.annualInterestRate) || 0;
+        let payments: any[] = [];
+        try { payments = await storage.getLiabilityPayments(lp.id); } catch { /* noop */ }
+        const totalPaidPrincipal = payments.reduce((s: number, p: any) => s + (Number(p.principalPortion) || 0), 0);
+        const totalPaidInterest = payments.reduce((s: number, p: any) => s + (Number(p.interestPortion) || 0), 0);
+        // Project payoff using current monthly payment
+        let monthsLeft: number | null = null;
+        if (monthlyPayment > 0 && currentBalance > 0) {
+          const r = annualRate / 12;
+          if (r > 0 && monthlyPayment > currentBalance * r) {
+            monthsLeft = Math.ceil(Math.log(monthlyPayment / (monthlyPayment - currentBalance * r)) / Math.log(1 + r));
+          } else if (r === 0) {
+            monthsLeft = Math.ceil(currentBalance / monthlyPayment);
+          }
+        }
+        let assetLinks: any[] = []; let partyLinks: any[] = [];
+        try { assetLinks = await storage.getLiabilityAssetLinks(lp.id); } catch { /* noop */ }
+        try { partyLinks = await storage.getLiabilityProfileLinks(lp.id); } catch { /* noop */ }
+        return {
+          id: lp.id, name: lp.name, subtype: lp.type_key || "other",
+          currentBalance, monthlyPayment, annualRate, lender: f.lender,
+          totalPaidPrincipal, totalPaidInterest, paymentCount: payments.length,
+          projectedMonthsRemaining: monthsLeft,
+          linkedAssets: assetLinks.length, linkedParties: partyLinks.length,
+          recentPayments: payments.slice(0, 5),
+        };
+      };
+      if (input.name) {
+        const nameLC = String(input.name).toLowerCase().trim();
+        const lp = liabilities.find((p: any) => p.name.toLowerCase() === nameLC)
+          || liabilities.find((p: any) => p.name.toLowerCase().includes(nameLC));
+        if (!lp) return { error: `Liability not found: ${input.name}` };
+        return { result: await summarize(lp) };
+      }
+      const summaries = await Promise.all(liabilities.map(summarize));
+      const totalDebt = summaries.reduce((s: number, x: any) => s + x.currentBalance, 0);
+      const totalMonthly = summaries.reduce((s: number, x: any) => s + x.monthlyPayment, 0);
+      return { result: { count: summaries.length, totalDebt, totalMonthly, liabilities: summaries } };
+    }
+
     case "get_cashflow": {
       const cf = await storage.getCashflow(input.month);
       return { result: { month: input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7), weeks: cf } };
