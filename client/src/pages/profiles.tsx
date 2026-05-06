@@ -730,7 +730,12 @@ function mapTypeKeyToLegacyType(typeKey: string, category: string): ProfileType 
     if (typeKey === "pet") return "pet";
     return "person";
   }
-  if (category === "liabilities") return "loan";
+  // "liability" is the canonical type post-Phase-1; the legacy "loan" alias is
+  // only kept around for backward compatibility on un-migrated rows. New
+  // creations must go in as "liability" so the dedicated liability profile
+  // page renders, the rollups include them, and the type_key registry binding
+  // works for the subtype badge.
+  if (category === "liabilities") return "liability";
   if (category === "subscriptions") return "subscription";
   if (category === "investments") return "investment";
   if (category === "property") return "property" as ProfileType;

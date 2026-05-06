@@ -110,36 +110,116 @@ const fmtDate = (iso?: string | null) => {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 };
 
-// Read a liability term consistently — historic data lives across multiple keys.
+// Read a liability term consistently — data lives across many key shapes:
+//   * camelCase keys written by LiabilityProfilePage / older flows
+//     (currentBalance, monthlyPayment, annualInterestRate)
+//   * snake_case keys written by the registry-driven CreateProfileDialog
+//     (current_balance, monthly_payment, interest_rate, loan_term_months,
+//      start_date, original_balance, extra_payment)
+//   * legacy nested paths (fields.loan.*, fields.finance.*)
 function readTerms(profile: LiabilityProfileLike) {
   const f = profile.fields || {};
-  const currentBalance = Number(
-    f.currentBalance ??
-      f.remainingBalance ??
-      f.loanBalance ??
-      f.balance ??
-      0,
-  ) || 0;
-  const originalBalance = Number(
-    f.originalBalance ?? f.originalAmount ?? f.principal ?? 0,
-  ) || 0;
+  const loan = f.loan || {};
+  const finance = f.finance || {};
+  const pick = (...vals: any[]) => {
+    for (const v of vals) {
+      if (v == null || v === "") continue;
+      const n = typeof v === "string" ? parseFloat(v.replace(/[^0-9.\-]/g, "")) : Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  };
+  const currentBalance =
+    pick(
+      f.currentBalance, f.current_balance,
+      f.remainingBalance, f.remaining_balance,
+      f.loanBalance, f.loan_balance,
+      f.balance,
+      finance.currentBalance, finance.current_balance,
+      finance.remainingBalance, finance.remaining_balance, finance.balance,
+      loan.currentBalance, loan.current_balance,
+      loan.remainingBalance, loan.remaining_balance, loan.balance,
+    ) || 0;
+  const originalBalance =
+    pick(
+      f.originalBalance, f.original_balance,
+      f.originalAmount, f.original_amount,
+      f.principal,
+      finance.originalBalance, finance.original_balance,
+      finance.originalAmount, finance.original_amount,
+      loan.originalBalance, loan.original_balance,
+      loan.originalAmount, loan.original_amount,
+    ) || 0;
   const annualRate = normalizeAnnualRate(
-    f.annualInterestRate ?? f.interestRate ?? f.rate ?? 0,
+    f.annualInterestRate ??
+    f.annual_interest_rate ??
+    f.interestRate ??
+    f.interest_rate ??
+    f.rate ??
+    f.apr ??
+    finance.interestRate ??
+    finance.interest_rate ??
+    finance.apr ??
+    loan.interestRate ??
+    loan.interest_rate ??
+    0,
   );
-  const monthlyPayment = Number(f.monthlyPayment ?? f.minimumPayment ?? 0) || 0;
-  const remainingTermMonths =
-    Number(f.remainingTermMonths ?? f.termMonths ?? 0) || undefined;
-  const firstPaymentDate =
-    typeof f.firstPaymentDate === "string"
-      ? f.firstPaymentDate
-      : typeof f.loanStartDate === "string"
-      ? f.loanStartDate
-      : typeof f.startDate === "string"
-      ? f.startDate
-      : undefined;
-  const lender = (f.lender || f.creditor || "").toString();
-  const accountNumberLast4 = (f.accountNumberLast4 || f.last4 || "").toString();
-  const dueDay = Number(f.dueDay ?? f.paymentDueDay ?? 0) || undefined;
+  const monthlyPayment =
+    pick(
+      f.monthlyPayment, f.monthly_payment,
+      f.minimumPayment, f.minimum_payment, f.min_payment,
+      finance.monthlyPayment, finance.monthly_payment,
+      loan.monthlyPayment, loan.monthly_payment,
+    ) || 0;
+  // term may be stored as a number, or as "60 months" string
+  const parseTermNumber = (raw: any): number => {
+    if (raw == null) return 0;
+    if (typeof raw === "number") return raw;
+    const m = String(raw).match(/(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+  };
+  const remainingTermMonthsRaw =
+    pick(
+      f.remainingTermMonths, f.remaining_term_months,
+      f.loanTermMonths, f.loan_term_months,
+      f.termMonths, f.term_months,
+      finance.termMonths, finance.term_months,
+      loan.termMonths, loan.term_months,
+    ) ||
+    parseTermNumber(f.term) ||
+    parseTermNumber(finance.term) ||
+    parseTermNumber(loan.term);
+  const remainingTermMonths = remainingTermMonthsRaw > 0 ? remainingTermMonthsRaw : undefined;
+  const rawDate =
+    f.firstPaymentDate ??
+    f.first_payment_date ??
+    f.loanStartDate ??
+    f.loan_start_date ??
+    f.startDate ??
+    f.start_date ??
+    finance.startDate ??
+    finance.start_date ??
+    loan.startDate ??
+    loan.start_date ??
+    undefined;
+  // Reject obviously broken date strings (e.g. accidental year 12024 from a
+  // browser date input fat-finger). Year must be 1900–2100.
+  let firstPaymentDate: string | undefined = undefined;
+  if (typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+    const yr = parseInt(rawDate.slice(0, 4), 10);
+    if (yr >= 1900 && yr <= 2100) firstPaymentDate = rawDate.slice(0, 10);
+  }
+  const lender = (f.lender || f.creditor || f.servicer || "").toString();
+  const accountNumberLast4 = (
+    f.accountNumberLast4 ||
+    f.account_number_last4 ||
+    f.loanNumber ||
+    f.loan_number ||
+    f.last4 ||
+    ""
+  ).toString();
+  const dueDay =
+    pick(f.dueDay, f.due_day, f.paymentDueDay, f.payment_due_day) || undefined;
 
   return {
     currentBalance,

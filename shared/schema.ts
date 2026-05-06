@@ -239,6 +239,7 @@ export interface Profile {
 
 export const insertProfileSchema = z.object({
   type: z.enum(["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"]),
+  type_key: z.string().optional(),
   name: z.string().min(1),
   fields: z.record(z.any()).optional().default({}),
   tags: z.array(z.string()).optional().default([]),

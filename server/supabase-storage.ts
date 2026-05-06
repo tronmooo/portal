@@ -103,6 +103,8 @@ function resolveLiabilityValue(fields: any): number {
     fields.currentBalance, fields.current_balance,
     finance.currentBalance, finance.current_balance,
     loan.currentBalance, loan.current_balance,
+    // Registry snake_case shape (CreateProfileDialog with auto_loan/mortgage/etc.)
+    fields.balance,
     fields.remainingBalance, fields.remaining_balance,
     fields.loanBalance, fields.loan_balance,
     fields.outstandingBalance, fields.outstanding_balance,
@@ -635,6 +637,13 @@ export class SupabaseStorage implements IStorage {
       documents: [], linked_trackers: [], linked_expenses: [],
       linked_tasks: [], linked_events: [], created_at: now, updated_at: now,
     };
+    // Persist type_key (registry key) so liability subtype, asset registry,
+    // etc. survive a round-trip through the DB. Without this, the client
+    // sends type_key but it's silently dropped — making the subtype badge
+    // and registry lookups fall back to generic labels.
+    if ((data as any).type_key) {
+      insertData.type_key = (data as any).type_key;
+    }
     // Write to the real column if it exists (Phase 1 migration adds it)
     if (parentProfileId) {
       insertData.parent_profile_id = parentProfileId;
@@ -739,6 +748,7 @@ export class SupabaseStorage implements IStorage {
     // Optional FK fields
     if (data.linkedObligationId !== undefined) updateData.linked_obligation_id = data.linkedObligationId || null;
     if (data.parentProfileId !== undefined) updateData.parent_profile_id = data.parentProfileId || null;
+    if ((data as any).type_key !== undefined) updateData.type_key = (data as any).type_key || null;
     const { error } = await this.supabase.from("profiles").update(updateData).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
 
