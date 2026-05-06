@@ -354,15 +354,20 @@ function ChartRenderer({ content, dataBindings, chartType }: { content: string; 
 function ArtifactCard({ item, onSelect, onTogglePin }: { item: UnifiedArtifact; onSelect?: (item: UnifiedArtifact) => void; onTogglePin?: () => void }) {
   const handleClick = () => {
     // Doc/sheet Artifact rows route through parent's handleSelect (which sends
-    // them to /editor/:id). Legacy Document rows go to /documents/:id. AI
-    // reports open the dialog. Notes route to the journal page.
-    if (item.type === "ai_report") {
-      onSelect?.(item);
-    } else if (item.type === "document") {
+    // them to /editor/:id). Legacy Document/scan rows go to /documents/:id. AI
+    // reports/charts/code/markdown open the dialog. Notes route to the journal page.
+    // Wave 17: every artifact type must do *something* on click — the previous
+    // version silently dropped scans and unknown types.
+    if (item.type === "document" || item.type === "scan") {
+      // Legacy documents/scans (not Artifact rows) live under /documents/:id.
       if (item.isArtifact) onSelect?.(item);
       else window.location.hash = `#/documents/${item.id}`;
     } else if (item.type === "note") {
       window.location.hash = "#/dashboard/journal";
+    } else {
+      // ai_report, chart, code, markdown, html, react, svg, mermaid, checklist —
+      // all open the dialog renderer.
+      onSelect?.(item);
     }
   };
 

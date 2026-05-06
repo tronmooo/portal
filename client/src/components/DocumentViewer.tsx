@@ -647,9 +647,20 @@ export function DocumentViewerDialog({
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
-            {/* Document preview — takes all available space */}
-            <div className="flex-1 min-h-0 px-4 pb-2" style={{ display: 'flex', flexDirection: 'column' }}>
+          // Wave 17: split layout. Preview takes ~55% of dialog height so the
+          // whole document is visible at once; details panel takes the rest and
+          // is independently scrollable so users can read every extracted field.
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {/* Document preview — capped to leave room for extracted data */}
+            <div
+              className="shrink-0 px-4 pt-2 pb-2 flex flex-col"
+              style={{
+                // If we have extracted data, the preview gets ~55% of the
+                // available content area; otherwise it gets everything.
+                flex: extractedData && Object.keys(extractedData).length > 0 ? "0 0 55%" : "1 1 auto",
+                minHeight: 0,
+              }}
+            >
               {displayData ? (
                 <div className="flex-1 min-h-0" style={{ height: '100%' }}>
                   <DocumentViewer id={id} name={name} mimeType={mimeType} data={displayData} inline />
@@ -663,24 +674,30 @@ export function DocumentViewerDialog({
               )}
             </div>
 
-            {/* Extracted data section — collapsed at bottom */}
+            {/* Extracted data section — independently scrollable so every field
+                is reachable even on long documents (driver's licenses, leases,
+                receipts …). */}
             {extractedData && Object.keys(extractedData).length > 0 && (
-              <div className="shrink-0 border-t border-border px-4 py-2 bg-muted/10 max-h-[40vh] overflow-y-auto">
-                <p className="text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider mb-1">Extracted Data</p>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3">
-                  {Object.entries(extractedData)
-                    .filter(([_, v]) => v != null && v !== '')
-                    .map(([key, rawVal]) => {
-                      const val = (rawVal && typeof rawVal === 'object' && 'value' in rawVal) ? rawVal.value : rawVal;
-                      const display = typeof val === 'object' ? JSON.stringify(val) : String(val);
-                      if (!display || display === 'null' || display === 'undefined') return null;
-                      return (
-                        <div key={key} className="flex justify-between items-baseline py-[2px] gap-1">
-                          <span className="text-xs-tight text-muted-foreground shrink-0 truncate">{formatFieldKey(key)}</span>
-                          <span className="text-xs-tight font-medium text-foreground text-right truncate">{display}</span>
-                        </div>
-                      );
-                    })}
+              <div className="flex-1 min-h-0 border-t border-border bg-muted/10 flex flex-col">
+                <p className="shrink-0 text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider px-4 pt-2 pb-1">
+                  Extracted Data
+                </p>
+                <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3 gap-y-0.5">
+                    {Object.entries(extractedData)
+                      .filter(([_, v]) => v != null && v !== '')
+                      .map(([key, rawVal]) => {
+                        const val = (rawVal && typeof rawVal === 'object' && 'value' in rawVal) ? rawVal.value : rawVal;
+                        const display = typeof val === 'object' ? JSON.stringify(val) : String(val);
+                        if (!display || display === 'null' || display === 'undefined') return null;
+                        return (
+                          <div key={key} className="flex justify-between items-baseline py-[2px] gap-1">
+                            <span className="text-xs-tight text-muted-foreground shrink-0 truncate">{formatFieldKey(key)}</span>
+                            <span className="text-xs-tight font-medium text-foreground text-right break-words" title={display}>{display}</span>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
               </div>
             )}

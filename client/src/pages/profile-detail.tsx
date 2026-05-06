@@ -6286,9 +6286,62 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar"] });
+      // Calendar uses keys like ["/api/calendar/timeline", start, end, mode, ...ids]
+      // — match by exact first key so all variants are refreshed.
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
     },
     onError: (err: Error) => toast({ title: "Failed to create bill", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // Wave 17: Mark Paid + Early Payoff for the linked monthly bill.
+  const [earlyPayoffOpen, setEarlyPayoffOpen] = useState(false);
+  const [earlyPayoffAmount, setEarlyPayoffAmount] = useState("");
+  const linkedMonthlyBill = linkedObs.find((o: any) => o.frequency === "monthly" && o.linkedProfiles?.includes(profile.id));
+  const markPaidMutation = useMutation({
+    mutationFn: async (amount?: number) => {
+      if (!linkedMonthlyBill) throw new Error("No linked bill");
+      const body: any = {};
+      if (amount && amount > 0) body.amount = Math.round(amount * 100) / 100;
+      await apiRequest("POST", `/api/obligations/${linkedMonthlyBill.id}/pay`, body);
+      // If paying more than monthly payment, reduce the loan balance accordingly.
+      const paid = amount && amount > 0 ? amount : monthlyPayment;
+      if (paid > 0) {
+        // Reduce the principal balance by the principal portion (pmt minus interest)
+        // For early payoff (paid > monthlyPayment), the extra goes 100% to principal.
+        const interestThisMonth = (loanBalance * (interestRate / 100)) / 12;
+        const principalPortion = Math.max(0, paid - interestThisMonth);
+        const newBalance = Math.max(0, loanBalance - principalPortion);
+        const fields: any = { ...(profile.fields || {}) };
+        // Write to the same path the loan tab reads from.
+        if (fields.loan && typeof fields.loan === "object") {
+          fields.loan = { ...fields.loan, remainingBalance: Math.round(newBalance * 100) / 100, balance: Math.round(newBalance * 100) / 100 };
+        } else if (fields.finance && typeof fields.finance === "object") {
+          fields.finance = { ...fields.finance, balance: Math.round(newBalance * 100) / 100 };
+        } else {
+          fields.loanBalance = Math.round(newBalance * 100) / 100;
+        }
+        await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+      }
+    },
+    onSuccess: (_d, paid) => {
+      const isEarly = paid && paid > monthlyPayment * 1.01;
+      toast({
+        title: isEarly ? "Early payment recorded" : "Payment marked paid",
+        description: isEarly ? `Extra principal applied to your loan balance.` : `${formatCurrency(monthlyPayment)} payment recorded.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      setEarlyPayoffOpen(false);
+      setEarlyPayoffAmount("");
+    },
+    onError: (err: Error) => toast({ title: "Payment failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -6497,6 +6550,90 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
               {createBillMutation.isPending ? "Adding…" : "Add monthly bill"}
             </Button>
           </div>
+        </Card>
+      )}
+
+      {/* Wave 17: Mark Paid + Early Payoff. Shown only when a linked bill exists. */}
+      {linkedMonthlyBill && monthlyPayment > 0 && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-xs font-semibold mb-0.5">Payment Tracker</h3>
+              <p className="text-[10px] text-muted-foreground">
+                Next due {linkedMonthlyBill.nextDueDate?.slice(0, 10)} · {formatCurrency(linkedMonthlyBill.amount || monthlyPayment)}
+              </p>
+            </div>
+            <Badge variant="outline" className="text-[10px]">{Math.round(percentPaid)}% paid</Badge>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              className="h-8 text-xs"
+              onClick={() => markPaidMutation.mutate(undefined)}
+              disabled={markPaidMutation.isPending}
+              data-testid="button-mark-paid"
+            >
+              {markPaidMutation.isPending && !earlyPayoffOpen ? "Recording…" : `Mark this month paid`}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs"
+              onClick={() => setEarlyPayoffOpen(o => !o)}
+              data-testid="button-early-payoff-toggle"
+            >
+              {earlyPayoffOpen ? "Cancel" : "Pay extra / pay off early"}
+            </Button>
+          </div>
+          {earlyPayoffOpen && (
+            <div className="mt-3 pt-3 border-t border-border">
+              <label className="text-[10px] text-muted-foreground mb-1 block">
+                Amount to pay (current balance: {formatCurrency(loanBalance)})
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  placeholder={`e.g. ${Math.max(monthlyPayment, loanBalance)}`}
+                  value={earlyPayoffAmount}
+                  onChange={e => setEarlyPayoffAmount(e.target.value)}
+                  data-testid="input-early-payoff-amount"
+                  className="h-8 text-xs"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-[10px] shrink-0"
+                  onClick={() => setEarlyPayoffAmount(String(loanBalance.toFixed(2)))}
+                  data-testid="button-fill-payoff"
+                  type="button"
+                >
+                  Pay off
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-8 text-[10px] shrink-0"
+                  onClick={() => {
+                    const v = parseFloat(earlyPayoffAmount);
+                    if (!v || v <= 0) {
+                      toast({ title: "Enter an amount", variant: "destructive" });
+                      return;
+                    }
+                    markPaidMutation.mutate(v);
+                  }}
+                  disabled={markPaidMutation.isPending || !earlyPayoffAmount}
+                  data-testid="button-submit-early-payoff"
+                >
+                  {markPaidMutation.isPending ? "…" : "Submit"}
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1.5">
+                Extra above this month’s interest goes straight to principal, shortening your payoff date.
+              </p>
+            </div>
+          )}
         </Card>
       )}
 
