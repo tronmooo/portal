@@ -13,7 +13,7 @@ interface AuthenticatedRequest extends Request {
   userId?: string;
 }
 import { storage } from "./storage";
-import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
 import Anthropic from "@anthropic-ai/sdk";
 import {
@@ -1613,6 +1613,70 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch (err: any) {
       log.error("[ProfileSummary]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate AI summary" });
+    }
+  }));
+
+  // Wave 9: Look up current market value for an asset profile.
+  // POST /api/profiles/:id/lookup-value
+  // - Runs estimateAssetValue (live web search + AI) on the profile's fields
+  // - Persists the result onto the profile (currentValue, valuationMethod,
+  //   valuationConfidence, valuationRange, valuationDate, previousValue)
+  // - Returns the new valuation so the client can show it without refetching
+  app.post("/api/profiles/:id/lookup-value", asyncHandler(async (req, res) => {
+    try {
+      const { id } = req.params;
+      const profile = await storage.getProfile(id);
+      if (!profile) return res.status(404).json({ error: "Profile not found" });
+
+      const valuableTypes = ["vehicle", "asset", "property", "investment"];
+      if (!valuableTypes.includes(profile.type)) {
+        return res.status(400).json({ error: `Cannot estimate value for type '${profile.type}'` });
+      }
+
+      const valuation = await estimateAssetValue({
+        type: profile.type,
+        name: profile.name,
+        fields: profile.fields || {},
+      });
+
+      if (!valuation || valuation.estimatedValue === 0) {
+        return res.status(422).json({
+          error: "Could not determine a current market value from search results.",
+          method: valuation?.method || "no data",
+        });
+      }
+
+      const oldValue = (profile.fields as any)?.currentValue
+                    ?? (profile.fields as any)?.purchasePrice
+                    ?? 0;
+
+      // DATA IS NOT DELETED — we merge into existing fields and preserve
+      // previousValue so the user can compare against the prior estimate.
+      const updatedFields = {
+        ...(profile.fields || {}),
+        currentValue: valuation.estimatedValue,
+        valuationMethod: valuation.method,
+        valuationConfidence: valuation.confidence,
+        valuationRange: valuation.details,
+        valuationDate: new Date().toISOString(),
+        previousValue: oldValue,
+      };
+      await storage.updateProfile(id, { fields: updatedFields });
+
+      // Bust the AI summary cache so the next render reflects the new value.
+      try { await storage.setPreference(`profile_ai_${id}`, ""); } catch { /* ignore */ }
+
+      res.json({
+        previousValue: Number(oldValue) || 0,
+        currentValue: valuation.estimatedValue,
+        confidence: valuation.confidence,
+        method: valuation.method,
+        range: valuation.details,
+        valuationDate: updatedFields.valuationDate,
+      });
+    } catch (err: any) {
+      log.error("[LookupValue]", err?.message || "unknown error");
+      res.status(500).json({ error: "Failed to look up current value" });
     }
   }));
 

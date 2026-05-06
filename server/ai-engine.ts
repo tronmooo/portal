@@ -76,7 +76,7 @@ async function webSearch(query: string, numResults = 5): Promise<string> {
   return "";
 }
 
-async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
+export async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
   const valuableTypes = ["vehicle", "asset", "property", "investment"];
   if (!valuableTypes.includes(profile.type)) return null;
 

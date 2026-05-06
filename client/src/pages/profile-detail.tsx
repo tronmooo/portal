@@ -1552,6 +1552,42 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
     });
   }, [profileId]);
 
+  // Wave 9: Look up current market value via web search + AI.
+  // Only shown for asset-like profile types (asset/vehicle/property/investment).
+  const canLookupValue = ["asset", "vehicle", "property", "investment"].includes(profileType);
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupResult, setLookupResult] = useState<null | { value: number; confidence: string; method: string; range: string; previousValue: number }>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+
+  const handleLookupValue = useCallback(async () => {
+    setLookupBusy(true);
+    setLookupError(null);
+    setLookupResult(null);
+    try {
+      const res = await apiRequest("POST", `/api/profiles/${profileId}/lookup-value`);
+      const data = await res.json();
+      if (!res.ok) {
+        setLookupError(data.error || "Lookup failed");
+      } else {
+        setLookupResult({
+          value: data.currentValue,
+          confidence: data.confidence,
+          method: data.method,
+          range: data.range,
+          previousValue: data.previousValue,
+        });
+        // Refresh the profile detail and AI summary so the new value flows everywhere.
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId] });
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
+      }
+    } catch (e: any) {
+      setLookupError(e?.message || "Lookup failed");
+    } finally {
+      setLookupBusy(false);
+    }
+  }, [profileId]);
+
   // Graceful degradation: if AI fails, just don't show the card
   if (isError) return null;
 
@@ -1596,17 +1632,35 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
             <Sparkles className="h-4 w-4 text-primary" />
             <CardTitle className="text-sm font-semibold">AI Summary</CardTitle>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
-            onClick={handleRefresh}
-            disabled={isFetching}
-            data-testid="button-refresh-ai-summary"
-          >
-            <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-1">
+            {canLookupValue && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                onClick={handleLookupValue}
+                disabled={lookupBusy}
+                data-testid="button-lookup-value"
+                title="Estimate current market value from live web data"
+              >
+                {lookupBusy
+                  ? <RefreshCw className="h-3 w-3 animate-spin" />
+                  : <Search className="h-3 w-3" />}
+                {lookupBusy ? "Looking up…" : "Look up value"}
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+              onClick={handleRefresh}
+              disabled={isFetching}
+              data-testid="button-refresh-ai-summary"
+            >
+              <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1614,6 +1668,33 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
         <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-ai-summary">
           {aiSummary.summary}
         </p>
+
+        {/* Wave 9: Lookup result/error banner */}
+        {lookupError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="text-lookup-error">
+            {lookupError}
+          </div>
+        )}
+        {lookupResult && (
+          <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1" data-testid="text-lookup-result">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">Estimated current value</span>
+              <span className="font-semibold tabular-nums">${lookupResult.value.toLocaleString()}</span>
+            </div>
+            <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5">
+              {lookupResult.range && <span>Range: {lookupResult.range}</span>}
+              <span>Confidence: {lookupResult.confidence}</span>
+              <span>Source: {lookupResult.method}</span>
+              {lookupResult.previousValue > 0 && lookupResult.previousValue !== lookupResult.value && (
+                <span>
+                  vs prior ${lookupResult.previousValue.toLocaleString()}{" "}
+                  ({lookupResult.value > lookupResult.previousValue ? "+" : ""}
+                  ${(lookupResult.value - lookupResult.previousValue).toLocaleString()})
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Highlights row */}
         {aiSummary.highlights.length > 0 && (
