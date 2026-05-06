@@ -12,7 +12,11 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
-  base: "./",
+  // Use absolute base ("/") so the index.html shipped on every SPA fallback
+  // route (e.g. /editor/new/sheet) resolves /assets/* correctly. With "./"
+  // nested routes turned `./assets/index.js` into /editor/new/assets/index.js
+  // and 404'd, leaving the page blank.
+  base: "/",
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
