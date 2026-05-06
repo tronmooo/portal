@@ -129,6 +129,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import EditableTitle from "@/components/EditableTitle";
 import { LinkedSheetView, LinkedViewToggle, useLinkedView, type SheetColumn } from "@/components/LinkedSheetView";
+import { LiabilityProfilePage } from "@/pages/liability-detail";
 // DynamicProfileDetail import removed — registry system not yet integrated (see registry/index.ts)
 
 // ============================================================
@@ -8297,6 +8298,13 @@ export default function ProfileDetailPage() {
         </Link>
       </div>
     );
+  }
+
+  // Liability profiles get a dedicated, fully-interactive profile page —
+  // overview, details, payments, amortization (Phase 2). Legacy 'loan' rows
+  // that haven't been migrated yet still flow through here too.
+  if (profile.type === "liability" || profile.type === "loan") {
+    return <LiabilityProfilePage profile={profile as any} />;
   }
 
   const linkedTypes = ["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance"];
