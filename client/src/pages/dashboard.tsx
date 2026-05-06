@@ -115,6 +115,10 @@ function resolveLiabilityBalance(p: any): number {
   if (!p || !p.fields) return 0;
   const f = p.fields;
   const candidates: any[] = [
+    // Phase 2 canonical liability field
+    f.currentBalance, f.current_balance,
+    f.finance?.currentBalance, f.finance?.current_balance,
+    f.loan?.currentBalance, f.loan?.current_balance,
     f.remainingBalance, f.remaining_balance, f.loanBalance, f.loan_balance,
     f.outstandingBalance, f.outstanding_balance, f.balance,
     f.finance?.remainingBalance, f.finance?.remaining_balance, f.finance?.loanBalance, f.finance?.loan_balance,

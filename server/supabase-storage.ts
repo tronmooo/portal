@@ -99,6 +99,10 @@ function resolveLiabilityValue(fields: any): number {
   // Walk every known camelCase + snake_case + nested storage path. Must stay
   // in sync with client/src/pages/dashboard.tsx resolveLiabilityBalance.
   const candidates = [
+    // Phase 2 canonical liability field (writes from LiabilityProfilePage)
+    fields.currentBalance, fields.current_balance,
+    finance.currentBalance, finance.current_balance,
+    loan.currentBalance, loan.current_balance,
     fields.remainingBalance, fields.remaining_balance,
     fields.loanBalance, fields.loan_balance,
     fields.outstandingBalance, fields.outstanding_balance,
@@ -3352,7 +3356,9 @@ export class SupabaseStorage implements IStorage {
         // which could double-count fields named things like `balance` or
         // `amount` that aren't really debts.
         totalLiabilities: (() => {
-          const liabilityTypes = new Set(["loan", "vehicle", "property", "asset", "account", "investment"]);
+          // 'liability' is the new canonical type (Phase 1+); 'loan' is the legacy
+          // alias kept around for any rows that haven't been migrated yet.
+          const liabilityTypes = new Set(["liability", "loan", "vehicle", "property", "asset", "account", "investment"]);
           const filteredProfiles = allProfiles.filter(p => {
             if (!liabilityTypes.has(p.type)) return false;
             if (!fpIds || fpIds.length === 0) return true;

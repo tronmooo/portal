@@ -19,6 +19,9 @@ import {
   Plus,
   Loader2,
   ChevronRight,
+  Calculator,
+  RotateCcw,
+  Sparkles,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +54,8 @@ interface LiabilityProfileLike {
   id: string;
   name: string;
   type: string;          // "liability" or legacy "loan"
-  subtype?: string | null;
+  type_key?: string | null;  // canonical subtype from DB column
+  subtype?: string | null;   // legacy alias
   fields?: any;
   createdAt?: string;
 }
@@ -156,7 +160,7 @@ interface LiabilityProfilePageProps {
   profile: LiabilityProfileLike;
 }
 
-type TabKey = "overview" | "details" | "payments" | "amortization";
+type TabKey = "overview" | "details" | "payments" | "amortization" | "calculator";
 
 export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [, navigate] = useLocation();
@@ -165,10 +169,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const qc = useQueryClient();
 
   const terms = useMemo(() => readTerms(profile), [profile]);
-  const subtypeLabel =
-    profile.subtype && SUBTYPE_LABELS[profile.subtype]
-      ? SUBTYPE_LABELS[profile.subtype]
-      : SUBTYPE_LABELS[(profile.fields?.subtype || "").toString()] || "Liability";
+  // Subtype lookup: type_key is the canonical column on the profiles table
+  // (e.g. 'auto_loan', 'mortgage'). We fall back to legacy fields for older
+  // rows that might still carry the value inside the JSON blob.
+  const subtypeRaw = (
+    profile.type_key ||
+    profile.subtype ||
+    profile.fields?.subtype ||
+    profile.fields?.type_key ||
+    profile.fields?.liabilityType ||
+    ""
+  ).toString();
+  const subtypeLabel = SUBTYPE_LABELS[subtypeRaw] || "Liability";
 
   // Payments fetch
   const paymentsQuery = useQuery<LiabilityPayment[]>({
@@ -245,6 +257,39 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       notes: "",
     });
   }
+
+  // Reverse a payment — deletes the row and adds the principal+fees back to the balance.
+  const reversePaymentMutation = useMutation({
+    mutationFn: async (payment: LiabilityPayment) => {
+      // Restore principal + fees to the balance (interest doesn't change balance,
+      // it accrued separately).
+      const restoreAmount = (Number(payment.principal) || 0) + (Number(payment.fees) || 0);
+      const newBalance = (terms.currentBalance || 0) + restoreAmount;
+      await apiRequest("DELETE", `/api/liability-payments/${payment.id}`);
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
+        fields: {
+          ...(profile.fields || {}),
+          currentBalance: newBalance,
+          remainingBalance: newBalance,
+          loanBalance: newBalance,
+        },
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Payment reversed" });
+      qc.invalidateQueries({ queryKey: [`/api/liabilities/${profile.id}/payments`] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
+    onError: (err: Error) =>
+      toast({
+        title: "Could not reverse payment",
+        description: formatApiError(err),
+        variant: "destructive",
+      }),
+  });
 
   const recordPaymentMutation = useMutation({
     mutationFn: async (input: {
@@ -403,11 +448,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       {/* Tabs */}
       <div className="px-4 md:px-6 pt-4">
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} data-testid="liability-tabs">
-          <TabsList className="grid grid-cols-4 w-full max-w-2xl">
+          <TabsList className="grid grid-cols-5 w-full max-w-3xl">
             <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
             <TabsTrigger value="details" data-testid="tab-details">Details</TabsTrigger>
             <TabsTrigger value="payments" data-testid="tab-payments">Payments</TabsTrigger>
-            <TabsTrigger value="amortization" data-testid="tab-amortization">Amortization</TabsTrigger>
+            <TabsTrigger value="calculator" data-testid="tab-calculator">Payoff</TabsTrigger>
+            <TabsTrigger value="amortization" data-testid="tab-amortization">Schedule</TabsTrigger>
           </TabsList>
 
           {/* OVERVIEW */}
@@ -559,12 +605,23 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 ) : (
                   <div className="divide-y" data-testid="payments-list">
                     {payments.map((p) => (
-                      <PaymentRow key={p.id} p={p} expanded />
+                      <PaymentRow
+                        key={p.id}
+                        p={p}
+                        expanded
+                        onReverse={() => reversePaymentMutation.mutate(p)}
+                        reversing={reversePaymentMutation.isPending}
+                      />
                     ))}
                   </div>
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* PAYOFF CALCULATOR */}
+          <TabsContent value="calculator" className="mt-4">
+            <PayoffCalculator terms={terms} baseSummary={summary} />
           </TabsContent>
 
           {/* AMORTIZATION */}
@@ -745,7 +802,17 @@ function QuickActionButton({
   );
 }
 
-function PaymentRow({ p, expanded }: { p: LiabilityPayment; expanded?: boolean }) {
+function PaymentRow({
+  p,
+  expanded,
+  onReverse,
+  reversing,
+}: {
+  p: LiabilityPayment;
+  expanded?: boolean;
+  onReverse?: () => void;
+  reversing?: boolean;
+}) {
   return (
     <div className="px-3 py-2 flex items-center justify-between gap-3" data-testid={`payment-row-${p.id}`}>
       <div className="min-w-0">
@@ -755,14 +822,324 @@ function PaymentRow({ p, expanded }: { p: LiabilityPayment; expanded?: boolean }
           <div className="text-xs text-muted-foreground mt-0.5 truncate">{p.notes}</div>
         ) : null}
       </div>
-      <div className="text-right text-xs text-muted-foreground shrink-0">
-        <div>P {fmtUSD(Number(p.principal) || 0)}</div>
-        <div>I {fmtUSD(Number(p.interest) || 0)}</div>
-        {expanded && p.remainingBalanceAfter != null ? (
-          <div className="mt-0.5">Bal {fmtUSD(Number(p.remainingBalanceAfter) || 0)}</div>
+      <div className="flex items-center gap-3">
+        <div className="text-right text-xs text-muted-foreground shrink-0">
+          <div>P {fmtUSD(Number(p.principal) || 0)}</div>
+          <div>I {fmtUSD(Number(p.interest) || 0)}</div>
+          {expanded && p.remainingBalanceAfter != null ? (
+            <div className="mt-0.5">Bal {fmtUSD(Number(p.remainingBalanceAfter) || 0)}</div>
+          ) : null}
+        </div>
+        {expanded && onReverse ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive"
+            onClick={onReverse}
+            disabled={reversing}
+            title="Reverse this payment"
+            data-testid={`reverse-payment-${p.id}`}
+          >
+            {reversing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+          </Button>
         ) : null}
       </div>
     </div>
+  );
+}
+
+// ─── Payoff Calculator ───────────────────────────────────────────────────────
+
+function PayoffCalculator({
+  terms,
+  baseSummary,
+}: {
+  terms: ReturnType<typeof readTerms>;
+  baseSummary: ReturnType<typeof summarizeLiability>;
+}) {
+  const [extra, setExtra] = useState<string>("100");
+  const [lumpSum, setLumpSum] = useState<string>("0");
+  const [targetMonths, setTargetMonths] = useState<string>("");
+
+  const extraNum = Math.max(0, parseFloat(extra) || 0);
+  const lumpSumNum = Math.max(0, parseFloat(lumpSum) || 0);
+  const targetMonthsNum = Math.max(0, parseInt(targetMonths) || 0);
+
+  const accelerated = useMemo(() => {
+    if (terms.currentBalance <= 0) return null;
+    const adjustedBalance = Math.max(0, terms.currentBalance - lumpSumNum);
+    return buildAmortization({
+      currentBalance: adjustedBalance,
+      annualInterestRate: terms.annualRate,
+      monthlyPayment: terms.monthlyPayment || baseSummary.monthlyPayment || undefined,
+      remainingTermMonths: terms.remainingTermMonths,
+      firstPaymentDate: terms.firstPaymentDate,
+      extraPerPeriod: extraNum,
+    });
+  }, [terms, lumpSumNum, extraNum, baseSummary.monthlyPayment]);
+
+  // "Pay it off in N months" reverse-solve: compute the required monthly payment
+  // for a given target term, given current balance + APR.
+  const targetSolve = useMemo(() => {
+    if (!targetMonthsNum || terms.currentBalance <= 0) return null;
+    const required =
+      ((terms.currentBalance) * (terms.annualRate / 12)) /
+      (1 - Math.pow(1 + terms.annualRate / 12, -targetMonthsNum));
+    const safeRequired = Number.isFinite(required) && required > 0 ? required : terms.currentBalance / targetMonthsNum;
+    const projection = buildAmortization({
+      currentBalance: terms.currentBalance,
+      annualInterestRate: terms.annualRate,
+      monthlyPayment: safeRequired,
+      firstPaymentDate: terms.firstPaymentDate,
+    });
+    return { requiredMonthlyPayment: safeRequired, projection };
+  }, [terms, targetMonthsNum]);
+
+  const baseMonths = baseSummary.remainingMonths;
+  const baseInterest = baseSummary.totalRemainingInterest;
+  const accMonths = accelerated?.payoffMonths ?? baseMonths;
+  const accInterest = accelerated?.totalInterest ?? baseInterest;
+  const monthsSaved = Math.max(0, baseMonths - accMonths);
+  const interestSaved = Math.max(0, baseInterest - accInterest);
+
+  return (
+    <div className="space-y-4" data-testid="payoff-calculator">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Calculator className="w-4 h-4 text-primary" />
+            What if you paid more?
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="calc-extra">Extra principal per month</Label>
+              <Input
+                id="calc-extra"
+                type="number"
+                step="10"
+                min="0"
+                value={extra}
+                onChange={(e) => setExtra(e.target.value)}
+                data-testid="calc-extra-input"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Applied on top of the regular monthly payment.</p>
+            </div>
+            <div>
+              <Label htmlFor="calc-lump">One-time lump sum</Label>
+              <Input
+                id="calc-lump"
+                type="number"
+                step="100"
+                min="0"
+                value={lumpSum}
+                onChange={(e) => setLumpSum(e.target.value)}
+                data-testid="calc-lump-input"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Applied immediately to the principal balance.</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid md:grid-cols-3 gap-3" data-testid="calc-impact">
+        <ImpactTile
+          label="Months saved"
+          value={monthsSaved > 0 ? `${monthsSaved} mo` : "—"}
+          accent="text-emerald-600"
+          icon={<TrendingDown className="w-4 h-4" />}
+          testid="impact-months"
+        />
+        <ImpactTile
+          label="Interest saved"
+          value={interestSaved > 0 ? fmtUSD(interestSaved) : "—"}
+          accent="text-emerald-600"
+          icon={<DollarSign className="w-4 h-4" />}
+          testid="impact-interest"
+        />
+        <ImpactTile
+          label="New payoff date"
+          value={accelerated && accMonths > 0 ? fmtDate(accelerated.payoffDate) : "—"}
+          accent="text-foreground"
+          icon={<CalendarIcon className="w-4 h-4" />}
+          testid="impact-payoff"
+        />
+      </div>
+
+      {/* Side-by-side schedule */}
+      <div className="grid md:grid-cols-2 gap-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Current pace</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <Row label="Months remaining" value={`${baseMonths}`} />
+            <Row label="Total interest" value={fmtUSD(baseInterest)} />
+            <Row label="Payoff date" value={baseMonths > 0 ? fmtDate(baseSummary.payoffDate) : "—"} />
+          </CardContent>
+        </Card>
+        <Card className="border-emerald-500/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />
+              Accelerated
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <Row label="Months remaining" value={`${accMonths}`} />
+            <Row label="Total interest" value={fmtUSD(accInterest)} />
+            <Row label="Payoff date" value={accMonths > 0 && accelerated ? fmtDate(accelerated.payoffDate) : "—"} />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Balance-over-time mini chart */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Balance over time</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <BalanceChart
+            baseRows={baseSummary.remainingMonths > 0 ? buildAmortization({
+              currentBalance: terms.currentBalance,
+              annualInterestRate: terms.annualRate,
+              monthlyPayment: terms.monthlyPayment || baseSummary.monthlyPayment || undefined,
+              remainingTermMonths: terms.remainingTermMonths,
+              firstPaymentDate: terms.firstPaymentDate,
+            }).rows : []}
+            acceleratedRows={accelerated?.rows ?? []}
+          />
+          <div className="flex items-center gap-4 text-xs text-muted-foreground mt-3">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-muted-foreground/50" /> Current pace</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-emerald-500" /> Accelerated</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Reverse-solve: target months → required payment */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Pay it off by a target date</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div>
+            <Label htmlFor="calc-target">Target months until payoff</Label>
+            <Input
+              id="calc-target"
+              type="number"
+              step="1"
+              min="0"
+              value={targetMonths}
+              onChange={(e) => setTargetMonths(e.target.value)}
+              placeholder="e.g. 36"
+              data-testid="calc-target-input"
+            />
+          </div>
+          {targetSolve ? (
+            <div className="text-sm space-y-1" data-testid="calc-target-result">
+              <Row
+                label="Required monthly payment"
+                value={fmtUSD(targetSolve.requiredMonthlyPayment)}
+              />
+              <Row
+                label="Total interest at this pace"
+                value={fmtUSD(targetSolve.projection.totalInterest)}
+              />
+              <Row
+                label="Final payment"
+                value={fmtDate(targetSolve.projection.payoffDate)}
+              />
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Enter a target term to see the monthly payment required.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ImpactTile({
+  label,
+  value,
+  accent,
+  icon,
+  testid,
+}: {
+  label: string;
+  value: string;
+  accent: string;
+  icon: React.ReactNode;
+  testid?: string;
+}) {
+  return (
+    <div className="rounded-lg border p-3 bg-card" data-testid={testid}>
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div className={`text-xl font-semibold mt-1 leading-tight ${accent}`}>{value}</div>
+    </div>
+  );
+}
+
+function BalanceChart({
+  baseRows,
+  acceleratedRows,
+}: {
+  baseRows: AmortizationRow[];
+  acceleratedRows: AmortizationRow[];
+}) {
+  if (baseRows.length === 0 && acceleratedRows.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground py-4" data-testid="chart-empty">
+        Set a balance, rate, and payment to see the projection.
+      </div>
+    );
+  }
+
+  const W = 600;
+  const H = 140;
+  const padding = 8;
+  const allRows = [...baseRows, ...acceleratedRows];
+  const maxBalance = Math.max(
+    1,
+    ...allRows.map((r) => r.remainingBalance),
+    baseRows[0]?.remainingBalance || 0,
+    acceleratedRows[0]?.remainingBalance || 0,
+  );
+  const maxMonths = Math.max(1, baseRows.length, acceleratedRows.length);
+
+  const toPath = (rows: AmortizationRow[]): string => {
+    if (rows.length === 0) return "";
+    const startBalance =
+      rows[0].remainingBalance + rows[0].principal + rows[0].extraPrincipal;
+    const points = [
+      [0, startBalance] as const,
+      ...rows.map((r, i) => [i + 1, r.remainingBalance] as const),
+    ];
+    return points
+      .map(([m, b], i) => {
+        const x = padding + (m / maxMonths) * (W - padding * 2);
+        const y = padding + (1 - b / maxBalance) * (H - padding * 2);
+        return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join(" ");
+  };
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" data-testid="balance-chart">
+      {/* Grid */}
+      <line x1={padding} y1={H - padding} x2={W - padding} y2={H - padding} stroke="currentColor" strokeOpacity="0.1" />
+      <line x1={padding} y1={padding} x2={padding} y2={H - padding} stroke="currentColor" strokeOpacity="0.1" />
+      {baseRows.length > 0 && (
+        <path d={toPath(baseRows)} fill="none" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" />
+      )}
+      {acceleratedRows.length > 0 && (
+        <path d={toPath(acceleratedRows)} fill="none" stroke="#10b981" strokeWidth="2" />
+      )}
+    </svg>
   );
 }
 
