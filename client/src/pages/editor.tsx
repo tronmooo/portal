@@ -23,6 +23,7 @@ import { useSheetSnapshot, buildSheetFunctions } from "@/lib/sheet-functions";
 import { SLASH_ITEMS, filterSlashItems, type SlashItem } from "@/lib/editor-slash-commands";
 import DOMPurify from "dompurify";
 import { apiRequest } from "@/lib/queryClient";
+import { getProfileFilter } from "@/lib/profileFilter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -194,15 +195,23 @@ export default function EditorPage() {
   // hydrate paramsNew on the first render under hash routing, which caused
   // /editor/new/sheet to silently fall back to doc mode. Read the hash directly
   // as a backstop so the editor always opens in the requested mode.
+  // ALSO: handle plain `/editor/new` (no /:type) — wouter's useRoute("/editor/:id")
+  // captures "new" as an id, which then makes save attempt PATCH /api/artifacts/new → 404.
   const rawHash = typeof window !== "undefined" ? (window.location.hash || "") : "";
-  const hashPath = rawHash.replace(/^#/, "").split("?")[0]; // e.g. "/editor/new/sheet"
+  const hashPath = rawHash.replace(/^#/, "").split("?")[0]; // e.g. "/editor/new/sheet" or "/editor/new"
   const hashSheetMatch = /^\/editor\/new\/(sheet|doc)\b/.exec(hashPath);
-  const hashIsNew = !!hashSheetMatch;
+  const hashIsBareNew = /^\/editor\/new\/?$/.test(hashPath); // bare /editor/new with no type
+  const hashIsNew = !!hashSheetMatch || hashIsBareNew;
   const hashType = (hashSheetMatch?.[1] === "sheet" ? "sheet" : hashSheetMatch?.[1] === "doc" ? "doc" : null) as "doc" | "sheet" | null;
 
-  const isNew = !!matchNew || hashIsNew;
+  // wouter route /editor/:id matches /editor/new and binds id="new" — explicitly
+  // ignore that case so we don't fetch a non-existent artifact and lock the
+  // editor into PATCH-update mode.
+  const existingIdRaw = (matchExisting && !hashIsNew) ? paramsExisting?.id : undefined;
+  const existingId = existingIdRaw === "new" ? undefined : existingIdRaw;
+
+  const isNew = !!matchNew || hashIsNew || !existingId;
   const newType = ((paramsNew?.type === "sheet" || hashType === "sheet") ? "sheet" : "doc") as "doc" | "sheet";
-  const existingId = (matchExisting && !hashIsNew) ? paramsExisting?.id : undefined;
 
   const { data: existing, isLoading: loadingExisting } = useQuery<Artifact>({
     queryKey: ["/api/artifacts", existingId],
@@ -504,14 +513,24 @@ export default function EditorPage() {
   }, [editor, toast]);
 
   // ── Save logic ──────────────────────────────────────────────────────────────
+  // When creating a brand-new artifact, link it to whichever profile(s) the
+  // user currently has selected in the global profile filter. This keeps the
+  // newly-saved doc visible after save instead of getting hidden behind the
+  // active filter (e.g. user filtering by "Bob" saves a doc → server auto-links
+  // it to "self" → doc disappears from view). Existing artifacts keep their
+  // original linkedProfiles — we only add profiles on first save.
   const buildPayload = () => {
     const t = (title || "").trim() || (type === "doc" ? "Untitled doc" : "Untitled sheet");
+    const filter = getProfileFilter();
+    const linkedProfiles = (!savedId && filter.mode === "selected" && filter.selectedIds.length > 0)
+      ? [...filter.selectedIds]
+      : undefined;
     if (type === "doc") {
       const cleanHtml = DOMPurify.sanitize(docHtml || "", {
         ALLOWED_TAGS: ["p", "br", "strong", "em", "u", "s", "code", "pre", "h1", "h2", "h3", "h4", "ul", "ol", "li", "a", "blockquote", "hr"],
         ALLOWED_ATTR: ["href", "target", "rel"],
       });
-      return { type: "doc" as const, title: t, content: cleanHtml, source: fromChat ? "chat" : "manual" };
+      return { type: "doc" as const, title: t, content: cleanHtml, source: fromChat ? "chat" : "manual", ...(linkedProfiles ? { linkedProfiles } : {}) };
     }
     // Sheet: cap dimensions so the zod max ceilings hold.
     const safe: SheetData = {
@@ -519,7 +538,7 @@ export default function EditorPage() {
       cols: Math.max(1, Math.min(200, sheet.cols)),
       cells: sheet.cells,
     };
-    return { type: "sheet" as const, title: t, content: "", sheetData: safe, source: fromChat ? "chat" : "manual" };
+    return { type: "sheet" as const, title: t, content: "", sheetData: safe, source: fromChat ? "chat" : "manual", ...(linkedProfiles ? { linkedProfiles } : {}) };
   };
 
   const saveMut = useMutation({
