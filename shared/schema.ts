@@ -408,12 +408,33 @@ export interface SheetCell {
   f?: string;                 // formula (starts with "="); v is the cached eval
 }
 
+/** Wave 14: per-cell display format (Google Sheets-style number formatting / styling). */
+export interface SheetCellFormat {
+  /** Number format: "plain" (default), "currency" ($), "percent" (%), "number" (with decimals), "date". */
+  numberFormat?: "plain" | "currency" | "percent" | "number" | "date";
+  /** Decimal places when numberFormat is "currency", "percent", or "number". Default 2. */
+  decimals?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  /** Tailwind text-align value. */
+  align?: "left" | "center" | "right";
+  /** Background color (any CSS color). */
+  bg?: string;
+  /** Foreground/text color (any CSS color). */
+  fg?: string;
+}
+
 export interface SheetData {
   rows: number;                       // grid height
   cols: number;                       // grid width
   cells: Record<string, SheetCell>;   // sparse map keyed by "r,c" (e.g. "0,0")
   colWidths?: Record<number, number>; // optional column width overrides
   rowHeights?: Record<number, number>;
+  /** Wave 14: optional per-cell display formats keyed by "r,c". */
+  formats?: Record<string, SheetCellFormat>;
+  /** Wave 14: optional sheet name (shown in the bottom tab bar). */
+  sheetName?: string;
 }
 
 export interface Artifact {

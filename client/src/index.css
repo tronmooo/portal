@@ -551,28 +551,33 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
 */
 .portol-sheet .Spreadsheet__cell,
 .portol-sheet .Spreadsheet__header {
-  min-width: 7em;
-  min-height: 2em;
-  height: 2em;
-  max-height: 2em;
-  font-size: 0.875rem;
+  min-width: 100px;
+  min-height: 22px;
+  height: 22px;
+  max-height: 22px;
+  font-size: 13px;
   border-color: hsl(var(--border));
+  padding: 0 6px;
 }
 .portol-sheet .Spreadsheet__header {
   background: hsl(var(--muted) / 0.6);
   color: hsl(var(--muted-foreground));
   font-weight: 500;
+  text-align: center;
 }
 .portol-sheet .Spreadsheet__header--selected {
-  background: hsl(var(--primary) / 0.18);
-  color: hsl(var(--primary-foreground, var(--foreground)));
+  background: #1a73e8 !important;
+  color: #ffffff !important;
+}
+.portol-sheet .Spreadsheet__cell--selected {
+  box-shadow: inset 0 0 0 2px #1a73e8 !important;
 }
 .portol-sheet .Spreadsheet {
   --background-color: hsl(var(--background));
   --text-color: hsl(var(--foreground));
   --readonly-text-color: hsl(var(--muted-foreground));
-  --outline-color: hsl(var(--primary));
-  --outline-background-color: hsl(var(--primary) / 0.12);
+  --outline-color: #1a73e8;
+  --outline-background-color: rgba(26, 115, 232, 0.1);
   --border-color: hsl(var(--border));
   --header-background-color: hsl(var(--muted) / 0.6);
 }
@@ -582,6 +587,21 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
   --readonly-text-color: hsl(var(--muted-foreground));
   --header-background-color: hsl(var(--muted) / 0.4);
   --border-color: hsl(var(--border));
+  --outline-color: #4285f4;
+}
+/* Sticky first column (row numbers) so it stays in view on horizontal scroll */
+.portol-sheet .Spreadsheet__row > .Spreadsheet__header:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: hsl(var(--muted) / 0.9);
+}
+/* Sticky header row */
+.portol-sheet .Spreadsheet__row:first-child .Spreadsheet__header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: hsl(var(--muted) / 0.9);
 }
 
 /* ── Print styles (Wave 5) ─────────────────────────────────────────────────

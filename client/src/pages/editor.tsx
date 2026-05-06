@@ -7,7 +7,7 @@
 // Saves to /api/artifacts. Autosaves every 5s after the first manual save.
 // Posts a chat preview card when launched from chat (via ?source=chat).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useTheme } from "@/components/theme-provider";
 import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -28,6 +28,8 @@ import {
   Heading1, Heading2, LinkIcon, Code, Save, Download, Trash2, Copy, Loader2, Plus, Minus,
   Share2, Printer, Check, BarChart3, LineChart as LineChartIcon, AreaChart as AreaChartIcon, PieChart as PieChartIcon,
   Link2, User as UserIcon, Activity, FileText, ListChecks, CheckCircle2, BookOpen, Receipt, ExternalLink, PanelRightOpen, PanelRightClose,
+  DollarSign, Percent, Hash, AlignLeft, AlignCenter, AlignRight,
+  Calendar as CalendarIcon, Eraser, ChevronDown,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
@@ -36,7 +38,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
-import type { Artifact, SheetData, SheetCell } from "@shared/schema";
+import type { Artifact, SheetData, SheetCell, SheetCellFormat } from "@shared/schema";
 import { getTemplatesByType, type EditorTemplate } from "@/lib/editor-templates";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
@@ -94,7 +96,7 @@ function sheetToMatrix(s: SheetData): { value: string }[][] {
   return m;
 }
 
-function matrixToSheet(m: any[][], rows: number, cols: number): SheetData {
+function matrixToSheet(m: any[][], rows: number, cols: number, prev?: SheetData): SheetData {
   const cells: Record<string, SheetCell> = {};
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -110,7 +112,16 @@ function matrixToSheet(m: any[][], rows: number, cols: number): SheetData {
       }
     }
   }
-  return { rows, cols, cells };
+  // Wave 14: preserve format metadata + sheet name across edits.
+  return {
+    rows,
+    cols,
+    cells,
+    formats: prev?.formats,
+    colWidths: prev?.colWidths,
+    rowHeights: prev?.rowHeights,
+    sheetName: prev?.sheetName,
+  };
 }
 
 function colLetterToIndex(s: string): number {
@@ -128,6 +139,36 @@ function colIndexToLetter(c: number): string {
     n = Math.floor((n - 1) / 26);
   }
   return s;
+}
+
+// ── Wave 14: Sheet number formatting ──────────────────────────────────────────
+/**
+ * Format a raw cell value using a per-cell display format. Returns a string
+ * suitable for display (formula evaluation already happens in react-spreadsheet,
+ * so this just polishes the look — currency, percent, fixed decimals, etc.).
+ */
+function formatCellDisplay(raw: unknown, fmt?: SheetCellFormat): string {
+  if (raw == null || raw === "") return "";
+  if (!fmt || !fmt.numberFormat || fmt.numberFormat === "plain") return String(raw);
+  const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[$,%\s]/g, ""));
+  if (!isFinite(n)) return String(raw);
+  const decimals = typeof fmt.decimals === "number" ? fmt.decimals : 2;
+  switch (fmt.numberFormat) {
+    case "currency":
+      return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    case "percent":
+      return (n * 100).toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + "%";
+    case "number":
+      return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    case "date":
+      try {
+        const d = typeof raw === "number" ? new Date(raw) : new Date(String(raw));
+        if (isNaN(d.getTime())) return String(raw);
+        return d.toLocaleDateString();
+      } catch { return String(raw); }
+    default:
+      return String(raw);
+  }
 }
 
 // ── Editor component ──────────────────────────────────────────────────────────
@@ -862,6 +903,89 @@ export default function EditorPage() {
   }, [docHtml, type]);
   const sheetStats = useMemo(() => Object.keys(sheet.cells).length, [sheet]);
 
+  // ── Wave 14: Sheet formatting helpers ────────────────────────────────────
+  /** Mutate the format for the active cell (or all of `cells` if a range pased in). */
+  const applyFormatToActive = useCallback((mut: (curr: SheetCellFormat) => SheetCellFormat) => {
+    if (!activeCell) return;
+    const key = `${activeCell.row},${activeCell.column}`;
+    setSheet(prev => {
+      const formats = { ...(prev.formats || {}) };
+      formats[key] = mut(formats[key] || {});
+      return { ...prev, formats };
+    });
+    setDirty(true);
+  }, [activeCell]);
+
+  /** Set or unset a number format for the active cell. */
+  const toggleNumberFormat = useCallback((nf: SheetCellFormat["numberFormat"]) => {
+    applyFormatToActive(curr => ({
+      ...curr,
+      numberFormat: curr.numberFormat === nf ? "plain" : nf,
+      decimals: curr.decimals ?? (nf === "currency" || nf === "percent" || nf === "number" ? 2 : undefined),
+    }));
+  }, [applyFormatToActive]);
+
+  /** Bump the decimal places for the active cell (±). Caps 0–6. */
+  const bumpDecimals = useCallback((delta: number) => {
+    applyFormatToActive(curr => ({
+      ...curr,
+      numberFormat: curr.numberFormat || "number",
+      decimals: Math.max(0, Math.min(6, (curr.decimals ?? 2) + delta)),
+    }));
+  }, [applyFormatToActive]);
+
+  /** Toggle a bold/italic/underline flag on the active cell. */
+  const toggleStyleFlag = useCallback((k: "bold" | "italic" | "underline") => {
+    applyFormatToActive(curr => ({ ...curr, [k]: !curr[k] }));
+  }, [applyFormatToActive]);
+
+  /** Set alignment for the active cell. */
+  const setAlign = useCallback((align: "left" | "center" | "right") => {
+    applyFormatToActive(curr => ({ ...curr, align }));
+  }, [applyFormatToActive]);
+
+  /** Clear all formatting from the active cell. */
+  const clearActiveFormat = useCallback(() => {
+    if (!activeCell) return;
+    const key = `${activeCell.row},${activeCell.column}`;
+    setSheet(prev => {
+      const formats = { ...(prev.formats || {}) };
+      delete formats[key];
+      return { ...prev, formats };
+    });
+    setDirty(true);
+  }, [activeCell]);
+
+  /** Resolve the current format for the active cell (read-only). */
+  const activeFormat: SheetCellFormat | undefined = useMemo(() => {
+    if (!activeCell) return undefined;
+    return sheet.formats?.[`${activeCell.row},${activeCell.column}`];
+  }, [activeCell, sheet.formats]);
+
+  /** Custom DataViewer that respects per-cell formats. */
+  const SheetDataViewer = useMemo(() => {
+    function Viewer(props: { row: number; column: number; cell: any; evaluatedCell?: any }) {
+      const { row, column, cell, evaluatedCell } = props;
+      const fmt = sheet.formats?.[`${row},${column}`];
+      const display = formatCellDisplay(
+        evaluatedCell?.value ?? cell?.value ?? "",
+        fmt,
+      );
+      const style: CSSProperties = {
+        width: "100%",
+        padding: "0 6px",
+        fontWeight: fmt?.bold ? 700 : undefined,
+        fontStyle: fmt?.italic ? "italic" : undefined,
+        textDecoration: fmt?.underline ? "underline" : undefined,
+        textAlign: fmt?.align,
+        background: fmt?.bg,
+        color: fmt?.fg,
+      };
+      return <span style={style}>{display}</span>;
+    }
+    return Viewer;
+  }, [sheet.formats]);
+
   // Commit formula-bar edits back into the sheet at activeCell.
   const commitFormulaBar = useCallback(() => {
     if (!activeCell) return;
@@ -1074,23 +1198,256 @@ export default function EditorPage() {
         </div>
       ) : (
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Sheet toolbar */}
-          <div className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1 shrink-0">
-            <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, rows: Math.min(10000, s.rows + 5) })); setDirty(true); }} data-testid="button-sheet-add-rows"><Plus className="h-3 w-3 mr-1" /> 5 rows</Button>
-            <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, rows: Math.max(1, s.rows - 5) })); setDirty(true); }} data-testid="button-sheet-rm-rows"><Minus className="h-3 w-3 mr-1" /> 5 rows</Button>
+          {/* Wave 14: Google-Sheets style menu bar */}
+          <div className="border-b bg-background px-2 py-0.5 flex items-center gap-0 shrink-0 text-xs">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal" data-testid="menu-file">File</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuItem onClick={() => { setSheet({ cells: {}, rows: 50, cols: 26, formats: {}, sheetName: "Sheet1" }); setDirty(true); }} data-testid="menu-file-new">
+                  <Plus className="h-3.5 w-3.5 mr-2" /> New sheet
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => saveMut.mutate()} data-testid="menu-file-save">
+                  <Save className="h-3.5 w-3.5 mr-2" /> Save
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => {
+                  // Download current sheet as CSV
+                  const lines: string[] = [];
+                  for (let r = 0; r < sheet.rows; r++) {
+                    const row: string[] = [];
+                    for (let c = 0; c < sheet.cols; c++) {
+                      const cell = sheet.cells[`${r},${c}`];
+                      const fmt = sheet.formats?.[`${r},${c}`];
+                      const display = formatCellDisplay(cell?.v ?? "", fmt);
+                      const escaped = /[",\n]/.test(display) ? `"${display.replace(/"/g, '""')}"` : display;
+                      row.push(escaped);
+                    }
+                    lines.push(row.join(","));
+                  }
+                  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url; a.download = `${title || sheet.sheetName || "sheet"}.csv`; a.click();
+                  URL.revokeObjectURL(url);
+                }} data-testid="menu-file-csv">
+                  <Download className="h-3.5 w-3.5 mr-2" /> Download CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => window.print()} data-testid="menu-file-print">
+                  Print
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal" data-testid="menu-edit">Edit</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuItem onClick={clearActiveFormat} data-testid="menu-edit-clear-format">
+                  <Eraser className="h-3.5 w-3.5 mr-2" /> Clear formatting
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal" data-testid="menu-insert">Insert</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuItem onClick={() => { setSheet(s => ({ ...s, rows: Math.min(10000, s.rows + 5) })); setDirty(true); }} data-testid="menu-insert-rows">
+                  <Plus className="h-3.5 w-3.5 mr-2" /> Insert 5 rows below
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setSheet(s => ({ ...s, cols: Math.min(200, s.cols + 2) })); setDirty(true); }} data-testid="menu-insert-cols">
+                  <Plus className="h-3.5 w-3.5 mr-2" /> Insert 2 columns right
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => {
+                  if (activeCell && !chartRange) {
+                    const a = `${colIndexToLetter(activeCell.column)}${activeCell.row + 1}`;
+                    setChartRange(`${a}:${colIndexToLetter(Math.min(sheet.cols - 1, activeCell.column + 2))}${Math.min(sheet.rows, activeCell.row + 10)}`);
+                  }
+                  setChartOpen(true);
+                }} data-testid="menu-insert-chart">
+                  <BarChart3 className="h-3.5 w-3.5 mr-2" /> Chart
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal" data-testid="menu-format">Format</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Number</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => toggleNumberFormat("plain")} data-testid="menu-format-plain">Automatic / Plain</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => toggleNumberFormat("number")} data-testid="menu-format-number"><Hash className="h-3.5 w-3.5 mr-2" /> Number</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => toggleNumberFormat("currency")} data-testid="menu-format-currency"><DollarSign className="h-3.5 w-3.5 mr-2" /> Currency</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => toggleNumberFormat("percent")} data-testid="menu-format-percent"><Percent className="h-3.5 w-3.5 mr-2" /> Percent</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => toggleNumberFormat("date")} data-testid="menu-format-date"><CalendarIcon className="h-3.5 w-3.5 mr-2" /> Date</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => bumpDecimals(1)}>Increase decimal places</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => bumpDecimals(-1)}>Decrease decimal places</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={clearActiveFormat}><Eraser className="h-3.5 w-3.5 mr-2" /> Clear formatting</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal" data-testid="menu-data">Data</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuItem onClick={() => setChartOpen(true)} data-testid="menu-data-chart">
+                  <BarChart3 className="h-3.5 w-3.5 mr-2" /> Range as chart
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal" data-testid="menu-view">View</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-48">
+                <DropdownMenuItem onClick={() => { setSheet(s => ({ ...s, rows: Math.max(1, s.rows - 5) })); setDirty(true); }}>
+                  <Minus className="h-3.5 w-3.5 mr-2" /> Remove 5 rows
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setSheet(s => ({ ...s, cols: Math.max(1, s.cols - 2) })); setDirty(true); }}>
+                  <Minus className="h-3.5 w-3.5 mr-2" /> Remove 2 columns
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <span className="text-[11px] text-muted-foreground ml-auto pr-2">{sheet.rows} × {sheet.cols}</span>
+          </div>
+
+          {/* Wave 14: Formatting toolbar (B/I/U, $ % decimals, align, eraser, chart) */}
+          <div className="border-b bg-muted/30 px-2 py-1 flex items-center gap-0.5 shrink-0">
+            <Button
+              variant={activeFormat?.bold ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => toggleStyleFlag("bold")}
+              disabled={!activeCell}
+              title="Bold (Ctrl+B)"
+              data-testid="fmt-bold"
+            ><Bold className="h-3.5 w-3.5" /></Button>
+            <Button
+              variant={activeFormat?.italic ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => toggleStyleFlag("italic")}
+              disabled={!activeCell}
+              title="Italic (Ctrl+I)"
+              data-testid="fmt-italic"
+            ><Italic className="h-3.5 w-3.5" /></Button>
+            <Button
+              variant={activeFormat?.underline ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => toggleStyleFlag("underline")}
+              disabled={!activeCell}
+              title="Underline (Ctrl+U)"
+              data-testid="fmt-underline"
+            ><UnderlineIcon className="h-3.5 w-3.5" /></Button>
+
             <div className="w-px h-5 bg-border mx-1" />
-            <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, cols: Math.min(200, s.cols + 2) })); setDirty(true); }} data-testid="button-sheet-add-cols"><Plus className="h-3 w-3 mr-1" /> 2 cols</Button>
-            <Button variant="ghost" size="sm" onClick={() => { setSheet(s => ({ ...s, cols: Math.max(1, s.cols - 2) })); setDirty(true); }} data-testid="button-sheet-rm-cols"><Minus className="h-3 w-3 mr-1" /> 2 cols</Button>
+
+            <Button
+              variant={activeFormat?.numberFormat === "currency" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => toggleNumberFormat("currency")}
+              disabled={!activeCell}
+              title="Format as currency"
+              data-testid="fmt-currency"
+            ><DollarSign className="h-3.5 w-3.5" /></Button>
+            <Button
+              variant={activeFormat?.numberFormat === "percent" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => toggleNumberFormat("percent")}
+              disabled={!activeCell}
+              title="Format as percent"
+              data-testid="fmt-percent"
+            ><Percent className="h-3.5 w-3.5" /></Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-1.5 text-[11px] font-mono"
+              onClick={() => bumpDecimals(-1)}
+              disabled={!activeCell}
+              title="Decrease decimal places"
+              data-testid="fmt-dec-decimal"
+            >.0←</Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-1.5 text-[11px] font-mono"
+              onClick={() => bumpDecimals(1)}
+              disabled={!activeCell}
+              title="Increase decimal places"
+              data-testid="fmt-inc-decimal"
+            >.0→</Button>
+
             <div className="w-px h-5 bg-border mx-1" />
-            <Button variant="ghost" size="sm" onClick={() => {
-              // Pre-fill range from active cell selection if user has clicked into the sheet.
-              if (activeCell && !chartRange) {
-                const a = `${colIndexToLetter(activeCell.column)}${activeCell.row + 1}`;
-                setChartRange(`${a}:${colIndexToLetter(Math.min(sheet.cols - 1, activeCell.column + 2))}${Math.min(sheet.rows, activeCell.row + 10)}`);
-              }
-              setChartOpen(true);
-            }} data-testid="button-sheet-insert-chart"><BarChart3 className="h-3 w-3 mr-1" /> Insert chart</Button>
-            <span className="text-xs text-muted-foreground ml-3">{sheet.rows} × {sheet.cols}</span>
+
+            <Button
+              variant={activeFormat?.align === "left" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => setAlign("left")}
+              disabled={!activeCell}
+              title="Align left"
+              data-testid="fmt-align-left"
+            ><AlignLeft className="h-3.5 w-3.5" /></Button>
+            <Button
+              variant={activeFormat?.align === "center" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => setAlign("center")}
+              disabled={!activeCell}
+              title="Align center"
+              data-testid="fmt-align-center"
+            ><AlignCenter className="h-3.5 w-3.5" /></Button>
+            <Button
+              variant={activeFormat?.align === "right" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => setAlign("right")}
+              disabled={!activeCell}
+              title="Align right"
+              data-testid="fmt-align-right"
+            ><AlignRight className="h-3.5 w-3.5" /></Button>
+
+            <div className="w-px h-5 bg-border mx-1" />
+
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={clearActiveFormat}
+              disabled={!activeCell}
+              title="Clear formatting"
+              data-testid="fmt-clear"
+            ><Eraser className="h-3.5 w-3.5" /></Button>
+
+            <div className="w-px h-5 bg-border mx-1" />
+
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => {
+                if (activeCell && !chartRange) {
+                  const a = `${colIndexToLetter(activeCell.column)}${activeCell.row + 1}`;
+                  setChartRange(`${a}:${colIndexToLetter(Math.min(sheet.cols - 1, activeCell.column + 2))}${Math.min(sheet.rows, activeCell.row + 10)}`);
+                }
+                setChartOpen(true);
+              }}
+              data-testid="button-sheet-insert-chart"
+            ><BarChart3 className="h-3.5 w-3.5 mr-1" /> Chart</Button>
           </div>
           {/* Formula bar (Excel-style: shows raw formula/value of active cell, lets you edit) */}
           <div className="border-b bg-muted/10 px-3 py-1 flex items-center gap-2 shrink-0">
@@ -1129,8 +1486,9 @@ export default function EditorPage() {
                 data={matrix}
                 darkMode={resolvedMode === "dark"}
                 createFormulaParser={sheetCreateFormulaParser}
+                DataViewer={SheetDataViewer as any}
                 onChange={(m: any) => {
-                  setSheet(matrixToSheet(m, sheet.rows, sheet.cols));
+                  setSheet(matrixToSheet(m, sheet.rows, sheet.cols, sheet));
                   setDirty(true);
                 }}
                 onActivate={(point: { row: number; column: number }) => {
@@ -1140,6 +1498,36 @@ export default function EditorPage() {
                 }}
               />
             </div>
+          </div>
+          {/* Wave 14: Bottom sheet tab bar (Google-Sheets style) */}
+          <div className="border-t bg-muted/30 px-2 py-1 flex items-center gap-1 shrink-0 text-xs">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0"
+              onClick={() => {
+                const next = prompt("Add a new sheet tab — coming soon. For now, rename the current tab.", sheet.sheetName || "Sheet1");
+                if (next && next.trim()) {
+                  setSheet(s => ({ ...s, sheetName: next.trim() }));
+                  setDirty(true);
+                }
+              }}
+              title="Add sheet"
+              data-testid="sheet-tab-add"
+            ><Plus className="h-3.5 w-3.5" /></Button>
+            <button
+              type="button"
+              onDoubleClick={() => {
+                const next = prompt("Rename sheet", sheet.sheetName || "Sheet1");
+                if (next && next.trim()) {
+                  setSheet(s => ({ ...s, sheetName: next.trim() }));
+                  setDirty(true);
+                }
+              }}
+              className="px-3 py-1 rounded-t border-t border-l border-r border-border bg-background text-foreground font-medium text-xs hover:bg-muted/50"
+              data-testid="sheet-tab-active"
+              title="Double-click to rename"
+            >{sheet.sheetName || "Sheet1"}</button>
           </div>
         </div>
       )}
