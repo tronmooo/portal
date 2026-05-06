@@ -1303,7 +1303,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Profiles ---
   {
     name: "create_profile",
-    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Loan: lender, amount, apr, term, monthlyPayment. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday. IMPORTANT: When creating a vehicle, asset, subscription, loan, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.",
+    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.\n\n*** DO NOT use type:'loan' OR create profiles for debts/loans/credit cards/mortgages/student loans/HELOC/BNPL/IRS debt with this tool. Use the dedicated `create_liability` tool instead — it sets the correct subtype, structured fields, and unlocks the Payments/Payoff/Schedule/Linked/Docs/Activity tabs. The 'loan' type here is LEGACY and must not be used for new entries. ***\n\nIMPORTANT: When creating a vehicle, asset, subscription, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -2533,6 +2533,17 @@ function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: str
 
 EXISTING DATA (this is fresh from the database — use it for every answer):
 ${context}
+
+*** TOP-PRIORITY ROUTING RULE — LIABILITIES ***
+Whenever the user mentions ANY actual debt, loan, credit card, mortgage, auto loan, student loan, personal loan, HELOC, business loan, medical debt, IRS/tax debt, BNPL (Affirm/Klarna/Afterpay), or money they owe, you MUST use the dedicated liability tools — never create_profile(type:"loan") and never create_obligation:
+- New debt mentioned → create_liability (with the correct subtype: credit_card | mortgage | auto_loan | student_loan | personal_loan | heloc | business_loan | medical_debt | tax_debt | bnpl | other)
+- Paid down a debt → add_liability_payment
+- Editing a debt (rate change, balance update, refinance) → update_liability
+- Linking debt to securing asset → link_liability_asset
+- Adding co-owner / co-signer / authorized user → link_liability_owner
+- User asks about totals/payoff → get_liability_summary
+
+The legacy create_profile(type:"loan") is forbidden for new entries — it skips subtype, structured fields, and the liability detail UI. The full LIABILITIES section below has subtype recognition tables, payment phrasing, ownership rules, and multi-action examples — follow it strictly.
 
 DIAGNOSTICS & INSIGHTS MODE:
 When the user asks questions like "how am I doing?", "give me a health summary", "what's my financial situation?", "diagnose my habits", "what do I need to focus on?", or any open-ended question about their status:
