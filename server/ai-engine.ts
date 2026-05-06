@@ -2851,11 +2851,24 @@ MULTI-ACTION CHAINS — when the user packs multiple facts in one sentence, FIRE
 - "opened a Chase Sapphire with $10k limit, current balance $3500, paid $200 today" → create_liability + add_liability_payment.
 - "refinanced my mortgage to 5.5% / $410k / 30yr and paid the first payment of $2300" → update_liability(refinance:true) + add_liability_payment.
 
+MATCHING THE RIGHT LIABILITY — read this CAREFULLY:
+- The CONTEXT BLOCK above contains a 'Liabilities (...)' section listing ALL liabilities — both ACTIVE and PAID-OFF. ALWAYS scan it before claiming you can't find one.
+- Each liability shows: name, subtype, status, id, balance/apr/monthly/dueDay, plus 'kw:' keyword field with lender / vehicle / property terms.
+- When the user uses CASUAL phrasing ("the boat thing", "my sea ray", "that klarna iphone", "my dad's loan"), match against name OR keywords. Examples:
+  - User says "boat" → match liability with kw containing "sea ray", "yacht", or vehicleMake including marine.
+  - User says "my dad's loan" → match liability with co-owner Dad in the profile_links section, OR with lender="Dad".
+  - User says "affirm peloton" → match the liability whose name or kw contains BOTH "affirm" AND "peloton". Do NOT fall back to a different BNPL just because it's the only other one.
+- PAID-OFF liabilities are still valid targets for: re-activation (when user says "extended me another $X", "reopened", "new advance"), reversal of payoff, balance corrections, refi unwinds, or audit edits. Use update_liability(changes:{currentBalance:NEW}) to reactivate.
+- If multiple liabilities partially match, pick the one with the strongest token overlap. If still ambiguous, ask ONE concise clarifying question listing the candidates by name.
+- If NO liability matches, do NOT create one silently as a fallback — first ask the user.
+
 NEVER:
 - Never use create_profile(type:"loan") for new debts — always create_liability.
 - Never use create_expense for paying down a debt — always add_liability_payment.
 - Never use create_obligation for a credit card balance, mortgage principal, or any debt with a payoff balance — only for pure recurring bills.
 - Never ask the user for clarification on subtype if the phrasing is unambiguous — pick the right subtype from the recognition table and proceed.
+- Never assume a liability does not exist without scanning the full Liabilities list (including PAID-OFF entries) in the context block.
+- Never silently match "Affirm Peloton" to a Klarna record (or vice versa) just because they're both BNPL — match by name + keywords.
 - Never split a self-owned liability into multiple ownership rows unless the user explicitly says they share it. Default = single owner = self at 100%, recorded implicitly via the parent profile.
 - GOALS + HABITS: When creating a daily or recurring goal tied to a tracker (e.g., "run every day", "drink 8 glasses of water daily", "meditate 10 min daily"), ALSO create a companion habit via create_habit so the user gets daily check-in tracking. The goal tracks progress toward the target; the habit tracks daily consistency. Always do BOTH calls when the goal implies a daily action.
 
@@ -6844,6 +6857,31 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         const f = s.fields || {};
         const details = Object.entries(f).filter(([k, v]) => v && !k.startsWith('_')).map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`).join(', ');
         return `${s.name} {${details}}`;
+      }).join('; ')}`;
+    })(),
+    // Liabilities (ALL — active AND paid-off) so chat NLP can find any of them by name, lender, asset, vehicle, or property keywords.
+    (() => {
+      const liabProfiles = profiles.filter((p: any) => p.type === 'liability' || p.type === 'loan');
+      if (liabProfiles.length === 0) return '';
+      return `Liabilities (${liabProfiles.length}): ${liabProfiles.map((l: any) => {
+        const f = l.fields || {};
+        const bal = Number(f.currentBalance) || 0;
+        const status = bal === 0 ? "PAID-OFF" : "active";
+        const subtype = l.type_key || "other";
+        // Searchable keywords helps the model fuzzy-match casual phrasings ("boat", "sea ray", "my dad's loan").
+        const keywords: string[] = [];
+        if (f.lender) keywords.push(String(f.lender));
+        if (f.vehicleYear) keywords.push(String(f.vehicleYear));
+        if (f.vehicleMake) keywords.push(String(f.vehicleMake));
+        if (f.vehicleModel) keywords.push(String(f.vehicleModel));
+        if (f.propertyAddress) keywords.push(String(f.propertyAddress));
+        const details = [
+          `bal: $${bal.toFixed(2)}`,
+          f.annualInterestRate ? `apr: ${(Number(f.annualInterestRate) * 100).toFixed(2)}%` : null,
+          f.monthlyPayment ? `mo: $${f.monthlyPayment}` : null,
+          f.dueDay ? `due: ${f.dueDay}` : null,
+        ].filter(Boolean).join(', ');
+        return `${l.name} [${subtype}, ${status}, id:${l.id.slice(0, 8)}, ${details}${keywords.length ? `, kw: ${keywords.join("|")}` : ""}]`;
       }).join('; ')}`;
     })(),
     `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
