@@ -4219,8 +4219,26 @@ async function executeTool(name: string, input: any): Promise<any> {
       const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === lNameLC)
         || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(lNameLC));
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
-      const party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
+      let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
         || profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase().includes(pNameLC));
+      // Auto-create the person profile if missing — same UX gap as the asset link.
+      if (!party && input.partyName) {
+        const partyName = String(input.partyName).trim();
+        // Skip self-y phrases that should have already been resolved
+        if (!/^(me|myself|i|self)$/i.test(partyName)) {
+          try {
+            party = await storage.createProfile({
+              name: partyName,
+              type: "person",
+              fields: input.relationship ? { relationship: input.relationship } : {},
+              tags: [],
+              notes: null,
+            } as any);
+          } catch (e: any) {
+            return { error: `Person "${partyName}" not found and could not be auto-created: ${e?.message || "unknown"}` };
+          }
+        }
+      }
       if (!party) return { error: `Person not found: ${input.partyName}` };
       try {
         const link = await storage.createLiabilityProfileLink({
