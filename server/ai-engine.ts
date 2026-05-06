@@ -1581,12 +1581,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "add_liability_payment",
-    description: "Record an actual payment made against a liability. Use for: 'paid $500 on my car loan', 'made the mortgage payment', 'sent $2000 extra principal on the student loan', 'paid off $1500 of the credit card'. Splits into principal + interest automatically when not specified. For extra/lump-sum principal payments, set principal explicitly and interest=0. Decreases currentBalance immediately and shows on the Payments + Activity tabs.",
+    description: "Record a payment (or non-payment) against a liability. Use for: 'paid $500 on my car loan', 'made the mortgage payment', 'sent $2000 extra principal on the student loan', 'paid off $1500 of the credit card', 'I missed last month's mortgage payment', 'skipped the November car payment', 'reversed the duplicate $200 payment'. Splits into principal + interest automatically when not specified. For extra/lump-sum principal payments, set principal explicitly and interest=0. For a missed/skipped payment, set paymentType='skipped' and amount=0 (the row is logged for the activity timeline but does NOT decrease the balance). For a reversal, set paymentType='reversal' and a positive amount; the balance is increased back. Otherwise the tool decreases currentBalance immediately and shows on the Payments + Activity tabs.",
     input_schema: {
       type: "object" as const,
       properties: {
         liabilityName: { type: "string", description: "Liability name (partial match). e.g. 'car loan', 'mortgage', 'Visa', 'student loans'." },
-        amount: { type: "number", description: "Total payment amount (principal + interest + escrow). REQUIRED." },
+        amount: { type: "number", description: "Total payment amount (principal + interest + escrow). For paymentType='skipped' pass 0. REQUIRED." },
         principal: { type: "number", description: "Principal portion. If omitted, computed from amortization (interest = balance * monthlyRate, principal = amount - interest)." },
         interest: { type: "number", description: "Interest portion." },
         escrow: { type: "number", description: "Escrow portion (mortgage only)." },
@@ -1595,6 +1595,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         method: { type: "string", description: "Payment method: 'auto-pay', 'manual ACH', 'check', 'card', etc." },
         confirmationNumber: { type: "string", description: "Bank/lender confirmation number." },
         notes: { type: "string", description: "Free-form notes (e.g. 'extra principal', 'February payment')." },
+        paymentType: { type: "string", enum: ["standard", "minimum", "custom", "extra_principal", "interest_only", "partial", "payoff", "reversal", "deferred", "skipped"], description: "Override auto-classification. Set 'skipped' for a missed payment (amount=0), 'reversal' to add the amount back to the balance, 'deferred' for a forbearance/grace-period entry." },
       },
       required: ["liabilityName", "amount"],
     },
@@ -2821,6 +2822,18 @@ PAYMENT PHRASING → add_liability_payment:
 - "made my mortgage payment, $300 went to escrow" → add_liability_payment(liabilityName:"mortgage", amount:<monthly>, escrow:300).
 - "paid off the auto loan" → add_liability_payment(liabilityName:"auto loan", amount:<currentBalance>). Auto-classified payoff (sets balance to 0).
 - "minimum payment on Visa, $35" → add_liability_payment(liabilityName:"Visa", amount:35).
+- "I missed last month's mortgage payment" / "skipped November car payment" → add_liability_payment(liabilityName:"mortgage", amount:0, paymentType:"skipped", paymentDate:<prior month date>). Logs the gap on the timeline; does NOT change balance.
+- "reverse the duplicate $200 charge on my Visa" → add_liability_payment(liabilityName:"Visa", amount:200, paymentType:"reversal"). Adds amount back to balance.
+- "deferred my student loan payments for 3 months" → update_liability with notes about forbearance OR add a single deferred row via paymentType:"deferred".
+- "I paid $200 extra toward Bob's Honda loan" → if a liability tied to Bob's Honda exists, target it by name (e.g. liabilityName:"Bob Honda"). If multiple Honda loans exist, the closer match in profile parentage wins; pass extra context in liabilityName.
+
+CROSS-PROFILE LIABILITY ASSIGNMENT:
+- "My wife's car loan with Toyota for $25k at 5%" → create_liability(name:"Wife's Toyota Loan", subtype:"auto_loan", lender:"Toyota", currentBalance:25000, annualRate:5, forProfile:"Wife"). The liability nests under the Wife profile.
+- "Add a $4,500 medical bill for my dad with $150 monthly payments" → create_liability(subtype:"medical_debt", currentBalance:4500, monthlyPayment:150, forProfile:"Dad").
+- "The fridge financing is due on the 12th every month, $80/month, $960 total via Synchrony" → create_liability(name:"Fridge Financing", subtype:"bnpl" (or "other"), lender:"Synchrony", currentBalance:960, monthlyPayment:80, dueDay:12, linkAssetName:"Fridge"). The dueDay automatically generates a recurring obligation for the calendar.
+- "Jane and I both share this credit card debt" → after create_liability, call link_liability_owner(liability, "Me", 50, "owner") AND link_liability_owner(liability, "Jane", 50, "owner").
+
+DUE DAY → CALENDAR: Always pass dueDay (1-31) on create_liability when the user mentions "due on the Xth" or implies a monthly due date. The backend auto-creates a recurring obligation so the payment surfaces on the calendar.
 
 REFINANCE / RESTRUCTURE:
 - "I refinanced my mortgage at 5.5%, new balance is $410k, 30 years" → update_liability(name:"mortgage", changes:{annualRate:5.5, currentBalance:410000, originalBalance:410000, termMonths:360}, refinance:true).
@@ -4078,6 +4091,32 @@ async function executeTool(name: string, input: any): Promise<any> {
           } catch (e: any) { logger.warn("ai", `auto link asset failed: ${e?.message}`); }
         }
       }
+      // Auto-generate a recurring obligation so the liability appears on the calendar
+      // (mirrors how create_obligation drives subscription calendar entries).
+      // Only do this when we have BOTH a monthly payment and a due-day.
+      if (liability?.id && fields.monthlyPayment && fields.dueDay) {
+        try {
+          const existingObs = await storage.getObligations();
+          const obName = `${input.name} payment`;
+          const dup = existingObs.find((o: any) => o.name.toLowerCase() === obName.toLowerCase());
+          if (!dup) {
+            const today = new Date();
+            const dueDay = Math.max(1, Math.min(31, Number(fields.dueDay)));
+            const next = new Date(today.getFullYear(), today.getMonth(), dueDay);
+            if (next.getTime() < today.getTime()) next.setMonth(next.getMonth() + 1);
+            const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+            const newOb = await storage.createObligation({
+              name: obName,
+              amount: Number(fields.monthlyPayment),
+              frequency: "monthly",
+              category: "liability",
+              nextDueDate,
+              autopay: false,
+            } as any);
+            try { await directLinkToProfile("obligation", newOb.id, input.name); } catch {}
+          }
+        } catch (e: any) { logger.warn("ai", `auto-create liability obligation failed: ${e?.message}`); }
+      }
       return { result: liability, actions: [{ type: "create", category: "liability", data: liability }] };
     }
 
@@ -4140,15 +4179,29 @@ async function executeTool(name: string, input: any): Promise<any> {
         interest = Math.max(0, cashTowardLoan - (principal || 0));
       }
       const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      const newBalance = Math.max(0, balance - principal);
-      // Determine paymentType
-      let paymentType: any = "standard";
+      // Determine paymentType (model can override)
+      let paymentType: any = input.paymentType || "standard";
       const monthly = Number(f.monthlyPayment) || 0;
-      if (input.principal != null && interest === 0 && principal > 0) paymentType = "extra_principal";
-      else if (newBalance === 0) paymentType = "payoff";
-      else if (monthly > 0 && Math.abs(amount - monthly) < 1) paymentType = "standard";
-      else if (monthly > 0 && amount < monthly) paymentType = "partial";
-      else if (monthly > 0 && amount > monthly) paymentType = "custom";
+      if (!input.paymentType) {
+        if (input.principal != null && interest === 0 && principal > 0) paymentType = "extra_principal";
+        else if (Math.max(0, balance - principal) === 0 && amount > 0) paymentType = "payoff";
+        else if (monthly > 0 && Math.abs(amount - monthly) < 1) paymentType = "standard";
+        else if (monthly > 0 && amount < monthly && amount > 0) paymentType = "partial";
+        else if (monthly > 0 && amount > monthly) paymentType = "custom";
+      }
+      // Compute new balance based on payment type
+      let newBalance: number;
+      if (paymentType === "skipped" || paymentType === "deferred") {
+        // No balance change. Force amount/principal/interest to 0 for the row.
+        newBalance = balance;
+        principal = 0; interest = 0;
+      } else if (paymentType === "reversal") {
+        // Add the amount back to the balance.
+        newBalance = balance + amount;
+        principal = -principal; interest = -interest;
+      } else {
+        newBalance = Math.max(0, balance - principal);
+      }
       const payment = await storage.createLiabilityPayment({
         liabilityProfileId: liability.id,
         paymentDate: input.paymentDate || today,
