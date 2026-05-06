@@ -2444,7 +2444,7 @@ function InfoTab({
     } else if (t === "person" || t === "self") {
       if (f.relationship) parts.push(String(f.relationship));
       if (f.email) parts.push(String(f.email));
-    } else if (t === "loan") {
+    } else if (t === "loan" || t === "liability") {
       if (f.lender) parts.push(String(f.lender));
       if (f.interestRate) parts.push(`${f.interestRate}% APR`);
     } else if (t === "subscription") {
@@ -2737,6 +2737,60 @@ function InfoTab({
         </Button>
       )}
 
+      {/* ── 5b. Liabilities (Phase 1: liabilities are nested profiles) ── */}
+      {(() => {
+        const kids = (profile.childProfiles || []) as any[];
+        const liabilities = kids.filter(c => c.type === "liability" || c.type === "loan");
+        if (liabilities.length === 0) return null;
+        const totalBalance = liabilities.reduce((s: number, l: any) => {
+          const f = l.fields || {}; const fin = f.finance || {};
+          const v = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+          return s + (Number.isFinite(v) ? v : 0);
+        }, 0);
+        const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+        return (
+          <Card data-testid="profile-liabilities-section">
+            <CardHeader className="py-2.5 px-4 flex flex-row items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <Wallet className="h-3.5 w-3.5 text-orange-500" />
+                <CardTitle className="text-xs font-semibold">Liabilities <span className="text-muted-foreground font-normal">({liabilities.length})</span></CardTitle>
+              </div>
+              {totalBalance > 0 && (
+                <span className="text-xs font-bold tabular-nums text-red-500">{fmt(totalBalance)}</span>
+              )}
+            </CardHeader>
+            <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
+              {liabilities.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((l: any) => {
+                const f = l.fields || {}; const fin = f.finance || {};
+                const bal = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+                const apr = f.apr ?? f.interestRate ?? fin.apr ?? fin.interestRate;
+                const monthly = f.monthlyPayment ?? fin.monthlyPayment;
+                const subtypeRaw = (l.type_key || l.fields?.subtype || "").toString().replace(/_/g, " ");
+                return (
+                  <Link key={l.id} href={`/profiles/${l.id}`}>
+                    <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer" data-testid={`liability-row-${l.id}`}>
+                      <div className="h-7 w-7 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
+                        <Wallet className="h-3.5 w-3.5 text-orange-500" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{l.name}</p>
+                        <p className="text-xs text-muted-foreground truncate capitalize">
+                          {subtypeRaw || "loan"}{apr ? ` · ${apr}${String(apr).includes("%") ? "" : "%"} APR` : ""}{monthly ? ` · ${fmt(Number(monthly))}/mo` : ""}
+                        </p>
+                      </div>
+                      {bal > 0 && (
+                        <span className="text-xs font-bold tabular-nums text-red-500 shrink-0">{fmt(bal)}</span>
+                      )}
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    </div>
+                  </Link>
+                );
+              })}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* ── 6. Child Profiles ── */}
       {(profile.childProfiles || []).length > 0 && (
         <Card>
@@ -2745,7 +2799,7 @@ function InfoTab({
           </CardHeader>
           <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
             {(profile.childProfiles || []).slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((child: any) => {
-              const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Package, loan: Wallet, investment: TrendingUp, property: Home, person: User, pet: PawPrint };
+              const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Package, loan: Wallet, liability: Wallet, investment: TrendingUp, property: Home, person: User, pet: PawPrint };
               const ChildIcon = iconMap[child.type] || Link2;
               return (
                 <Link key={child.id} href={`/profiles/${child.id}`}>
@@ -3279,7 +3333,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   // Phase 8: loans live as fields inside an asset profile (not as their own type).
   // Detect loan-shaped data either at top level OR in a nested fields.loan / fields.finance object.
   const loanSub: Record<string, any> = (profile.fields as any)?.loan || (profile.fields as any)?.finance || {};
-  const isLoan = profile.type === "loan" ||
+  const isLoan = profile.type === "loan" || profile.type === "liability" ||
     !!(profile.fields.interestRate || profile.fields.loanBalance || profile.fields.monthlyPayment ||
        loanSub.interestRate || loanSub.apr || loanSub.originalAmount || loanSub.remainingBalance || loanSub.monthlyPayment);
   const isInvestment = profile.type === "investment";
@@ -3570,7 +3624,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           return s + val;
         }, 0);
         // Liabilities: loans with a balance
-        const loans = children.filter((c: any) => c.type === "loan" || c.fields?.loanBalance || c.fields?.remainingBalance);
+        const loans = children.filter((c: any) => c.type === "loan" || c.type === "liability" || c.fields?.loanBalance || c.fields?.remainingBalance);
         const totalLiabilities = loans.reduce((s: number, c: any) => {
           const bal = Number(c.fields?.remainingBalance || c.fields?.loanBalance || c.fields?.balance || 0);
           return s + bal;

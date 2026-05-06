@@ -6267,7 +6267,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       const assetTypes = ["vehicle","property","investment","asset","account","banking"];
       const totalAssets = children.filter((c: any) => assetTypes.includes(c.type))
         .reduce((s, c) => s + Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || 0), 0);
-      const totalLiabs = children.filter((c: any) => c.type === "loan" || c.fields?.loanBalance)
+      const totalLiabs = children.filter((c: any) => c.type === "loan" || c.type === "liability" || c.fields?.loanBalance)
         .reduce((s, c) => s + Number(c.fields?.remainingBalance || c.fields?.loanBalance || 0), 0);
       const monthlySubs = obligations.filter((o: any) => o.status !== "cancelled")
         .reduce((s, o) => {

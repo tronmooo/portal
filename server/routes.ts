@@ -31,6 +31,9 @@ import {
   insertDomainSchema,
   insertGoalSchema,
   insertEntityLinkSchema,
+  insertLiabilityAssetLinkSchema,
+  insertLiabilityProfileLinkSchema,
+  insertLiabilityPaymentSchema,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
@@ -4520,6 +4523,71 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       .delete()
       .eq('id', req.params.id)
       .eq('user_id', (storage as any).userId);
+    res.json({ success: true });
+  }));
+
+  // ============================================================
+  // LIABILITIES — Phase 1 endpoints
+  // ============================================================
+
+  // ---- Asset ↔ liability links ----
+  app.get("/api/liabilities/:id/assets", asyncHandler(async (req, res) => {
+    const rows = await storage.getLiabilityAssetLinks(req.params.id);
+    res.json(rows);
+  }));
+  app.get("/api/assets/:id/liabilities", asyncHandler(async (req, res) => {
+    const rows = await storage.getLiabilityAssetLinksForAsset(req.params.id);
+    res.json(rows);
+  }));
+  app.post("/api/liability-asset-links", asyncHandler(async (req, res) => {
+    const parsed = insertLiabilityAssetLinkSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const row = await storage.createLiabilityAssetLink(parsed.data);
+    res.json(row);
+  }));
+  app.delete("/api/liability-asset-links/:id", asyncHandler(async (req, res) => {
+    await storage.deleteLiabilityAssetLink(req.params.id);
+    res.json({ success: true });
+  }));
+
+  // ---- Party ↔ liability links ----
+  app.get("/api/liabilities/:id/parties", asyncHandler(async (req, res) => {
+    const rows = await storage.getLiabilityProfileLinks(req.params.id);
+    res.json(rows);
+  }));
+  app.get("/api/parties/:id/liabilities", asyncHandler(async (req, res) => {
+    const rows = await storage.getLiabilityProfileLinksForParty(req.params.id);
+    res.json(rows);
+  }));
+  app.post("/api/liability-profile-links", asyncHandler(async (req, res) => {
+    const parsed = insertLiabilityProfileLinkSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const row = await storage.createLiabilityProfileLink(parsed.data);
+    res.json(row);
+  }));
+  app.delete("/api/liability-profile-links/:id", asyncHandler(async (req, res) => {
+    await storage.deleteLiabilityProfileLink(req.params.id);
+    res.json({ success: true });
+  }));
+
+  // ---- Payments ----
+  app.get("/api/liabilities/:id/payments", asyncHandler(async (req, res) => {
+    const rows = await storage.getLiabilityPayments(req.params.id);
+    res.json(rows);
+  }));
+  app.post("/api/liabilities/:id/payments", asyncHandler(async (req, res) => {
+    const parsed = insertLiabilityPaymentSchema.safeParse({ ...req.body, liabilityProfileId: req.params.id });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const row = await storage.createLiabilityPayment(parsed.data);
+    res.json(row);
+  }));
+  app.patch("/api/liability-payments/:id", asyncHandler(async (req, res) => {
+    const row = await storage.updateLiabilityPayment(req.params.id, req.body || {});
+    if (!row) return res.status(404).json({ error: "Not found" });
+    res.json(row);
+  }));
+  app.delete("/api/liability-payments/:id", asyncHandler(async (req, res) => {
+    await storage.deleteLiabilityPayment(req.params.id);
     res.json({ success: true });
   }));
 

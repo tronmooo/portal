@@ -200,6 +200,22 @@ export interface IStorage {
 
   // Bulk delete all user data (preserves profiles)
   deleteAllUserData(): Promise<{ deleted: Record<string, number> }>;
+
+  // Liabilities (Phase 1)
+  getLiabilityAssetLinks(liabilityProfileId?: string): Promise<import("@shared/schema").LiabilityAssetLink[]>;
+  getLiabilityAssetLinksForAsset(assetProfileId: string): Promise<import("@shared/schema").LiabilityAssetLink[]>;
+  createLiabilityAssetLink(data: import("@shared/schema").InsertLiabilityAssetLink): Promise<import("@shared/schema").LiabilityAssetLink>;
+  deleteLiabilityAssetLink(id: string): Promise<void>;
+
+  getLiabilityProfileLinks(liabilityProfileId?: string): Promise<import("@shared/schema").LiabilityProfileLink[]>;
+  getLiabilityProfileLinksForParty(partyProfileId: string): Promise<import("@shared/schema").LiabilityProfileLink[]>;
+  createLiabilityProfileLink(data: import("@shared/schema").InsertLiabilityProfileLink): Promise<import("@shared/schema").LiabilityProfileLink>;
+  deleteLiabilityProfileLink(id: string): Promise<void>;
+
+  getLiabilityPayments(liabilityProfileId: string): Promise<import("@shared/schema").LiabilityPayment[]>;
+  createLiabilityPayment(data: import("@shared/schema").InsertLiabilityPayment): Promise<import("@shared/schema").LiabilityPayment>;
+  updateLiabilityPayment(id: string, data: Partial<import("@shared/schema").InsertLiabilityPayment>): Promise<import("@shared/schema").LiabilityPayment | undefined>;
+  deleteLiabilityPayment(id: string): Promise<void>;
 }
 
 // ---- Human-readable tracker value formatting ----
@@ -2011,6 +2027,20 @@ export class MemStorage implements IStorage {
     this.preferences.clear();
     return { deleted };
   }
+
+  // Liabilities — stubs (MemStorage is dev-only; no persistence needed).
+  async getLiabilityAssetLinks(_id?: string) { return []; }
+  async getLiabilityAssetLinksForAsset(_id: string) { return []; }
+  async createLiabilityAssetLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
+  async deleteLiabilityAssetLink(_id: string) { /* noop */ }
+  async getLiabilityProfileLinks(_id?: string) { return []; }
+  async getLiabilityProfileLinksForParty(_id: string) { return []; }
+  async createLiabilityProfileLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
+  async deleteLiabilityProfileLink(_id: string) { /* noop */ }
+  async getLiabilityPayments(_id: string) { return []; }
+  async createLiabilityPayment(_data: any): Promise<any> { throw new Error("MemStorage: liability payments not implemented"); }
+  async updateLiabilityPayment(_id: string, _data: any): Promise<any> { return undefined; }
+  async deleteLiabilityPayment(_id: string) { /* noop */ }
 }
 
 // Storage factory — uses Supabase if env vars are set, otherwise falls back to SQLite

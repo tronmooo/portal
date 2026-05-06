@@ -21,6 +21,9 @@ import {
   type MoodLevel,
   type Goal, type InsertGoal,
   type EntityLink, type InsertEntityLink,
+  type LiabilityAssetLink, type InsertLiabilityAssetLink,
+  type LiabilityProfileLink, type InsertLiabilityProfileLink,
+  type LiabilityPayment, type InsertLiabilityPayment,
   MOOD_SCORES,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
@@ -606,12 +609,12 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {
-    const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "investment", "property", "account", "insurance", "medical"]);
+    const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
     if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
     const now = new Date().toISOString();
     const id = randomUUID();
     // Auto-assign parent to self profile if not specified for child types
-    const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+    const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "liability", "investment", "account", "property"]);
     let parentProfileId = data.parentProfileId;
     if (!parentProfileId && childTypes.has(data.type)) {
       const selfProfile = await this.getSelfProfile();
@@ -1835,7 +1838,7 @@ export class SupabaseStorage implements IStorage {
         // Map loan_id → profile linked profiles (so per-profile filtering works).
         const loanProfileMap = new Map<string, string[]>();
         for (const p of profiles) {
-          if (p.type === 'loan') loanProfileMap.set(p.id, [p.id]);
+          if (p.type === 'loan' || p.type === 'liability') loanProfileMap.set(p.id, [p.id]);
         }
         for (const row of loanRows) {
           if (row.paid) continue;
@@ -1918,7 +1921,7 @@ export class SupabaseStorage implements IStorage {
       }
 
       // Loan → startDate or nextPayment
-      if (profile.type === "loan" && (f.nextPayment || f.startDate)) {
+      if ((profile.type === "loan" || profile.type === "liability") && (f.nextPayment || f.startDate)) {
         const d = (f.nextPayment || f.startDate).slice(0, 10);
         if (d >= startDate && d <= endDate) {
           const label = f.nextPayment ? "Payment Due" : "Start Date";
@@ -3791,6 +3794,190 @@ export class SupabaseStorage implements IStorage {
     }
 
     return { deleted };
+  }
+
+  // ============================================================
+  // LIABILITIES — links + payments (Phase 1)
+  // ============================================================
+
+  private rowToLiabilityAssetLink(r: any): LiabilityAssetLink {
+    return {
+      id: r.id,
+      liabilityProfileId: r.liability_profile_id,
+      assetProfileId: r.asset_profile_id,
+      ownershipPercentage: Number(r.ownership_percentage ?? 100),
+      allocationAmount: r.allocation_amount != null ? Number(r.allocation_amount) : null,
+      role: r.role || "collateral",
+      notes: r.notes ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  private rowToLiabilityProfileLink(r: any): LiabilityProfileLink {
+    return {
+      id: r.id,
+      liabilityProfileId: r.liability_profile_id,
+      partyProfileId: r.party_profile_id,
+      ownershipPercentage: Number(r.ownership_percentage ?? 100),
+      role: r.role,
+      notes: r.notes ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  private rowToLiabilityPayment(r: any): LiabilityPayment {
+    return {
+      id: r.id,
+      liabilityProfileId: r.liability_profile_id,
+      paymentDate: r.payment_date,
+      amount: Number(r.amount || 0),
+      principalPortion: Number(r.principal_portion || 0),
+      interestPortion: Number(r.interest_portion || 0),
+      fees: Number(r.fees || 0),
+      remainingBalanceAfter: r.remaining_balance_after != null ? Number(r.remaining_balance_after) : null,
+      paymentType: r.payment_type || "standard",
+      sourceAccount: r.source_account ?? null,
+      documentId: r.document_id ?? null,
+      notes: r.notes ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  async getLiabilityAssetLinks(liabilityProfileId?: string): Promise<LiabilityAssetLink[]> {
+    let q = this.supabase.from("liability_asset_links").select("*").eq("user_id", this.userId);
+    if (liabilityProfileId) q = q.eq("liability_profile_id", liabilityProfileId);
+    const { data, error } = await q;
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityAssetLink(r));
+  }
+
+  async getLiabilityAssetLinksForAsset(assetProfileId: string): Promise<LiabilityAssetLink[]> {
+    const { data, error } = await this.supabase.from("liability_asset_links")
+      .select("*").eq("user_id", this.userId).eq("asset_profile_id", assetProfileId);
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityAssetLink(r));
+  }
+
+  async createLiabilityAssetLink(data: InsertLiabilityAssetLink): Promise<LiabilityAssetLink> {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const row = {
+      id, user_id: this.userId,
+      liability_profile_id: data.liabilityProfileId,
+      asset_profile_id: data.assetProfileId,
+      ownership_percentage: data.ownershipPercentage ?? 100,
+      allocation_amount: data.allocationAmount ?? null,
+      role: data.role || "collateral",
+      notes: data.notes ?? null,
+      created_at: now, updated_at: now,
+    };
+    const { error } = await this.supabase.from("liability_asset_links").insert(row);
+    if (error) throw error;
+    return this.rowToLiabilityAssetLink(row);
+  }
+
+  async deleteLiabilityAssetLink(id: string): Promise<void> {
+    const { error } = await this.supabase.from("liability_asset_links")
+      .delete().eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+  }
+
+  async getLiabilityProfileLinks(liabilityProfileId?: string): Promise<LiabilityProfileLink[]> {
+    let q = this.supabase.from("liability_profile_links").select("*").eq("user_id", this.userId);
+    if (liabilityProfileId) q = q.eq("liability_profile_id", liabilityProfileId);
+    const { data, error } = await q;
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityProfileLink(r));
+  }
+
+  async getLiabilityProfileLinksForParty(partyProfileId: string): Promise<LiabilityProfileLink[]> {
+    const { data, error } = await this.supabase.from("liability_profile_links")
+      .select("*").eq("user_id", this.userId).eq("party_profile_id", partyProfileId);
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityProfileLink(r));
+  }
+
+  async createLiabilityProfileLink(data: InsertLiabilityProfileLink): Promise<LiabilityProfileLink> {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const row = {
+      id, user_id: this.userId,
+      liability_profile_id: data.liabilityProfileId,
+      party_profile_id: data.partyProfileId,
+      ownership_percentage: data.ownershipPercentage ?? 100,
+      role: data.role || "owner",
+      notes: data.notes ?? null,
+      created_at: now, updated_at: now,
+    };
+    const { error } = await this.supabase.from("liability_profile_links").insert(row);
+    if (error) throw error;
+    return this.rowToLiabilityProfileLink(row);
+  }
+
+  async deleteLiabilityProfileLink(id: string): Promise<void> {
+    const { error } = await this.supabase.from("liability_profile_links")
+      .delete().eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+  }
+
+  async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {
+    const { data, error } = await this.supabase.from("liability_payments")
+      .select("*").eq("user_id", this.userId).eq("liability_profile_id", liabilityProfileId)
+      .order("payment_date", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityPayment(r));
+  }
+
+  async createLiabilityPayment(data: InsertLiabilityPayment): Promise<LiabilityPayment> {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const row = {
+      id, user_id: this.userId,
+      liability_profile_id: data.liabilityProfileId,
+      payment_date: data.paymentDate,
+      amount: data.amount,
+      principal_portion: data.principalPortion ?? 0,
+      interest_portion: data.interestPortion ?? 0,
+      fees: data.fees ?? 0,
+      remaining_balance_after: data.remainingBalanceAfter ?? null,
+      payment_type: data.paymentType || "standard",
+      source_account: data.sourceAccount ?? null,
+      document_id: data.documentId ?? null,
+      notes: data.notes ?? null,
+      created_at: now, updated_at: now,
+    };
+    const { error } = await this.supabase.from("liability_payments").insert(row);
+    if (error) throw error;
+    return this.rowToLiabilityPayment(row);
+  }
+
+  async updateLiabilityPayment(id: string, data: Partial<InsertLiabilityPayment>): Promise<LiabilityPayment | undefined> {
+    const patch: any = { updated_at: new Date().toISOString() };
+    if (data.paymentDate !== undefined) patch.payment_date = data.paymentDate;
+    if (data.amount !== undefined) patch.amount = data.amount;
+    if (data.principalPortion !== undefined) patch.principal_portion = data.principalPortion;
+    if (data.interestPortion !== undefined) patch.interest_portion = data.interestPortion;
+    if (data.fees !== undefined) patch.fees = data.fees;
+    if (data.remainingBalanceAfter !== undefined) patch.remaining_balance_after = data.remainingBalanceAfter;
+    if (data.paymentType !== undefined) patch.payment_type = data.paymentType;
+    if (data.sourceAccount !== undefined) patch.source_account = data.sourceAccount;
+    if (data.documentId !== undefined) patch.document_id = data.documentId;
+    if (data.notes !== undefined) patch.notes = data.notes;
+    const { error } = await this.supabase.from("liability_payments")
+      .update(patch).eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+    const { data: row } = await this.supabase.from("liability_payments")
+      .select("*").eq("id", id).eq("user_id", this.userId).single();
+    return row ? this.rowToLiabilityPayment(row) : undefined;
+  }
+
+  async deleteLiabilityPayment(id: string): Promise<void> {
+    const { error } = await this.supabase.from("liability_payments")
+      .delete().eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
   }
 
   // ============================================================

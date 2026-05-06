@@ -4371,7 +4371,8 @@ export default function TrackersPage() {
         // Group by type
         const typeGroups: Record<string, typeof childProfiles> = {};
         for (const p of childProfiles) {
-          const group = p.type === "vehicle" ? "Vehicles" : p.type === "asset" ? "Assets" : p.type === "property" ? "Properties" : p.type === "loan" ? "Loans" : p.type === "investment" ? "Investments" : "Other";
+          // Phase 1 Liabilities: liabilities/loans intentionally excluded from Trackers — they live inside asset/person profile pages only.
+          const group = p.type === "vehicle" ? "Vehicles" : p.type === "asset" ? "Assets" : p.type === "property" ? "Properties" : p.type === "investment" ? "Investments" : "Other";
           (typeGroups[group] = typeGroups[group] || []).push(p);
         }
         const sortedGroups = Object.entries(typeGroups).sort(([a], [b]) => a.localeCompare(b));

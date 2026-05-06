@@ -190,7 +190,31 @@ export type InsertDomain = z.infer<typeof insertDomainSchema>;
 // PROFILES (expanded types)
 // ============================================================
 
-export type ProfileType = "person" | "pet" | "vehicle" | "account" | "property" | "subscription" | "medical" | "self" | "loan" | "investment" | "asset";
+export type ProfileType = "person" | "pet" | "vehicle" | "account" | "property" | "subscription" | "medical" | "self" | "loan" | "investment" | "asset" | "liability";
+
+// ============================================================
+// LIABILITY SUBTYPES (type_key when type === 'liability')
+// ============================================================
+export type LiabilitySubtype =
+  | "mortgage" | "auto_loan" | "credit_card" | "student_loan"
+  | "medical_debt" | "business_loan" | "tax_debt" | "line_of_credit"
+  | "bnpl" | "personal_loan" | "financing" | "utility_plan" | "custom";
+
+export const LIABILITY_SUBTYPES: ReadonlyArray<{ key: LiabilitySubtype; label: string; icon?: string }> = [
+  { key: "mortgage",       label: "Mortgage" },
+  { key: "auto_loan",      label: "Auto Loan" },
+  { key: "credit_card",    label: "Credit Card" },
+  { key: "student_loan",   label: "Student Loan" },
+  { key: "medical_debt",   label: "Medical Debt" },
+  { key: "business_loan",  label: "Business Loan" },
+  { key: "tax_debt",       label: "Tax Debt" },
+  { key: "line_of_credit", label: "Line of Credit" },
+  { key: "bnpl",           label: "BNPL / Installment" },
+  { key: "personal_loan",  label: "Personal Loan" },
+  { key: "financing",      label: "Financing Agreement" },
+  { key: "utility_plan",   label: "Utility Payment Plan" },
+  { key: "custom",         label: "Custom" },
+];
 
 export interface Profile {
   id: string;
@@ -214,7 +238,7 @@ export interface Profile {
 }
 
 export const insertProfileSchema = z.object({
-  type: z.enum(["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset"]),
+  type: z.enum(["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"]),
   name: z.string().min(1),
   fields: z.record(z.any()).optional().default({}),
   tags: z.array(z.string()).optional().default([]),
@@ -920,4 +944,102 @@ export interface DashboardStats {
   currentMood?: MoodLevel;
   totalArtifacts: number;
   totalMemories: number;
+}
+
+// ============================================================
+// LIABILITIES — links + payments (Phase 1 of Liability module)
+// ============================================================
+
+export type LiabilityPartyRole = "owner" | "co_signer" | "guarantor" | "responsible_party" | "authorized_user";
+
+export interface LiabilityAssetLink {
+  id: string;
+  liabilityProfileId: string;
+  assetProfileId: string;
+  ownershipPercentage: number;    // 0..100
+  allocationAmount?: number | null; // optional hard $ allocation
+  role: string;                    // "collateral" | "improvement" | "shared" | custom
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LiabilityProfileLink {
+  id: string;
+  liabilityProfileId: string;
+  partyProfileId: string;
+  ownershipPercentage: number;
+  role: LiabilityPartyRole;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LiabilityPaymentType =
+  | "standard" | "minimum" | "custom" | "extra_principal"
+  | "interest_only" | "partial" | "payoff" | "reversal"
+  | "deferred" | "skipped";
+
+export interface LiabilityPayment {
+  id: string;
+  liabilityProfileId: string;
+  paymentDate: string;      // YYYY-MM-DD
+  amount: number;
+  principalPortion: number;
+  interestPortion: number;
+  fees: number;
+  remainingBalanceAfter?: number | null;
+  paymentType: LiabilityPaymentType;
+  sourceAccount?: string | null;
+  documentId?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const insertLiabilityAssetLinkSchema = z.object({
+  liabilityProfileId: z.string().uuid(),
+  assetProfileId: z.string().uuid(),
+  ownershipPercentage: z.number().min(0).max(100).default(100),
+  allocationAmount: z.number().nonnegative().nullable().optional(),
+  role: z.string().default("collateral"),
+  notes: z.string().nullable().optional(),
+});
+export type InsertLiabilityAssetLink = z.input<typeof insertLiabilityAssetLinkSchema>;
+
+export const insertLiabilityProfileLinkSchema = z.object({
+  liabilityProfileId: z.string().uuid(),
+  partyProfileId: z.string().uuid(),
+  ownershipPercentage: z.number().min(0).max(100).default(100),
+  role: z.enum(["owner", "co_signer", "guarantor", "responsible_party", "authorized_user"]).default("owner"),
+  notes: z.string().nullable().optional(),
+});
+export type InsertLiabilityProfileLink = z.input<typeof insertLiabilityProfileLinkSchema>;
+
+export const insertLiabilityPaymentSchema = z.object({
+  liabilityProfileId: z.string().uuid(),
+  paymentDate: z.string(),
+  amount: z.number().nonnegative(),
+  principalPortion: z.number().nonnegative().default(0),
+  interestPortion: z.number().nonnegative().default(0),
+  fees: z.number().nonnegative().default(0),
+  remainingBalanceAfter: z.number().nullable().optional(),
+  paymentType: z.enum([
+    "standard", "minimum", "custom", "extra_principal",
+    "interest_only", "partial", "payoff", "reversal",
+    "deferred", "skipped",
+  ]).default("standard"),
+  sourceAccount: z.string().nullable().optional(),
+  documentId: z.string().uuid().nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+export type InsertLiabilityPayment = z.input<typeof insertLiabilityPaymentSchema>;
+
+/**
+ * Phase 1 liability migration: legacy profiles may still carry type='loan'
+ * until a user-initiated re-save. Treat both 'loan' and 'liability' as the
+ * same logical kind throughout the app.
+ */
+export function isLiabilityType(t: string | null | undefined): boolean {
+  return t === "liability" || t === "loan";
 }
