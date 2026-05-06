@@ -5932,9 +5932,12 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
-  // Asset (laptop, device, etc.)
+  // Asset (laptop, device, etc.) — loan tab so an item financed on a card or
+  // installment plan can carry its own loan instead of needing a separate Loan
+  // profile. Same data shape as the Vehicle/Property loan tab.
   asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
