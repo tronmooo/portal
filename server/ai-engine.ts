@@ -4174,12 +4174,26 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "link_liability_asset": {
       const profiles = await storage.getProfiles();
       const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
-      const aNameLC = String(input.assetName || "").toLowerCase().trim();
+      const aNameRaw = String(input.assetName || "").trim();
+      const aNameLC = aNameRaw.toLowerCase();
       const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === lNameLC)
         || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(lNameLC));
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
-      const asset = profiles.find((p: any) => p.name.toLowerCase() === aNameLC && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self")
+      let asset = profiles.find((p: any) => p.name.toLowerCase() === aNameLC && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self")
         || profiles.find((p: any) => p.name.toLowerCase().includes(aNameLC) && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self");
+      // Auto-create the asset if missing — this is the most common UX gap.
+      // Heuristic: addresses (digits + street word) → property; vehicle keywords → vehicle; otherwise generic asset.
+      if (!asset && aNameRaw) {
+        const looksLikeAddress = /\d/.test(aNameRaw) && /(street|st|avenue|ave|road|rd|drive|dr|lane|ln|blvd|boulevard|way|ct|court|place|pl|circle|cir|highway|hwy|parkway|pkwy)\b/i.test(aNameRaw);
+        const looksLikeVehicle = /(tesla|honda|toyota|ford|chevy|chevrolet|jeep|nissan|mazda|bmw|mercedes|audi|hyundai|kia|volvo|subaru|lexus|acura|porsche|civic|corolla|camry|accord|f150|f-150|silverado|model [sxy3])/i.test(aNameRaw);
+        const newType = looksLikeAddress ? "property" : looksLikeVehicle ? "vehicle" : "asset";
+        const newFields: any = looksLikeAddress ? { address: aNameRaw } : {};
+        try {
+          asset = await storage.createProfile({ name: aNameRaw, type: newType, fields: newFields, tags: [], notes: null } as any);
+        } catch (e: any) {
+          return { error: `Asset "${aNameRaw}" not found and could not be auto-created: ${e?.message || "unknown"}` };
+        }
+      }
       if (!asset) return { error: `Asset not found: ${input.assetName}` };
       try {
         const link = await storage.createLiabilityAssetLink({
