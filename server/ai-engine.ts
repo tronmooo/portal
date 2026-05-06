@@ -1615,7 +1615,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "link_liability_owner",
-    description: "Assign an owner / co-signer / guarantor to a liability with an ownership percentage. Use for: 'this loan is split 50/50 with my wife', 'my dad co-signed this', 'mom is the guarantor'. Multiple parties can be linked; ownership_pct should sum to 100 across all owners. For a single sole owner, you usually don't need to call this — the forProfile on create_liability already nests under the owner.",
+    description: "Assign an owner / co-signer / guarantor to a liability with an ownership percentage. Use for: 'this loan is split 50/50 with my wife', 'my dad co-signed this', 'mom is the guarantor'. Multiple parties can be linked; ownership_pct should sum to 100 across all owners. For a single sole owner, you usually don't need to call this — the forProfile on create_liability already nests under the owner.\n\nFor REALLOCATION (e.g. 'I now own 100%, remove my dad', 'change me from co-signer to co-owner', 'we now split 70/30 instead of 50/50'), set replaceExisting:true so all prior owner links are wiped and you start fresh — then call this tool once per new owner to install the new allocation.\nTo remove a single party while keeping others, pass removeOwnerName:\"<name>\".",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1623,8 +1623,10 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         partyName: { type: "string", description: "Person profile name (partial match). Use 'Me' or 'Self' for the user themself." },
         role: { type: "string", enum: ["owner", "co_signer", "guarantor", "responsible_party", "authorized_user"], description: "Role. Defaults to 'owner'." },
         ownershipPct: { type: "number", description: "Ownership percentage (0-100). Defaults to 100 for a single owner, 50 for two-party splits." },
+        replaceExisting: { type: "boolean", description: "When true, deletes ALL existing owner links on this liability before creating the new one. Use this for full reallocation — e.g. 'change to 100% mine', 'I'm taking over the loan', 'we now split it 70/30 instead of 50/50' (call once per new owner with replaceExisting:true on the FIRST call only, then false on subsequent calls in the same chain). Default false." },
+        removeOwnerName: { type: "string", description: "Optional. If set, removes the link for this owner name BEFORE creating the new one. Use for 'remove Jane from the card', 'take Dad off the loan'. Use ALONE (without partyName) when only removing." },
       },
-      required: ["liabilityName", "partyName"],
+      required: ["liabilityName"],
     },
   },
   {
@@ -4329,9 +4331,44 @@ async function executeTool(name: string, input: any): Promise<any> {
         const selfP = profiles.find((p: any) => p.type === "self");
         if (selfP) pNameLC = selfP.name.toLowerCase();
       }
-      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === lNameLC)
-        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(lNameLC));
+      const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      const liability = liabs.find((p: any) => p.name.toLowerCase() === lNameLC)
+        || liabs.find((p: any) => p.name.toLowerCase().includes(lNameLC))
+        || liabs.find((p: any) => lNameLC.length >= 3 && lNameLC.includes(p.name.toLowerCase()))
+        || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === lNameLC)
+        || liabs.find((p: any) => {
+          const tokens = lNameLC.split(/\s+/).filter((t) => t.length >= 3);
+          if (!tokens.length) return false;
+          const hay = `${p.name} ${(p.fields || {}).lender || ""}`.toLowerCase();
+          return tokens.every((t) => hay.includes(t));
+        });
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      // Reallocation support: wipe all existing owner links FIRST when requested.
+      if (input.replaceExisting) {
+        try {
+          const existing = await storage.getLiabilityProfileLinks(liability.id);
+          for (const ex of existing || []) {
+            await storage.deleteLiabilityProfileLink(ex.id);
+          }
+        } catch (e: any) { logger.warn("ai", `replaceExisting cleanup failed: ${e?.message}`); }
+      }
+      // Targeted removal of a specific owner.
+      if (input.removeOwnerName) {
+        const removeLC = String(input.removeOwnerName).toLowerCase().trim();
+        try {
+          const existing = await storage.getLiabilityProfileLinks(liability.id);
+          for (const ex of existing || []) {
+            const partyP = profiles.find((p: any) => p.id === ex.partyProfileId);
+            if (partyP && (partyP.name.toLowerCase() === removeLC || partyP.name.toLowerCase().includes(removeLC))) {
+              await storage.deleteLiabilityProfileLink(ex.id);
+            }
+          }
+        } catch (e: any) { logger.warn("ai", `removeOwner cleanup failed: ${e?.message}`); }
+        // If ONLY removing (no partyName for new link), return after cleanup.
+        if (!input.partyName) {
+          return { result: { removed: input.removeOwnerName }, actions: [{ type: "unlink", category: "liability_owner", data: { name: input.removeOwnerName } }] };
+        }
+      }
       let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
         || profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase().includes(pNameLC));
       // Auto-create the person profile if missing — same UX gap as the asset link.
