@@ -4017,7 +4017,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         const has = (...words: string[]) => words.some((w) => blob.includes(w));
         if (has("mortgage", "home loan", "house loan")) input.subtype = "mortgage";
         else if (has("heloc", "home equity")) input.subtype = "heloc";
-        else if (has("auto", "car loan", "vehicle", "truck", "motorcycle", "toyota", "honda", "ford", "chevy", "tesla", "bmw", "audi", "nissan", "hyundai", "kia", "jeep", "subaru", "lexus", "acura", "mazda", "volkswagen")) input.subtype = "auto_loan";
+        else if (has("auto", "car loan", "vehicle", "truck", "motorcycle", "toyota", "honda", "ford", "chevy", "tesla", "bmw", "audi", "nissan", "hyundai", "kia", "jeep", "subaru", "lexus", "acura", "mazda", "volkswagen", "boat", "yacht", "marine", "sea ray", "rv", "motorhome", "camper", "atv", "snowmobile", "jet ski")) input.subtype = "auto_loan";
         else if (has("student", "sallie mae", "fedloan", "nelnet", "navient", "mohela", "sofi student", "aidvantage")) input.subtype = "student_loan";
         else if (has("credit card", "visa", "mastercard", "amex", "american express", "discover", "capital one", "chase sapphire", "chase freedom", "quicksilver", "venture")) input.subtype = "credit_card";
         else if (has("medical", "hospital", "clinic", "dental", "surgery", "carecredit", "ent", "physician")) input.subtype = "medical_debt";
@@ -4140,8 +4140,17 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "update_liability": {
       const profiles = await storage.getProfiles();
       const nameLC = String(input.name || "").toLowerCase().trim();
-      const target = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === nameLC)
-        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(nameLC));
+      const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      const target = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
+        || liabs.find((p: any) => p.name.toLowerCase().includes(nameLC))
+        || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()))
+        || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === nameLC)
+        || liabs.find((p: any) => {
+          const tokens = nameLC.split(/\s+/).filter((t) => t.length >= 3);
+          if (!tokens.length) return false;
+          const hay = `${p.name} ${(p.fields || {}).lender || ""}`.toLowerCase();
+          return tokens.every((t) => hay.includes(t));
+        });
       if (!target) return { error: `Liability not found: ${input.name}` };
       const ch = input.changes || {};
       // Normalize annualRate
@@ -4173,8 +4182,18 @@ async function executeTool(name: string, input: any): Promise<any> {
     case "add_liability_payment": {
       const profiles = await storage.getProfiles();
       const nameLC = String(input.liabilityName || "").toLowerCase().trim();
-      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === nameLC)
-        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(nameLC));
+      // Match strategy (most specific first): exact name, name-includes-query, query-includes-name (e.g. AI says "Affirm Peloton" but record is "Affirm Peloton Purchase"), lender match, token-overlap.
+      const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      let liability = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
+        || liabs.find((p: any) => p.name.toLowerCase().includes(nameLC))
+        || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()))
+        || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === nameLC)
+        || liabs.find((p: any) => {
+          const tokens = nameLC.split(/\s+/).filter((t) => t.length >= 3);
+          if (!tokens.length) return false;
+          const hay = `${p.name} ${(p.fields || {}).lender || ""}`.toLowerCase();
+          return tokens.every((t) => hay.includes(t));
+        });
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
       const f = liability.fields || {};
       const balance = Number(f.currentBalance) || 0;
@@ -4216,8 +4235,19 @@ async function executeTool(name: string, input: any): Promise<any> {
         // Add the amount back to the balance.
         newBalance = balance + amount;
         principal = -principal; interest = -interest;
+      } else if (paymentType === "payoff") {
+        // Payoff zeroes the balance regardless of how the AI sliced principal/interest.
+        // Adjust the principal portion so it reconciles with the actual balance reduction.
+        principal = balance;
+        interest = Math.max(0, cashTowardLoan - balance);
+        newBalance = 0;
       } else {
         newBalance = Math.max(0, balance - principal);
+        // If the balance is within $1 of zero (rounding noise from AI splits), zero it out cleanly.
+        if (newBalance > 0 && newBalance < 1) {
+          principal = principal + newBalance;
+          newBalance = 0;
+        }
       }
       const payment = await storage.createLiabilityPayment({
         liabilityProfileId: liability.id,
