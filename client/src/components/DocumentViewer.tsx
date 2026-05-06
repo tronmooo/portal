@@ -414,13 +414,18 @@ export default function DocumentViewer({
     </div>
   );
 
+  // Wave 11: Image renderer scales to fit its container (object-contain) so a
+  // tall mobile screenshot never pushes the dialog past the viewport. The
+  // wrapper fills its parent's height and the image scales down to fit — prior
+  // version used `w-full h-auto` which caused vertical overflow whenever the
+  // image's aspect ratio was taller than the available box.
   const renderImage = (maxH: string) => (
     <div
       ref={containerRef}
-      className={`relative overflow-hidden rounded-lg bg-muted/30 ${
+      className={`relative overflow-hidden rounded-lg bg-muted/30 flex items-center justify-center ${
         isDragging ? "cursor-grabbing" : zoom > 1 ? "cursor-grab" : ""
       }`}
-      style={{ maxHeight: maxH }}
+      style={{ height: "100%", maxHeight: maxH, minHeight: "200px" }}
       onWheel={handleWheel}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -432,7 +437,7 @@ export default function DocumentViewer({
       <img
         src={dataUrl}
         alt={name}
-        className="w-full h-auto transition-transform duration-150"
+        className="max-w-full max-h-full w-auto h-auto object-contain transition-transform duration-150"
         style={{
           transform: `scale(${zoom}) rotate(${rotation}deg) translate(${translate.x / zoom}px, ${translate.y / zoom}px)`,
           transformOrigin: "center center",
@@ -605,19 +610,22 @@ export function DocumentViewerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[96vw] md:max-w-6xl h-[92vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
-        <DialogHeader className="px-4 py-3 border-b border-border shrink-0">
-          <DialogTitle className="text-sm flex items-center gap-2">
-            <FileText className="h-4 w-4 shrink-0" />
-            <span className="truncate">{name}</span>
-            {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal shrink-0">{docType.replace(/_/g, ' ')}</span>}
-          </DialogTitle>
-          {displayData && (
-            <div className="flex items-center gap-2 mt-1">
+      {/* Wave 11: Cap dialog at 85vh on desktop, 90vh on mobile, with a tighter
+          max-w on wide displays so it never feels like it eats the viewport.
+          Header is single-row (title + Download + close) instead of stacked. */}
+      <DialogContent className="max-w-[96vw] md:max-w-4xl lg:max-w-5xl max-h-[85vh] sm:h-[85vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
+        <DialogHeader className="px-3 py-2 border-b border-border shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <DialogTitle className="text-sm flex items-center gap-2 min-w-0">
+              <FileText className="h-4 w-4 shrink-0" />
+              <span className="truncate">{name}</span>
+              {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal shrink-0">{docType.replace(/_/g, ' ')}</span>}
+            </DialogTitle>
+            {displayData && (
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2"
+                className="h-7 px-2 shrink-0"
                 onClick={() => {
                   const link = document.createElement("a");
                   const prefix = mimeType === "application/pdf" ? "data:application/pdf;base64," : `data:${mimeType};base64,`;
@@ -629,8 +637,8 @@ export function DocumentViewerDialog({
                 <Download className="h-3.5 w-3.5 mr-1" />
                 Download
               </Button>
-            </div>
-          )}
+            )}
+          </div>
         </DialogHeader>
 
         {loading ? (
