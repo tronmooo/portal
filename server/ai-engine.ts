@@ -4010,6 +4010,23 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
       let rate = Number(input.annualRate);
       if (!isNaN(rate) && rate > 1) rate = rate / 100;
+      // Auto-infer subtype if the model omitted it (safety net for NLP coverage).
+      // Order matters: most-specific patterns first.
+      if (!input.subtype) {
+        const blob = `${input.name || ""} ${input.lender || ""} ${input.notes || ""}`.toLowerCase();
+        const has = (...words: string[]) => words.some((w) => blob.includes(w));
+        if (has("mortgage", "home loan", "house loan")) input.subtype = "mortgage";
+        else if (has("heloc", "home equity")) input.subtype = "heloc";
+        else if (has("auto", "car loan", "vehicle", "truck", "motorcycle", "toyota", "honda", "ford", "chevy", "tesla", "bmw", "audi", "nissan", "hyundai", "kia", "jeep", "subaru", "lexus", "acura", "mazda", "volkswagen")) input.subtype = "auto_loan";
+        else if (has("student", "sallie mae", "fedloan", "nelnet", "navient", "mohela", "sofi student", "aidvantage")) input.subtype = "student_loan";
+        else if (has("credit card", "visa", "mastercard", "amex", "american express", "discover", "capital one", "chase sapphire", "chase freedom", "quicksilver", "venture")) input.subtype = "credit_card";
+        else if (has("medical", "hospital", "clinic", "dental", "surgery", "carecredit", "ent", "physician")) input.subtype = "medical_debt";
+        else if (has("irs", "tax debt", "back taxes", "tax bill", "franchise tax")) input.subtype = "tax_debt";
+        else if (has("affirm", "klarna", "afterpay", "sezzle", "zip", "synchrony", "financing", "buy now", "bnpl")) input.subtype = "bnpl";
+        else if (has("sba", "business loan", "merchant cash", "business line")) input.subtype = "business_loan";
+        else if (has("personal loan", "marcus", "sofi", "upstart", "lightstream", "prosper", "lending club", "best egg", "upgrade")) input.subtype = "personal_loan";
+        else input.subtype = "other";
+      }
       // Resolve parent (forProfile)
       let parentProfileId: string | undefined;
       if (input.forProfile) {
