@@ -76,7 +76,61 @@ async function webSearch(query: string, numResults = 5): Promise<string> {
   return "";
 }
 
+// Perplexity Sonar API — live web search + LLM in one call. Returns a JSON
+// estimate with a real number, used as the primary source for lookup-value.
+async function perplexityValuation(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
+  const apiKey = process.env.PERPLEXITY_API_KEY;
+  if (!apiKey) return null;
+  const fieldDesc = Object.entries(profile.fields || {})
+    .filter(([k, v]) => v && !k.startsWith("_") && typeof v !== "object")
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(", ");
+  const userMsg = `What is the current US market resale value of this ${profile.type}: "${profile.name}"${fieldDesc ? " (" + fieldDesc + ")" : ""}? Search current listings (eBay, Swappa, KBB, Zillow, Edmunds, etc.) and respond with ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<source·e.g. Swappa, KBB>", "range": "$X - $Y"}. ALWAYS return a positive number — never 0. If unsure, give your best informed estimate based on similar items.`;
+  try {
+    const resp = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "sonar",
+        messages: [
+          { role: "system", content: "You are an expert asset appraiser. Always respond with a single JSON object and a positive numeric value." },
+          { role: "user", content: userMsg },
+        ],
+        max_tokens: 300,
+        temperature: 0.2,
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!resp.ok) {
+      console.warn("[Valuation] Perplexity API", resp.status, await resp.text().catch(() => ""));
+      return null;
+    }
+    const json: any = await resp.json();
+    const text: string = json?.choices?.[0]?.message?.content || "";
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const parsed = JSON.parse(m[0]);
+    const v = Number(parsed.value) || 0;
+    if (v <= 0) return null;
+    return {
+      estimatedValue: v,
+      confidence: parsed.confidence || "medium",
+      method: parsed.method ? `Live search: ${parsed.method}` : "Live search",
+      details: parsed.range || "",
+    };
+  } catch (e: any) {
+    console.warn("[Valuation] Perplexity call failed:", e?.message || e);
+    return null;
+  }
+}
+
 export async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
+  // PRIMARY: Perplexity Sonar (live web search + LLM in one call). This is the
+  // same API the chat uses, so it works reliably from Vercel cloud IPs.
+  const ppx = await perplexityValuation(profile);
+  if (ppx && ppx.estimatedValue > 0) return ppx;
+
+  // FALLBACK: legacy Anthropic + DDG/Brave path (kept for resilience).
   const valuableTypes = ["vehicle", "asset", "property", "investment"];
   if (!valuableTypes.includes(profile.type)) return null;
 
