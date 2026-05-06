@@ -205,11 +205,13 @@ export interface IStorage {
   getLiabilityAssetLinks(liabilityProfileId?: string): Promise<import("@shared/schema").LiabilityAssetLink[]>;
   getLiabilityAssetLinksForAsset(assetProfileId: string): Promise<import("@shared/schema").LiabilityAssetLink[]>;
   createLiabilityAssetLink(data: import("@shared/schema").InsertLiabilityAssetLink): Promise<import("@shared/schema").LiabilityAssetLink>;
+  updateLiabilityAssetLink(id: string, patch: Partial<import("@shared/schema").InsertLiabilityAssetLink>): Promise<import("@shared/schema").LiabilityAssetLink | undefined>;
   deleteLiabilityAssetLink(id: string): Promise<void>;
 
   getLiabilityProfileLinks(liabilityProfileId?: string): Promise<import("@shared/schema").LiabilityProfileLink[]>;
   getLiabilityProfileLinksForParty(partyProfileId: string): Promise<import("@shared/schema").LiabilityProfileLink[]>;
   createLiabilityProfileLink(data: import("@shared/schema").InsertLiabilityProfileLink): Promise<import("@shared/schema").LiabilityProfileLink>;
+  updateLiabilityProfileLink(id: string, patch: Partial<import("@shared/schema").InsertLiabilityProfileLink>): Promise<import("@shared/schema").LiabilityProfileLink | undefined>;
   deleteLiabilityProfileLink(id: string): Promise<void>;
 
   getLiabilityPayments(liabilityProfileId: string): Promise<import("@shared/schema").LiabilityPayment[]>;
@@ -2032,10 +2034,12 @@ export class MemStorage implements IStorage {
   async getLiabilityAssetLinks(_id?: string) { return []; }
   async getLiabilityAssetLinksForAsset(_id: string) { return []; }
   async createLiabilityAssetLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
+  async updateLiabilityAssetLink(_id: string, _patch: any): Promise<any> { return undefined; }
   async deleteLiabilityAssetLink(_id: string) { /* noop */ }
   async getLiabilityProfileLinks(_id?: string) { return []; }
   async getLiabilityProfileLinksForParty(_id: string) { return []; }
   async createLiabilityProfileLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
+  async updateLiabilityProfileLink(_id: string, _patch: any): Promise<any> { return undefined; }
   async deleteLiabilityProfileLink(_id: string) { /* noop */ }
   async getLiabilityPayments(_id: string) { return []; }
   async createLiabilityPayment(_data: any): Promise<any> { throw new Error("MemStorage: liability payments not implemented"); }

@@ -4545,6 +4545,11 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     const row = await storage.createLiabilityAssetLink(parsed.data);
     res.json(row);
   }));
+  app.patch("/api/liability-asset-links/:id", asyncHandler(async (req, res) => {
+    const updated = await storage.updateLiabilityAssetLink(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json(updated);
+  }));
   app.delete("/api/liability-asset-links/:id", asyncHandler(async (req, res) => {
     await storage.deleteLiabilityAssetLink(req.params.id);
     res.json({ success: true });
@@ -4564,6 +4569,11 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     const row = await storage.createLiabilityProfileLink(parsed.data);
     res.json(row);
+  }));
+  app.patch("/api/liability-profile-links/:id", asyncHandler(async (req, res) => {
+    const updated = await storage.updateLiabilityProfileLink(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json(updated);
   }));
   app.delete("/api/liability-profile-links/:id", asyncHandler(async (req, res) => {
     await storage.deleteLiabilityProfileLink(req.params.id);

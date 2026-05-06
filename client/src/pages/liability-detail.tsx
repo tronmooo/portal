@@ -6,7 +6,7 @@
  * documents OCR, calendar auto-events, and subtype-specific UI on top of this.
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
@@ -22,7 +22,21 @@ import {
   Calculator,
   RotateCcw,
   Sparkles,
+  Link2,
+  Users,
+  FileText,
+  Upload,
+  Trash2,
+  X,
 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -240,7 +254,28 @@ interface LiabilityProfilePageProps {
   profile: LiabilityProfileLike;
 }
 
-type TabKey = "overview" | "details" | "payments" | "amortization" | "calculator";
+type TabKey =
+  | "overview"
+  | "details"
+  | "payments"
+  | "amortization"
+  | "calculator"
+  | "linked"
+  | "documents";
+
+const PROFILE_LINK_ROLES: { value: string; label: string }[] = [
+  { value: "owner", label: "Owner" },
+  { value: "co_signer", label: "Co-signer" },
+  { value: "guarantor", label: "Guarantor" },
+  { value: "responsible_party", label: "Responsible party" },
+  { value: "authorized_user", label: "Authorized user" },
+];
+
+const ASSET_LINK_ROLES: { value: string; label: string }[] = [
+  { value: "collateral", label: "Collateral" },
+  { value: "secured_by", label: "Secured by" },
+  { value: "associated", label: "Associated" },
+];
 
 export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [, navigate] = useLocation();
@@ -528,12 +563,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       {/* Tabs */}
       <div className="px-4 md:px-6 pt-4">
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} data-testid="liability-tabs">
-          <TabsList className="grid grid-cols-5 w-full max-w-3xl">
+          <TabsList className="grid grid-cols-4 md:grid-cols-7 w-full max-w-4xl">
             <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
             <TabsTrigger value="details" data-testid="tab-details">Details</TabsTrigger>
             <TabsTrigger value="payments" data-testid="tab-payments">Payments</TabsTrigger>
             <TabsTrigger value="calculator" data-testid="tab-calculator">Payoff</TabsTrigger>
             <TabsTrigger value="amortization" data-testid="tab-amortization">Schedule</TabsTrigger>
+            <TabsTrigger value="linked" data-testid="tab-linked">Linked</TabsTrigger>
+            <TabsTrigger value="documents" data-testid="tab-documents">Docs</TabsTrigger>
           </TabsList>
 
           {/* OVERVIEW */}
@@ -702,6 +739,17 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           {/* PAYOFF CALCULATOR */}
           <TabsContent value="calculator" className="mt-4">
             <PayoffCalculator terms={terms} baseSummary={summary} />
+          </TabsContent>
+
+          {/* LINKED ASSETS + PROFILES */}
+          <TabsContent value="linked" className="mt-4 space-y-4">
+            <LinkedAssetsCard liabilityId={profile.id} />
+            <LinkedProfilesCard liabilityId={profile.id} />
+          </TabsContent>
+
+          {/* DOCUMENTS */}
+          <TabsContent value="documents" className="mt-4">
+            <LiabilityDocumentsCard liabilityId={profile.id} />
           </TabsContent>
 
           {/* AMORTIZATION */}
@@ -1233,6 +1281,659 @@ function AmortRow({ row }: { row: AmortizationRow }) {
       <td className="px-3 py-2 text-right">{fmtUSD(row.interest)}</td>
       <td className="px-3 py-2 text-right">{fmtUSD(row.remainingBalance)}</td>
     </tr>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Phase 4: Linked Assets / Linked Profiles / Documents tabs
+// ───────────────────────────────────────────────────────────────────────────
+
+interface ProfileLite {
+  id: string;
+  name: string;
+  type: string;
+  type_key?: string | null;
+  fields?: any;
+}
+
+function useAllProfiles() {
+  return useQuery<ProfileLite[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/profiles");
+      return res.json();
+    },
+  });
+}
+
+// ─── Linked Assets tab ────────────────────────────────────────────────────
+
+interface LiabilityAssetLinkRow {
+  id: string;
+  liabilityProfileId: string;
+  assetProfileId: string;
+  ownershipPercentage: number;
+  allocationAmount?: number | null;
+  role: string;
+  notes?: string | null;
+}
+
+function LinkedAssetsCard({ liabilityId }: { liabilityId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedAssetId, setSelectedAssetId] = useState<string>("");
+  const [selectedRole, setSelectedRole] = useState<string>("collateral");
+
+  const linksQuery = useQuery<LiabilityAssetLinkRow[]>({
+    queryKey: [`/api/liabilities/${liabilityId}/assets`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/liabilities/${liabilityId}/assets`);
+      return res.json();
+    },
+  });
+
+  const profilesQuery = useAllProfiles();
+  const allProfiles = profilesQuery.data || [];
+
+  // Asset-eligible profiles: anything that's NOT a liability/loan/person/self
+  const eligibleAssets = useMemo(() => {
+    return allProfiles.filter((p) => {
+      const t = (p.type || "").toLowerCase();
+      return t !== "liability" && t !== "loan" && t !== "person" && t !== "self";
+    });
+  }, [allProfiles]);
+
+  const linkedIds = new Set((linksQuery.data || []).map((l) => l.assetProfileId));
+  const availableAssets = eligibleAssets.filter((p) => !linkedIds.has(p.id));
+
+  const profileById = useMemo(() => {
+    const map = new Map<string, ProfileLite>();
+    for (const p of allProfiles) map.set(p.id, p);
+    return map;
+  }, [allProfiles]);
+
+  const createLink = useMutation({
+    mutationFn: async (input: { assetProfileId: string; role: string }) => {
+      const res = await apiRequest("POST", "/api/liability-asset-links", {
+        liabilityProfileId: liabilityId,
+        assetProfileId: input.assetProfileId,
+        ownershipPercentage: 100,
+        role: input.role,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Asset linked" });
+      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/assets`] });
+      setPickerOpen(false);
+      setSelectedAssetId("");
+    },
+    onError: (err: Error) =>
+      toast({ title: "Could not link asset", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const updateLink = useMutation({
+    mutationFn: async (input: { id: string; patch: Partial<LiabilityAssetLinkRow> }) => {
+      const res = await apiRequest("PATCH", `/api/liability-asset-links/${input.id}`, input.patch);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/assets`] });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Update failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const deleteLink = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/liability-asset-links/${id}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Asset unlinked" });
+      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/assets`] });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <Card data-testid="linked-assets-card">
+      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Link2 className="w-4 h-4" /> Linked assets
+        </CardTitle>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setPickerOpen((s) => !s)}
+          data-testid="link-asset-toggle"
+          disabled={availableAssets.length === 0}
+        >
+          <Plus className="w-3.5 h-3.5 mr-1" />
+          Link asset
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {pickerOpen && (
+          <div className="rounded-md border p-3 bg-muted/30 space-y-2" data-testid="link-asset-picker">
+            <div className="flex flex-col md:flex-row gap-2">
+              <Select value={selectedAssetId} onValueChange={setSelectedAssetId}>
+                <SelectTrigger className="flex-1" data-testid="link-asset-select">
+                  <SelectValue placeholder="Choose an asset profile…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableAssets.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name} <span className="text-xs text-muted-foreground ml-1">({p.type})</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={selectedRole} onValueChange={setSelectedRole}>
+                <SelectTrigger className="w-full md:w-44" data-testid="link-asset-role-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ASSET_LINK_ROLES.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!selectedAssetId) return;
+                  createLink.mutate({ assetProfileId: selectedAssetId, role: selectedRole });
+                }}
+                disabled={!selectedAssetId || createLink.isPending}
+                data-testid="link-asset-confirm"
+              >
+                {createLink.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Link"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {linksQuery.isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : (linksQuery.data || []).length === 0 ? (
+          <div className="text-sm text-muted-foreground py-4 text-center" data-testid="linked-assets-empty">
+            No assets linked yet. Link a property, vehicle, or other asset that secures or relates to this liability.
+          </div>
+        ) : (
+          <div className="space-y-2" data-testid="linked-assets-list">
+            {(linksQuery.data || []).map((link) => {
+              const asset = profileById.get(link.assetProfileId);
+              return (
+                <AssetLinkRow
+                  key={link.id}
+                  link={link}
+                  assetName={asset?.name || "Unknown asset"}
+                  assetType={asset?.type || ""}
+                  onChange={(patch) => updateLink.mutate({ id: link.id, patch })}
+                  onDelete={() => deleteLink.mutate(link.id)}
+                />
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AssetLinkRow({
+  link,
+  assetName,
+  assetType,
+  onChange,
+  onDelete,
+}: {
+  link: LiabilityAssetLinkRow;
+  assetName: string;
+  assetType: string;
+  onChange: (patch: Partial<LiabilityAssetLinkRow>) => void;
+  onDelete: () => void;
+}) {
+  const [pct, setPct] = useState<number>(link.ownershipPercentage ?? 100);
+  return (
+    <div className="rounded-md border p-3 space-y-2" data-testid={`asset-link-row-${link.id}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">{assetName}</div>
+          <div className="text-xs text-muted-foreground">{assetType}</div>
+        </div>
+        <Select value={link.role} onValueChange={(v) => onChange({ role: v })}>
+          <SelectTrigger className="w-36" data-testid="asset-link-role">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ASSET_LINK_ROLES.map((r) => (
+              <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button size="icon" variant="ghost" onClick={onDelete} data-testid="asset-link-delete">
+          <Trash2 className="w-4 h-4 text-rose-500" />
+        </Button>
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-muted-foreground w-24 shrink-0">Ownership %</span>
+        <Slider
+          value={[pct]}
+          min={0}
+          max={100}
+          step={1}
+          onValueChange={(vs) => setPct(vs[0] ?? 0)}
+          onValueCommit={(vs) => onChange({ ownershipPercentage: vs[0] ?? 0 })}
+          className="flex-1"
+        />
+        <span className="text-sm font-medium w-12 text-right tabular-nums">{pct}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Linked Profiles tab ────────────────────────────────────────────────────
+
+interface LiabilityProfileLinkRow {
+  id: string;
+  liabilityProfileId: string;
+  partyProfileId: string;
+  ownershipPercentage: number;
+  role: string;
+  notes?: string | null;
+}
+
+function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedPartyId, setSelectedPartyId] = useState<string>("");
+  const [selectedRole, setSelectedRole] = useState<string>("owner");
+
+  const linksQuery = useQuery<LiabilityProfileLinkRow[]>({
+    queryKey: [`/api/liabilities/${liabilityId}/parties`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/liabilities/${liabilityId}/parties`);
+      return res.json();
+    },
+  });
+
+  const profilesQuery = useAllProfiles();
+  const allProfiles = profilesQuery.data || [];
+
+  // Party-eligible profiles: people only (person, self)
+  const eligibleParties = useMemo(() => {
+    return allProfiles.filter((p) => {
+      const t = (p.type || "").toLowerCase();
+      return t === "person" || t === "self";
+    });
+  }, [allProfiles]);
+
+  const linkedIds = new Set((linksQuery.data || []).map((l) => l.partyProfileId));
+  const availableParties = eligibleParties.filter((p) => !linkedIds.has(p.id));
+
+  const profileById = useMemo(() => {
+    const map = new Map<string, ProfileLite>();
+    for (const p of allProfiles) map.set(p.id, p);
+    return map;
+  }, [allProfiles]);
+
+  const totalOwnership = useMemo(
+    () => (linksQuery.data || []).reduce((s, l) => s + (Number(l.ownershipPercentage) || 0), 0),
+    [linksQuery.data],
+  );
+
+  const createLink = useMutation({
+    mutationFn: async (input: { partyProfileId: string; role: string }) => {
+      const res = await apiRequest("POST", "/api/liability-profile-links", {
+        liabilityProfileId: liabilityId,
+        partyProfileId: input.partyProfileId,
+        ownershipPercentage: 100,
+        role: input.role,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Person linked" });
+      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+      setPickerOpen(false);
+      setSelectedPartyId("");
+    },
+    onError: (err: Error) =>
+      toast({ title: "Could not link person", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const updateLink = useMutation({
+    mutationFn: async (input: { id: string; patch: Partial<LiabilityProfileLinkRow> }) => {
+      const res = await apiRequest("PATCH", `/api/liability-profile-links/${input.id}`, input.patch);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Update failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const deleteLink = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/liability-profile-links/${id}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Person unlinked" });
+      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <Card data-testid="linked-profiles-card">
+      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Users className="w-4 h-4" /> Linked people
+          {(linksQuery.data || []).length > 1 && (
+            <Badge
+              variant={Math.abs(totalOwnership - 100) < 0.5 ? "secondary" : "destructive"}
+              className="ml-2 text-[10px]"
+              data-testid="ownership-total-badge"
+            >
+              Total {totalOwnership.toFixed(0)}%
+            </Badge>
+          )}
+        </CardTitle>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setPickerOpen((s) => !s)}
+          data-testid="link-party-toggle"
+          disabled={availableParties.length === 0}
+        >
+          <Plus className="w-3.5 h-3.5 mr-1" />
+          Add person
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {pickerOpen && (
+          <div className="rounded-md border p-3 bg-muted/30 space-y-2" data-testid="link-party-picker">
+            <div className="flex flex-col md:flex-row gap-2">
+              <Select value={selectedPartyId} onValueChange={setSelectedPartyId}>
+                <SelectTrigger className="flex-1" data-testid="link-party-select">
+                  <SelectValue placeholder="Choose a person…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableParties.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={selectedRole} onValueChange={setSelectedRole}>
+                <SelectTrigger className="w-full md:w-44" data-testid="link-party-role-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PROFILE_LINK_ROLES.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!selectedPartyId) return;
+                  createLink.mutate({ partyProfileId: selectedPartyId, role: selectedRole });
+                }}
+                disabled={!selectedPartyId || createLink.isPending}
+                data-testid="link-party-confirm"
+              >
+                {createLink.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Add"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {linksQuery.isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : (linksQuery.data || []).length === 0 ? (
+          <div className="text-sm text-muted-foreground py-4 text-center" data-testid="linked-profiles-empty">
+            No people linked yet. Add the borrower, co-signer, guarantor, or other responsible parties.
+          </div>
+        ) : (
+          <div className="space-y-2" data-testid="linked-profiles-list">
+            {(linksQuery.data || []).map((link) => {
+              const party = profileById.get(link.partyProfileId);
+              return (
+                <PartyLinkRow
+                  key={link.id}
+                  link={link}
+                  partyName={party?.name || "Unknown"}
+                  onChange={(patch) => updateLink.mutate({ id: link.id, patch })}
+                  onDelete={() => deleteLink.mutate(link.id)}
+                />
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PartyLinkRow({
+  link,
+  partyName,
+  onChange,
+  onDelete,
+}: {
+  link: LiabilityProfileLinkRow;
+  partyName: string;
+  onChange: (patch: Partial<LiabilityProfileLinkRow>) => void;
+  onDelete: () => void;
+}) {
+  const [pct, setPct] = useState<number>(link.ownershipPercentage ?? 100);
+  const roleLabel = PROFILE_LINK_ROLES.find((r) => r.value === link.role)?.label || link.role;
+  return (
+    <div className="rounded-md border p-3 space-y-2" data-testid={`party-link-row-${link.id}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">{partyName}</div>
+          <div className="text-xs text-muted-foreground">{roleLabel}</div>
+        </div>
+        <Select value={link.role} onValueChange={(v) => onChange({ role: v })}>
+          <SelectTrigger className="w-44" data-testid="party-link-role">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PROFILE_LINK_ROLES.map((r) => (
+              <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button size="icon" variant="ghost" onClick={onDelete} data-testid="party-link-delete">
+          <Trash2 className="w-4 h-4 text-rose-500" />
+        </Button>
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-muted-foreground w-24 shrink-0">Ownership %</span>
+        <Slider
+          value={[pct]}
+          min={0}
+          max={100}
+          step={1}
+          onValueChange={(vs) => setPct(vs[0] ?? 0)}
+          onValueCommit={(vs) => onChange({ ownershipPercentage: vs[0] ?? 0 })}
+          className="flex-1"
+        />
+        <span className="text-sm font-medium w-12 text-right tabular-nums">{pct}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Documents tab ─────────────────────────────────────────────────────────
+
+interface LiabilityDocument {
+  id: string;
+  name: string;
+  type: string;
+  mimeType?: string;
+  fileData?: string | null;
+  linkedProfiles?: string[];
+  createdAt?: string;
+  ocrText?: string | null;
+  extractedData?: any;
+}
+
+function LiabilityDocumentsCard({ liabilityId }: { liabilityId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const docsQuery = useQuery<LiabilityDocument[]>({
+    queryKey: [`/api/profiles/${liabilityId}/documents`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${liabilityId}/documents`);
+      return res.json();
+    },
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const toBase64 = (f: File): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(f);
+        });
+      const fileData = await toBase64(file);
+      // /api/upload runs OCR + AI extraction and links to profileId.
+      const res = await apiRequest("POST", "/api/upload", {
+        fileName: file.name,
+        mimeType: file.type,
+        fileData,
+        profileId: liabilityId,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Document uploaded", description: "OCR & AI extraction running." });
+      qc.invalidateQueries({ queryKey: [`/api/profiles/${liabilityId}/documents`] });
+      qc.invalidateQueries({ queryKey: ["/api/documents"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles", liabilityId, "detail"] });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (docId: string) => {
+      await apiRequest("DELETE", `/api/documents/${docId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Document deleted" });
+      qc.invalidateQueries({ queryKey: [`/api/profiles/${liabilityId}/documents`] });
+      qc.invalidateQueries({ queryKey: ["/api/documents"] });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) uploadMutation.mutate(file);
+    e.target.value = "";
+  }
+
+  const docs = docsQuery.data || [];
+
+  return (
+    <Card data-testid="liability-documents-card">
+      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+        <CardTitle className="text-base flex items-center gap-2">
+          <FileText className="w-4 h-4" /> Documents
+        </CardTitle>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploadMutation.isPending}
+          data-testid="liability-doc-upload"
+        >
+          {uploadMutation.isPending ? (
+            <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+          ) : (
+            <Upload className="w-3.5 h-3.5 mr-1" />
+          )}
+          Upload
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept="image/*,application/pdf"
+          onChange={handleFileChange}
+          data-testid="liability-doc-file-input"
+        />
+      </CardHeader>
+      <CardContent>
+        {docsQuery.isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : docs.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-6 text-center" data-testid="liability-docs-empty">
+            No documents yet. Upload statements, payoff letters, or original loan agreements — we'll OCR them and pull out key fields.
+          </div>
+        ) : (
+          <div className="space-y-2" data-testid="liability-docs-list">
+            {docs.map((doc) => (
+              <div
+                key={doc.id}
+                className="flex items-center justify-between gap-2 rounded-md border p-3"
+                data-testid={`liability-doc-${doc.id}`}
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-sm truncate">{doc.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {doc.type}{doc.createdAt ? ` · ${fmtDate(doc.createdAt)}` : ""}
+                      {doc.ocrText ? " · OCR ready" : ""}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  asChild
+                  data-testid={`liability-doc-view-${doc.id}`}
+                >
+                  <a href={`/api/documents/${doc.id}/file`} target="_blank" rel="noopener noreferrer">
+                    View
+                  </a>
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => deleteMutation.mutate(doc.id)}
+                  data-testid={`liability-doc-delete-${doc.id}`}
+                >
+                  <Trash2 className="w-4 h-4 text-rose-500" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

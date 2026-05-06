@@ -660,6 +660,30 @@ export class SupabaseStorage implements IStorage {
 
   /** Auto-create calendar events for profile date fields */
   private async autoGenerateProfileEvents(profileId: string, type: string, name: string, fields: Record<string, any>): Promise<void> {
+    // ── Phase 4: synthesize nextPayment from dueDay for liability/loan profiles ──
+    // If the profile has a `dueDay` (1-31) but no explicit nextPayment date, compute
+    // the next occurrence so the auto-event generator below picks it up.
+    if ((type === "liability" || type === "loan") && !fields.nextPayment) {
+      const dueDayRaw = fields.dueDay ?? fields.due_day ?? fields?.finance?.dueDay;
+      const dd = Number(dueDayRaw);
+      if (Number.isFinite(dd) && dd >= 1 && dd <= 31) {
+        const today = new Date();
+        const y = today.getFullYear();
+        const m = today.getMonth();
+        const d = today.getDate();
+        // If due day already passed this month, schedule for next month
+        const targetMonth = d <= dd ? m : m + 1;
+        const candidate = new Date(y, targetMonth, dd);
+        // Clamp to last day of month if needed (e.g. Feb 31 → Feb 28/29)
+        if (candidate.getMonth() !== ((targetMonth) % 12 + 12) % 12) {
+          candidate.setDate(0);
+        }
+        const iso = candidate.toISOString().slice(0, 10);
+        // Mutate the fields snapshot we'll feed into the event generator below
+        fields = { ...fields, nextPayment: iso };
+      }
+    }
+
     const eventDefs: { fieldKey: string; titleFn: (n: string) => string; category: string; recurrence: string; color: string }[] = [];
 
     switch (type) {
@@ -679,6 +703,10 @@ export class SupabaseStorage implements IStorage {
         eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F504} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#D19900" });
         break;
       case "loan":
+      case "liability":
+        // Calendar events on loan/liability profiles. Phase 4 also derives a synthetic
+        // 'nextPayment' from `dueDay` (1-31) when explicit nextPayment isn't set —
+        // see synthesizeNextPaymentFromDueDay below.
         eventDefs.push({ fieldKey: "nextPayment", titleFn: (n) => `\u{1F4B0} ${n} — Payment Due`, category: "finance", recurrence: "monthly", color: "#BB653B" });
         eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F4B0} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#BB653B" });
         break;
@@ -3895,6 +3923,18 @@ export class SupabaseStorage implements IStorage {
     return this.rowToLiabilityAssetLink(row);
   }
 
+  async updateLiabilityAssetLink(id: string, patch: Partial<InsertLiabilityAssetLink>): Promise<LiabilityAssetLink | undefined> {
+    const update: any = { updated_at: new Date().toISOString() };
+    if (patch.ownershipPercentage !== undefined) update.ownership_percentage = patch.ownershipPercentage;
+    if (patch.allocationAmount !== undefined) update.allocation_amount = patch.allocationAmount;
+    if (patch.role !== undefined) update.role = patch.role;
+    if (patch.notes !== undefined) update.notes = patch.notes;
+    const { data, error } = await this.supabase.from("liability_asset_links")
+      .update(update).eq("id", id).eq("user_id", this.userId).select().single();
+    if (error) throw error;
+    return data ? this.rowToLiabilityAssetLink(data) : undefined;
+  }
+
   async deleteLiabilityAssetLink(id: string): Promise<void> {
     const { error } = await this.supabase.from("liability_asset_links")
       .delete().eq("id", id).eq("user_id", this.userId);
@@ -3931,6 +3971,17 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("liability_profile_links").insert(row);
     if (error) throw error;
     return this.rowToLiabilityProfileLink(row);
+  }
+
+  async updateLiabilityProfileLink(id: string, patch: Partial<InsertLiabilityProfileLink>): Promise<LiabilityProfileLink | undefined> {
+    const update: any = { updated_at: new Date().toISOString() };
+    if (patch.ownershipPercentage !== undefined) update.ownership_percentage = patch.ownershipPercentage;
+    if (patch.role !== undefined) update.role = patch.role;
+    if (patch.notes !== undefined) update.notes = patch.notes;
+    const { data, error } = await this.supabase.from("liability_profile_links")
+      .update(update).eq("id", id).eq("user_id", this.userId).select().single();
+    if (error) throw error;
+    return data ? this.rowToLiabilityProfileLink(data) : undefined;
   }
 
   async deleteLiabilityProfileLink(id: string): Promise<void> {
