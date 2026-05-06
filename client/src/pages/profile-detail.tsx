@@ -128,6 +128,7 @@ import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import EditableTitle from "@/components/EditableTitle";
+import { LinkedSheetView, LinkedViewToggle, useLinkedView, type SheetColumn } from "@/components/LinkedSheetView";
 // DynamicProfileDetail import removed — registry system not yet integrated (see registry/index.ts)
 
 // ============================================================
@@ -661,6 +662,7 @@ function ChildAssetsCard({
   const [childType, setChildType] = useState<NestedAssetType>("asset");
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const { view: assetView, setView: setAssetView } = useLinkedView(); // Wave 15
 
   const directChildren = useMemo(() => {
     const all = ((profile as any).childProfiles || []) as any[];
@@ -700,15 +702,18 @@ function ChildAssetsCard({
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <Package className="h-4 w-4 text-muted-foreground" /> Child Assets
           </CardTitle>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-[44px] text-xs gap-1 px-3"
-            onClick={() => setShowAddChild(true)}
-            data-testid="button-add-child-asset"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add Child
-          </Button>
+          <div className="flex items-center gap-2">
+            {directChildren.length > 0 && <LinkedViewToggle view={assetView} onChange={setAssetView} />}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-[44px] text-xs gap-1 px-3"
+              onClick={() => setShowAddChild(true)}
+              data-testid="button-add-child-asset"
+            >
+              <Plus className="h-3.5 w-3.5" /> Add Child
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="pt-0">
@@ -716,6 +721,30 @@ function ChildAssetsCard({
           <div className="py-4 text-center" data-testid="child-assets-empty">
             <p className="text-sm text-muted-foreground">No child assets yet.</p>
           </div>
+        ) : assetView === "sheet" ? (
+          // Wave 15: Spreadsheet view of child assets
+          <LinkedSheetView
+            rows={directChildren.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""))}
+            columns={[
+              { key: "name", label: "Name", width: "minmax(140px, 1.5fr)", render: (c: any) => <span className="font-medium">{c.name}</span> },
+              { key: "type", label: "Type", width: "100px", render: (c: any) => <span className="capitalize">{c.type}</span> },
+              { key: "value", label: "Value", width: "110px", align: "right", render: (c: any) => {
+                const v = getAssetBaseValue(c.fields);
+                return <span className="tabular-nums">{v > 0 ? formatCurrency(v) : "—"}</span>;
+              } },
+              { key: "loan", label: "Loan Balance", width: "110px", align: "right", render: (c: any) => {
+                const v = getAssetLoanValue(c.fields);
+                return <span className="tabular-nums">{v > 0 ? formatCurrency(v) : "—"}</span>;
+              } },
+              { key: "net", label: "Net", width: "110px", align: "right", render: (c: any) => {
+                const v = getAssetBaseValue(c.fields) - getAssetLoanValue(c.fields);
+                return <span className="tabular-nums font-semibold">{formatCurrency(v)}</span>;
+              } },
+            ]}
+            onRowClick={(c: any) => setLocation(`/profiles/${c.id}`)}
+            emptyMessage="No child assets"
+            testId="child-assets-sheet"
+          />
         ) : (
           <div className="space-y-1" data-testid="child-assets-list">
             {directChildren
@@ -2795,6 +2824,7 @@ function DocumentsTab({
   const [docSearch, setDocSearch] = useState("");
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   const [linkTarget, setLinkTarget] = useState<string>("profile"); // "profile" or a child profile ID
+  const { view: docView, setView: setDocView } = useLinkedView(); // Wave 15: list/sheet toggle
 
   // ── Child-asset documents (Section 5) ──
   const isAssetTypeForDocs = profileType ? NESTED_ASSET_TYPES.includes(profileType as NestedAssetType) : false;
@@ -2974,13 +3004,16 @@ function DocumentsTab({
       {/* Search and Filter */}
       {documents.length > 0 && (
         <div className="space-y-2">
-          <input
-            type="text"
-            placeholder="Search documents..."
-            value={docSearch}
-            onChange={e => setDocSearch(e.target.value)}
-            className="w-full h-8 px-3 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Search documents..."
+              value={docSearch}
+              onChange={e => setDocSearch(e.target.value)}
+              className="flex-1 h-8 px-3 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <LinkedViewToggle view={docView} onChange={setDocView} />
+          </div>
           {docTypes.length > 1 && (
             <div className="flex items-center gap-1 flex-wrap">
               <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({documents.length})</button>
@@ -3006,6 +3039,27 @@ function DocumentsTab({
             <p className="text-sm text-muted-foreground">No documents match your search</p>
           </CardContent>
         </Card>
+      ) : docView === "sheet" ? (
+        // Wave 15: Spreadsheet view of documents
+        <LinkedSheetView
+          rows={filteredDocs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))}
+          columns={[
+            { key: "name", label: "Name", width: "minmax(180px, 2fr)", render: (d: any) => <span className="font-medium truncate inline-block max-w-full">{d.name}</span> },
+            { key: "type", label: "Type", width: "120px", render: (d: any) => <span className="capitalize">{d.type || "—"}</span> },
+            { key: "size", label: "Size", width: "80px", align: "right", render: (d: any) => d.size ? `${(d.size / 1024).toFixed(0)} KB` : "—" },
+            { key: "uploaded", label: "Uploaded", width: "110px", render: (d: any) => d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "—" },
+            { key: "expiration", label: "Expires", width: "110px", render: (d: any) => {
+              const exp = d.extractedData?.expirationDate || d.extractedData?.expiry || d.extractedData?.expiration;
+              if (!exp) return "—";
+              const status = getExpirationStatus(d);
+              return <span className={status === "expired" ? "text-red-500" : status === "soon" ? "text-amber-500" : ""}>{new Date(exp).toLocaleDateString()}</span>;
+            } },
+            { key: "tags", label: "Tags", width: "140px", render: (d: any) => (d.tags || []).slice(0, 3).join(", ") || "—" },
+          ]}
+          onRowClick={(d: any) => setViewingDoc(d)}
+          emptyMessage="No documents match your search"
+          testId="linked-docs-sheet"
+        />
       ) : (
         <div className="space-y-2">
           {filteredDocs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
@@ -7065,28 +7119,53 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
 }
 
 function LinkedSubsTab({ profile }: { profile: any }) {
+  const [, navigate] = useLocation();
+  const { view, setView } = useLinkedView();
   const children = (profile.childProfiles || []).filter((c: any) => c.type === "subscription");
+  const sortedChildren = children.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
   const totalMonthly = children.reduce((sum: number, c: any) => sum + (Number(c.fields?.cost) || 0), 0);
+
+  const subColumns: SheetColumn<any>[] = [
+    { key: "name", label: "Name", width: "minmax(140px, 1.5fr)", render: (s) => <span className="font-medium">{s.name || "—"}</span> },
+    { key: "cost", label: "Cost", width: "100px", align: "right", render: (s) => <span className="tabular-nums">{s.fields?.cost ? formatCurrency(Number(s.fields.cost)) : "—"}</span> },
+    { key: "frequency", label: "Frequency", width: "100px", render: (s) => s.fields?.frequency || "monthly" },
+    { key: "category", label: "Category", width: "120px", render: (s) => s.fields?.category || "—" },
+    { key: "renewal", label: "Next Renewal", width: "120px", render: (s) => s.fields?.renewalDate ? new Date(s.fields.renewalDate).toLocaleDateString() : "—" },
+  ];
+
   return (
     <div className="space-y-3" data-testid="linked-subs-tab">
       <Card>
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Linked Subscriptions</span>
-            {totalMonthly > 0 && <Badge variant="outline" className="text-xs">{formatCurrency(totalMonthly)}/mo</Badge>}
-          </div>
-          {children.length > 0 ? (
-            <div className="divide-y divide-border/30">
-              {children.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((sub: any) => (
-                <div key={sub.id} className="flex items-center justify-between py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium truncate">{sub.name}</p>
-                    <p className="text-xs text-muted-foreground">{sub.fields?.frequency || "monthly"}</p>
-                  </div>
-                  <span className="text-xs font-medium tabular-nums">{sub.fields?.cost ? formatCurrency(Number(sub.fields.cost)) : "—"}</span>
-                </div>
-              ))}
+            <div className="flex items-center gap-2">
+              {totalMonthly > 0 && <Badge variant="outline" className="text-xs">{formatCurrency(totalMonthly)}/mo</Badge>}
+              {sortedChildren.length > 0 && <LinkedViewToggle view={view} onChange={setView} />}
             </div>
+          </div>
+          {sortedChildren.length > 0 ? (
+            view === "sheet" ? (
+              <LinkedSheetView
+                rows={sortedChildren}
+                columns={subColumns}
+                onRowClick={(s) => navigate(`/profile/${s.id}`)}
+                emptyMessage="No subscriptions linked"
+                testId="linked-subs-sheet"
+              />
+            ) : (
+              <div className="divide-y divide-border/30">
+                {sortedChildren.map((sub: any) => (
+                  <div key={sub.id} className="flex items-center justify-between py-2 cursor-pointer hover:bg-muted/30 -mx-3 px-3 rounded" onClick={() => navigate(`/profile/${sub.id}`)}>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium truncate">{sub.name}</p>
+                      <p className="text-xs text-muted-foreground">{sub.fields?.frequency || "monthly"}</p>
+                    </div>
+                    <span className="text-xs font-medium tabular-nums">{sub.fields?.cost ? formatCurrency(Number(sub.fields.cost)) : "—"}</span>
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
             <p className="text-xs text-muted-foreground text-center py-4">No subscriptions linked to this account</p>
           )}
