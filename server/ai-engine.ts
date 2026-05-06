@@ -124,7 +124,7 @@ export async function estimateAssetValue(profile: { type: string; name: string; 
   try {
     const prompt = searchResults
       ? `You have LIVE web search results for pricing this ${profile.type}. Use ONLY the search data to determine the value — do NOT guess or use outdated knowledge.\n\nAsset: "${profile.name}"\nDetails: ${fieldDesc}\n\n--- LIVE SEARCH RESULTS ---\n${searchResults}\n--- END SEARCH RESULTS ---\n\nBased on the search results above, return ONLY a JSON object:\n{"value": <number — the most accurate current value from search results>, "confidence": "high|medium|low", "method": "<source used, e.g. Zillow, Edmunds, KBB>", "range": "$X - $Y"}\n\nRules:\n- Use the EXACT prices from search results when available\n- For vehicles, use the fair market/trade-in range from the results\n- For homes, use the Zillow or Redfin estimate from search results\n- Return 0 only if search results have NO pricing data at all\n- confidence=high if exact match found, medium if similar model/area, low if rough estimate`
-      : `Estimate the current US market value of this ${profile.type}: "${profile.name}". Details: ${fieldDesc}.\n\nReturn ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<brief method>", "range": "<low-high range>"}\n\nBe realistic. Return 0 if you truly cannot estimate.`;
+      : `You are an expert appraiser. Provide your BEST current US market value estimate for this ${profile.type}: "${profile.name}". Details: ${fieldDesc || "(no extra details)"}.\n\nReturn ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<brief method>", "range": "<low-high range>"}\n\nRules:\n- ALWAYS return your best-effort numeric estimate based on training data, even with limited info — never return 0.\n- Use confidence="low" when info is sparse, "medium" for typical, "high" for well-specified items.\n- For vehicles, infer plausible value from year/make/model/mileage.\n- For property, infer from city/state/type.\n- For electronics/assets, use brand/model/condition.\n- Round to a sensible figure.`;
 
     const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
@@ -149,7 +149,10 @@ export async function estimateAssetValue(profile: { type: string; name: string; 
   } catch (e) {
     console.error("[Valuation] Failed:", e);
   }
-  return null;
+  // Last-resort floor: never block the UI with a hard failure. Return a 0 with low
+  // confidence and a clear method label so the route can persist a placeholder and
+  // the user can manually edit it. The route layer also accepts 0 (Phase 8 fix).
+  return { estimatedValue: 0, confidence: "low", method: "No data available — please enter manually", details: "" };
 }
 
 // ============================================================

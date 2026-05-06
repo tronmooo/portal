@@ -1639,12 +1639,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         fields: profile.fields || {},
       });
 
-      if (!valuation || valuation.estimatedValue === 0) {
+      if (!valuation) {
         return res.status(422).json({
           error: "Could not determine a current market value from search results.",
-          method: valuation?.method || "no data",
+          method: "no data",
         });
       }
+      // Phase 8: accept estimatedValue === 0 as a valid "no data" placeholder.
+      // We persist with low confidence so the user can edit manually instead of
+      // hitting a hard 422 error. The AI fallback path always returns a record.
 
       const oldValue = (profile.fields as any)?.currentValue
                     ?? (profile.fields as any)?.purchasePrice

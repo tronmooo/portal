@@ -29,7 +29,6 @@ import { NotificationBell } from "@/components/NotificationBell";
 
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
-import { QuickCreateFab } from "@/components/QuickCreateFab";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { lazy, Suspense, useEffect, useRef, useCallback, useState } from "react";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
@@ -518,8 +517,6 @@ function App() {
                   </div>
                 </div>
                 <MobileBottomNav />
-                {/* Wave 12: global quick-create FAB */}
-                <QuickCreateFab />
               </SidebarProvider>
               {/* Global command palette — renders its own Dialog portal */}
               <CommandSearch />
