@@ -6076,6 +6076,8 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
 
   // Payoff calculator state — must be at component top level (hook rule)
   const [extraPmt, setExtraPmt] = useState(0);
+  // Wave 13: amortization show-all toggle (hook must live at top level)
+  const [showAllSchedule, setShowAllSchedule] = useState(false);
 
   // Inline edit form state
   const [editing, setEditing] = useState(false);
@@ -6154,10 +6156,65 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
     return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
   })() : null;
 
+  // Wave 13: Paid-to-date stats. If a startDate is set, infer how many months
+  // have elapsed and split the schedule into paid vs remaining.
+  const monthsElapsed = (() => {
+    if (!startDate) return 0;
+    const start = new Date(startDate);
+    const now = new Date();
+    if (isNaN(start.getTime())) return 0;
+    const months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+    return Math.max(0, Math.min(schedule.length, months));
+  })();
+  const paidSlice = schedule.slice(0, monthsElapsed);
+  const remainingSlice = schedule.slice(monthsElapsed);
+  const principalPaid = paidSlice.reduce((s, r) => s + r.principal, 0);
+  const interestPaid = paidSlice.reduce((s, r) => s + r.interest, 0);
+  const totalPaid = principalPaid + interestPaid;
+  const principalRemaining = remainingSlice.reduce((s, r) => s + r.principal, 0);
+  const interestRemaining = remainingSlice.reduce((s, r) => s + r.interest, 0);
+  const remainingBalanceComputed = remainingSlice.length > 0 ? remainingSlice[0].balance + remainingSlice[0].principal : loanBalance;
+  const percentPaid = loanBalance > 0 ? Math.min(100, (principalPaid / loanBalance) * 100) : 0;
+
   // Linked obligations (existing payments)
   const linkedObs = obligations.filter((o: any) =>
     o.linkedProfiles?.includes(profile.id) || o.name?.toLowerCase().includes(profile.name?.toLowerCase())
   );
+
+  // Wave 13: Auto-create a recurring monthly bill linked to this loan.
+  const hasLinkedMonthlyBill = linkedObs.some((o: any) => o.frequency === "monthly" && o.linkedProfiles?.includes(profile.id));
+  const createBillMutation = useMutation({
+    mutationFn: async () => {
+      if (!monthlyPayment || monthlyPayment <= 0) throw new Error("Monthly payment is required");
+      // Compute next due date: same day-of-month as startDate, next occurrence.
+      const due = (() => {
+        const today = new Date();
+        const ref = startDate ? new Date(startDate) : today;
+        const day = ref.getDate();
+        const next = new Date(today.getFullYear(), today.getMonth(), day);
+        if (next <= today) next.setMonth(next.getMonth() + 1);
+        return next.toISOString().slice(0, 10);
+      })();
+      const billName = `${profile.name || lender || "Loan"} payment`;
+      await apiRequest("POST", "/api/obligations", {
+        name: billName,
+        amount: Math.round(monthlyPayment * 100) / 100,
+        frequency: "monthly",
+        category: "loan",
+        nextDueDate: due,
+        autopay: false,
+        linkedProfiles: [profile.id],
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Monthly bill created", description: "This loan will now appear in your bills." });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to create bill", description: formatApiError(err), variant: "destructive" }),
+  });
 
   return (
     <div className="space-y-4">
@@ -6289,16 +6346,81 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Months Left</p>
-              <p className="text-sm font-bold">{schedule.length}</p>
+              <p className="text-sm font-bold">{remainingSlice.length}</p>
             </div>
           </div>
-          {/* Progress bar */}
+          {/* Progress bar — uses principal paid so far */}
           <div className="mt-3">
             <div className="flex justify-between text-xs text-muted-foreground mb-1">
               <span>Paid off</span>
-              <span>{derivedTermLocal > 0 ? `${Math.round((1 - schedule.length / derivedTermLocal) * 100)}%` : "—"}</span>
+              <span>{percentPaid > 0 ? `${percentPaid.toFixed(1)}%` : "—"}</span>
             </div>
-            <Progress value={derivedTermLocal > 0 ? Math.round((1 - schedule.length / derivedTermLocal) * 100) : 0} className="h-2" />
+            <Progress value={percentPaid} className="h-2" />
+          </div>
+        </Card>
+      )}
+
+      {/* Wave 13: Paid-to-date breakdown — only when we have a start date */}
+      {schedule.length > 0 && monthsElapsed > 0 && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-semibold">Paid to Date</h3>
+            <span className="text-[10px] text-muted-foreground">{monthsElapsed} of {schedule.length} months</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-border/50 p-3">
+              <p className="text-[10px] text-muted-foreground">Total paid</p>
+              <p className="text-base font-bold tabular-nums">{formatCurrency(totalPaid)}</p>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                <div>
+                  <span className="text-green-500">● Principal</span>
+                  <p className="font-semibold tabular-nums">{formatCurrency(principalPaid)}</p>
+                </div>
+                <div>
+                  <span className="text-red-400">● Interest</span>
+                  <p className="font-semibold tabular-nums">{formatCurrency(interestPaid)}</p>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-border/50 p-3">
+              <p className="text-[10px] text-muted-foreground">Remaining</p>
+              <p className="text-base font-bold tabular-nums">{formatCurrency(principalRemaining + interestRemaining)}</p>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                <div>
+                  <span className="text-green-500">● Principal</span>
+                  <p className="font-semibold tabular-nums">{formatCurrency(principalRemaining)}</p>
+                </div>
+                <div>
+                  <span className="text-red-400">● Interest</span>
+                  <p className="font-semibold tabular-nums">{formatCurrency(interestRemaining)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Current balance</span>
+            <span className="font-semibold tabular-nums">{formatCurrency(remainingBalanceComputed)}</span>
+          </div>
+        </Card>
+      )}
+
+      {/* Wave 13: Auto-create monthly bill */}
+      {hasLoanData && monthlyPayment > 0 && !hasLinkedMonthlyBill && (
+        <Card className="p-4 border-dashed border-primary/40">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-xs font-semibold mb-1">Track this loan in Bills</h3>
+              <p className="text-[10px] text-muted-foreground">Creates a recurring monthly obligation of {formatCurrency(monthlyPayment)} so it shows up on your dashboard and calendar.</p>
+            </div>
+            <Button
+              size="sm"
+              className="shrink-0 h-8 text-xs"
+              onClick={() => createBillMutation.mutate()}
+              disabled={createBillMutation.isPending}
+              data-testid="button-create-loan-bill"
+            >
+              {createBillMutation.isPending ? "Adding…" : "Add monthly bill"}
+            </Button>
           </div>
         </Card>
       )}
@@ -6444,48 +6566,67 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
         );
       })()}
 
-      {/* Amortization Schedule (first 12 + last 3) */}
-      {schedule.length > 0 && (
-        <Card className="p-4">
-          <h3 className="text-xs font-semibold mb-2">Amortization Schedule</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b text-muted-foreground">
-                  <th className="text-left py-1 pr-2">#</th>
-                  <th className="text-right py-1 px-2">Payment</th>
-                  <th className="text-right py-1 px-2">Principal</th>
-                  <th className="text-right py-1 px-2">Interest</th>
-                  <th className="text-right py-1 pl-2">Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {schedule.slice(0, 12).map(row => (
-                  <tr key={row.month} className="border-b border-border/30">
-                    <td className="py-1 pr-2 text-muted-foreground">{row.month}</td>
-                    <td className="text-right py-1 px-2">{formatCurrency(row.payment)}</td>
-                    <td className="text-right py-1 px-2 text-green-500">{formatCurrency(row.principal)}</td>
-                    <td className="text-right py-1 px-2 text-red-400">{formatCurrency(row.interest)}</td>
-                    <td className="text-right py-1 pl-2 font-medium">{formatCurrency(row.balance)}</td>
+      {/* Wave 13: Full amortization schedule with show-all toggle and current-month highlight */}
+      {schedule.length > 0 && (() => {
+        const visible = showAllSchedule ? schedule : (() => {
+          // Default view: first 12 + ... + last 3 (existing behavior)
+          if (schedule.length <= 15) return schedule;
+          return [...schedule.slice(0, 12), null as any, ...schedule.slice(-3)];
+        })();
+        const startDateObj = startDate ? new Date(startDate) : null;
+        return (
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold">Amortization Schedule</h3>
+              {schedule.length > 15 && (
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowAllSchedule(s => !s)} data-testid="button-toggle-schedule">
+                  {showAllSchedule ? `Collapse` : `Show all ${schedule.length} months`}
+                </Button>
+              )}
+            </div>
+            <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-card z-10">
+                  <tr className="border-b text-muted-foreground">
+                    <th className="text-left py-1 pr-2">#</th>
+                    <th className="text-left py-1 px-2">Date</th>
+                    <th className="text-right py-1 px-2">Payment</th>
+                    <th className="text-right py-1 px-2">Principal</th>
+                    <th className="text-right py-1 px-2">Interest</th>
+                    <th className="text-right py-1 pl-2">Balance</th>
                   </tr>
-                ))}
-                {schedule.length > 15 && (
-                  <tr><td colSpan={5} className="text-center py-2 text-muted-foreground">... {schedule.length - 15} more months ...</td></tr>
-                )}
-                {schedule.length > 12 && schedule.slice(-3).map(row => (
-                  <tr key={row.month} className="border-b border-border/30">
-                    <td className="py-1 pr-2 text-muted-foreground">{row.month}</td>
-                    <td className="text-right py-1 px-2">{formatCurrency(row.payment)}</td>
-                    <td className="text-right py-1 px-2 text-green-500">{formatCurrency(row.principal)}</td>
-                    <td className="text-right py-1 px-2 text-red-400">{formatCurrency(row.interest)}</td>
-                    <td className="text-right py-1 pl-2 font-medium">{formatCurrency(row.balance)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+                </thead>
+                <tbody>
+                  {visible.map((row, idx) => {
+                    if (row === null) {
+                      return (
+                        <tr key="sep"><td colSpan={6} className="text-center py-2 text-muted-foreground">… {schedule.length - 15} more months …</td></tr>
+                      );
+                    }
+                    const isPaid = row.month <= monthsElapsed;
+                    const isCurrent = row.month === monthsElapsed + 1;
+                    const dateStr = startDateObj ? (() => {
+                      const d = new Date(startDateObj.getTime());
+                      d.setMonth(d.getMonth() + row.month);
+                      return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+                    })() : "—";
+                    return (
+                      <tr key={`${row.month}-${idx}`} className={`border-b border-border/30 ${isCurrent ? "bg-primary/8" : isPaid ? "opacity-60" : ""}`}>
+                        <td className="py-1 pr-2 text-muted-foreground">{row.month}{isCurrent ? " · now" : ""}</td>
+                        <td className="py-1 px-2 text-muted-foreground">{dateStr}</td>
+                        <td className="text-right py-1 px-2">{formatCurrency(row.payment)}</td>
+                        <td className="text-right py-1 px-2 text-green-500">{formatCurrency(row.principal)}</td>
+                        <td className="text-right py-1 px-2 text-red-400">{formatCurrency(row.interest)}</td>
+                        <td className="text-right py-1 pl-2 font-medium">{formatCurrency(row.balance)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Linked Obligations */}
       {linkedObs.length > 0 && (
