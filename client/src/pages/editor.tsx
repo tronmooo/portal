@@ -187,9 +187,19 @@ export default function EditorPage() {
   const fromChat = params.get("source") === "chat";
   const initialTemplateId = params.get("template");
 
-  const isNew = !!matchNew;
-  const newType = (paramsNew?.type === "sheet" ? "sheet" : "doc") as "doc" | "sheet";
-  const existingId = matchExisting ? paramsExisting?.id : undefined;
+  // Defensive routing: wouter's useRoute("/editor/new/:type") sometimes doesn't
+  // hydrate paramsNew on the first render under hash routing, which caused
+  // /editor/new/sheet to silently fall back to doc mode. Read the hash directly
+  // as a backstop so the editor always opens in the requested mode.
+  const rawHash = typeof window !== "undefined" ? (window.location.hash || "") : "";
+  const hashPath = rawHash.replace(/^#/, "").split("?")[0]; // e.g. "/editor/new/sheet"
+  const hashSheetMatch = /^\/editor\/new\/(sheet|doc)\b/.exec(hashPath);
+  const hashIsNew = !!hashSheetMatch;
+  const hashType = (hashSheetMatch?.[1] === "sheet" ? "sheet" : hashSheetMatch?.[1] === "doc" ? "doc" : null) as "doc" | "sheet" | null;
+
+  const isNew = !!matchNew || hashIsNew;
+  const newType = ((paramsNew?.type === "sheet" || hashType === "sheet") ? "sheet" : "doc") as "doc" | "sheet";
+  const existingId = (matchExisting && !hashIsNew) ? paramsExisting?.id : undefined;
 
   const { data: existing, isLoading: loadingExisting } = useQuery<Artifact>({
     queryKey: ["/api/artifacts", existingId],
