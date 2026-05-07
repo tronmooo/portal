@@ -6051,6 +6051,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -6061,6 +6062,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
+    { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -7464,6 +7466,575 @@ function LinkedSubsTab({ profile }: { profile: any }) {
   );
 }
 
+// ────────────────────────────────────────────────────────────────────
+// LinkedLiabilitiesTab — person/self profile tab
+// Shows every liability this person owns / co-owns (via
+// liability_profile_links). Each row reveals collateral assets and all
+// co-owners with their ownership %, and exposes inline CRUD:
+//   • Add / edit / delete co-owner links (people)
+//   • Add / delete collateral asset links
+//   • Link an existing liability to this person (with ownership %)
+//   • Unlink a liability
+// All edits invalidate the relevant queries so dashboards stay in sync.
+// ────────────────────────────────────────────────────────────────────
+function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+
+  // ── data: links + all profiles (for resolving names + picker options) ──
+  const { data: partyLinks = [], refetch: refetchPartyLinks } = useQuery<any[]>({
+    queryKey: ["/api/parties", profileId, "liabilities"],
+    queryFn: () => apiRequest("GET", `/api/parties/${profileId}/liabilities`).then(r => r.json()),
+  });
+  const { data: allProfiles = [], refetch: refetchAllProfiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+
+  // Resolve link rows → liability profiles
+  const liabilities = (partyLinks || [])
+    .map((link: any) => {
+      const lp = (allProfiles || []).find((p: any) => p.id === link.liabilityProfileId);
+      if (!lp) return null;
+      return { link, profile: lp };
+    })
+    .filter(Boolean) as Array<{ link: any; profile: any }>;
+  liabilities.sort((a, b) => (a.profile.name || "").localeCompare(b.profile.name || ""));
+
+  // ── totals (this person's share) ───────────────────────────────────
+  const userBalanceShare = liabilities.reduce((s, x) => {
+    const f = x.profile.fields || {};
+    const fin = f.finance || {};
+    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const pct = Number(x.link.ownershipPercentage ?? 100);
+    return s + (bal * pct) / 100;
+  }, 0);
+  const userMonthlyShare = liabilities.reduce((s, x) => {
+    const f = x.profile.fields || {};
+    const fin = f.finance || {};
+    const m = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
+    const pct = Number(x.link.ownershipPercentage ?? 100);
+    return s + (m * pct) / 100;
+  }, 0);
+
+  // ── unlink (remove the current person from a liability) ───────────
+  const unlinkMutation = useMutation({
+    mutationFn: async (linkId: string) => {
+      await apiRequest("DELETE", `/api/liability-profile-links/${linkId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Unlinked" });
+      refetchPartyLinks();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to unlink", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // ── link existing liability to this person ────────────────────────
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkSearch, setLinkSearch] = useState("");
+  const [linkPct, setLinkPct] = useState("100");
+  const [pendingLiabilityId, setPendingLiabilityId] = useState<string | null>(null);
+
+  const linkedIds = new Set(liabilities.map(x => x.profile.id));
+  const candidateLiabilities = (allProfiles || [])
+    .filter((p: any) => p.type === "liability" || p.type === "loan")
+    .filter((p: any) => !linkedIds.has(p.id))
+    .filter((p: any) => !linkSearch.trim() || (p.name || "").toLowerCase().includes(linkSearch.toLowerCase()))
+    .slice(0, 50);
+
+  const linkMutation = useMutation({
+    mutationFn: async () => {
+      if (!pendingLiabilityId) throw new Error("No liability selected");
+      const pct = Math.max(0, Math.min(100, Number(linkPct) || 100));
+      await apiRequest("POST", "/api/liability-profile-links", {
+        liabilityProfileId: pendingLiabilityId,
+        partyProfileId: profileId,
+        ownershipPercentage: pct,
+        role: "owner",
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Liability linked" });
+      setLinkDialogOpen(false);
+      setPendingLiabilityId(null);
+      setLinkPct("100");
+      setLinkSearch("");
+      refetchPartyLinks();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to link", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // ── empty state ────────────────────────────────────────────────────
+  if (liabilities.length === 0) {
+    return (
+      <div className="space-y-3" data-testid="linked-liabilities-tab">
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setLinkDialogOpen(true)} data-testid="button-link-liability-empty">
+                <Plus className="h-3 w-3 mr-1" /> Link Liability
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground text-center py-6">
+              No liabilities linked. Connect mortgages, car loans, credit cards, or other debts that this person owns or co-owns.
+            </p>
+          </CardContent>
+        </Card>
+        <LinkLiabilityDialog
+          open={linkDialogOpen}
+          onOpenChange={setLinkDialogOpen}
+          search={linkSearch}
+          setSearch={setLinkSearch}
+          candidates={candidateLiabilities}
+          pendingId={pendingLiabilityId}
+          setPendingId={setPendingLiabilityId}
+          pct={linkPct}
+          setPct={setLinkPct}
+          onSubmit={() => linkMutation.mutate()}
+          submitting={linkMutation.isPending}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3" data-testid="linked-liabilities-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <Badge variant="outline" className="text-xs" data-testid="badge-liabilities-count">{liabilities.length}</Badge>
+              {userBalanceShare > 0 && (
+                <Badge variant="outline" className="text-xs text-red-500 border-red-500/30" data-testid="badge-liabilities-share">
+                  Your share: {formatCurrency(userBalanceShare)}
+                </Badge>
+              )}
+              {userMonthlyShare > 0 && (
+                <Badge variant="outline" className="text-xs" data-testid="badge-liabilities-monthly">
+                  {formatCurrency(userMonthlyShare)}/mo
+                </Badge>
+              )}
+            </div>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setLinkDialogOpen(true)} data-testid="button-link-liability">
+              <Plus className="h-3 w-3 mr-1" /> Link
+            </Button>
+          </div>
+          <div className="divide-y divide-border/30">
+            {liabilities.map(({ link, profile: lp }) => (
+              <LiabilityRow
+                key={link.id}
+                link={link}
+                liability={lp}
+                allProfiles={allProfiles}
+                refetchAll={() => { refetchPartyLinks(); refetchAllProfiles(); onChanged(); }}
+                onUnlink={() => unlinkMutation.mutate(link.id)}
+                onOpenLiability={() => navigate(`/profile/${lp.id}`)}
+              />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      <LinkLiabilityDialog
+        open={linkDialogOpen}
+        onOpenChange={setLinkDialogOpen}
+        search={linkSearch}
+        setSearch={setLinkSearch}
+        candidates={candidateLiabilities}
+        pendingId={pendingLiabilityId}
+        setPendingId={setPendingLiabilityId}
+        pct={linkPct}
+        setPct={setLinkPct}
+        onSubmit={() => linkMutation.mutate()}
+        submitting={linkMutation.isPending}
+      />
+    </div>
+  );
+}
+
+// ── Per-liability expandable row ─────────────────────────────────────
+function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOpenLiability }: {
+  link: any; liability: any; allProfiles: any[]; refetchAll: () => void; onUnlink: () => void; onOpenLiability: () => void;
+}) {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+
+  const f = liability.fields || {};
+  const fin = f.finance || {};
+  const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+  const pct = Number(link.ownershipPercentage ?? 100);
+  const monthly = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
+  const userShare = (bal * pct) / 100;
+
+  // Co-owners + collateral (loaded only when expanded)
+  const { data: coOwners = [], refetch: refetchCoOwners } = useQuery<any[]>({
+    queryKey: ["/api/liabilities", liability.id, "parties"],
+    queryFn: () => apiRequest("GET", `/api/liabilities/${liability.id}/parties`).then(r => r.json()),
+    enabled: expanded,
+  });
+  const { data: collateral = [], refetch: refetchCollateral } = useQuery<any[]>({
+    queryKey: ["/api/liabilities", liability.id, "assets"],
+    queryFn: () => apiRequest("GET", `/api/liabilities/${liability.id}/assets`).then(r => r.json()),
+    enabled: expanded,
+  });
+
+  return (
+    <div className="py-2" data-testid={`row-liability-${liability.id}`}>
+      {/* Header row */}
+      <div className="flex items-center justify-between gap-2 -mx-3 px-3 py-1 rounded">
+        <button
+          className="flex-1 min-w-0 flex items-center gap-2 hover:bg-muted/30 rounded px-1 -mx-1 py-1 text-left"
+          onClick={() => setExpanded(v => !v)}
+          data-testid={`button-expand-liability-${liability.id}`}
+        >
+          <Pencil className="h-3 w-3 text-muted-foreground shrink-0" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium truncate">{liability.name}</p>
+            <p className="text-xs text-muted-foreground">
+              {pct}% · {formatCurrency(userShare)} of {formatCurrency(bal)}
+              {monthly > 0 && ` · ${formatCurrency((monthly * pct) / 100)}/mo`}
+            </p>
+          </div>
+        </button>
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onOpenLiability} data-testid={`button-open-liability-${liability.id}`}>
+          Open
+        </Button>
+      </div>
+
+      {/* Expanded detail */}
+      {expanded && (
+        <div className="mt-2 ml-5 space-y-3 border-l-2 border-border/50 pl-3" data-testid={`detail-liability-${liability.id}`}>
+          {/* Co-owners */}
+          <CoOwnersEditor
+            liabilityId={liability.id}
+            coOwners={coOwners}
+            allProfiles={allProfiles}
+            onChanged={() => { refetchCoOwners(); refetchAll(); }}
+          />
+          {/* Collateral assets */}
+          <CollateralEditor
+            liabilityId={liability.id}
+            collateral={collateral}
+            allProfiles={allProfiles}
+            onChanged={() => { refetchCollateral(); refetchAll(); }}
+          />
+          {/* Unlink current person */}
+          <div className="flex justify-end">
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-red-500 hover:text-red-600" onClick={() => setConfirmUnlink(true)} data-testid={`button-unlink-${liability.id}`}>
+              <Trash2 className="h-3 w-3 mr-1" /> Remove from this person
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Unlink confirmation */}
+      <AlertDialog open={confirmUnlink} onOpenChange={setConfirmUnlink}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlink liability?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the ownership link only — the liability itself, its payments, and other co-owners are unchanged.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { onUnlink(); setConfirmUnlink(false); }} className="bg-red-500 hover:bg-red-600">
+              Unlink
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// ── Co-owners editor ────────────────────────────────────────────────
+function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
+  liabilityId: string; coOwners: any[]; allProfiles: any[]; onChanged: () => void;
+}) {
+  const { toast } = useToast();
+  const [adding, setAdding] = useState(false);
+  const [pickPersonId, setPickPersonId] = useState("");
+  const [pickPct, setPickPct] = useState("50");
+
+  const totalPct = coOwners.reduce((s, l) => s + Number(l.ownershipPercentage ?? 0), 0);
+  const linkedPersonIds = new Set(coOwners.map((l: any) => l.partyProfileId));
+  const personCandidates = (allProfiles || [])
+    .filter((p: any) => (p.type === "person" || p.type === "self") && !linkedPersonIds.has(p.id));
+
+  const addMutation = useMutation({
+    mutationFn: async () => {
+      if (!pickPersonId) throw new Error("Select a person");
+      const pct = Math.max(0, Math.min(100, Number(pickPct) || 0));
+      await apiRequest("POST", "/api/liability-profile-links", {
+        liabilityProfileId: liabilityId,
+        partyProfileId: pickPersonId,
+        ownershipPercentage: pct,
+        role: "owner",
+      });
+    },
+    onSuccess: () => { toast({ title: "Co-owner added" }); setAdding(false); setPickPersonId(""); setPickPct("50"); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, pct }: { id: string; pct: number }) => {
+      await apiRequest("PATCH", `/api/liability-profile-links/${id}`, { ownershipPercentage: pct });
+    },
+    onSuccess: () => { toast({ title: "Updated" }); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/liability-profile-links/${id}`); },
+    onSuccess: () => { toast({ title: "Removed" }); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <div data-testid="coowners-editor">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Co-owners</span>
+        <div className="flex items-center gap-1">
+          <Badge variant="outline" className={`text-[10px] h-5 px-1.5 ${totalPct === 100 ? "" : "text-yellow-600 border-yellow-500/30"}`} data-testid="badge-total-ownership">
+            Total: {totalPct}%
+          </Badge>
+          {!adding && (
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setAdding(true)} data-testid="button-add-coowner">
+              <Plus className="h-3 w-3" /> Add
+            </Button>
+          )}
+        </div>
+      </div>
+      <div className="space-y-1">
+        {coOwners.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground italic">No co-owners on record yet.</p>
+        ) : (
+          coOwners.map((l: any) => {
+            const person = allProfiles.find((p: any) => p.id === l.partyProfileId);
+            return (
+              <div key={l.id} className="flex items-center gap-2 py-1" data-testid={`coowner-${l.id}`}>
+                <span className="text-xs flex-1 truncate">{person?.name || "Unknown"}</span>
+                <Input
+                  type="number"
+                  defaultValue={Number(l.ownershipPercentage ?? 0)}
+                  className="h-7 w-16 text-xs text-right"
+                  min={0}
+                  max={100}
+                  onBlur={(e) => {
+                    const v = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                    if (v !== Number(l.ownershipPercentage)) updateMutation.mutate({ id: l.id, pct: v });
+                  }}
+                  data-testid={`input-coowner-pct-${l.id}`}
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" data-testid={`button-remove-coowner-${l.id}`}>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })
+        )}
+        {adding && (
+          <div className="flex items-center gap-2 py-1 bg-muted/30 px-2 rounded" data-testid="add-coowner-row">
+            <select
+              value={pickPersonId}
+              onChange={(e) => setPickPersonId(e.target.value)}
+              className="h-7 flex-1 text-xs bg-background border border-border rounded px-2"
+              data-testid="select-new-coowner"
+            >
+              <option value="">Select person…</option>
+              {personCandidates.map((p: any) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <Input
+              type="number"
+              value={pickPct}
+              onChange={(e) => setPickPct(e.target.value)}
+              className="h-7 w-16 text-xs text-right"
+              min={0}
+              max={100}
+              data-testid="input-new-coowner-pct"
+            />
+            <span className="text-xs text-muted-foreground">%</span>
+            <Button size="sm" className="h-7 px-2 text-xs" onClick={() => addMutation.mutate()} disabled={!pickPersonId || addMutation.isPending} data-testid="button-confirm-add-coowner">
+              Add
+            </Button>
+            <button onClick={() => { setAdding(false); setPickPersonId(""); }} className="text-muted-foreground hover:text-foreground" data-testid="button-cancel-add-coowner">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Collateral (asset) editor ───────────────────────────────────────
+function CollateralEditor({ liabilityId, collateral, allProfiles, onChanged }: {
+  liabilityId: string; collateral: any[]; allProfiles: any[]; onChanged: () => void;
+}) {
+  const { toast } = useToast();
+  const [adding, setAdding] = useState(false);
+  const [pickAssetId, setPickAssetId] = useState("");
+
+  const linkedAssetIds = new Set(collateral.map((l: any) => l.assetProfileId));
+  const assetCandidates = (allProfiles || [])
+    .filter((p: any) => p.type === "asset" || p.type === "vehicle" || p.type === "property")
+    .filter((p: any) => !linkedAssetIds.has(p.id));
+
+  const addMutation = useMutation({
+    mutationFn: async () => {
+      if (!pickAssetId) throw new Error("Select an asset");
+      await apiRequest("POST", "/api/liability-asset-links", {
+        liabilityProfileId: liabilityId,
+        assetProfileId: pickAssetId,
+        ownershipPercentage: 100,
+        role: "collateral",
+      });
+    },
+    onSuccess: () => { toast({ title: "Collateral linked" }); setAdding(false); setPickAssetId(""); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/liability-asset-links/${id}`); },
+    onSuccess: () => { toast({ title: "Unlinked" }); onChanged(); },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <div data-testid="collateral-editor">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Collateral / Linked Assets</span>
+        {!adding && (
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setAdding(true)} data-testid="button-add-collateral">
+            <Plus className="h-3 w-3" /> Add
+          </Button>
+        )}
+      </div>
+      <div className="space-y-1">
+        {collateral.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground italic">No assets linked as collateral.</p>
+        ) : (
+          collateral.map((l: any) => {
+            const asset = allProfiles.find((p: any) => p.id === l.assetProfileId);
+            return (
+              <div key={l.id} className="flex items-center gap-2 py-1" data-testid={`collateral-${l.id}`}>
+                <span className="text-xs flex-1 truncate">{asset?.name || "Unknown asset"}</span>
+                <Badge variant="outline" className="text-[10px] h-5 px-1.5">{l.role || "collateral"}</Badge>
+                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" data-testid={`button-remove-collateral-${l.id}`}>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })
+        )}
+        {adding && (
+          <div className="flex items-center gap-2 py-1 bg-muted/30 px-2 rounded" data-testid="add-collateral-row">
+            <select
+              value={pickAssetId}
+              onChange={(e) => setPickAssetId(e.target.value)}
+              className="h-7 flex-1 text-xs bg-background border border-border rounded px-2"
+              data-testid="select-new-collateral"
+            >
+              <option value="">Select asset…</option>
+              {assetCandidates.map((p: any) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <Button size="sm" className="h-7 px-2 text-xs" onClick={() => addMutation.mutate()} disabled={!pickAssetId || addMutation.isPending} data-testid="button-confirm-add-collateral">
+              Add
+            </Button>
+            <button onClick={() => { setAdding(false); setPickAssetId(""); }} className="text-muted-foreground hover:text-foreground" data-testid="button-cancel-add-collateral">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Link-existing-liability dialog ──────────────────────────────────
+function LinkLiabilityDialog({ open, onOpenChange, search, setSearch, candidates, pendingId, setPendingId, pct, setPct, onSubmit, submitting }: {
+  open: boolean; onOpenChange: (b: boolean) => void;
+  search: string; setSearch: (s: string) => void;
+  candidates: any[]; pendingId: string | null; setPendingId: (id: string | null) => void;
+  pct: string; setPct: (s: string) => void;
+  onSubmit: () => void; submitting: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md max-h-[85vh] flex flex-col" data-testid="dialog-link-liability">
+        <DialogHeader>
+          <DialogTitle>Link Liability</DialogTitle>
+          <DialogDescription>Connect an existing liability to this person and set their ownership share.</DialogDescription>
+        </DialogHeader>
+        <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
+          <Input
+            placeholder="Search liabilities…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 text-xs"
+            data-testid="input-link-liability-search"
+          />
+          <div className="flex-1 overflow-y-auto space-y-1 pr-1" data-testid="list-link-liability-candidates">
+            {candidates.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-6">No liabilities available to link.</p>
+            ) : candidates.map((p: any) => (
+              <button
+                key={p.id}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs hover:bg-muted transition-colors flex items-center gap-2 ${
+                  p.id === pendingId ? "bg-primary/10 text-primary font-semibold" : ""
+                }`}
+                onClick={() => setPendingId(p.id)}
+                data-testid={`option-link-liability-${p.id}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="truncate font-medium">{p.name}</p>
+                  <p className="text-muted-foreground text-[10px]">
+                    {p.fields?.lender || p.fields?.subtype || "liability"}
+                    {p.fields?.currentBalance ? ` · ${formatCurrency(Number(p.fields.currentBalance))}` : ""}
+                  </p>
+                </div>
+                {p.id === pendingId && <Check className="h-3.5 w-3.5 shrink-0" />}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 border-t pt-2">
+            <span className="text-xs text-muted-foreground">Ownership</span>
+            <Input
+              type="number"
+              value={pct}
+              onChange={(e) => setPct(e.target.value)}
+              className="h-8 w-20 text-xs text-right"
+              min={0}
+              max={100}
+              data-testid="input-link-liability-pct"
+            />
+            <span className="text-xs text-muted-foreground">%</span>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button size="sm" onClick={onSubmit} disabled={!pendingId || submitting} data-testid="button-confirm-link-liability">
+            Link
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
   const { toast } = useToast();
   const f = profile.fields || {};
@@ -7605,6 +8176,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "insights": return true;
         case "valuation": return true;
         case "linked-subs": return true;
+        case "linked-liabilities": return true;
         case "payments": return true;
         default: return false;
       }
@@ -7614,7 +8186,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "payments"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -8683,6 +9255,12 @@ export default function ProfileDetailPage() {
               {tabValues.has("linked-subs") && (
                 <TabsContent value="linked-subs" className="mt-4 px-1 sm:px-0">
                   <LinkedSubsTab profile={profile} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("linked-liabilities") && (
+                <TabsContent value="linked-liabilities" className="mt-4 px-1 sm:px-0">
+                  <LinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
