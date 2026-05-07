@@ -3690,10 +3690,17 @@ export default function TrackersPage() {
   };
 
   // Unified section filter: which sections to show
-  const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "subscriptions" | "documents" | "trackers">(() => {
-    try { return (sessionStorage.getItem("portol_linked_filter") as any) || "all"; } catch { return "all"; }
+  // Phase 8 Liabilities: "subscriptions" filter renamed to "liabilities". The
+  // legacy stored value is silently migrated so users with stale sessionStorage
+  // don't land on a filter that no longer exists.
+  const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "liabilities" | "documents" | "trackers">(() => {
+    try {
+      const raw = sessionStorage.getItem("portol_linked_filter");
+      if (raw === "subscriptions") return "liabilities";
+      return (raw as any) || "all";
+    } catch { return "all"; }
   });
-  const setSectionFilter = (val: "all" | "profiles" | "subscriptions" | "documents" | "trackers") => {
+  const setSectionFilter = (val: "all" | "profiles" | "liabilities" | "documents" | "trackers") => {
     setSectionFilterRaw(val);
     try { sessionStorage.setItem("portol_linked_filter", val); } catch {}
   };
@@ -3849,19 +3856,25 @@ export default function TrackersPage() {
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
   }, [profiles, filterMode, filterIds]);
 
-  // Subscription category list (after profile filter) for the Subscriptions tab chip row.
-  const subCategoryOptions = useMemo(() => {
+  // Liability category list (after profile filter) for the Liabilities tab chip row.
+  // Categories come from the liability subtype (mortgage, auto, credit_card, etc.).
+  const liabilityCategoryOptions = useMemo(() => {
     const isShowAll = filterMode === "everyone";
-    const subs = (profiles || []).filter(p => {
-      if (p.type !== "subscription") return false;
+    const liabs = (profiles || []).filter(p => {
+      if (p.type !== "liability" && p.type !== "loan") return false;
       if (isShowAll) return true;
-      const pParent = p.fields?._parentProfileId || (p as any).parentProfileId;
+      // A liability is in scope if it's directly selected, parented to a selected
+      // profile, or linked via liability_profile_links — but the link data isn't
+      // on the profile object, so we approximate via parent + direct selection.
+      const pParent = (p.fields as any)?._parentProfileId || (p as any).parentProfileId;
+      if (filterIds.includes(p.id)) return true;
       return pParent && filterIds.includes(pParent);
     });
     const counts: Record<string, number> = {};
-    for (const s of subs) {
-      const cat = (s.fields?.category || s.fields?.subscriptions?.category || s.fields?.type || "Other") as string;
-      const c = String(cat).trim() || "Other";
+    for (const s of liabs) {
+      const f = (s.fields as any) || {};
+      const cat = (f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other") as string;
+      const c = String(cat).trim().replace(/_/g, " ") || "Other";
       counts[c] = (counts[c] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
@@ -3943,7 +3956,7 @@ export default function TrackersPage() {
             {sectionFilter === "trackers" ? `${filteredTrackers.length} trackers`
              : sectionFilter === "documents" ? `${filteredDocuments.length} documents`
              : sectionFilter === "all" ? `${filteredTrackers.length + filteredDocuments.length} items`
-             : sectionFilter === "subscriptions" ? "subscriptions"
+             : sectionFilter === "liabilities" ? "liabilities"
              : sectionFilter === "profiles" ? "assets"
              : `${filteredTrackers.length} trackers`}
           </span>
@@ -3960,7 +3973,7 @@ export default function TrackersPage() {
           {(() => {
             // ─── Smart + button: routes to the right creation flow based on the active section ───
             const openAssetDialog = () => { setCreateProfileFilter(["assets", "investments", "property"]); setCreateProfileTitle("Add Asset"); setCreateProfileOpen(true); };
-            const openSubDialog = () => { setCreateProfileFilter("subscriptions"); setCreateProfileTitle("Add Subscription"); setCreateProfileOpen(true); };
+            const openLiabilityDialog = () => { setCreateProfileFilter("liabilities"); setCreateProfileTitle("Add Liability"); setCreateProfileOpen(true); };
             const openTrackerDialog = () => setCreateOpen(true);
             const openDocumentUpload = () => navigate("/dashboard/artifacts");
 
@@ -3972,9 +3985,9 @@ export default function TrackersPage() {
                 </Button>
               );
             }
-            if (sectionFilter === "subscriptions") {
+            if (sectionFilter === "liabilities") {
               return (
-                <Button onClick={openSubDialog} size="icon" className="h-7 w-7" data-testid="button-create-subscription" aria-label="Add Subscription">
+                <Button onClick={openLiabilityDialog} size="icon" className="h-7 w-7" data-testid="button-create-liability" aria-label="Add Liability">
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
               );
@@ -4005,8 +4018,8 @@ export default function TrackersPage() {
                   <DropdownMenuItem onClick={openAssetDialog} data-testid="menu-add-asset">
                     <Building2 className="h-3.5 w-3.5 mr-2" /> Asset
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={openSubDialog} data-testid="menu-add-subscription">
-                    <Clock className="h-3.5 w-3.5 mr-2" /> Subscription
+                  <DropdownMenuItem onClick={openLiabilityDialog} data-testid="menu-add-liability">
+                    <TrendingDown className="h-3.5 w-3.5 mr-2" /> Liability
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={openTrackerDialog} data-testid="menu-add-tracker">
@@ -4047,21 +4060,23 @@ export default function TrackersPage() {
               if (pParent && filterIds.includes(pParent)) return true;
               return false;
             }).length;
-            const filteredSubCount = (profiles || []).filter(p => {
-              if (p.type !== "subscription") return false;
+            // Liabilities count — includes both "liability" (canonical) and legacy "loan".
+            const filteredLiabilityCount = (profiles || []).filter(p => {
+              if (p.type !== "liability" && p.type !== "loan") return false;
               if (isShowAllForCounts) return true;
-              const pParent = p.fields?._parentProfileId || p.parentProfileId;
+              if (filterIds.includes(p.id)) return true;
+              const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
               if (pParent && filterIds.includes(pParent)) return true;
               return false;
             }).length;
-            return (["all", "trackers", "documents", "profiles", "subscriptions"] as const).map(s => {
-            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", subscriptions: "Subscriptions" };
+            return (["all", "trackers", "documents", "profiles", "liabilities"] as const).map(s => {
+            const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", liabilities: "Liabilities" };
             const counts: Record<string, number> = {
-              all: filteredTrackers.length + filteredDocuments.length + filteredSubCount + filteredAssetCount,
+              all: filteredTrackers.length + filteredDocuments.length + filteredLiabilityCount + filteredAssetCount,
               trackers: filteredTrackers.length,
               documents: filteredDocuments.length,
               profiles: filteredAssetCount,
-              subscriptions: filteredSubCount,
+              liabilities: filteredLiabilityCount,
             };
             return (
               <button
@@ -4184,22 +4199,22 @@ export default function TrackersPage() {
         </div>
       )}
 
-      {sectionFilter === "subscriptions" && subCategoryOptions.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-subscriptions">
+      {sectionFilter === "liabilities" && liabilityCategoryOptions.length > 1 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-liabilities">
           <button
             onClick={() => setSubCatFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${subCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
           >
-            All Categories
+            All Types
           </button>
-          {subCategoryOptions.map(([cat, count]) => {
+          {liabilityCategoryOptions.map(([cat, count]) => {
             const isActive = subCatFilter === cat;
             return (
               <button
                 key={cat}
                 onClick={() => setSubCatFilter(isActive ? "all" : cat)}
                 className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize transition-colors whitespace-nowrap shrink-0 ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
-                data-testid={`filter-sub-cat-${cat}`}
+                data-testid={`filter-liability-cat-${cat}`}
               >
                 {cat} <span className="opacity-70">{count}</span>
               </button>
@@ -4218,7 +4233,7 @@ export default function TrackersPage() {
           linked item as a single flat table regardless of section. This
           replaces the per-section card grids below. */}
       {viewMode === "table" && (() => {
-        type Row = { id: string; kind: "asset" | "subscription" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; };
+        type Row = { id: string; kind: "asset" | "liability" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; };
         const rows: Row[] = [];
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone";
@@ -4240,16 +4255,16 @@ export default function TrackersPage() {
             rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}` });
           });
         }
-        // Subscriptions
-        if (sectionFilter === "all" || sectionFilter === "subscriptions") {
+        // Liabilities (replaces Subscriptions)
+        if (sectionFilter === "all" || sectionFilter === "liabilities") {
           (profiles || []).forEach(p => {
-            if (p.type !== "subscription") return;
-            const pParent = p.fields?._parentProfileId || p.parentProfileId;
+            if (p.type !== "liability" && p.type !== "loan") return;
+            const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
             if (!isShowAll && !filterIds.includes(p.id) && !(pParent && filterIds.includes(pParent))) return;
-            const f = p.fields || {}; const fin = f.finance || {};
-            const cost = toNum(f.cost) ?? toNum(f.amount) ?? toNum(fin.cost) ?? toNum(fin.amount) ?? toNum(f.monthlyCost);
-            const cycle = (f.billingCycle || f.cycle || fin.billingCycle || "month") as string;
-            rows.push({ id: p.id, kind: "subscription", name: p.name, subtitle: "Subscription", meta: cost != null ? `$${cost.toLocaleString()}/${String(cycle).slice(0, 3)}` : "—", href: `/profiles/${p.id}` });
+            const f = (p.fields as any) || {}; const fin = f.finance || {};
+            const bal = toNum(f.currentBalance) ?? toNum(f.remainingBalance) ?? toNum(f.loanBalance) ?? toNum(f.balance) ?? toNum(fin.remainingBalance) ?? toNum(fin.loanBalance) ?? toNum(fin.balance);
+            const sub = (f.subtype || f.liabilityType || "Liability").toString().replace(/_/g, " ");
+            rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta: bal != null ? `$${Math.round(bal).toLocaleString()}` : "—", href: `/profiles/${p.id}` });
           });
         }
         // Documents
@@ -4280,8 +4295,8 @@ export default function TrackersPage() {
             </div>
           );
         }
-        const kindIcons: Record<Row["kind"], any> = { asset: Star, subscription: CreditCard, document: FileText, tracker: Activity };
-        const kindColors: Record<Row["kind"], string> = { asset: "262 60% 62%", subscription: "30 95% 55%", document: "200 60% 50%", tracker: "142 60% 45%" };
+        const kindIcons: Record<Row["kind"], any> = { asset: Star, liability: TrendingDown, document: FileText, tracker: Activity };
+        const kindColors: Record<Row["kind"], string> = { asset: "262 60% 62%", liability: "0 72% 55%", document: "200 60% 50%", tracker: "142 60% 45%" };
         return (
           <div className="rounded-lg border border-border/40 overflow-hidden bg-card" data-testid="linked-list-view">
             <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-1.5 border-b border-border/40 bg-muted/30 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -4540,106 +4555,117 @@ export default function TrackersPage() {
       })()}
 
 
-      {/* Subscriptions Section */}
-      {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "subscriptions") && (() => {
+      {/* Liabilities Section (replaces Subscriptions) */}
+      {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "liabilities") && (() => {
         const isShowAll = filterMode === "everyone";
-        const subs = (profiles || []).filter(p => {
-          if (p.type !== "subscription") return false;
-          // Profile-level scope first
+        const liabs = (profiles || []).filter(p => {
+          if (p.type !== "liability" && p.type !== "loan") return false;
+          // Profile-level scope first — liability is in scope if it's directly
+          // selected, parented to a selected profile, or the user is on "everyone".
           let inScope = isShowAll;
           if (!inScope) {
-            const pParent = p.fields?._parentProfileId || p.parentProfileId;
+            if (filterIds.includes(p.id)) inScope = true;
+            const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
             if (pParent && filterIds.includes(pParent)) inScope = true;
           }
           if (!inScope) return false;
-          // Subscription category chip filter — only applies on the Subscriptions tab.
-          if (sectionFilter === "subscriptions" && subCatFilter !== "all") {
-            const cat = String(p.fields?.category || p.fields?.subscriptions?.category || p.fields?.type || "Other").trim() || "Other";
+          // Type chip filter — only applies on the Liabilities tab.
+          if (sectionFilter === "liabilities" && subCatFilter !== "all") {
+            const f = (p.fields as any) || {};
+            const cat = String(f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other").trim().replace(/_/g, " ") || "Other";
             if (cat !== subCatFilter) return false;
           }
           return true;
         });
-        if (subs.length === 0) return (
+        if (liabs.length === 0) return (
           <div className="rounded-lg border bg-card p-6 text-center">
-            <CreditCard className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">No subscriptions or bills yet</p>
-            <p className="text-xs text-muted-foreground mt-1">Add recurring payments to track them here</p>
+            <TrendingDown className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No liabilities yet</p>
+            <p className="text-xs text-muted-foreground mt-1">Track mortgages, car loans, credit cards, and other debts here</p>
             <Button
               size="sm"
               variant="outline"
               className="mt-3 h-8 text-xs"
-              onClick={() => { setCreateProfileFilter("subscriptions"); setCreateProfileTitle("Add Subscription"); setCreateProfileOpen(true); }}
-              data-testid="btn-empty-add-subscription"
+              onClick={() => { setCreateProfileFilter("liabilities"); setCreateProfileTitle("Add Liability"); setCreateProfileOpen(true); }}
+              data-testid="btn-empty-add-liability"
             >
-              <Plus className="h-3 w-3 mr-1" /> Add Subscription
+              <Plus className="h-3 w-3 mr-1" /> Add Liability
             </Button>
           </div>
         );
+        // Compute totals — helps the user see total debt + monthly burden at a glance.
+        const toNumLiab = (v: any): number | null => {
+          if (v == null || v === '') return null;
+          if (typeof v === 'number' && isFinite(v)) return v;
+          if (typeof v === 'string') { const n = parseFloat(v.replace(/[$,\s\/a-zA-Z]/g, '')); return isFinite(n) ? n : null; }
+          return null;
+        };
+        const totalBalance = liabs.reduce((s, l) => {
+          const f: any = l.fields || {}; const fin = f.finance || {};
+          return s + (toNumLiab(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance) || 0);
+        }, 0);
+        const totalMonthly = liabs.reduce((s, l) => {
+          const f: any = l.fields || {}; const fin = f.finance || {};
+          return s + (toNumLiab(f.monthlyPayment ?? fin.monthlyPayment) || 0);
+        }, 0);
+        // Red-tinted accent because liabilities are debt; a pure-red would feel
+        // alarmist on a calm dashboard, so we soften with the same lightness as
+        // the Assets purple to keep visual weight balanced.
+        const accentHsl = '0 72% 55%';
+        const ac = `hsl(${accentHsl})`;
         return (
           <div className="space-y-2">
-            <button onClick={() => toggleSection("subscriptions")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-subscriptions">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(43 85% 52% / 0.15)' }}>
-                <CreditCard className="h-4 w-4" style={{ color: 'hsl(43 85% 52%)' }} />
+            <button onClick={() => toggleSection("liabilities")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: `linear-gradient(135deg, hsl(${accentHsl} / 0.06) 0%, transparent 50%)` }} data-testid="section-toggle-liabilities">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accentHsl} / 0.15)` }}>
+                <TrendingDown className="h-4 w-4" style={{ color: ac }} />
               </div>
               <div className="flex-1 text-left">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold" style={{ color: 'hsl(43 85% 52%)' }}>Subscriptions & Bills</span>
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(43 85% 52% / 0.15)', color: 'hsl(43 85% 52%)' }}>{subs.length}</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-bold" style={{ color: ac }}>Liabilities</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: `hsl(${accentHsl} / 0.15)`, color: ac }}>{liabs.length}</span>
+                  {totalBalance > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">${Math.round(totalBalance).toLocaleString()} total</span>}
+                  {totalMonthly > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">· ${Math.round(totalMonthly).toLocaleString()}/mo</span>}
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">Recurring payments and services</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Mortgages, loans, credit cards, and debts</p>
               </div>
-              {collapsedSections.has("subscriptions") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
+              {collapsedSections.has("liabilities") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
-            {!collapsedSections.has("subscriptions") && (
+            {!collapsedSections.has("liabilities") && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                {subs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(sub => {
-                  const fields = sub.fields || {};
-                  // Nested subscription data is stored under fields.subscriptions for older entries
-                  const subFields = fields.subscriptions || {};
-                  const toNum = (v: any): number | null => {
-                    if (v == null || v === '') return null;
-                    if (typeof v === 'number' && isFinite(v)) return v;
-                    if (typeof v === 'string') {
-                      const n = parseFloat(v.replace(/[$,\s\/a-zA-Z]/g, ''));
-                      return isFinite(n) ? n : null;
-                    }
-                    return null;
-                  };
-                  const cost = toNum(fields.cost) ?? toNum(subFields.cost) ?? toNum(fields.amount) ?? toNum(fields.price) ?? toNum(subFields.amount) ?? toNum(subFields.price);
-                  const freq = fields.frequency || subFields.frequency || fields.billing || subFields.billing || fields.billingCycle || subFields.billingCycle || 'monthly';
-                  const freqShort = String(freq).toLowerCase().includes('year') ? '/yr' : String(freq).toLowerCase().includes('week') ? '/wk' : '/mo';
-                  const category = fields.category || subFields.category || fields.type || '';
-                  const status = fields.status || subFields.status || (cost != null && cost > 0 ? 'Active' : '');
-                  const provider = fields.provider || subFields.provider || fields.company || subFields.company || '';
-                  const monthlyCost = cost != null && cost > 0 ? (String(freq).toLowerCase().includes('year') ? cost / 12 : cost) : 0;
-                  const annualCost = monthlyCost * 12;
-                  const accentHsl = '43 85% 52%';
-                  const ac = `hsl(${accentHsl})`;
+                {liabs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(liab => {
+                  const fields: any = liab.fields || {};
+                  const fin = fields.finance || {};
+                  const balance = toNumLiab(fields.currentBalance ?? fields.remainingBalance ?? fields.loanBalance ?? fields.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance);
+                  const monthly = toNumLiab(fields.monthlyPayment ?? fin.monthlyPayment);
+                  const apr = toNumLiab(fields.annualInterestRate ?? fields.apr ?? fin.annualInterestRate);
+                  const lender = fields.lender || fin.lender || '';
+                  const subtype = String(fields.subtype || fields.liabilityType || 'liability').replace(/_/g, ' ');
+                  const original = toNumLiab(fields.originalBalance ?? fin.originalBalance);
+                  const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
                   return (
-                    <Link key={sub.id} href={`/profiles/${sub.id}`}>
-                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`sub-card-${sub.id}`}>
+                    <Link key={liab.id} href={`/profiles/${liab.id}`}>
+                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`liab-card-${liab.id}`}>
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><CreditCard className="h-3.5 w-3.5" /></div>
-                          <p className="text-[10px] font-bold text-foreground truncate">{sub.name}</p>
+                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><TrendingDown className="h-3.5 w-3.5" /></div>
+                          <p className="text-[10px] font-bold text-foreground truncate">{liab.name}</p>
                         </div>
                         <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-                          {cost != null && cost > 0 ? (
+                          {balance != null && balance > 0 ? (
                             <div className="flex items-center justify-between">
                               <div className="flex items-baseline gap-0.5">
-                                <span className="text-xl font-black tabular-nums text-foreground">${cost.toLocaleString()}</span>
-                                <span className="text-[9px] text-muted-foreground">{freqShort}</span>
+                                <span className="text-xl font-black tabular-nums text-foreground">${Math.round(balance).toLocaleString()}</span>
+                                <span className="text-[9px] text-muted-foreground">bal</span>
                               </div>
-                              {annualCost > 0 && <Donut pct={Math.min(1, monthlyCost / 100)} color={ac} size={32} label={`$${Math.round(monthlyCost)}`} />}
+                              {original && original > 0 && <Donut pct={paidPct} color={ac} size={32} label={`${Math.round(paidPct * 100)}%`} />}
                             </div>
-                          ) : <span className="text-[10px] text-muted-foreground/50 italic">No cost set</span>}
-                          {annualCost > 0 && <KpiLine label="Annual" value={`$${Math.round(annualCost).toLocaleString()}/yr`} />}
-                          {provider && <KpiLine label="Provider" value={String(provider).slice(0, 18)} />}
-                          {category && <KpiLine label="Category" value={String(category).slice(0, 16)} />}
-                          {status && <KpiLine label="Status" value={status} accent={String(status).toLowerCase() === 'active' ? '#22c55e' : undefined} />}
+                          ) : <span className="text-[10px] text-muted-foreground/50 italic">No balance set</span>}
+                          {monthly != null && monthly > 0 && <KpiLine label="Monthly" value={`$${Math.round(monthly).toLocaleString()}/mo`} />}
+                          {apr != null && apr > 0 && <KpiLine label="APR" value={`${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%`} />}
+                          {lender && <KpiLine label="Lender" value={String(lender).slice(0, 18)} />}
                         </div>
                         <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
-                          <span className="text-[7px] font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>Subscription</span>
-                          <span className="text-[7px] text-muted-foreground tabular-nums">{String(freq).slice(0, 8)}</span>
+                          <span className="text-[7px] font-semibold px-1.5 py-0.5 rounded capitalize" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{subtype}</span>
+                          {original && original > 0 && balance != null && <span className="text-[7px] text-muted-foreground tabular-nums">of ${Math.round(original).toLocaleString()}</span>}
                         </div>
                       </div>
                     </Link>
