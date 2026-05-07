@@ -1017,6 +1017,54 @@ export const insertLiabilityProfileLinkSchema = z.object({
 });
 export type InsertLiabilityProfileLink = z.input<typeof insertLiabilityProfileLinkSchema>;
 
+// ============================================================
+// RELATIONSHIPS — asset_party_links + ownership_history
+// ============================================================
+
+export type AssetPartyRole = "owner" | "co_owner" | "beneficiary" | "trustee" | "custodian" | "authorized_user";
+
+export interface AssetPartyLink {
+  id: string;
+  assetProfileId: string;
+  partyProfileId: string;
+  ownershipPercentage: number;
+  role: AssetPartyRole;
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const insertAssetPartyLinkSchema = z.object({
+  assetProfileId: z.string().uuid(),
+  partyProfileId: z.string().uuid(),
+  ownershipPercentage: z.number().min(0).max(100).default(100),
+  role: z.enum(["owner", "co_owner", "beneficiary", "trustee", "custodian", "authorized_user"]).default("owner"),
+  effectiveFrom: z.string().nullable().optional(),
+  effectiveTo: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+export type InsertAssetPartyLink = z.input<typeof insertAssetPartyLinkSchema>;
+
+export type OwnershipLinkKind = "asset_party" | "liability_party" | "liability_asset";
+export type OwnershipAction = "create" | "update" | "delete" | "move";
+
+export interface OwnershipHistoryEntry {
+  id: string;
+  linkKind: OwnershipLinkKind;
+  linkId?: string | null;
+  subjectId?: string | null;
+  counterpartyId?: string | null;
+  action: OwnershipAction;
+  fieldChanged?: string | null;
+  oldValue?: string | null;
+  newValue?: string | null;
+  changedBy: string;        // 'user' | 'ai'
+  note?: string | null;
+  changedAt: string;
+}
+
 export const insertLiabilityPaymentSchema = z.object({
   liabilityProfileId: z.string().uuid(),
   paymentDate: z.string(),

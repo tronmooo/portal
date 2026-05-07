@@ -1629,6 +1629,101 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: ["liabilityName"],
     },
   },
+  // --- RELATIONSHIPS (asset ↔ liability ↔ party) ---
+  {
+    name: "link_asset_to_liability",
+    description: "Attach an asset to a liability (collateral, secured_by, etc). Use for 'this loan covers my Tesla', 'mortgage on 123 Maple', 'add appliance financing to the kitchen'. Multiple assets can attach to one liability and vice versa. If the asset doesn't exist yet, set createIfMissing:true to auto-create a stub asset.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability name (partial match)." },
+        assetName: { type: "string", description: "Asset name (partial match)." },
+        role: { type: "string", enum: ["collateral", "secured_by", "guaranteed", "shared", "improvement", "general"], description: "Role. Defaults to 'collateral'." },
+        ownershipPct: { type: "number", description: "Allocation percentage (0-100). Defaults to 100." },
+        createIfMissing: { type: "boolean", description: "If true and asset doesn't exist, create a stub asset profile with smart type inference. Default true." },
+      },
+      required: ["liabilityName", "assetName"],
+    },
+  },
+  {
+    name: "unlink_asset_from_liability",
+    description: "Detach an asset from a liability. Use for 'remove the Tesla from this loan', 'this loan no longer covers the fridge'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability name (partial match)." },
+        assetName: { type: "string", description: "Asset name (partial match)." },
+      },
+      required: ["liabilityName", "assetName"],
+    },
+  },
+  {
+    name: "move_liability_to_asset",
+    description: "Move a liability's collateral attachment from one asset to another atomically. Use for 'move the appliance financing from the old house to the new house', 'transfer the auto loan from the Honda to the Tesla'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability name (partial match)." },
+        fromAssetName: { type: "string", description: "Current asset (partial match)." },
+        toAssetName: { type: "string", description: "Destination asset (partial match). If it doesn't exist, set createIfMissing:true." },
+        createIfMissing: { type: "boolean", description: "If destination asset doesn't exist, create a stub. Default true." },
+      },
+      required: ["liabilityName", "fromAssetName", "toAssetName"],
+    },
+  },
+  {
+    name: "link_asset_owner",
+    description: "Assign an owner / co-owner / beneficiary / trustee to an asset with an ownership percentage. Use for 'split the Porsche 60/40 with Sarah', 'add my wife as co-owner of the house', 'mom is the trustee of this account'. Multiple parties can be linked.\n\nFor REALLOCATION (e.g. 'I now own 100%, remove my dad', 'we now split 70/30 instead of 50/50'), set replaceExisting:true on the FIRST call to wipe prior owner links, then call this tool once per new owner.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        assetName: { type: "string", description: "Asset name (partial match)." },
+        partyName: { type: "string", description: "Person profile name (partial match). Use 'Me' or 'Self' for the user." },
+        role: { type: "string", enum: ["owner", "co_owner", "beneficiary", "trustee", "custodian", "authorized_user"], description: "Role. Defaults to 'owner'." },
+        ownershipPct: { type: "number", description: "Ownership percentage (0-100). Defaults to 100 for sole, 50 for two-party." },
+        replaceExisting: { type: "boolean", description: "If true, deletes ALL existing owner links on this asset before creating the new one. Default false." },
+        removeOwnerName: { type: "string", description: "Optional. If set, removes the link for this owner name BEFORE creating the new one. Use ALONE (without partyName) for pure removal." },
+      },
+      required: ["assetName"],
+    },
+  },
+  {
+    name: "split_ownership",
+    description: "Atomically replace all ownership on an asset OR liability with a new split across multiple parties. Use for 'split the Tesla 60/40 between me and Sarah', 'mortgage is now 70% me, 30% wife'. Wipes existing party links and recreates them.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        subjectName: { type: "string", description: "Asset or liability name (partial match)." },
+        subjectKind: { type: "string", enum: ["asset", "liability"], description: "Whether the subject is an asset or a liability." },
+        splits: {
+          type: "array",
+          description: "Array of {partyName, pct, role}. Percentages should sum to 100.",
+          items: {
+            type: "object",
+            properties: {
+              partyName: { type: "string" },
+              pct: { type: "number" },
+              role: { type: "string", description: "For assets: owner|co_owner|beneficiary|trustee|custodian|authorized_user. For liabilities: owner|co_signer|guarantor|responsible_party|authorized_user." },
+            },
+            required: ["partyName", "pct"],
+          },
+        },
+      },
+      required: ["subjectName", "subjectKind", "splits"],
+    },
+  },
+  {
+    name: "get_relationships",
+    description: "Return the full relationship graph for a profile (1 or 2 hops): all linked assets, liabilities, and people with their roles and ownership %. Use when the user asks 'show me everything connected to my house', 'what's tied to the Tesla', 'who owns what', or before making changes that need full context.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        profileName: { type: "string", description: "Profile name (partial match)." },
+        hops: { type: "number", description: "1 (direct) or 2 (one extra ring). Default 1." },
+      },
+      required: ["profileName"],
+    },
+  },
   {
     name: "get_liability_summary",
     description: "Get a complete summary of one liability OR all liabilities: balances, payoff timeline, total interest paid + projected, recent payments, linked assets, linked parties. Use when the user asks 'how much do I owe?', 'when will my mortgage be paid off?', 'show all my debts', 'what's my total debt?', or for any debt-payoff question.",
@@ -4489,6 +4584,223 @@ async function executeTool(name: string, input: any): Promise<any> {
       } catch (e: any) {
         return { error: `Link failed: ${e?.message || "unknown"}` };
       }
+    }
+
+    case "link_asset_to_liability": {
+      const profiles = await storage.getProfiles();
+      const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
+      const aNameLC = String(input.assetName || "").toLowerCase().trim();
+      const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      const liability = liabs.find((p: any) => p.name.toLowerCase() === lNameLC) || liabs.find((p: any) => p.name.toLowerCase().includes(lNameLC));
+      if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      const assets = profiles.filter((p: any) => ["asset", "vehicle", "property"].includes(p.type));
+      let asset = assets.find((p: any) => p.name.toLowerCase() === aNameLC) || assets.find((p: any) => p.name.toLowerCase().includes(aNameLC));
+      if (!asset && (input.createIfMissing !== false)) {
+        // smart-infer type
+        const aname = String(input.assetName).trim();
+        const lc = aname.toLowerCase();
+        let assetType = "asset"; let typeKey = "high_value_item";
+        if (/(car|truck|suv|sedan|honda|toyota|ford|chevy|tesla|porsche|bmw|audi|nissan|hyundai|kia|jeep|civic|camry|model\s?[xyz3])/i.test(lc)) { assetType = "vehicle"; typeKey = "vehicle"; }
+        else if (/(home|house|condo|duplex|apartment|property|lot|street|avenue|drive|road|blvd|lane)/i.test(lc)) { assetType = "property"; typeKey = "property"; }
+        try {
+          asset = await storage.createProfile({
+            name: aname, type: assetType, typeKey,
+            fields: { autoCreatedFromLiability: liability.id, note: `Auto-created from liability '${liability.name}'—update with details when ready.` },
+            tags: [], notes: null,
+          } as any);
+        } catch (e: any) { return { error: `Auto-create asset failed: ${e?.message}` }; }
+      }
+      if (!asset) return { error: `Asset not found: ${input.assetName}` };
+      try {
+        const link = await storage.createLiabilityAssetLink({
+          liabilityProfileId: liability.id,
+          assetProfileId: asset.id,
+          ownershipPercentage: input.ownershipPct != null ? Number(input.ownershipPct) : 100,
+          role: input.role || "collateral",
+        } as any);
+        return { result: link, actions: [{ type: "link", category: "liability_asset", data: link }] };
+      } catch (e: any) {
+        if (String(e?.message || "").includes("duplicate")) return { error: `Asset "${asset.name}" is already linked to this liability.` };
+        return { error: `Link failed: ${e?.message || "unknown"}` };
+      }
+    }
+
+    case "unlink_asset_from_liability": {
+      const profiles = await storage.getProfiles();
+      const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
+      const aNameLC = String(input.assetName || "").toLowerCase().trim();
+      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === lNameLC || p.name.toLowerCase().includes(lNameLC)));
+      if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      const asset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === aNameLC || p.name.toLowerCase().includes(aNameLC)));
+      if (!asset) return { error: `Asset not found: ${input.assetName}` };
+      const links = await storage.getLiabilityAssetLinks(liability.id);
+      const target = links.find((l: any) => l.assetProfileId === asset.id);
+      if (!target) return { error: `No link found between liability and asset.` };
+      await storage.deleteLiabilityAssetLink(target.id);
+      return { result: { removed: target.id }, actions: [{ type: "unlink", category: "liability_asset", data: target }] };
+    }
+
+    case "move_liability_to_asset": {
+      const profiles = await storage.getProfiles();
+      const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
+      const fromLC = String(input.fromAssetName || "").toLowerCase().trim();
+      const toLC = String(input.toAssetName || "").toLowerCase().trim();
+      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === lNameLC || p.name.toLowerCase().includes(lNameLC)));
+      if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      const fromAsset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === fromLC || p.name.toLowerCase().includes(fromLC)));
+      if (!fromAsset) return { error: `Source asset not found: ${input.fromAssetName}` };
+      let toAsset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === toLC || p.name.toLowerCase().includes(toLC)));
+      if (!toAsset && (input.createIfMissing !== false)) {
+        try {
+          toAsset = await storage.createProfile({
+            name: String(input.toAssetName).trim(), type: "asset", typeKey: "high_value_item",
+            fields: { autoCreatedFromLiability: liability.id }, tags: [], notes: null,
+          } as any);
+        } catch (e: any) { return { error: `Auto-create destination asset failed: ${e?.message}` }; }
+      }
+      if (!toAsset) return { error: `Destination asset not found: ${input.toAssetName}` };
+      const links = await storage.getLiabilityAssetLinks(liability.id);
+      const target = links.find((l: any) => l.assetProfileId === fromAsset.id);
+      if (!target) return { error: `No existing link between '${liability.name}' and '${fromAsset.name}'.` };
+      const updated = await storage.updateLiabilityAssetLink(target.id, { assetProfileId: toAsset.id } as any);
+      return { result: updated, actions: [{ type: "move", category: "liability_asset", data: { from: fromAsset.id, to: toAsset.id, linkId: target.id } }] };
+    }
+
+    case "link_asset_owner": {
+      const profiles = await storage.getProfiles();
+      const aNameLC = String(input.assetName || "").toLowerCase().trim();
+      let pNameLC = String(input.partyName || "").toLowerCase().trim();
+      if (pNameLC === "me" || pNameLC === "myself" || pNameLC === "i" || pNameLC === "self") {
+        const selfP = profiles.find((p: any) => p.type === "self");
+        if (selfP) pNameLC = selfP.name.toLowerCase();
+      }
+      const assets = profiles.filter((p: any) => ["asset", "vehicle", "property"].includes(p.type));
+      const asset = assets.find((p: any) => p.name.toLowerCase() === aNameLC) || assets.find((p: any) => p.name.toLowerCase().includes(aNameLC));
+      if (!asset) return { error: `Asset not found: ${input.assetName}` };
+      if (input.replaceExisting) {
+        try {
+          const existing = await storage.getAssetPartyLinks(asset.id);
+          for (const ex of existing || []) await storage.deleteAssetPartyLink(ex.id);
+        } catch (e: any) { logger.warn("ai", `asset replaceExisting cleanup failed: ${e?.message}`); }
+      }
+      if (input.removeOwnerName) {
+        const removeLC = String(input.removeOwnerName).toLowerCase().trim();
+        try {
+          const existing = await storage.getAssetPartyLinks(asset.id);
+          for (const ex of existing || []) {
+            const partyP = profiles.find((p: any) => p.id === ex.partyProfileId);
+            if (partyP && (partyP.name.toLowerCase() === removeLC || partyP.name.toLowerCase().includes(removeLC))) {
+              await storage.deleteAssetPartyLink(ex.id);
+            }
+          }
+        } catch (e: any) { logger.warn("ai", `removeOwner asset cleanup failed: ${e?.message}`); }
+        if (!input.partyName) return { result: { removed: input.removeOwnerName }, actions: [{ type: "unlink", category: "asset_owner", data: { name: input.removeOwnerName } }] };
+      }
+      let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
+        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase().includes(pNameLC));
+      if (!party && input.partyName) {
+        const partyName = String(input.partyName).trim();
+        if (!/^(me|myself|i|self)$/i.test(partyName)) {
+          try {
+            party = await storage.createProfile({ name: partyName, type: "person", fields: {}, tags: [], notes: null } as any);
+          } catch (e: any) { return { error: `Person "${partyName}" not found and could not be auto-created: ${e?.message || "unknown"}` }; }
+        }
+      }
+      if (!party) return { error: `Person not found: ${input.partyName}` };
+      try {
+        const link = await storage.createAssetPartyLink({
+          assetProfileId: asset.id,
+          partyProfileId: party.id,
+          ownershipPercentage: input.ownershipPct != null ? Number(input.ownershipPct) : 100,
+          role: (input.role || "owner") as any,
+        } as any);
+        return { result: link, actions: [{ type: "link", category: "asset_owner", data: link }] };
+      } catch (e: any) {
+        if (String(e?.message || "").includes("duplicate")) return { error: `Owner "${party.name}" already linked to this asset with role "${input.role || "owner"}".` };
+        return { error: `Link failed: ${e?.message || "unknown"}` };
+      }
+    }
+
+    case "split_ownership": {
+      const profiles = await storage.getProfiles();
+      const sNameLC = String(input.subjectName || "").toLowerCase().trim();
+      const kind = String(input.subjectKind || "").toLowerCase();
+      const splits: Array<{ partyName: string; pct: number; role?: string }> = Array.isArray(input.splits) ? input.splits : [];
+      if (!splits.length) return { error: "splits array is required" };
+      let subject: any;
+      if (kind === "asset") {
+        subject = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === sNameLC || p.name.toLowerCase().includes(sNameLC)));
+      } else {
+        subject = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === sNameLC || p.name.toLowerCase().includes(sNameLC)));
+      }
+      if (!subject) return { error: `${kind} not found: ${input.subjectName}` };
+      // wipe
+      try {
+        if (kind === "asset") {
+          const existing = await storage.getAssetPartyLinks(subject.id);
+          for (const ex of existing || []) await storage.deleteAssetPartyLink(ex.id);
+        } else {
+          const existing = await storage.getLiabilityProfileLinks(subject.id);
+          for (const ex of existing || []) await storage.deleteLiabilityProfileLink(ex.id);
+        }
+      } catch (e: any) { logger.warn("ai", `split wipe failed: ${e?.message}`); }
+      const created: any[] = [];
+      for (const s of splits) {
+        let pNameLC = String(s.partyName).toLowerCase().trim();
+        if (pNameLC === "me" || pNameLC === "myself" || pNameLC === "i" || pNameLC === "self") {
+          const selfP = profiles.find((p: any) => p.type === "self");
+          if (selfP) pNameLC = selfP.name.toLowerCase();
+        }
+        let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && (p.name.toLowerCase() === pNameLC || p.name.toLowerCase().includes(pNameLC)));
+        if (!party) {
+          try {
+            party = await storage.createProfile({ name: String(s.partyName).trim(), type: "person", fields: {}, tags: [], notes: null } as any);
+          } catch (e: any) { continue; }
+        }
+        try {
+          if (kind === "asset") {
+            const link = await storage.createAssetPartyLink({
+              assetProfileId: subject.id, partyProfileId: party.id,
+              ownershipPercentage: Number(s.pct) || 0, role: (s.role || "co_owner") as any,
+            } as any);
+            created.push(link);
+          } else {
+            const link = await storage.createLiabilityProfileLink({
+              liabilityProfileId: subject.id, partyProfileId: party.id,
+              ownershipPercentage: Number(s.pct) || 0, role: (s.role || "owner") as any,
+            } as any);
+            created.push(link);
+          }
+        } catch (e: any) { logger.warn("ai", `split create failed for ${s.partyName}: ${e?.message}`); }
+      }
+      return { result: { subject: subject.id, kind, created }, actions: [{ type: "split", category: kind, data: { subjectId: subject.id, count: created.length } }] };
+    }
+
+    case "get_relationships": {
+      const profiles = await storage.getProfiles();
+      const nameLC = String(input.profileName || "").toLowerCase().trim();
+      const subject = profiles.find((p: any) => p.name.toLowerCase() === nameLC) || profiles.find((p: any) => p.name.toLowerCase().includes(nameLC));
+      if (!subject) return { error: `Profile not found: ${input.profileName}` };
+      const profById = new Map(profiles.map((p: any) => [p.id, p]));
+      const summary: any = { subject: { id: subject.id, name: subject.name, type: subject.type }, linkedAssets: [], linkedLiabilities: [], linkedPeople: [] };
+      if (["liability", "loan"].includes(subject.type)) {
+        const la = await storage.getLiabilityAssetLinks(subject.id);
+        const lp = await storage.getLiabilityProfileLinks(subject.id);
+        summary.linkedAssets = la.map((l: any) => ({ id: l.assetProfileId, name: profById.get(l.assetProfileId)?.name, role: l.role, ownershipPercentage: l.ownershipPercentage, linkId: l.id }));
+        summary.linkedPeople = lp.map((l: any) => ({ id: l.partyProfileId, name: profById.get(l.partyProfileId)?.name, role: l.role, ownershipPercentage: l.ownershipPercentage, linkId: l.id }));
+      } else if (["asset", "vehicle", "property"].includes(subject.type)) {
+        const al = await storage.getLiabilityAssetLinksForAsset(subject.id);
+        const ap = await storage.getAssetPartyLinks(subject.id);
+        summary.linkedLiabilities = al.map((l: any) => ({ id: l.liabilityProfileId, name: profById.get(l.liabilityProfileId)?.name, role: l.role, ownershipPercentage: l.ownershipPercentage, linkId: l.id }));
+        summary.linkedPeople = ap.map((l: any) => ({ id: l.partyProfileId, name: profById.get(l.partyProfileId)?.name, role: l.role, ownershipPercentage: l.ownershipPercentage, linkId: l.id }));
+      } else {
+        // person/self/business
+        const lpAsParty = await storage.getLiabilityProfileLinksForParty(subject.id);
+        const apAsParty = await storage.getAssetPartyLinksForParty(subject.id);
+        summary.linkedLiabilities = lpAsParty.map((l: any) => ({ id: l.liabilityProfileId, name: profById.get(l.liabilityProfileId)?.name, role: l.role, ownershipPercentage: l.ownershipPercentage, linkId: l.id }));
+        summary.linkedAssets = apAsParty.map((l: any) => ({ id: l.assetProfileId, name: profById.get(l.assetProfileId)?.name, role: l.role, ownershipPercentage: l.ownershipPercentage, linkId: l.id }));
+      }
+      return { result: summary };
     }
 
     case "get_liability_summary": {

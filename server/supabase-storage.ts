@@ -24,6 +24,8 @@ import {
   type LiabilityAssetLink, type InsertLiabilityAssetLink,
   type LiabilityProfileLink, type InsertLiabilityProfileLink,
   type LiabilityPayment, type InsertLiabilityPayment,
+  type AssetPartyLink, type InsertAssetPartyLink,
+  type OwnershipHistoryEntry,
   MOOD_SCORES,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
@@ -3920,25 +3922,81 @@ export class SupabaseStorage implements IStorage {
     };
     const { error } = await this.supabase.from("liability_asset_links").insert(row);
     if (error) throw error;
+    try {
+      await this.recordOwnershipHistory({
+        linkKind: "liability_asset", linkId: id,
+        subjectId: data.liabilityProfileId, counterpartyId: data.assetProfileId,
+        action: "create", fieldChanged: null, oldValue: null,
+        newValue: JSON.stringify({ pct: row.ownership_percentage, role: row.role }),
+        changedBy: "user", note: null,
+      });
+    } catch (e) { /* history is best-effort */ }
     return this.rowToLiabilityAssetLink(row);
   }
 
   async updateLiabilityAssetLink(id: string, patch: Partial<InsertLiabilityAssetLink>): Promise<LiabilityAssetLink | undefined> {
+    const { data: existing } = await this.supabase.from("liability_asset_links")
+      .select("*").eq("id", id).eq("user_id", this.userId).single();
     const update: any = { updated_at: new Date().toISOString() };
     if (patch.ownershipPercentage !== undefined) update.ownership_percentage = patch.ownershipPercentage;
     if (patch.allocationAmount !== undefined) update.allocation_amount = patch.allocationAmount;
     if (patch.role !== undefined) update.role = patch.role;
     if (patch.notes !== undefined) update.notes = patch.notes;
+    if (patch.assetProfileId !== undefined) update.asset_profile_id = patch.assetProfileId;
     const { data, error } = await this.supabase.from("liability_asset_links")
       .update(update).eq("id", id).eq("user_id", this.userId).select().single();
     if (error) throw error;
+    if (existing) {
+      try {
+        if (patch.ownershipPercentage !== undefined && Number(existing.ownership_percentage) !== Number(patch.ownershipPercentage)) {
+          await this.recordOwnershipHistory({
+            linkKind: "liability_asset", linkId: id,
+            subjectId: existing.liability_profile_id, counterpartyId: existing.asset_profile_id,
+            action: "update", fieldChanged: "ownership_percentage",
+            oldValue: String(existing.ownership_percentage), newValue: String(patch.ownershipPercentage),
+            changedBy: "user", note: null,
+          });
+        }
+        if (patch.role !== undefined && existing.role !== patch.role) {
+          await this.recordOwnershipHistory({
+            linkKind: "liability_asset", linkId: id,
+            subjectId: existing.liability_profile_id, counterpartyId: existing.asset_profile_id,
+            action: "update", fieldChanged: "role",
+            oldValue: existing.role, newValue: String(patch.role),
+            changedBy: "user", note: null,
+          });
+        }
+        if (patch.assetProfileId !== undefined && existing.asset_profile_id !== patch.assetProfileId) {
+          await this.recordOwnershipHistory({
+            linkKind: "liability_asset", linkId: id,
+            subjectId: existing.liability_profile_id, counterpartyId: patch.assetProfileId,
+            action: "move", fieldChanged: "asset_profile_id",
+            oldValue: existing.asset_profile_id, newValue: String(patch.assetProfileId),
+            changedBy: "user", note: null,
+          });
+        }
+      } catch (e) { /* best-effort */ }
+    }
     return data ? this.rowToLiabilityAssetLink(data) : undefined;
   }
 
   async deleteLiabilityAssetLink(id: string): Promise<void> {
+    const { data: existing } = await this.supabase.from("liability_asset_links")
+      .select("*").eq("id", id).eq("user_id", this.userId).single();
     const { error } = await this.supabase.from("liability_asset_links")
       .delete().eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    if (existing) {
+      try {
+        await this.recordOwnershipHistory({
+          linkKind: "liability_asset", linkId: id,
+          subjectId: existing.liability_profile_id, counterpartyId: existing.asset_profile_id,
+          action: "delete", fieldChanged: null,
+          oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
+          newValue: null, changedBy: "user", note: null,
+        });
+      } catch (e) { /* best-effort */ }
+    }
   }
 
   async getLiabilityProfileLinks(liabilityProfileId?: string): Promise<LiabilityProfileLink[]> {
@@ -3970,10 +4028,21 @@ export class SupabaseStorage implements IStorage {
     };
     const { error } = await this.supabase.from("liability_profile_links").insert(row);
     if (error) throw error;
+    try {
+      await this.recordOwnershipHistory({
+        linkKind: "liability_party", linkId: id,
+        subjectId: data.liabilityProfileId, counterpartyId: data.partyProfileId,
+        action: "create", fieldChanged: null, oldValue: null,
+        newValue: JSON.stringify({ pct: row.ownership_percentage, role: row.role }),
+        changedBy: "user", note: null,
+      });
+    } catch (e) { /* best-effort */ }
     return this.rowToLiabilityProfileLink(row);
   }
 
   async updateLiabilityProfileLink(id: string, patch: Partial<InsertLiabilityProfileLink>): Promise<LiabilityProfileLink | undefined> {
+    const { data: existing } = await this.supabase.from("liability_profile_links")
+      .select("*").eq("id", id).eq("user_id", this.userId).single();
     const update: any = { updated_at: new Date().toISOString() };
     if (patch.ownershipPercentage !== undefined) update.ownership_percentage = patch.ownershipPercentage;
     if (patch.role !== undefined) update.role = patch.role;
@@ -3981,13 +4050,48 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await this.supabase.from("liability_profile_links")
       .update(update).eq("id", id).eq("user_id", this.userId).select().single();
     if (error) throw error;
+    if (existing) {
+      try {
+        if (patch.ownershipPercentage !== undefined && Number(existing.ownership_percentage) !== Number(patch.ownershipPercentage)) {
+          await this.recordOwnershipHistory({
+            linkKind: "liability_party", linkId: id,
+            subjectId: existing.liability_profile_id, counterpartyId: existing.party_profile_id,
+            action: "update", fieldChanged: "ownership_percentage",
+            oldValue: String(existing.ownership_percentage), newValue: String(patch.ownershipPercentage),
+            changedBy: "user", note: null,
+          });
+        }
+        if (patch.role !== undefined && existing.role !== patch.role) {
+          await this.recordOwnershipHistory({
+            linkKind: "liability_party", linkId: id,
+            subjectId: existing.liability_profile_id, counterpartyId: existing.party_profile_id,
+            action: "update", fieldChanged: "role",
+            oldValue: existing.role, newValue: String(patch.role),
+            changedBy: "user", note: null,
+          });
+        }
+      } catch (e) { /* best-effort */ }
+    }
     return data ? this.rowToLiabilityProfileLink(data) : undefined;
   }
 
   async deleteLiabilityProfileLink(id: string): Promise<void> {
+    const { data: existing } = await this.supabase.from("liability_profile_links")
+      .select("*").eq("id", id).eq("user_id", this.userId).single();
     const { error } = await this.supabase.from("liability_profile_links")
       .delete().eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    if (existing) {
+      try {
+        await this.recordOwnershipHistory({
+          linkKind: "liability_party", linkId: id,
+          subjectId: existing.liability_profile_id, counterpartyId: existing.party_profile_id,
+          action: "delete", fieldChanged: null,
+          oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
+          newValue: null, changedBy: "user", note: null,
+        });
+      } catch (e) { /* best-effort */ }
+    }
   }
 
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {
@@ -4043,6 +4147,181 @@ export class SupabaseStorage implements IStorage {
 
   async deleteLiabilityPayment(id: string): Promise<void> {
     const { error } = await this.supabase.from("liability_payments")
+      .delete().eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+  }
+
+  // ============================================================
+  // ASSET ↔ PARTY LINKS + OWNERSHIP HISTORY (Relationships module)
+  // ============================================================
+
+  private rowToAssetPartyLink(r: any): AssetPartyLink {
+    return {
+      id: r.id,
+      assetProfileId: r.asset_profile_id,
+      partyProfileId: r.party_profile_id,
+      ownershipPercentage: Number(r.ownership_percentage ?? 100),
+      role: r.role || "owner",
+      effectiveFrom: r.effective_from ?? null,
+      effectiveTo: r.effective_to ?? null,
+      notes: r.notes ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  private rowToOwnershipHistory(r: any): OwnershipHistoryEntry {
+    return {
+      id: r.id,
+      linkKind: r.link_kind,
+      linkId: r.link_id ?? null,
+      subjectId: r.subject_id ?? null,
+      counterpartyId: r.counterparty_id ?? null,
+      action: r.action,
+      fieldChanged: r.field_changed ?? null,
+      oldValue: r.old_value ?? null,
+      newValue: r.new_value ?? null,
+      changedBy: r.changed_by || "user",
+      note: r.note ?? null,
+      changedAt: r.changed_at,
+    };
+  }
+
+  async getAssetPartyLinks(assetProfileId?: string): Promise<AssetPartyLink[]> {
+    let q = this.supabase.from("asset_party_links").select("*").eq("user_id", this.userId);
+    if (assetProfileId) q = q.eq("asset_profile_id", assetProfileId);
+    const { data, error } = await q;
+    if (error) throw error;
+    return (data || []).map((r: any) => this.rowToAssetPartyLink(r));
+  }
+
+  async getAssetPartyLinksForParty(partyProfileId: string): Promise<AssetPartyLink[]> {
+    const { data, error } = await this.supabase.from("asset_party_links")
+      .select("*").eq("user_id", this.userId).eq("party_profile_id", partyProfileId);
+    if (error) throw error;
+    return (data || []).map((r: any) => this.rowToAssetPartyLink(r));
+  }
+
+  async createAssetPartyLink(data: InsertAssetPartyLink): Promise<AssetPartyLink> {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const row = {
+      id, user_id: this.userId,
+      asset_profile_id: data.assetProfileId,
+      party_profile_id: data.partyProfileId,
+      ownership_percentage: data.ownershipPercentage ?? 100,
+      role: data.role || "owner",
+      effective_from: data.effectiveFrom ?? null,
+      effective_to: data.effectiveTo ?? null,
+      notes: data.notes ?? null,
+      created_at: now, updated_at: now,
+    };
+    const { error } = await this.supabase.from("asset_party_links").insert(row);
+    if (error) throw error;
+    // history
+    await this.recordOwnershipHistory({
+      linkKind: "asset_party", linkId: id,
+      subjectId: data.assetProfileId, counterpartyId: data.partyProfileId,
+      action: "create",
+      fieldChanged: null, oldValue: null,
+      newValue: JSON.stringify({ pct: row.ownership_percentage, role: row.role }),
+      changedBy: "user", note: null,
+    });
+    return this.rowToAssetPartyLink(row);
+  }
+
+  async updateAssetPartyLink(id: string, patch: Partial<InsertAssetPartyLink>): Promise<AssetPartyLink | undefined> {
+    // fetch existing for history
+    const { data: existing } = await this.supabase.from("asset_party_links")
+      .select("*").eq("id", id).eq("user_id", this.userId).single();
+    if (!existing) return undefined;
+    const update: any = { updated_at: new Date().toISOString() };
+    if (patch.ownershipPercentage !== undefined) update.ownership_percentage = patch.ownershipPercentage;
+    if (patch.role !== undefined) update.role = patch.role;
+    if (patch.notes !== undefined) update.notes = patch.notes;
+    if (patch.effectiveFrom !== undefined) update.effective_from = patch.effectiveFrom;
+    if (patch.effectiveTo !== undefined) update.effective_to = patch.effectiveTo;
+    const { data, error } = await this.supabase.from("asset_party_links")
+      .update(update).eq("id", id).eq("user_id", this.userId).select().single();
+    if (error) throw error;
+    // record history per changed field
+    if (patch.ownershipPercentage !== undefined && Number(existing.ownership_percentage) !== Number(patch.ownershipPercentage)) {
+      await this.recordOwnershipHistory({
+        linkKind: "asset_party", linkId: id,
+        subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
+        action: "update", fieldChanged: "ownership_percentage",
+        oldValue: String(existing.ownership_percentage), newValue: String(patch.ownershipPercentage),
+        changedBy: "user", note: null,
+      });
+    }
+    if (patch.role !== undefined && existing.role !== patch.role) {
+      await this.recordOwnershipHistory({
+        linkKind: "asset_party", linkId: id,
+        subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
+        action: "update", fieldChanged: "role",
+        oldValue: existing.role, newValue: String(patch.role),
+        changedBy: "user", note: null,
+      });
+    }
+    return data ? this.rowToAssetPartyLink(data) : undefined;
+  }
+
+  async deleteAssetPartyLink(id: string): Promise<void> {
+    const { data: existing } = await this.supabase.from("asset_party_links")
+      .select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { error } = await this.supabase.from("asset_party_links")
+      .delete().eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+    if (existing) {
+      await this.recordOwnershipHistory({
+        linkKind: "asset_party", linkId: id,
+        subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
+        action: "delete", fieldChanged: null,
+        oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
+        newValue: null, changedBy: "user", note: null,
+      });
+    }
+  }
+
+  async getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<OwnershipHistoryEntry[]> {
+    let q = this.supabase.from("ownership_history").select("*").eq("user_id", this.userId)
+      .order("changed_at", { ascending: false });
+    if (opts?.subjectId && opts?.counterpartyId) {
+      q = q.or(`subject_id.eq.${opts.subjectId},counterparty_id.eq.${opts.subjectId},subject_id.eq.${opts.counterpartyId},counterparty_id.eq.${opts.counterpartyId}`);
+    } else if (opts?.subjectId) {
+      q = q.or(`subject_id.eq.${opts.subjectId},counterparty_id.eq.${opts.subjectId}`);
+    } else if (opts?.counterpartyId) {
+      q = q.or(`subject_id.eq.${opts.counterpartyId},counterparty_id.eq.${opts.counterpartyId}`);
+    }
+    if (opts?.limit) q = q.limit(opts.limit);
+    const { data, error } = await q;
+    if (error) throw error;
+    return (data || []).map((r: any) => this.rowToOwnershipHistory(r));
+  }
+
+  async recordOwnershipHistory(entry: Omit<OwnershipHistoryEntry, "id" | "changedAt">): Promise<OwnershipHistoryEntry> {
+    const id = randomUUID();
+    const row = {
+      id, user_id: this.userId,
+      link_kind: entry.linkKind,
+      link_id: entry.linkId ?? null,
+      subject_id: entry.subjectId ?? null,
+      counterparty_id: entry.counterpartyId ?? null,
+      action: entry.action,
+      field_changed: entry.fieldChanged ?? null,
+      old_value: entry.oldValue ?? null,
+      new_value: entry.newValue ?? null,
+      changed_by: entry.changedBy || "user",
+      note: entry.note ?? null,
+      changed_at: new Date().toISOString(),
+    };
+    const { error } = await this.supabase.from("ownership_history").insert(row);
+    if (error) throw error;
+    return this.rowToOwnershipHistory(row);
+  }
+
+  async deleteOwnershipHistoryEntry(id: string): Promise<void> {
+    const { error } = await this.supabase.from("ownership_history")
       .delete().eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
   }

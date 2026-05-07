@@ -218,6 +218,18 @@ export interface IStorage {
   createLiabilityPayment(data: import("@shared/schema").InsertLiabilityPayment): Promise<import("@shared/schema").LiabilityPayment>;
   updateLiabilityPayment(id: string, data: Partial<import("@shared/schema").InsertLiabilityPayment>): Promise<import("@shared/schema").LiabilityPayment | undefined>;
   deleteLiabilityPayment(id: string): Promise<void>;
+
+  // Asset ↔ party links (Phase 1 of relationships module)
+  getAssetPartyLinks(assetProfileId?: string): Promise<import("@shared/schema").AssetPartyLink[]>;
+  getAssetPartyLinksForParty(partyProfileId: string): Promise<import("@shared/schema").AssetPartyLink[]>;
+  createAssetPartyLink(data: import("@shared/schema").InsertAssetPartyLink): Promise<import("@shared/schema").AssetPartyLink>;
+  updateAssetPartyLink(id: string, patch: Partial<import("@shared/schema").InsertAssetPartyLink>): Promise<import("@shared/schema").AssetPartyLink | undefined>;
+  deleteAssetPartyLink(id: string): Promise<void>;
+
+  // Ownership history (audit log)
+  getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<import("@shared/schema").OwnershipHistoryEntry[]>;
+  recordOwnershipHistory(entry: Omit<import("@shared/schema").OwnershipHistoryEntry, "id" | "changedAt">): Promise<import("@shared/schema").OwnershipHistoryEntry>;
+  deleteOwnershipHistoryEntry(id: string): Promise<void>;
 }
 
 // ---- Human-readable tracker value formatting ----
@@ -2041,6 +2053,14 @@ export class MemStorage implements IStorage {
   async createLiabilityProfileLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
   async updateLiabilityProfileLink(_id: string, _patch: any): Promise<any> { return undefined; }
   async deleteLiabilityProfileLink(_id: string) { /* noop */ }
+  async getAssetPartyLinks(_id?: string) { return []; }
+  async getAssetPartyLinksForParty(_id: string) { return []; }
+  async createAssetPartyLink(_data: any): Promise<any> { throw new Error("MemStorage: asset party links not implemented"); }
+  async updateAssetPartyLink(_id: string, _patch: any) { return undefined; }
+  async deleteAssetPartyLink(_id: string) { /* no-op */ }
+  async getOwnershipHistory(_opts?: any) { return []; }
+  async recordOwnershipHistory(_entry: any): Promise<any> { return { id: "mem", changedAt: new Date().toISOString(), ..._entry }; }
+  async deleteOwnershipHistoryEntry(_id: string) { /* no-op */ }
   async getLiabilityPayments(_id: string) { return []; }
   async createLiabilityPayment(_data: any): Promise<any> { throw new Error("MemStorage: liability payments not implemented"); }
   async updateLiabilityPayment(_id: string, _data: any): Promise<any> { return undefined; }

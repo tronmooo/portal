@@ -34,6 +34,7 @@ import {
   insertLiabilityAssetLinkSchema,
   insertLiabilityProfileLinkSchema,
   insertLiabilityPaymentSchema,
+  insertAssetPartyLinkSchema,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
@@ -4600,6 +4601,136 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.delete("/api/liability-payments/:id", asyncHandler(async (req, res) => {
     await storage.deleteLiabilityPayment(req.params.id);
     res.json({ success: true });
+  }));
+
+  // ============================================================
+  // RELATIONSHIPS — asset ↔ party links + history + move
+  // ============================================================
+
+  app.get("/api/assets/:id/parties", asyncHandler(async (req, res) => {
+    const rows = await storage.getAssetPartyLinks(req.params.id);
+    res.json(rows);
+  }));
+  app.get("/api/parties/:id/assets", asyncHandler(async (req, res) => {
+    const rows = await storage.getAssetPartyLinksForParty(req.params.id);
+    res.json(rows);
+  }));
+  app.post("/api/asset-party-links", asyncHandler(async (req, res) => {
+    const parsed = insertAssetPartyLinkSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const row = await storage.createAssetPartyLink(parsed.data);
+    res.json(row);
+  }));
+  app.patch("/api/asset-party-links/:id", asyncHandler(async (req, res) => {
+    const updated = await storage.updateAssetPartyLink(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json(updated);
+  }));
+  app.delete("/api/asset-party-links/:id", asyncHandler(async (req, res) => {
+    await storage.deleteAssetPartyLink(req.params.id);
+    res.json({ success: true });
+  }));
+
+  // Ownership history
+  app.get("/api/ownership-history", asyncHandler(async (req, res) => {
+    const subjectId = (req.query.subjectId as string) || undefined;
+    const counterpartyId = (req.query.counterpartyId as string) || undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 200;
+    const rows = await storage.getOwnershipHistory({ subjectId, counterpartyId, limit });
+    res.json(rows);
+  }));
+  app.delete("/api/ownership-history/:id", asyncHandler(async (req, res) => {
+    await storage.deleteOwnershipHistoryEntry(req.params.id);
+    res.json({ success: true });
+  }));
+
+  // Atomic move: move a liability_asset_link to a different asset (preserves link id and history chain)
+  app.post("/api/relationships/move-liability", asyncHandler(async (req, res) => {
+    const { linkId, toAssetId, note } = req.body || {};
+    if (!linkId || !toAssetId) return res.status(400).json({ error: "linkId and toAssetId required" });
+    const updated = await storage.updateLiabilityAssetLink(linkId, { assetProfileId: toAssetId } as any);
+    if (!updated) return res.status(404).json({ error: "Link not found" });
+    if (note) {
+      try {
+        await storage.recordOwnershipHistory({
+          linkKind: "liability_asset", linkId,
+          subjectId: updated.liabilityProfileId, counterpartyId: updated.assetProfileId,
+          action: "move", fieldChanged: "asset_profile_id", oldValue: null, newValue: toAssetId,
+          changedBy: "user", note,
+        });
+      } catch {}
+    }
+    res.json(updated);
+  }));
+
+  // Aggregate "relationships graph" for a profile — 1 or 2 hops
+  app.get("/api/relationships/graph/:id", asyncHandler(async (req, res) => {
+    const id = req.params.id;
+    const hops = Math.max(1, Math.min(2, Number(req.query.hops) || 1));
+    const visited = new Set<string>([id]);
+    const nodes: any[] = [];
+    const edges: any[] = [];
+
+    const getProfile = async (pid: string) => {
+      try {
+        const p = await storage.getProfile?.(pid);
+        return p || null;
+      } catch { return null; }
+    };
+
+    const expand = async (pid: string, depth: number) => {
+      if (depth > hops) return;
+      const prof: any = await getProfile(pid);
+      if (prof && !nodes.find(n => n.id === pid)) {
+        nodes.push({ id: pid, name: prof.name, type: prof.type, typeKey: prof.type_key || prof.typeKey });
+      }
+      // collect links from all 3 link tables involving this profile
+      const [liabAssets, liabPartiesAsLiab, liabPartiesAsParty, assetParties, assetPartiesAsParty, liabAssetsAsAsset] = await Promise.all([
+        storage.getLiabilityAssetLinks(pid).catch(() => []),
+        storage.getLiabilityProfileLinks(pid).catch(() => []),
+        storage.getLiabilityProfileLinksForParty(pid).catch(() => []),
+        storage.getAssetPartyLinks(pid).catch(() => []),
+        storage.getAssetPartyLinksForParty(pid).catch(() => []),
+        storage.getLiabilityAssetLinksForAsset(pid).catch(() => []),
+      ]);
+      const pushEdge = (kind: string, fromId: string, toId: string, role: string, pct: number, linkId: string) => {
+        edges.push({ kind, from: fromId, to: toId, role, ownershipPercentage: pct, linkId });
+      };
+      for (const l of liabAssets) {
+        pushEdge("liability_asset", l.liabilityProfileId, l.assetProfileId, l.role, l.ownershipPercentage, l.id);
+        if (!visited.has(l.assetProfileId)) { visited.add(l.assetProfileId); await expand(l.assetProfileId, depth + 1); }
+      }
+      for (const l of liabAssetsAsAsset) {
+        pushEdge("liability_asset", l.liabilityProfileId, l.assetProfileId, l.role, l.ownershipPercentage, l.id);
+        if (!visited.has(l.liabilityProfileId)) { visited.add(l.liabilityProfileId); await expand(l.liabilityProfileId, depth + 1); }
+      }
+      for (const l of liabPartiesAsLiab) {
+        pushEdge("liability_party", l.liabilityProfileId, l.partyProfileId, l.role, l.ownershipPercentage, l.id);
+        if (!visited.has(l.partyProfileId)) { visited.add(l.partyProfileId); await expand(l.partyProfileId, depth + 1); }
+      }
+      for (const l of liabPartiesAsParty) {
+        pushEdge("liability_party", l.liabilityProfileId, l.partyProfileId, l.role, l.ownershipPercentage, l.id);
+        if (!visited.has(l.liabilityProfileId)) { visited.add(l.liabilityProfileId); await expand(l.liabilityProfileId, depth + 1); }
+      }
+      for (const l of assetParties) {
+        pushEdge("asset_party", l.assetProfileId, l.partyProfileId, l.role, l.ownershipPercentage, l.id);
+        if (!visited.has(l.partyProfileId)) { visited.add(l.partyProfileId); await expand(l.partyProfileId, depth + 1); }
+      }
+      for (const l of assetPartiesAsParty) {
+        pushEdge("asset_party", l.assetProfileId, l.partyProfileId, l.role, l.ownershipPercentage, l.id);
+        if (!visited.has(l.assetProfileId)) { visited.add(l.assetProfileId); await expand(l.assetProfileId, depth + 1); }
+      }
+    };
+
+    await expand(id, 0);
+    // dedupe edges
+    const seen = new Set<string>();
+    const uniqEdges = edges.filter(e => {
+      const k = `${e.kind}:${e.linkId}`;
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+    res.json({ rootId: id, nodes, edges: uniqEdges });
   }));
 
   // Global async error handler — catches unhandled promise rejections from route handlers
