@@ -2871,6 +2871,8 @@ NEVER:
 - Never ask the user for clarification on subtype if the phrasing is unambiguous — pick the right subtype from the recognition table and proceed.
 - Never assume a liability does not exist without scanning the full Liabilities list (including PAID-OFF entries) in the context block.
 - Never silently match "Affirm Peloton" to a Klarna record (or vice versa) just because they're both BNPL — match by name + keywords.
+- Never claim you updated, paid, linked, or removed something WITHOUT actually calling the corresponding tool. If the user asks for a change and you say "✅ done", you MUST have just called update_liability / add_liability_payment / link_liability_owner. Hallucinating success is unacceptable.
+- Never accept a NEGATIVE liability balance. If the user says "set balance to -$500" or "I overpaid by $200", do NOT pass a negative number. Instead either: (a) set balance to 0 and explain there's no negative-debt concept, or (b) log a 'reversal' payment for the overpaid amount.
 - Never split a self-owned liability into multiple ownership rows unless the user explicitly says they share it. Default = single owner = self at 100%, recorded implicitly via the parent profile.
 - GOALS + HABITS: When creating a daily or recurring goal tied to a tracker (e.g., "run every day", "drink 8 glasses of water daily", "meditate 10 min daily"), ALSO create a companion habit via create_habit so the user gets daily check-in tracking. The goal tracks progress toward the target; the habit tracks daily consistency. Always do BOTH calls when the goal implies a daily action.
 
@@ -4022,6 +4024,10 @@ async function executeTool(name: string, input: any): Promise<any> {
     // ─── Liability tools (Phase 5+) ───────────────────────────────────────────────
     case "create_liability": {
       const profiles = await storage.getProfiles();
+      // Reject negative balance on create.
+      if (input.currentBalance != null && Number(input.currentBalance) < 0) {
+        return { error: `Cannot create a liability with a negative balance ($${input.currentBalance}). A liability is what you owe — it must be ≥ 0.` };
+      }
       // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
       let rate = Number(input.annualRate);
       if (!isNaN(rate) && rate > 1) rate = rate / 100;
@@ -4168,6 +4174,10 @@ async function executeTool(name: string, input: any): Promise<any> {
         });
       if (!target) return { error: `Liability not found: ${input.name}` };
       const ch = input.changes || {};
+      // Reject explicit negative balance — surface real intent (refund vs typo).
+      if (ch.currentBalance != null && Number(ch.currentBalance) < 0) {
+        return { error: `Cannot set a negative balance ($${ch.currentBalance}). If you overpaid and want to track a credit, set the balance to 0 and log a 'reversal' payment for the credit amount instead.` };
+      }
       // Normalize annualRate
       if (ch.annualRate != null) {
         let r = Number(ch.annualRate);

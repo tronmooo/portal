@@ -121,12 +121,25 @@ const fmtUSD = (n: number) =>
     ? n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 })
     : "$0.00";
 
-const fmtUSDShort = (n: number) =>
-  Number.isFinite(n)
-    ? n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })
-    : "$0";
+// Smart formatter: shows decimals only when needed (e.g. $325,000.50 keeps cents, $325,000 stays clean).
+const fmtUSDShort = (n: number) => {
+  if (!Number.isFinite(n)) return "$0";
+  const hasCents = Math.round(n * 100) !== Math.round(n) * 100;
+  return n.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: hasCents ? 2 : 0,
+  });
+};
 
-const fmtPct = (decimal: number) => `${(decimal * 100).toFixed(2)}%`;
+// Smart percent formatter: shows 3 decimals for sub-1%, 2 decimals otherwise so micro-rates aren't lost.
+const fmtPct = (decimal: number) => {
+  if (!Number.isFinite(decimal)) return "0.00%";
+  const pct = decimal * 100;
+  const digits = Math.abs(pct) > 0 && Math.abs(pct) < 1 ? 3 : 2;
+  return `${pct.toFixed(digits)}%`;
+};
 
 const fmtDate = (iso?: string | null) => {
   if (!iso) return "—";
