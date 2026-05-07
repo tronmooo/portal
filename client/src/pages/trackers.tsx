@@ -3856,12 +3856,29 @@ export default function TrackersPage() {
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
   }, [profiles, filterMode, filterIds]);
 
+  // Subscriptions/recurring bills are conceptually liabilities (things you owe
+  // every month) so they live in the same Liabilities bucket alongside loans,
+  // mortgages, and credit cards. Anything in this set shows up in the
+  // Liabilities chip count, the Liabilities cards section, and the unified
+  // table view.
+  const isLiabilityLikeProfile = (p: any) => p?.type === "liability" || p?.type === "loan" || p?.type === "subscription";
+  const liabilitySubcategoryOf = (p: any): string => {
+    const f = (p?.fields as any) || {};
+    if (p?.type === "subscription") {
+      const c = (f.subtype || f.kind || f.category || "Subscription") as string;
+      return String(c).trim().replace(/_/g, " ") || "Subscription";
+    }
+    const c = (f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other") as string;
+    return String(c).trim().replace(/_/g, " ") || "Other";
+  };
+
   // Liability category list (after profile filter) for the Liabilities tab chip row.
-  // Categories come from the liability subtype (mortgage, auto, credit_card, etc.).
+  // Categories come from the liability subtype (mortgage, auto, credit_card,
+  // etc.) and from subscription kinds (Subscription, Utility, Rent...).
   const liabilityCategoryOptions = useMemo(() => {
     const isShowAll = filterMode === "everyone";
     const liabs = (profiles || []).filter(p => {
-      if (p.type !== "liability" && p.type !== "loan") return false;
+      if (!isLiabilityLikeProfile(p)) return false;
       if (isShowAll) return true;
       // A liability is in scope if it's directly selected, parented to a selected
       // profile, or linked via liability_profile_links — but the link data isn't
@@ -3872,9 +3889,7 @@ export default function TrackersPage() {
     });
     const counts: Record<string, number> = {};
     for (const s of liabs) {
-      const f = (s.fields as any) || {};
-      const cat = (f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other") as string;
-      const c = String(cat).trim().replace(/_/g, " ") || "Other";
+      const c = liabilitySubcategoryOf(s);
       counts[c] = (counts[c] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
@@ -3973,7 +3988,10 @@ export default function TrackersPage() {
           {(() => {
             // ─── Smart + button: routes to the right creation flow based on the active section ───
             const openAssetDialog = () => { setCreateProfileFilter(["assets", "investments", "property"]); setCreateProfileTitle("Add Asset"); setCreateProfileOpen(true); };
-            const openLiabilityDialog = () => { setCreateProfileFilter("liabilities"); setCreateProfileTitle("Add Liability"); setCreateProfileOpen(true); };
+            // Subscriptions live inside the Liabilities bucket now, so the
+            // Liability create dialog should also offer subscription types
+            // (Netflix, Spotify, rent, utilities, gym membership, etc.).
+            const openLiabilityDialog = () => { setCreateProfileFilter(["liabilities", "subscriptions"]); setCreateProfileTitle("Add Liability"); setCreateProfileOpen(true); };
             const openTrackerDialog = () => setCreateOpen(true);
             const openDocumentUpload = () => navigate("/dashboard/artifacts");
 
@@ -4060,9 +4078,11 @@ export default function TrackersPage() {
               if (pParent && filterIds.includes(pParent)) return true;
               return false;
             }).length;
-            // Liabilities count — includes both "liability" (canonical) and legacy "loan".
+            // Liabilities count — includes "liability" (canonical), legacy "loan",
+            // AND "subscription" (recurring bills are liabilities too — Netflix,
+            // rent, utilities all behave like recurring debts you owe).
             const filteredLiabilityCount = (profiles || []).filter(p => {
-              if (p.type !== "liability" && p.type !== "loan") return false;
+              if (!isLiabilityLikeProfile(p)) return false;
               if (isShowAllForCounts) return true;
               if (filterIds.includes(p.id)) return true;
               const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
@@ -4255,16 +4275,24 @@ export default function TrackersPage() {
             rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}` });
           });
         }
-        // Liabilities (replaces Subscriptions)
+        // Liabilities — includes loans/mortgages/credit cards AND subscriptions
+        // (recurring bills like Netflix, rent, utilities). For loans we show
+        // the outstanding balance; for subscriptions we show the per-period
+        // cost so the meta column always carries something useful.
         if (sectionFilter === "all" || sectionFilter === "liabilities") {
           (profiles || []).forEach(p => {
-            if (p.type !== "liability" && p.type !== "loan") return;
+            if (!isLiabilityLikeProfile(p)) return;
             const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
             if (!isShowAll && !filterIds.includes(p.id) && !(pParent && filterIds.includes(pParent))) return;
             const f = (p.fields as any) || {}; const fin = f.finance || {};
             const bal = toNum(f.currentBalance) ?? toNum(f.remainingBalance) ?? toNum(f.loanBalance) ?? toNum(f.balance) ?? toNum(fin.remainingBalance) ?? toNum(fin.loanBalance) ?? toNum(fin.balance);
-            const sub = (f.subtype || f.liabilityType || "Liability").toString().replace(/_/g, " ");
-            rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta: bal != null ? `$${Math.round(bal).toLocaleString()}` : "—", href: `/profiles/${p.id}` });
+            const cost = toNum(f.cost) ?? toNum(f.amount) ?? toNum(f.monthlyPayment) ?? toNum(fin.monthlyPayment);
+            const freq = (f.frequency || "monthly").toString();
+            const sub = liabilitySubcategoryOf(p);
+            const meta = bal != null && bal > 0
+              ? `$${Math.round(bal).toLocaleString()}`
+              : (cost != null && cost > 0 ? `$${Math.round(cost).toLocaleString()}/${freq.startsWith('y') ? 'yr' : freq.startsWith('w') ? 'wk' : 'mo'}` : "—");
+            rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta, href: `/profiles/${p.id}` });
           });
         }
         // Documents
@@ -4559,7 +4587,7 @@ export default function TrackersPage() {
       {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "liabilities") && (() => {
         const isShowAll = filterMode === "everyone";
         const liabs = (profiles || []).filter(p => {
-          if (p.type !== "liability" && p.type !== "loan") return false;
+          if (!isLiabilityLikeProfile(p)) return false;
           // Profile-level scope first — liability is in scope if it's directly
           // selected, parented to a selected profile, or the user is on "everyone".
           let inScope = isShowAll;
@@ -4571,9 +4599,7 @@ export default function TrackersPage() {
           if (!inScope) return false;
           // Type chip filter — only applies on the Liabilities tab.
           if (sectionFilter === "liabilities" && subCatFilter !== "all") {
-            const f = (p.fields as any) || {};
-            const cat = String(f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other").trim().replace(/_/g, " ") || "Other";
-            if (cat !== subCatFilter) return false;
+            if (liabilitySubcategoryOf(p) !== subCatFilter) return false;
           }
           return true;
         });
@@ -4581,12 +4607,12 @@ export default function TrackersPage() {
           <div className="rounded-lg border bg-card p-6 text-center">
             <TrendingDown className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No liabilities yet</p>
-            <p className="text-xs text-muted-foreground mt-1">Track mortgages, car loans, credit cards, and other debts here</p>
+            <p className="text-xs text-muted-foreground mt-1">Track mortgages, loans, credit cards, subscriptions, and recurring bills here</p>
             <Button
               size="sm"
               variant="outline"
               className="mt-3 h-8 text-xs"
-              onClick={() => { setCreateProfileFilter("liabilities"); setCreateProfileTitle("Add Liability"); setCreateProfileOpen(true); }}
+              onClick={() => { setCreateProfileFilter(["liabilities", "subscriptions"]); setCreateProfileTitle("Add Liability"); setCreateProfileOpen(true); }}
               data-testid="btn-empty-add-liability"
             >
               <Plus className="h-3 w-3 mr-1" /> Add Liability
@@ -4601,11 +4627,21 @@ export default function TrackersPage() {
           return null;
         };
         const totalBalance = liabs.reduce((s, l) => {
+          // Subscriptions don't carry a payoff balance — only sum balances on
+          // actual debt instruments so the header total stays meaningful.
+          if (l.type === "subscription") return s;
           const f: any = l.fields || {}; const fin = f.finance || {};
           return s + (toNumLiab(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance) || 0);
         }, 0);
         const totalMonthly = liabs.reduce((s, l) => {
           const f: any = l.fields || {}; const fin = f.finance || {};
+          // Subscription per-period cost normalised to monthly.
+          if (l.type === "subscription") {
+            const cost = toNumLiab(f.cost ?? f.amount) || 0;
+            const freq = String(f.frequency || "monthly").toLowerCase();
+            const monthly = freq.startsWith("y") ? cost / 12 : freq.startsWith("w") ? cost * 52 / 12 : freq.startsWith("q") ? cost / 3 : freq.startsWith("b") ? cost * 26 / 12 : cost;
+            return s + monthly;
+          }
           return s + (toNumLiab(f.monthlyPayment ?? fin.monthlyPayment) || 0);
         }, 0);
         // Red-tinted accent because liabilities are debt; a pure-red would feel
@@ -4626,7 +4662,7 @@ export default function TrackersPage() {
                   {totalBalance > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">${Math.round(totalBalance).toLocaleString()} total</span>}
                   {totalMonthly > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">· ${Math.round(totalMonthly).toLocaleString()}/mo</span>}
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">Mortgages, loans, credit cards, and debts</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Mortgages, loans, credit cards, subscriptions, and recurring bills</p>
               </div>
               {collapsedSections.has("liabilities") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
@@ -4635,11 +4671,20 @@ export default function TrackersPage() {
                 {liabs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(liab => {
                   const fields: any = liab.fields || {};
                   const fin = fields.finance || {};
+                  const isSubscription = liab.type === "subscription";
                   const balance = toNumLiab(fields.currentBalance ?? fields.remainingBalance ?? fields.loanBalance ?? fields.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance);
-                  const monthly = toNumLiab(fields.monthlyPayment ?? fin.monthlyPayment);
+                  // For subscriptions, surface the recurring cost in the
+                  // "Monthly" KPI line so the card still tells you what it
+                  // costs you each month.
+                  const subFreq = String(fields.frequency || "monthly").toLowerCase();
+                  const subCost = toNumLiab(fields.cost ?? fields.amount);
+                  const subMonthly = isSubscription && subCost != null
+                    ? (subFreq.startsWith("y") ? subCost / 12 : subFreq.startsWith("w") ? subCost * 52 / 12 : subFreq.startsWith("q") ? subCost / 3 : subFreq.startsWith("b") ? subCost * 26 / 12 : subCost)
+                    : null;
+                  const monthly = isSubscription ? subMonthly : toNumLiab(fields.monthlyPayment ?? fin.monthlyPayment);
                   const apr = toNumLiab(fields.annualInterestRate ?? fields.apr ?? fin.annualInterestRate);
-                  const lender = fields.lender || fin.lender || '';
-                  const subtype = String(fields.subtype || fields.liabilityType || 'liability').replace(/_/g, ' ');
+                  const lender = fields.lender || fin.lender || fields.provider || '';
+                  const subtype = liabilitySubcategoryOf(liab);
                   const original = toNumLiab(fields.originalBalance ?? fin.originalBalance);
                   const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
                   return (
@@ -4658,8 +4703,18 @@ export default function TrackersPage() {
                               </div>
                               {original && original > 0 && <Donut pct={paidPct} color={ac} size={32} label={`${Math.round(paidPct * 100)}%`} />}
                             </div>
+                          ) : isSubscription && subCost != null && subCost > 0 ? (
+                            // Subscriptions don't have a payoff balance — show
+                            // the recurring price as the headline number.
+                            <div className="flex items-baseline gap-0.5">
+                              <span className="text-xl font-black tabular-nums text-foreground">${Math.round(subCost).toLocaleString()}</span>
+                              <span className="text-[9px] text-muted-foreground">/{subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo'}</span>
+                            </div>
                           ) : <span className="text-[10px] text-muted-foreground/50 italic">No balance set</span>}
-                          {monthly != null && monthly > 0 && <KpiLine label="Monthly" value={`$${Math.round(monthly).toLocaleString()}/mo`} />}
+                          {/* For subscriptions we already showed the cost as
+                              the headline, so don't repeat it on a Monthly
+                              line unless the freq isn't already monthly. */}
+                          {monthly != null && monthly > 0 && !(isSubscription && subFreq.startsWith('m')) && <KpiLine label="Monthly" value={`$${Math.round(monthly).toLocaleString()}/mo`} />}
                           {apr != null && apr > 0 && <KpiLine label="APR" value={`${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%`} />}
                           {lender && <KpiLine label="Lender" value={String(lender).slice(0, 18)} />}
                         </div>
