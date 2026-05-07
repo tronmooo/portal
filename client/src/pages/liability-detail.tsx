@@ -651,7 +651,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="liability-profile-page">
       {/* Hero — matches asset profile header layout */}
-      <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: "linear-gradient(135deg, hsl(var(--rose-500)/0.08) 0%, transparent 60%)" }}>
+      <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: "linear-gradient(135deg, hsl(0 72% 28%), hsl(25 75% 28%))" }}>
         {/* Top bar: back arrow left, owner picker + edit/delete right */}
         <div className="flex items-center justify-between mb-3">
           <Button
@@ -941,7 +941,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
             <section className="mt-6">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Nested Liabilities</p>
-              <LinkedProfilesCard liabilityId={profile.id} />
+              <NestedLiabilitiesCard liabilityId={profile.id} />
             </section>
           </TabsContent>
 
@@ -2069,6 +2069,82 @@ function PartyLinkRow({
         />
         <span className="text-sm font-medium w-12 text-right tabular-nums">{pct}%</span>
       </div>
+    </div>
+  );
+}
+
+// ─── Nested Liabilities card ───────────────────────────────────────────────
+
+function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
+  const [, navigate] = useLocation();
+
+  const graphQuery = useQuery<{ nodes: { id: string; name: string; typeKey: string; type?: string }[] }>({
+    queryKey: [`/api/relationships/graph/${liabilityId}`, "hops2"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/relationships/graph/${liabilityId}?hops=2`);
+      return res.json();
+    },
+  });
+
+  const nestedLiabilities = useMemo(() => {
+    const nodes = graphQuery.data?.nodes || [];
+    return nodes.filter((n) => {
+      const tk = (n.typeKey || n.type || "").toLowerCase();
+      return (tk === "liability" || tk === "loan") && n.id !== liabilityId;
+    });
+  }, [graphQuery.data, liabilityId]);
+
+  const SUBTYPE_LABELS_LOCAL: Record<string, string> = {
+    mortgage: "Mortgage",
+    auto_loan: "Auto loan",
+    credit_card: "Credit card",
+    student_loan: "Student loan",
+    medical_debt: "Medical debt",
+    business_loan: "Business loan",
+    tax_debt: "Tax debt",
+    line_of_credit: "Line of credit",
+    bnpl: "Buy now pay later",
+    personal_loan: "Personal loan",
+    financing: "Financing",
+    utility_plan: "Utility plan",
+    custom: "Other liability",
+    liability: "Liability",
+    loan: "Loan",
+  };
+
+  return (
+    <div data-testid="nested-liabilities-card">
+      {graphQuery.isLoading ? (
+        <Skeleton className="h-40 w-full" />
+      ) : nestedLiabilities.length === 0 ? (
+        <div className="text-sm text-muted-foreground py-4 text-center" data-testid="nested-liabilities-empty">
+          No nested liabilities yet.
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-3" data-testid="nested-liabilities-list">
+          {nestedLiabilities.map((node) => {
+            const tk = (node.typeKey || node.type || "").toLowerCase();
+            const typeLabel = SUBTYPE_LABELS_LOCAL[tk] || "Liability";
+            return (
+              <div
+                key={node.id}
+                style={{ height: 160 }}
+                className="w-40 shrink-0 rounded-xl border bg-card p-3 flex flex-col justify-between cursor-pointer hover:bg-accent transition-colors"
+                onClick={() => navigate(`/profiles/${node.id}`)}
+                data-testid={`nested-liability-${node.id}`}
+              >
+                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-rose-500/10 text-rose-600">
+                  <Wallet className="w-5 h-5" />
+                </div>
+                <div className="mt-2 min-w-0">
+                  <div className="font-medium text-sm truncate">{node.name}</div>
+                  <Badge variant="secondary" className="text-[10px] mt-1">{typeLabel}</Badge>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
