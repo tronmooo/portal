@@ -4120,13 +4120,45 @@ async function executeTool(name: string, input: any): Promise<any> {
           parentProfileId,
         } as any);
       }
+      // Auto-derive linkAssetName from the liability's name when the model
+      // didn't pass one explicitly. If the user said "loan for my Sony TV
+      // financed at Best Buy", the model often produces name="Sony TV Best
+      // Buy Financing" + lender="Best Buy" and forgets linkAssetName. Strip
+      // the lender + financing/loan/credit-card suffix off the name and use
+      // the remainder as the asset hint, so the user's mental model ("this
+      // loan is for my Sony TV") still results in a linked asset.
+      let derivedLinkAssetName: string | undefined = input.linkAssetName;
+      if (!derivedLinkAssetName && liability?.id) {
+        const rawName = String(input.name || "").trim();
+        const lender = String(input.lender || "").trim();
+        let stripped = rawName;
+        // Strip the lender from the name if it's there.
+        if (lender) {
+          const re = new RegExp(`\\b${lender.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+          stripped = stripped.replace(re, '').trim();
+        }
+        // Strip common loan-instrument suffix words.
+        stripped = stripped.replace(/\b(financing|loan|mortgage|credit\s+card|line\s+of\s+credit|payment(?:s)?|debt|account)\b/ig, ' ').replace(/\s+/g, ' ').trim();
+        // Only use it if there's still a meaningful product noun left and the
+        // remainder differs from the liability name (otherwise we'd be re-
+        // linking to the liability itself).
+        if (stripped && stripped.length >= 3 && stripped.toLowerCase() !== rawName.toLowerCase()) {
+          // Check the remainder looks like an asset (contains at least one
+          // common product / property / vehicle keyword).
+          const ASSET_HINT = /\b(fridge|refrigerator|tv|television|laptop|macbook|computer|iphone|phone|console|playstation|xbox|nintendo|peloton|bike|appliance|washer|dryer|oven|dishwasher|sofa|couch|mattress|car|truck|suv|sedan|tesla|honda|toyota|ford|chevy|bmw|audi|nissan|hyundai|kia|jeep|subaru|lexus|acura|mazda|volkswagen|porsche|motorcycle|moto|atv|rv|boat|yacht|jet ski|home|house|condo|apartment|duplex|property|land|street|avenue|ave|drive|road|lane)\b/i;
+          if (ASSET_HINT.test(stripped)) {
+            derivedLinkAssetName = stripped;
+            logger.info("ai", `auto-derived linkAssetName="${derivedLinkAssetName}" from liability name "${rawName}"`);
+          }
+        }
+      }
       // Optional: auto-link an asset as collateral right after creation.
       // If no matching asset profile exists yet, auto-create a stub one so
       // the user's mental model ("this loan is for my fridge") is preserved.
       // Without this, asking the AI to "add a loan for my Samsung refrigerator"
       // when no fridge profile exists would silently drop the link.
-      if (input.linkAssetName && liability?.id) {
-        const linkName = String(input.linkAssetName).trim();
+      if (derivedLinkAssetName && liability?.id) {
+        const linkName = String(derivedLinkAssetName).trim();
         const linkLC = linkName.toLowerCase();
         // Only consider real asset-like profile types as collateral candidates
         // — never another liability, person, etc.
