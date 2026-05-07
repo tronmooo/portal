@@ -3315,6 +3315,44 @@ function DocumentsTab({
 function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
   // ── state ──────────────────────────────────────────────────────
   const { toast } = useToast();
+
+  // ── shared liabilities (person/self only) ──────────────────────
+  // Fetches liability_profile_links rows where party_profile_id = this profile.
+  // Each link is then resolved to its liability profile via the global /api/profiles cache.
+  const isPersonOrSelf = profile.type === "person" || profile.type === "self";
+  const { data: sharedLiabilityLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/parties", profileId, "liabilities"],
+    queryFn: () => apiRequest("GET", `/api/parties/${profileId}/liabilities`).then(r => r.json()),
+    enabled: isPersonOrSelf,
+  });
+  const { data: allProfilesForLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: isPersonOrSelf && sharedLiabilityLinks.length > 0,
+  });
+  // Resolve links to liability profiles, dedupe with childProfiles to avoid double-counting.
+  const childProfileIds = new Set((profile.childProfiles || []).map((c: any) => c.id));
+  const sharedLiabilities = (sharedLiabilityLinks || [])
+    .map((link: any) => {
+      const lp = (allProfilesForLinks || []).find((p: any) => p.id === link.liabilityProfileId);
+      if (!lp) return null;
+      const ownership = Number(link.ownershipPercentage ?? 100);
+      return { link, profile: lp, ownership };
+    })
+    .filter((x: any) => x && !childProfileIds.has(x.profile.id));
+  const sharedLiabilitiesUserShare = sharedLiabilities.reduce((s: number, x: any) => {
+    const f = x.profile.fields || {};
+    const fin = f.finance || {};
+    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    return s + (bal * (x.ownership / 100));
+  }, 0);
+  const sharedMonthlyShare = sharedLiabilities.reduce((s: number, x: any) => {
+    const f = x.profile.fields || {};
+    const fin = f.finance || {};
+    const m = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
+    return s + (m * (x.ownership / 100));
+  }, 0);
+
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ProfileDetail["relatedExpenses"][number] | null>(null);
   const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
@@ -3624,12 +3662,16 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           const val = Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || c.fields?.accountBalance || 0);
           return s + val;
         }, 0);
-        // Liabilities: loans with a balance
+        // Liabilities: loans with a balance (parent-child)
         const loans = children.filter((c: any) => c.type === "loan" || c.type === "liability" || c.fields?.loanBalance || c.fields?.remainingBalance);
-        const totalLiabilities = loans.reduce((s: number, c: any) => {
+        const childLiabilitiesTotal = loans.reduce((s: number, c: any) => {
           const bal = Number(c.fields?.remainingBalance || c.fields?.loanBalance || c.fields?.balance || 0);
           return s + bal;
         }, 0);
+        // Shared liabilities (linked via liability_profile_links, e.g. co-owned mortgage).
+        // Use the user's ownership share, not the full balance.
+        const totalLiabilities = childLiabilitiesTotal + sharedLiabilitiesUserShare;
+        const totalLoanCount = loans.length + sharedLiabilities.length;
         const netWorth = totalAssets - totalLiabilities;
         // Monthly subscriptions
         const subs = children.filter((c: any) => c.type === "subscription" || c.type === "insurance");
@@ -3670,7 +3712,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                 <div className="text-center p-2 rounded-lg bg-muted/30">
                   <p className="text-base font-bold tabular-nums text-red-500">{formatCurrency(totalLiabilities)}</p>
                   <p className="text-[11px] text-muted-foreground">Liabilities</p>
-                  <p className="text-[10px] text-muted-foreground/70">{loans.length} loan{loans.length !== 1 ? "s" : ""}</p>
+                  <p className="text-[10px] text-muted-foreground/70">{totalLoanCount} loan{totalLoanCount !== 1 ? "s" : ""}</p>
                 </div>
                 <div className="text-center p-2 rounded-lg bg-muted/30">
                   <p className="text-base font-bold tabular-nums text-foreground">{formatCurrency(monthlySubscriptions)}/mo</p>
@@ -3695,7 +3737,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                   ))}
                 </div>
               )}
-              {/* Loan/liability list */}
+              {/* Loan/liability list (parent-child) */}
               {loans.length > 0 && (
                 <div className="mt-3 space-y-1">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Liabilities</p>
@@ -3709,17 +3751,51 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                   ))}
                 </div>
               )}
+              {/* Shared liabilities (co-owned via liability_profile_links) */}
+              {sharedLiabilities.length > 0 && (
+                <div className="mt-3 space-y-1" data-testid="shared-liabilities-section">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Shared Liabilities</p>
+                  {sharedLiabilities.slice().sort((a: any, b: any) => (a.profile.name || '').localeCompare(b.profile.name || '')).slice(0, 6).map((x: any) => {
+                    const f = x.profile.fields || {};
+                    const fin = f.finance || {};
+                    const fullBal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+                    const userShare = fullBal * (x.ownership / 100);
+                    return (
+                      <Link key={x.profile.id} href={`/profiles/${x.profile.id}`}>
+                        <div className="flex items-center justify-between py-1 border-b border-border/30 last:border-0 cursor-pointer hover:bg-muted/30 rounded px-1" data-testid={`shared-liability-row-${x.profile.id}`}>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-xs truncate max-w-[140px]">{x.profile.name}</span>
+                            <Badge variant="outline" className="text-[10px] px-1 py-0">{x.ownership}%</Badge>
+                          </div>
+                          <div className="flex flex-col items-end shrink-0">
+                            <span className="text-xs font-semibold tabular-nums text-red-500">-{formatCurrency(userShare)}</span>
+                            {x.ownership !== 100 && (
+                              <span className="text-[10px] text-muted-foreground tabular-nums">of {formatCurrency(fullBal)}</span>
+                            )}
+                          </div>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
               {/* Monthly burn */}
-              {(monthlyBurn > 0 || monthlySubscriptions > 0) && (
+              {(monthlyBurn > 0 || monthlySubscriptions > 0 || sharedMonthlyShare > 0) && (
                 <div className="mt-3 pt-3 border-t border-border/40">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-muted-foreground">Monthly burn rate</span>
-                    <span className="text-xs font-semibold tabular-nums">{formatCurrency(monthlyBurn + monthlySubscriptions)}/mo</span>
+                    <span className="text-xs font-semibold tabular-nums">{formatCurrency(monthlyBurn + monthlySubscriptions + sharedMonthlyShare)}/mo</span>
                   </div>
                   {monthlySubscriptions > 0 && (
                     <div className="flex items-center justify-between mt-0.5">
                       <span className="text-[11px] text-muted-foreground">Subscriptions</span>
                       <span className="text-[11px] tabular-nums text-muted-foreground">{formatCurrency(monthlySubscriptions)}/mo</span>
+                    </div>
+                  )}
+                  {sharedMonthlyShare > 0 && (
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-[11px] text-muted-foreground">Shared loan share</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{formatCurrency(sharedMonthlyShare)}/mo</span>
                     </div>
                   )}
                   {avgPerMonth > 0 && (
