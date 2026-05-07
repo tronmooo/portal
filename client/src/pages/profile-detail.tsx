@@ -101,6 +101,9 @@ import {
   Target,
   Search,
   BookOpen,
+  Share2,
+  Users,
+  Network,
 } from "lucide-react";
 import {
   LineChart,
@@ -6052,6 +6055,11 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -6063,6 +6071,11 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -6076,12 +6089,22 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "tasks", label: "Reminders", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   // Vehicle — maintenance + cost focused
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6096,6 +6119,11 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   // Investment
   investment: [
@@ -6104,6 +6132,11 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   // Subscription
   subscription: [
@@ -6120,12 +6153,22 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Visits", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   // Property / Home
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6139,6 +6182,11 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6150,6 +6198,11 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
 };
 
@@ -6162,6 +6215,11 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "activity", label: "Activity", testId: "tab-activity" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
+  { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+  { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+  { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+  { value: "connections", label: "Connections", testId: "tab-connections" },
+  { value: "history", label: "History", testId: "tab-history" },
 ];
 
 // ── Asset subtype tab configs ──
@@ -6177,6 +6235,11 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   credit_card: [
     { value: "info", label: "Overview", testId: "tab-info" },
@@ -6186,6 +6249,11 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   digital_asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
@@ -6195,6 +6263,11 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "billing", label: "Billing", testId: "tab-billing" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   business: [
     { value: "info", label: "Overview", testId: "tab-info" },
@@ -6204,6 +6277,11 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   collectible: [
     { value: "info", label: "Overview", testId: "tab-info" },
@@ -6213,6 +6291,11 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "History", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   loan_receivable: [
     { value: "info", label: "Overview", testId: "tab-info" },
@@ -6220,6 +6303,11 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Payments", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
   high_value_item: [
     { value: "info", label: "Overview", testId: "tab-info" },
@@ -6229,6 +6317,11 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
+    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
+    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
+    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
+    { value: "connections", label: "Connections", testId: "tab-connections" },
+    { value: "history", label: "History", testId: "tab-history" },
   ],
 };
 
@@ -8432,6 +8525,657 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
   );
 }
 
+
+// ============================================================
+// PHASE 2 — Linked Assets / People / Liabilities (rel tabs)
+// ============================================================
+
+function typeKeyIcon(typeKey: string) {
+  if (typeKey === "property") return <Home className="h-4 w-4" />;
+  if (typeKey === "vehicle") return <Car className="h-4 w-4" />;
+  if (typeKey === "liability" || typeKey === "loan") return <CreditCard className="h-4 w-4" />;
+  if (typeKey === "person" || typeKey === "self") return <User className="h-4 w-4" />;
+  if (typeKey === "business") return <Building2 className="h-4 w-4" />;
+  if (typeKey === "asset") return <Package className="h-4 w-4" />;
+  return <Package className="h-4 w-4" />;
+}
+
+function rolePillColor(role: string) {
+  const r = (role || "").toLowerCase();
+  if (r.includes("owner")) return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400";
+  if (r.includes("collateral") || r.includes("secured")) return "bg-amber-500/15 text-amber-700 dark:text-amber-400";
+  if (r.includes("beneficiary")) return "bg-purple-500/15 text-purple-700 dark:text-purple-400";
+  return "bg-blue-500/15 text-blue-700 dark:text-blue-400";
+}
+
+// Generic party card shown in rel-* tabs
+function RelPartyCard({
+  id, name, typeKey, role, ownershipPercentage, linkId, totalParties,
+  onEdit, onRemove,
+}: {
+  id: string; name: string; typeKey: string; role: string;
+  ownershipPercentage: number | null; linkId: string; totalParties: number;
+  onEdit: (linkId: string, role: string, pct: number) => void;
+  onRemove: (linkId: string) => void;
+}) {
+  const pct = ownershipPercentage ?? 100;
+  const sharedLabel = totalParties <= 1 ? "Sole" : `Shared ${totalParties}-way`;
+  return (
+    <Card style={{height: 160}} className="overflow-hidden">
+      <CardContent className="p-3 h-full flex flex-col justify-between">
+        <div className="flex items-start gap-2">
+          <span className="text-muted-foreground mt-0.5">{typeKeyIcon(typeKey)}</span>
+          <div className="flex-1 min-w-0">
+            <a href={`#/profiles/${id}`} className="text-sm font-semibold hover:underline truncate block">{name}</a>
+            <span className={`inline-block mt-0.5 text-xs px-1.5 py-0.5 rounded-full ${rolePillColor(role)}`}>
+              {role || "Owner"}
+            </span>
+          </div>
+          <Badge variant="outline" className="text-xs shrink-0">{sharedLabel}</Badge>
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div className="h-full bg-primary rounded-full" style={{width: `${pct}%`}} />
+            </div>
+            <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
+          </div>
+          <div className="flex gap-1 justify-end">
+            <Button size="sm" variant="ghost" className="h-6 text-xs px-2"
+              onClick={() => onEdit(linkId, role, pct)}>
+              <Edit className="h-3 w-3 mr-1" />Edit
+            </Button>
+            <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-destructive hover:text-destructive"
+              onClick={() => onRemove(linkId)}>
+              <Trash2 className="h-3 w-3 mr-1" />Remove
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Asset card shown in rel-assets tab — simpler (no ownership editing for graph-sourced)
+function RelAssetCard({ id, name, typeKey }: { id: string; name: string; typeKey: string }) {
+  return (
+    <Card style={{height: 160}} className="overflow-hidden">
+      <CardContent className="p-3 h-full flex flex-col justify-between">
+        <div className="flex items-start gap-2">
+          <span className="text-muted-foreground mt-0.5">{typeKeyIcon(typeKey)}</span>
+          <div className="flex-1 min-w-0">
+            <a href={`#/profiles/${id}`} className="text-sm font-semibold hover:underline truncate block">{name}</a>
+            <span className="text-xs text-muted-foreground capitalize">{typeKey}</span>
+          </div>
+        </div>
+        <div>
+          <Button size="sm" variant="ghost" className="h-6 text-xs px-2" asChild>
+            <a href={`#/profiles/${id}`}><ExternalLink className="h-3 w-3 mr-1" />View</a>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Edit link modal (for asset-party links in rel-people tab on asset profiles)
+function EditAssetPartyLinkModal({
+  open, linkId, initialRole, initialPct,
+  onClose, onSaved,
+}: {
+  open: boolean; linkId: string; initialRole: string; initialPct: number;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const { toast } = useToast();
+  const [role, setRole] = useState(initialRole);
+  const [pct, setPct] = useState(String(initialPct));
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/asset-party-links/${linkId}`, {
+        role,
+        ownershipPercentage: Math.max(0, Math.min(100, Number(pct) || 0)),
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Updated" });
+      onSaved();
+      onClose();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Edit Link</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium">Role</label>
+            <Select value={role} onValueChange={setRole}>
+              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["Owner","Co-Owner","Beneficiary","Trustee","Manager","Guarantor"].map(r =>
+                  <SelectItem key={r} value={r.toLowerCase().replace(/ /g,"-")}>{r}</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs font-medium">Ownership %</label>
+            <Input type="number" min={0} max={100} value={pct}
+              onChange={e => setPct(e.target.value)} className="mt-1" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+            {mutation.isPending ? "Saving..." : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Linked People tab (shown on ASSET profiles via /api/assets/:id/parties) ──
+function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: string; profileType: string; onChanged: () => void }) {
+  const { toast } = useToast();
+  const isAsset = ["asset","vehicle","property"].includes(profileType);
+  const isLiability = profileType === "liability" || profileType === "loan";
+  const isPerson = profileType === "person" || profileType === "self";
+
+  // For asset profiles use /api/assets/:id/parties
+  // For liability profiles use /api/liabilities/:id/profile-links
+  // For person/self: people via graph 2-hops
+  const { data: parties = [], refetch } = useQuery<any[]>({
+    queryKey: ["/api/rel-people", profileType, profileId],
+    queryFn: async () => {
+      if (isAsset) {
+        return apiRequest("GET", `/api/assets/${profileId}/parties`).then(r => r.json());
+      } else if (isLiability) {
+        return apiRequest("GET", `/api/liabilities/${profileId}/profile-links`).then(r => r.json());
+      } else {
+        // person: use graph 2 hops, filter person/self/business nodes
+        const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
+        const root = g.rootId;
+        const personTypes = new Set(["person","self","business","pet"]);
+        return (g.nodes || [])
+          .filter((n: any) => n.id !== root && personTypes.has(n.typeKey || n.type))
+          .map((n: any) => ({ id: n.id, party: { id: n.id, name: n.name, type: n.type, profileType: n.typeKey || n.type } }));
+      }
+    },
+  });
+
+  const [editState, setEditState] = useState<{linkId:string;role:string;pct:number}|null>(null);
+
+  const removeMutation = useMutation({
+    mutationFn: async (linkId: string) => {
+      if (isAsset) {
+        await apiRequest("DELETE", `/api/asset-party-links/${linkId}`);
+      } else if (isLiability) {
+        await apiRequest("DELETE", `/api/liability-profile-links/${linkId}`);
+      }
+    },
+    onSuccess: () => {
+      toast({ title: "Removed" });
+      refetch();
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  if (parties.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <User className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">No linked people</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {editState && isAsset && (
+        <EditAssetPartyLinkModal
+          open={true}
+          linkId={editState.linkId}
+          initialRole={editState.role}
+          initialPct={editState.pct}
+          onClose={() => setEditState(null)}
+          onSaved={() => { refetch(); onChanged(); }}
+        />
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {parties.map((item: any) => {
+          const person = item.party || item;
+          const linkId = item.linkId || item.id || "";
+          const role = item.role || "owner";
+          const pct = item.ownershipPercentage ?? 100;
+          const typeKey = person.profileType || person.type || "person";
+          return (
+            <RelPartyCard
+              key={linkId}
+              id={person.id}
+              name={person.name || "Unknown"}
+              typeKey={typeKey}
+              role={role}
+              ownershipPercentage={pct}
+              linkId={linkId}
+              totalParties={parties.length}
+              onEdit={(lId, r, p) => setEditState({linkId: lId, role: r, pct: p})}
+              onRemove={(lId) => {
+                if (confirm("Remove this link?")) removeMutation.mutate(lId);
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Linked Assets tab ──
+function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profileType: string }) {
+  const isLiability = profileType === "liability" || profileType === "loan";
+  const isPerson = profileType === "person" || profileType === "self";
+  const isAsset = ["asset","vehicle","property"].includes(profileType);
+
+  const { data: items = [] } = useQuery<any[]>({
+    queryKey: ["/api/rel-assets", profileType, profileId],
+    queryFn: async () => {
+      if (isLiability) {
+        // Use liability asset links
+        const links = await apiRequest("GET", `/api/liabilities/${profileId}/asset-links`).then(r => r.json());
+        return links.map((l: any) => ({ id: l.assetProfileId || l.id, name: l.assetName || l.name || "Asset", typeKey: l.assetType || "asset" }));
+      } else if (isPerson) {
+        // /api/parties/:id/assets
+        const assets = await apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json());
+        return assets.map((a: any) => ({ id: a.asset?.id || a.id, name: a.asset?.name || a.name || "Asset", typeKey: a.asset?.profileType || a.asset?.type || "asset" }));
+      } else {
+        // Asset: find related assets via graph 2 hops
+        const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
+        const root = g.rootId;
+        const assetTypes = new Set(["asset","vehicle","property"]);
+        return (g.nodes || [])
+          .filter((n: any) => n.id !== root && assetTypes.has(n.typeKey || n.type))
+          .map((n: any) => ({ id: n.id, name: n.name, typeKey: n.typeKey || n.type }));
+      }
+    },
+  });
+
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <Package className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">No linked assets</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {items.map((item: any, i: number) => (
+        <RelAssetCard key={item.id || i} id={item.id} name={item.name} typeKey={item.typeKey} />
+      ))}
+    </div>
+  );
+}
+
+// ── Linked Liabilities tab (rel-liabilities) ──
+function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string; profileType: string }) {
+  const isLiability = profileType === "liability" || profileType === "loan";
+  const isPerson = profileType === "person" || profileType === "self";
+  const isAsset = ["asset","vehicle","property"].includes(profileType);
+
+  const { data: items = [] } = useQuery<any[]>({
+    queryKey: ["/api/rel-liabilities", profileType, profileId],
+    queryFn: async () => {
+      if (isPerson) {
+        // /api/parties/:id/liabilities
+        const links = await apiRequest("GET", `/api/parties/${profileId}/liabilities`).then(r => r.json());
+        return links.map((l: any) => ({
+          id: l.liabilityProfileId || l.id,
+          name: l.liabilityName || l.name || "Liability",
+          typeKey: l.liabilityType || "liability",
+        }));
+      } else if (isAsset) {
+        // /api/assets/:id/liabilities (same as asset-liabilities tab)
+        const links = await apiRequest("GET", `/api/assets/${profileId}/liabilities`).then(r => r.json());
+        return links.map((l: any) => ({
+          id: l.liabilityProfileId || l.id,
+          name: l.liabilityName || l.name || "Liability",
+          typeKey: l.liabilityType || "liability",
+        }));
+      } else {
+        // Liability: graph 2 hops, filter liability nodes
+        const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
+        const root = g.rootId;
+        const liabTypes = new Set(["liability","loan"]);
+        return (g.nodes || [])
+          .filter((n: any) => n.id !== root && liabTypes.has(n.typeKey || n.type))
+          .map((n: any) => ({ id: n.id, name: n.name, typeKey: n.typeKey || n.type }));
+      }
+    },
+  });
+
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <CreditCard className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">No linked liabilities</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {items.map((item: any, i: number) => (
+        <Card key={item.id || i} style={{height: 160}} className="overflow-hidden">
+          <CardContent className="p-3 h-full flex flex-col justify-between">
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground mt-0.5">{typeKeyIcon(item.typeKey)}</span>
+              <div className="flex-1 min-w-0">
+                <a href={`#/profiles/${item.id}`} className="text-sm font-semibold hover:underline truncate block">{item.name}</a>
+                <span className="text-xs text-muted-foreground capitalize">{item.typeKey}</span>
+              </div>
+            </div>
+            <div>
+              <Button size="sm" variant="ghost" className="h-6 text-xs px-2" asChild>
+                <a href={`#/profiles/${item.id}`}><ExternalLink className="h-3 w-3 mr-1" />View</a>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+// ============================================================
+// PHASE 3 — Connections Tab (SVG radial graph)
+// ============================================================
+
+function ConnectionsTab({ profileId }: { profileId: string }) {
+  const [hops, setHops] = useState<1|2>(1);
+
+  const { data: graph, isLoading } = useQuery<any>({
+    queryKey: ["/api/relationships/graph", profileId, hops],
+    queryFn: () => apiRequest("GET", `/api/relationships/graph/${profileId}?hops=${hops}`).then(r => r.json()),
+  });
+
+  if (isLoading) {
+    return <div className="text-center py-10 text-sm text-muted-foreground">Loading graph...</div>;
+  }
+  if (!graph || !graph.nodes || graph.nodes.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <Share2 className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">No connections found</p>
+      </div>
+    );
+  }
+
+  const rootId = graph.rootId;
+  const nodes: any[] = graph.nodes || [];
+  const edges: any[] = graph.edges || [];
+
+  // Build hop distance map
+  const hopDist = new Map<string, number>();
+  hopDist.set(rootId, 0);
+  // BFS from edges
+  const adj = new Map<string, string[]>();
+  for (const e of edges) {
+    if (!adj.has(e.from)) adj.set(e.from, []);
+    if (!adj.has(e.to)) adj.set(e.to, []);
+    adj.get(e.from)!.push(e.to);
+    adj.get(e.to)!.push(e.from);
+  }
+  const queue = [rootId];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const d = hopDist.get(cur)!;
+    for (const nb of (adj.get(cur) || [])) {
+      if (!hopDist.has(nb)) {
+        hopDist.set(nb, d + 1);
+        queue.push(nb);
+      }
+    }
+  }
+
+  // Separate 1-hop and 2-hop neighbors
+  const hop1 = nodes.filter(n => n.id !== rootId && hopDist.get(n.id) === 1);
+  const hop2 = nodes.filter(n => n.id !== rootId && hopDist.get(n.id) === 2);
+  const otherNodes = nodes.filter(n => n.id !== rootId && hopDist.get(n.id) !== 1 && hopDist.get(n.id) !== 2);
+
+  const R1 = 160;
+  const R2 = 300;
+
+  // Compute positions
+  const pos = new Map<string, {x: number; y: number}>();
+  pos.set(rootId, {x: 0, y: 0});
+
+  hop1.forEach((n, i) => {
+    const angle = (i * 2 * Math.PI) / Math.max(1, hop1.length) - Math.PI / 2;
+    pos.set(n.id, { x: Math.cos(angle) * R1, y: Math.sin(angle) * R1 });
+  });
+
+  // For 2-hop: cluster near their 1-hop parent
+  const parentAngles = new Map<string, number>();
+  hop1.forEach((n, i) => {
+    parentAngles.set(n.id, (i * 2 * Math.PI) / Math.max(1, hop1.length) - Math.PI / 2);
+  });
+
+  // Group 2-hop nodes by their 1-hop parent
+  const childrenOf = new Map<string, any[]>();
+  for (const n of hop2) {
+    // Find closest 1-hop parent via edges
+    const parent = edges.find(e => (e.from === n.id && hop1.some(h => h.id === e.to)) || (e.to === n.id && hop1.some(h => h.id === e.from)));
+    const parentId = parent ? (hop1.some(h => h.id === parent.from) ? parent.from : parent.to) : null;
+    if (parentId) {
+      if (!childrenOf.has(parentId)) childrenOf.set(parentId, []);
+      childrenOf.get(parentId)!.push(n);
+    } else {
+      if (!childrenOf.has("__unattached")) childrenOf.set("__unattached", []);
+      childrenOf.get("__unattached")!.push(n);
+    }
+  }
+
+  childrenOf.forEach((children, parentId) => {
+    const baseAngle = parentAngles.get(parentId) ?? 0;
+    const spread = Math.PI / 4;
+    children.forEach((n, i) => {
+      const offset = children.length > 1 ? (i / (children.length - 1) - 0.5) * spread : 0;
+      const angle = baseAngle + offset;
+      pos.set(n.id, { x: Math.cos(angle) * R2, y: Math.sin(angle) * R2 });
+    });
+  });
+
+  // unattached 2-hop nodes
+  const unattached = childrenOf.get("__unattached") || [];
+  unattached.forEach((n, i) => {
+    const angle = (i * 2 * Math.PI) / Math.max(1, unattached.length);
+    pos.set(n.id, { x: Math.cos(angle) * R2, y: Math.sin(angle) * R2 });
+  });
+
+  // Remaining nodes not positioned
+  otherNodes.forEach((n, i) => {
+    if (!pos.has(n.id)) {
+      const angle = (i * 2 * Math.PI) / Math.max(1, otherNodes.length) + Math.PI / 6;
+      pos.set(n.id, { x: Math.cos(angle) * (R2 + 60), y: Math.sin(angle) * (R2 + 60) });
+    }
+  });
+
+  function nodeColor(typeKey: string) {
+    if (["asset","vehicle","property"].includes(typeKey)) return "#10b981";
+    if (["liability","loan"].includes(typeKey)) return "#ef4444";
+    return "#3b82f6";
+  }
+
+  function edgeColor(kind: string) {
+    if (kind === "asset_party") return "#10b981";
+    if (kind === "liability_party") return "#3b82f6";
+    if (kind === "liability_asset") return "#f59e0b";
+    return "#6b7280";
+  }
+
+  const rootNode = nodes.find(n => n.id === rootId);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2 items-center">
+        <span className="text-xs text-muted-foreground">Hops:</span>
+        <Button size="sm" variant={hops === 1 ? "default" : "outline"} className="h-7 text-xs"
+          onClick={() => setHops(1)}>1 hop</Button>
+        <Button size="sm" variant={hops === 2 ? "default" : "outline"} className="h-7 text-xs"
+          onClick={() => setHops(2)}>2 hops</Button>
+      </div>
+      <div className="border rounded-lg overflow-hidden bg-muted/10">
+        <svg viewBox="-400 -400 800 800" width="100%" height="600" style={{display:"block"}}>
+          {/* Edges */}
+          {edges.map((e: any, i: number) => {
+            const fp = pos.get(e.from);
+            const tp = pos.get(e.to);
+            if (!fp || !tp) return null;
+            return (
+              <line key={i}
+                x1={fp.x} y1={fp.y} x2={tp.x} y2={tp.y}
+                stroke={edgeColor(e.kind)} strokeWidth={2} strokeOpacity={0.6}
+              />
+            );
+          })}
+          {/* Nodes */}
+          {nodes.map((n: any) => {
+            const p = pos.get(n.id);
+            if (!p) return null;
+            const isRoot = n.id === rootId;
+            const color = nodeColor(n.typeKey || n.type || "person");
+            const label = (n.name || "").length > 14 ? (n.name || "").slice(0, 13) + "…" : (n.name || "");
+            return (
+              <g key={n.id} style={{cursor:"pointer"}}
+                onClick={() => { window.location.hash = `/profiles/${n.id}`; }}>
+                <title>{n.name} ({n.typeKey || n.type})</title>
+                <circle cx={p.x} cy={p.y} r={isRoot ? 28 : 22}
+                  fill={color} fillOpacity={isRoot ? 1 : 0.75}
+                  stroke={isRoot ? "#fff" : color} strokeWidth={isRoot ? 3 : 1.5}
+                />
+                <text x={p.x} y={p.y + (isRoot ? 28 : 22) + 12}
+                  textAnchor="middle" fontSize={isRoot ? 11 : 10}
+                  fill="currentColor" className="fill-foreground" fontWeight={isRoot ? "600" : "400"}>
+                  {label}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="flex gap-4 text-xs text-muted-foreground flex-wrap">
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-500 inline-block" />Asset</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 inline-block" />Liability</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-500 inline-block" />Person/Business</span>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PHASE 5 — History Tab + Undo
+// ============================================================
+
+function HistoryTab({ profileId }: { profileId: string }) {
+  const { toast } = useToast();
+
+  const { data: entries = [], refetch } = useQuery<any[]>({
+    queryKey: ["/api/ownership-history", profileId],
+    queryFn: () => apiRequest("GET", `/api/ownership-history?subjectId=${profileId}&limit=200`).then(r => r.json()),
+  });
+
+  const undoMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/ownership-history/${id}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Reverted" });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/rel-people"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rel-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rel-liabilities"] });
+    },
+    onError: (err: Error) => toast({ title: "Undo failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  if (entries.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <Clock className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">No ownership history</p>
+      </div>
+    );
+  }
+
+  // Group by date
+  const grouped = new Map<string, any[]>();
+  const sorted = [...entries].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  for (const e of sorted) {
+    const day = new Date(e.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    if (!grouped.has(day)) grouped.set(day, []);
+    grouped.get(day)!.push(e);
+  }
+
+  const now = Date.now();
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+
+  return (
+    <div className="space-y-4">
+      {Array.from(grouped.entries()).map(([day, dayEntries]) => (
+        <div key={day}>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{day}</p>
+          <div className="space-y-2">
+            {dayEntries.map((e: any) => {
+              const time = new Date(e.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+              const canUndo = now - new Date(e.createdAt).getTime() < ONE_DAY;
+              const changedByBadge = (e.changedBy || "user") === "ai" ? "AI" : "user";
+
+              let description = "";
+              if (e.fieldChanged && e.oldValue !== undefined && e.newValue !== undefined) {
+                description = `${e.fieldChanged}: ${e.oldValue ?? "none"} → ${e.newValue ?? "none"}`;
+              } else if (e.action) {
+                description = String(e.action);
+              }
+
+              return (
+                <div key={e.id} className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium">
+                      {time} — {description || e.note || `${e.action || "change"} (${e.linkKind || "link"})`}
+                    </p>
+                    <div className="flex gap-2 mt-0.5 items-center">
+                      <Badge variant="outline" className="text-xs h-4 px-1">
+                        {changedByBadge}
+                      </Badge>
+                      {e.note && <span className="text-xs text-muted-foreground truncate">{e.note}</span>}
+                    </div>
+                  </div>
+                  {canUndo && (
+                    <Button
+                      size="sm" variant="ghost" className="h-6 text-xs px-2 shrink-0"
+                      onClick={() => undoMutation.mutate(e.id)}
+                      disabled={undoMutation.isPending}
+                    >
+                      <RefreshCw className="h-3 w-3 mr-1" />Undo
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
 function getTabsForType(type: string, profile?: any): TabDef[] {
   const assetSubtype = type === "asset" && profile?.fields?.assetSubtype ? String(profile.fields.assetSubtype) : null;
   const baseTabs = assetSubtype
@@ -8486,7 +9230,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "asset-liabilities", "payments"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "asset-liabilities", "payments", "rel-assets", "rel-liabilities", "rel-people", "connections", "history"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -9641,6 +10385,36 @@ export default function ProfileDetailPage() {
                     profileId={profile.id}
                     onChanged={handleSaved}
                   />
+                </TabsContent>
+              )}
+
+              {tabValues.has("rel-assets") && (
+                <TabsContent value="rel-assets" className="mt-4 px-1 sm:px-0">
+                  <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("rel-liabilities") && (
+                <TabsContent value="rel-liabilities" className="mt-4 px-1 sm:px-0">
+                  <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("rel-people") && (
+                <TabsContent value="rel-people" className="mt-4 px-1 sm:px-0">
+                  <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("connections") && (
+                <TabsContent value="connections" className="mt-4 px-1 sm:px-0">
+                  <ConnectionsTab profileId={profile.id} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("history") && (
+                <TabsContent value="history" className="mt-4 px-1 sm:px-0">
+                  <HistoryTab profileId={profile.id} />
                 </TabsContent>
               )}
             </Tabs>
