@@ -6,7 +6,7 @@
  * documents OCR, calendar auto-events, and subtype-specific UI on top of this.
  */
 
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
@@ -21,6 +21,7 @@ import {
   Plus,
   Loader2,
   ChevronRight,
+  ChevronDown,
   Calculator,
   RotateCcw,
   Sparkles,
@@ -39,6 +40,8 @@ import {
   Car,
   GraduationCap,
   AlertTriangle,
+  Edit,
+  User,
 } from "lucide-react";
 import {
   Select,
@@ -65,6 +68,13 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import {
@@ -341,11 +351,10 @@ type TabKey =
   | "overview"
   | "details"
   | "payments"
-  | "amortization"
-  | "calculator"
-  | "linked"
   | "documents"
-  | "activity";
+  | "activity"
+  | "connections"
+  | "history";
 
 const PROFILE_LINK_ROLES: { value: string; label: string }[] = [
   { value: "owner", label: "Owner" },
@@ -366,6 +375,87 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [tab, setTab] = useState<TabKey>("overview");
   const { toast } = useToast();
   const qc = useQueryClient();
+
+  // ── Multi-owner popover (mirrors asset profile picker) ──────────────────────
+  const [ownerPopoverOpen, setOwnerPopoverOpen] = useState(false);
+
+  const { data: ownerCandidates } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: !!profile.id,
+  });
+  const personOptions = (ownerCandidates || []).filter((p: any) =>
+    ["self", "person"].includes(p.type) && !p.fields?._parentProfileId
+  );
+
+  // Fetch current liability party links
+  const { data: currentPartyLinks = [], refetch: refetchPartyLinks } = useQuery<any[]>({
+    queryKey: ["/api/liabilities", profile.id, "parties"],
+    queryFn: () => apiRequest("GET", `/api/liabilities/${profile.id}/parties`).then(r => r.json()),
+    enabled: !!profile.id,
+  });
+
+  const linkedPersonIdSet = useMemo(() =>
+    new Set((currentPartyLinks || []).map((l: any) => l.partyProfileId || l.party?.id)),
+    [currentPartyLinks]
+  );
+
+  const [checkedOwnerIds, setCheckedOwnerIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (ownerPopoverOpen) {
+      setCheckedOwnerIds(new Set(linkedPersonIdSet));
+    }
+  }, [ownerPopoverOpen, linkedPersonIdSet]);
+
+  const saveOwnersMutation = useMutation({
+    mutationFn: async (selectedIds: string[]) => {
+      const pct = selectedIds.length > 0 ? Math.round(10000 / selectedIds.length) / 100 : 100;
+      const toAdd = selectedIds.filter(sid => !linkedPersonIdSet.has(sid));
+      const toRemove = (currentPartyLinks || []).filter((l: any) => {
+        const lid = l.partyProfileId || l.party?.id;
+        return lid && !selectedIds.includes(lid);
+      });
+      for (const link of toRemove) {
+        await apiRequest("DELETE", `/api/liability-profile-links/${link.id || link.linkId}`);
+      }
+      for (const sid of toAdd) {
+        await apiRequest("POST", "/api/liability-profile-links", {
+          liabilityProfileId: profile.id,
+          partyProfileId: sid,
+          ownershipPercentage: pct,
+          role: "borrower",
+        });
+      }
+      const toKeep = (currentPartyLinks || []).filter((l: any) => {
+        const lid = l.partyProfileId || l.party?.id;
+        return lid && selectedIds.includes(lid);
+      });
+      for (const link of toKeep) {
+        await apiRequest("PATCH", `/api/liability-profile-links/${link.id || link.linkId}`, {
+          ownershipPercentage: pct,
+        });
+      }
+    },
+    onSuccess: () => {
+      toast({ title: "Ownership updated" });
+      refetchPartyLinks();
+      qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "parties"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
+      setOwnerPopoverOpen(false);
+    },
+    onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const ownerButtonLabel = useMemo(() => {
+    const linked = (currentPartyLinks || []).map((l: any) =>
+      l.party?.name || personOptions.find((p: any) => p.id === (l.partyProfileId || l.party?.id))?.name
+    ).filter(Boolean);
+    if (linked.length === 0) return "Set owner";
+    if (linked.length === 1) return linked[0];
+    if (linked.length === 2) return `Shared · ${linked[0]} + ${linked[1]}`;
+    return `Shared · ${linked.length} people`;
+  }, [currentPartyLinks, personOptions]);
 
   const terms = useMemo(() => readTerms(profile), [profile]);
   // Subtype lookup: type_key is the canonical column on the profiles table
@@ -560,8 +650,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="liability-profile-page">
-      {/* Hero */}
-      <div className="px-4 md:px-6 pt-4 pb-5 border-b">
+      {/* Hero — matches asset profile header layout */}
+      <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: "linear-gradient(135deg, hsl(var(--rose-500)/0.08) 0%, transparent 60%)" }}>
+        {/* Top bar: back arrow left, owner picker + edit/delete right */}
         <div className="flex items-center justify-between mb-3">
           <Button
             variant="ghost"
@@ -573,25 +664,87 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <ArrowLeft className="w-4 h-4 mr-1" />
             Back
           </Button>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => openPaymentDialog("minimum")} data-testid="quick-pay-min">
-              <Plus className="w-4 h-4 mr-1" />
-              Pay minimum
+          <div className="flex items-center gap-1.5">
+            {/* Multi-owner checkbox picker — same UX as asset profiles */}
+            {personOptions.length > 0 && (
+              <Popover open={ownerPopoverOpen} onOpenChange={setOwnerPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5 bg-background/60 backdrop-blur-sm font-medium max-w-[180px] truncate"
+                    data-testid="button-owner-dropdown"
+                  >
+                    <User className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{ownerButtonLabel}</span>
+                    <ChevronDown className="h-2.5 w-2.5 opacity-70 shrink-0" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-52 p-2" align="end">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mb-2">Owners</p>
+                  <div className="space-y-1 max-h-52 overflow-y-auto">
+                    {personOptions.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((p: any) => (
+                      <label
+                        key={p.id}
+                        className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted/50 cursor-pointer"
+                      >
+                        <Checkbox
+                          id={`owner-chk-${p.id}`}
+                          checked={checkedOwnerIds.has(p.id)}
+                          onCheckedChange={(checked) => {
+                            setCheckedOwnerIds(prev => {
+                              const next = new Set(prev);
+                              if (checked) next.add(p.id); else next.delete(p.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="text-xs truncate">{p.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-border/40">
+                    <Button
+                      size="sm"
+                      className="w-full h-7 text-xs"
+                      disabled={saveOwnersMutation.isPending}
+                      onClick={() => saveOwnersMutation.mutate(Array.from(checkedOwnerIds))}
+                      data-testid="button-owner-save"
+                    >
+                      {saveOwnersMutation.isPending ? "Saving…" : "Save"}
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1 bg-background/60 backdrop-blur-sm"
+              onClick={() => openPaymentDialog("minimum")}
+              data-testid="quick-pay-min"
+            >
+              <Plus className="w-3 h-3" /> Pay
             </Button>
           </div>
         </div>
+
+        {/* Icon + name + badge row */}
         <div className="flex items-start gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center">
+          <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center shrink-0">
             <Wallet className="w-7 h-7" />
           </div>
-          <div className="flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl md:text-2xl font-semibold" data-testid="liability-title">
-                {profile.name || subtypeLabel}
-              </h1>
-              <Badge variant="secondary" data-testid="liability-subtype-badge">
-                {subtypeLabel}
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl font-semibold" data-testid="liability-title">
+              {profile.name || subtypeLabel}
+            </h1>
+            <div className="flex flex-wrap items-center gap-2 mt-1.5">
+              <Badge variant="secondary" className="text-xs" data-testid="liability-subtype-badge">
+                Liability
               </Badge>
+              {subtypeLabel !== "Liability" && (
+                <Badge variant="outline" className="text-xs">{subtypeLabel}</Badge>
+              )}
             </div>
             {terms.lender ? (
               <div className="text-sm text-muted-foreground mt-0.5">
@@ -601,8 +754,23 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             ) : null}
           </div>
         </div>
+
+        {/* Quick stats — Docs + Payments count, matching asset stat cards */}
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          <div className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
+            <p className="text-lg font-semibold tabular-nums">{payments.length}</p>
+            <p className="text-xs text-muted-foreground">Payments</p>
+          </div>
+          <div className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
+            <p className="text-lg font-semibold tabular-nums">
+              {summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "Paid"}
+            </p>
+            <p className="text-xs text-muted-foreground">Remaining</p>
+          </div>
+        </div>
+
         {/* KPI strip */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
           <KpiTile
             label="Current balance"
             value={fmtUSDShort(summary.currentBalance)}
@@ -647,28 +815,29 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       {/* Tabs */}
       <div className="px-4 md:px-6 pt-4">
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} data-testid="liability-tabs">
-          <TabsList className="grid grid-cols-4 md:grid-cols-8 w-full max-w-5xl">
-            <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
-            <TabsTrigger value="details" data-testid="tab-details">Details</TabsTrigger>
-            <TabsTrigger value="payments" data-testid="tab-payments">Payments</TabsTrigger>
-            <TabsTrigger value="calculator" data-testid="tab-calculator">Payoff</TabsTrigger>
-            <TabsTrigger value="amortization" data-testid="tab-amortization">Schedule</TabsTrigger>
-            <TabsTrigger value="linked" data-testid="tab-linked">Linked</TabsTrigger>
-            <TabsTrigger value="documents" data-testid="tab-documents">Docs</TabsTrigger>
-            <TabsTrigger value="activity" data-testid="tab-activity">Activity</TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto pb-1 border-b border-border/50 -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" as any }}>
+            <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
+              <TabsTrigger value="overview" className="text-xs px-3 whitespace-nowrap" data-testid="tab-overview">Overview</TabsTrigger>
+              <TabsTrigger value="details" className="text-xs px-3 whitespace-nowrap" data-testid="tab-details">Details</TabsTrigger>
+              <TabsTrigger value="payments" className="text-xs px-3 whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
+              <TabsTrigger value="documents" className="text-xs px-3 whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
+              <TabsTrigger value="activity" className="text-xs px-3 whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
+              <TabsTrigger value="connections" className="text-xs px-3 whitespace-nowrap" data-testid="tab-connections">Connections</TabsTrigger>
+              <TabsTrigger value="history" className="text-xs px-3 whitespace-nowrap" data-testid="tab-history">History</TabsTrigger>
+            </TabsList>
+          </div>
 
           {/* OVERVIEW */}
           <TabsContent value="overview" className="mt-4 space-y-4">
-            {/* Phase 5: AI insights card */}
+            {/* AI insights card */}
             <AISummaryCard profileId={profile.id} />
 
-            {/* Phase 5: Subtype-specific overview */}
+            {/* Subtype-specific overview */}
             <SubtypeOverview
               subtype={subtypeRaw}
               terms={terms}
               liabilityId={profile.id}
-              onJumpLinked={() => setTab("linked")}
+              onJumpLinked={() => setTab("payments")}
             />
 
             <Card>
@@ -763,6 +932,17 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 )}
               </CardContent>
             </Card>
+
+            {/* Nested sections — mirroring asset Overview layout */}
+            <section className="mt-6">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Nested Assets</p>
+              <LinkedAssetsCard liabilityId={profile.id} />
+            </section>
+
+            <section className="mt-6">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Nested Liabilities</p>
+              <LinkedProfilesCard liabilityId={profile.id} />
+            </section>
           </TabsContent>
 
           {/* DETAILS */}
@@ -792,55 +972,95 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             </p>
           </TabsContent>
 
-          {/* PAYMENTS */}
-          <TabsContent value="payments" className="mt-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">
-                {payments.length} payment{payments.length === 1 ? "" : "s"} on record
+          {/* PAYMENTS — unified tab: payment history + payoff calculator + amortization schedule */}
+          <TabsContent value="payments" className="mt-4 space-y-6">
+            {/* Section 1: Payment history */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-0.5">Payment History</p>
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-muted-foreground">
+                  {payments.length} payment{payments.length === 1 ? "" : "s"} on record
+                </div>
+                <Button size="sm" onClick={() => openPaymentDialog("custom")} data-testid="payments-add">
+                  <Plus className="w-4 h-4 mr-1" />
+                  Record payment
+                </Button>
               </div>
-              <Button size="sm" onClick={() => openPaymentDialog("custom")} data-testid="payments-add">
-                <Plus className="w-4 h-4 mr-1" />
-                Record payment
-              </Button>
+              <Card>
+                <CardContent className="p-0">
+                  {paymentsQuery.isLoading ? (
+                    <div className="p-4 space-y-2">
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-10 w-full" />
+                    </div>
+                  ) : payments.length === 0 ? (
+                    <div className="p-6 text-sm text-muted-foreground" data-testid="payments-empty">
+                      No payments recorded yet.
+                    </div>
+                  ) : (
+                    <div className="divide-y" data-testid="payments-list">
+                      {payments.map((p) => (
+                        <PaymentRow
+                          key={p.id}
+                          p={p}
+                          expanded
+                          onReverse={() => reversePaymentMutation.mutate(p)}
+                          reversing={reversePaymentMutation.isPending}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
-            <Card>
-              <CardContent className="p-0">
-                {paymentsQuery.isLoading ? (
-                  <div className="p-4 space-y-2">
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                  </div>
-                ) : payments.length === 0 ? (
-                  <div className="p-6 text-sm text-muted-foreground" data-testid="payments-empty">
-                    No payments recorded yet.
-                  </div>
-                ) : (
-                  <div className="divide-y" data-testid="payments-list">
-                    {payments.map((p) => (
-                      <PaymentRow
-                        key={p.id}
-                        p={p}
-                        expanded
-                        onReverse={() => reversePaymentMutation.mutate(p)}
-                        reversing={reversePaymentMutation.isPending}
-                      />
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
 
-          {/* PAYOFF CALCULATOR */}
-          <TabsContent value="calculator" className="mt-4">
-            <PayoffCalculator terms={terms} baseSummary={summary} />
-          </TabsContent>
+            {/* Section 2: Payoff Calculator */}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Payoff Calculator</p>
+              <PayoffCalculator terms={terms} baseSummary={summary} />
+            </div>
 
-          {/* LINKED ASSETS + PROFILES */}
-          <TabsContent value="linked" className="mt-4 space-y-4">
-            <LinkedAssetsCard liabilityId={profile.id} />
-            <LinkedProfilesCard liabilityId={profile.id} />
+            {/* Section 3: Amortization Schedule */}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Amortization Schedule</p>
+              <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-base">Amortization schedule</CardTitle>
+                  <div className="text-xs text-muted-foreground">
+                    {amortization.rows.length} period{amortization.rows.length === 1 ? "" : "s"} ·
+                    total interest {fmtUSD(amortization.totalInterest)}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {amortization.rows.length === 0 ? (
+                    <div className="p-6 text-sm text-muted-foreground" data-testid="amort-empty">
+                      No schedule available — set a balance, rate, and either a monthly payment or a remaining term.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto" data-testid="amort-table">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/40 text-muted-foreground">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium">#</th>
+                            <th className="text-left px-3 py-2 font-medium">Due</th>
+                            <th className="text-right px-3 py-2 font-medium">Payment</th>
+                            <th className="text-right px-3 py-2 font-medium">Principal</th>
+                            <th className="text-right px-3 py-2 font-medium">Interest</th>
+                            <th className="text-right px-3 py-2 font-medium">Balance</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {amortization.rows.map((r) => (
+                            <AmortRow key={r.paymentNumber} row={r} />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
 
           {/* DOCUMENTS */}
@@ -848,7 +1068,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <LiabilityDocumentsCard liabilityId={profile.id} />
           </TabsContent>
 
-          {/* ACTIVITY (Phase 5) */}
+          {/* ACTIVITY */}
           <TabsContent value="activity" className="mt-4">
             <ActivityTimelineCard
               profileId={profile.id}
@@ -856,44 +1076,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             />
           </TabsContent>
 
-          {/* AMORTIZATION */}
-          <TabsContent value="amortization" className="mt-4">
-            <Card>
-              <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-base">Amortization schedule</CardTitle>
-                <div className="text-xs text-muted-foreground">
-                  {amortization.rows.length} period{amortization.rows.length === 1 ? "" : "s"} ·
-                  total interest {fmtUSD(amortization.totalInterest)}
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                {amortization.rows.length === 0 ? (
-                  <div className="p-6 text-sm text-muted-foreground" data-testid="amort-empty">
-                    No schedule available — set a balance, rate, and either a monthly payment or a remaining term.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto" data-testid="amort-table">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/40 text-muted-foreground">
-                        <tr>
-                          <th className="text-left px-3 py-2 font-medium">#</th>
-                          <th className="text-left px-3 py-2 font-medium">Due</th>
-                          <th className="text-right px-3 py-2 font-medium">Payment</th>
-                          <th className="text-right px-3 py-2 font-medium">Principal</th>
-                          <th className="text-right px-3 py-2 font-medium">Interest</th>
-                          <th className="text-right px-3 py-2 font-medium">Balance</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {amortization.rows.map((r) => (
-                          <AmortRow key={r.paymentNumber} row={r} />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+          {/* CONNECTIONS */}
+          <TabsContent value="connections" className="mt-4 px-1 sm:px-0">
+            <ConnectionsTab profileId={profile.id} />
+          </TabsContent>
+
+          {/* HISTORY */}
+          <TabsContent value="history" className="mt-4 px-1 sm:px-0">
+            <HistoryTab profileId={profile.id} />
           </TabsContent>
         </Tabs>
       </div>
