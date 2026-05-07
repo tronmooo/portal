@@ -2871,8 +2871,13 @@ NEVER:
 - Never ask the user for clarification on subtype if the phrasing is unambiguous — pick the right subtype from the recognition table and proceed.
 - Never assume a liability does not exist without scanning the full Liabilities list (including PAID-OFF entries) in the context block.
 - Never silently match "Affirm Peloton" to a Klarna record (or vice versa) just because they're both BNPL — match by name + keywords.
+- When SUMMARIZING multi-party (shared) liabilities, ALWAYS state the user's ownership PERCENTAGE explicitly (e.g. "50% owned" or "Self 50% / Tom 50%"). Never write vague phrases like "shared ownership (2 parties)" — the % is what the user needs to compute their share.
 - Never claim you updated, paid, linked, or removed something WITHOUT actually calling the corresponding tool. If the user asks for a change and you say "✅ done", you MUST have just called update_liability / add_liability_payment / link_liability_owner. Hallucinating success is unacceptable.
-- ATTACHING NOTES / DOCUMENTS to a liability (e.g. "add a note to the Porsche loan", "attach a memo about my refinance", "save a note on the mortgage"): you MUST call create_document(name, content, forProfile=<liability name>). Do NOT claim the note was attached without actually calling create_document. There is no Google Drive integration — every note lives as a Portol document linked to the profile, surfaced in the Docs tab. If the user mentions Google Drive / Dropbox / iCloud, politely note that Portol stores notes natively and proceed with create_document anyway. For SHORT factual updates ("refinance scheduled for June", "interest rate now variable"), prefer update_liability(changes:{notes:"..."}) so it lives in the structured notes field. For longer write-ups, use create_document.
+- ATTACHING NOTES / DOCUMENTS to a liability — STRICT RULE:
+  * "add a note", "save a note", "attach a note", "file this note", "jot down", "add a memo", "attach this to <liability>", "add to my docs", "keep a record on <liability>" → you MUST call create_document(name, content, forProfile=<liability name>). NEVER call update_liability(notes:) for these phrasings. The user wants the note to appear in the Docs tab and Activity timeline, not silently buried in a hidden notes field.
+  * "update the notes field to X", "set internal notes to X", "replace the structured notes" → these few cases use update_liability(changes:{notes:"X"}) because the user explicitly named the structured field.
+  * If unsure, default to create_document. Documents are visible; the notes field is not.
+  * NEVER claim a note was attached without actually calling create_document. There is no Google Drive integration — every note lives as a Portol document linked to the profile. If the user mentions Google Drive / Dropbox / iCloud, politely clarify that Portol stores notes natively and proceed with create_document anyway.
 - Never accept a NEGATIVE liability balance. If the user says "set balance to -$500" or "I overpaid by $200", do NOT pass a negative number. Instead either: (a) set balance to 0 and explain there's no negative-debt concept, or (b) log a 'reversal' payment for the overpaid amount.
 - Never split a self-owned liability into multiple ownership rows unless the user explicitly says they share it. Default = single owner = self at 100%, recorded implicitly via the parent profile.
 - GOALS + HABITS: When creating a daily or recurring goal tied to a tracker (e.g., "run every day", "drink 8 glasses of water daily", "meditate 10 min daily"), ALSO create a companion habit via create_habit so the user gets daily check-in tracking. The goal tracks progress toward the target; the habit tracks daily consistency. Always do BOTH calls when the goal implies a daily action.
@@ -7337,10 +7342,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       } else if (wantsReport) {
         try {
           let reportType = "financial";
-          if (/life|score|balance/.test(msgLower)) reportType = "life_scorecard";
+          // Life scorecard only for explicit phrases. Plain 'balance' is too generic
+          // (collides with liability balance, account balance, etc.) so it is excluded.
+          if (/\blife\s*score|life\s*scorecard|scorecard|life\s*balance/.test(msgLower)) reportType = "life_scorecard";
           else if (/health|medical|fitness/.test(msgLower)) reportType = "health";
           else if (/week/.test(msgLower)) reportType = "weekly_digest";
           else if (/goal/.test(msgLower)) reportType = "goal_progress";
+          else if (/liabilit|loan|debt|mortgage|credit\s*card/.test(msgLower)) reportType = "financial";
           richReport = await buildReportSpec({ reportType });
           logger.info("ai", `[report-fallback] Auto-generated ${reportType} report`);
         } catch (e: any) {
