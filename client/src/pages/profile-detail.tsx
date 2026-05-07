@@ -35,6 +35,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   ArrowLeft,
   User,
@@ -6055,9 +6061,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
@@ -6071,9 +6074,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
@@ -6089,9 +6089,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "tasks", label: "Reminders", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6100,9 +6097,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
@@ -6119,9 +6113,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6132,9 +6123,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6153,9 +6141,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Visits", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6164,9 +6149,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
@@ -6182,9 +6164,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
     { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
@@ -6198,9 +6177,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6215,9 +6191,6 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "activity", label: "Activity", testId: "tab-activity" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
-  { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-  { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-  { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
   { value: "connections", label: "Connections", testId: "tab-connections" },
   { value: "history", label: "History", testId: "tab-history" },
 ];
@@ -6235,9 +6208,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6249,9 +6219,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6263,9 +6230,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "billing", label: "Billing", testId: "tab-billing" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6277,9 +6241,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6291,9 +6252,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "History", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6303,9 +6261,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Payments", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6317,9 +6272,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "rel-assets", label: "Linked Assets", testId: "tab-rel-assets" },
-    { value: "rel-people", label: "Linked People", testId: "tab-rel-people" },
-    { value: "rel-liabilities", label: "Linked Liabilities", testId: "tab-rel-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -9230,7 +9182,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "asset-liabilities", "payments", "rel-assets", "rel-liabilities", "rel-people", "connections", "history"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "asset-liabilities", "payments", "connections", "history"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -9900,8 +9852,8 @@ export default function ProfileDetailPage() {
   }
 
   // ── Owner dropdown (asset / vehicle / loan / subscription etc.) ───────────────
-  const [showOwnerMenu, setShowOwnerMenu] = useState(false);
-  const ownerMenuRef = useRef<HTMLDivElement>(null);
+  // ── Multi-owner popover state ─────────────────────────────────────────────
+  const [ownerPopoverOpen, setOwnerPopoverOpen] = useState(false);
 
   const assetTypes = ["vehicle","asset","subscription","loan","investment","property","insurance","medical","account"];
   const isAssetProfile = !!profile && assetTypes.includes(profile.type);
@@ -9914,37 +9866,97 @@ export default function ProfileDetailPage() {
   const personOptions = (ownerCandidates || []).filter((p: any) =>
     ["self","person"].includes(p.type) && !p.fields?._parentProfileId
   );
-  const currentOwnerLabel = profile?.fields?.ownerName || null;
 
-  const setOwnerMutation = useMutation({
-    mutationFn: async (ownerProfile: any | null) => {
-      const res = await apiRequest("PATCH", `/api/profiles/${id}`, {
-        fields: {
-          ...(profile?.fields || {}),
-          ownerProfileId: ownerProfile?.id || null,
-          ownerName: ownerProfile?.name || null,
-          // _parentProfileId drives ALL filter queries (dashboard, linked, profiles pages)
-          // — must be kept in sync with the owner so filtering works correctly
-          _parentProfileId: ownerProfile?.id || null,
-        },
-      });
-      return res.json();
-    },
-    onSuccess: (_, ownerProfile) => {
-      toast({ title: ownerProfile ? `Owned by ${ownerProfile.name}` : "Set to Shared" });
-      handleSaved();
-    },
-    onError: (err: Error) => toast({ title: "Failed to update owner", description: formatApiError(err), variant: "destructive" }),
+  // Fetch current asset-party links so we know who is already linked
+  const { data: currentPartyLinks = [], refetch: refetchPartyLinks } = useQuery<any[]>({
+    queryKey: ["/api/assets", id, "parties"],
+    queryFn: () => apiRequest("GET", `/api/assets/${id}/parties`).then(r => r.json()),
+    enabled: isAssetProfile && !!id,
   });
 
+  // Build checked set from current links (partyProfileId set)
+  const linkedPersonIdSet = useMemo(() =>
+    new Set((currentPartyLinks || []).map((l: any) => l.partyProfileId || l.party?.id)),
+    [currentPartyLinks]
+  );
+
+  // Local checked state for the popover (initialise from server data when popover opens)
+  const [checkedOwnerIds, setCheckedOwnerIds] = useState<Set<string>>(new Set());
+
+  // Sync checked state when popover opens
   useEffect(() => {
-    if (!showOwnerMenu) return;
-    const close = (e: MouseEvent) => {
-      if (ownerMenuRef.current && !ownerMenuRef.current.contains(e.target as Node)) setShowOwnerMenu(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [showOwnerMenu]);
+    if (ownerPopoverOpen) {
+      setCheckedOwnerIds(new Set(linkedPersonIdSet));
+    }
+  }, [ownerPopoverOpen, linkedPersonIdSet]);
+
+  const saveOwnersMutation = useMutation({
+    mutationFn: async (selectedIds: string[]) => {
+      const pct = selectedIds.length > 0 ? Math.round(10000 / selectedIds.length) / 100 : 100;
+      // Determine which links to add and which to remove
+      const toAdd = selectedIds.filter(sid => !linkedPersonIdSet.has(sid));
+      const toRemove = (currentPartyLinks || []).filter((l: any) => {
+        const lid = l.partyProfileId || l.party?.id;
+        return lid && !selectedIds.includes(lid);
+      });
+      // Delete removed links
+      for (const link of toRemove) {
+        await apiRequest("DELETE", `/api/asset-party-links/${link.id || link.linkId}`);
+      }
+      // Add new links
+      for (const sid of toAdd) {
+        await apiRequest("POST", "/api/asset-party-links", {
+          assetProfileId: id,
+          partyProfileId: sid,
+          ownershipPercentage: pct,
+          role: "owner",
+        });
+      }
+      // Update ownership pct for existing kept links to equalize
+      const toKeep = (currentPartyLinks || []).filter((l: any) => {
+        const lid = l.partyProfileId || l.party?.id;
+        return lid && selectedIds.includes(lid);
+      });
+      for (const link of toKeep) {
+        await apiRequest("PATCH", `/api/asset-party-links/${link.id || link.linkId}`, {
+          ownershipPercentage: pct,
+        });
+      }
+      // Also update fields.ownerName / _parentProfileId for backward-compat
+      const firstName = selectedIds.length === 1
+        ? (personOptions.find((p: any) => p.id === selectedIds[0])?.name || null)
+        : null;
+      await apiRequest("PATCH", `/api/profiles/${id}`, {
+        fields: {
+          ...(profile?.fields || {}),
+          ownerProfileId: selectedIds.length === 1 ? selectedIds[0] : null,
+          ownerName: firstName,
+          _parentProfileId: selectedIds.length === 1 ? selectedIds[0] : (profile?.fields?._parentProfileId || null),
+        },
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Ownership updated" });
+      refetchPartyLinks();
+      handleSaved();
+      queryClient.invalidateQueries({ queryKey: ["/api/rel-people"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/assets", id, "parties"] });
+      setOwnerPopoverOpen(false);
+    },
+    onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // Derive display label for the owner button
+  const ownerButtonLabel = useMemo(() => {
+    const linked = (currentPartyLinks || []).map((l: any) => l.party?.name || personOptions.find((p: any) => p.id === (l.partyProfileId || l.party?.id))?.name).filter(Boolean);
+    if (linked.length === 0) {
+      // Fall back to fields.ownerName if no party links yet
+      return profile?.fields?.ownerName || "Set owner";
+    }
+    if (linked.length === 1) return linked[0];
+    if (linked.length === 2) return `Shared · ${linked[0]} + ${linked[1]}`;
+    return `Shared · ${linked.length} people`;
+  }, [currentPartyLinks, personOptions, profile]);
 
   if (isLoading) {
     return (
@@ -10013,45 +10025,57 @@ export default function ProfileDetailPage() {
             <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
           </Link>
           <div className="flex items-center gap-1.5">
-            {/* Owner dropdown — only on asset / vehicle / loan / subscription etc. */}
+            {/* Owner multi-select — only on asset / vehicle / loan / subscription etc. */}
             {isAssetProfile && personOptions.length > 0 && (
-              <div className="relative" ref={ownerMenuRef}>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs gap-1.5 bg-background/60 backdrop-blur-sm font-medium"
-                  onClick={() => setShowOwnerMenu(v => !v)}
-                  data-testid="button-owner-dropdown"
-                >
-                  <User className="h-3 w-3" />
-                  {currentOwnerLabel || "Shared"}
-                  <ChevronDown className="h-2.5 w-2.5 opacity-70" />
-                </Button>
-                {showOwnerMenu && (
-                  <div className="absolute right-0 top-full mt-1 z-50 min-w-[130px] rounded-lg border border-border/80 bg-card shadow-lg overflow-hidden py-1">
-                    <button
-                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted/70 transition-colors ${
-                        !currentOwnerLabel ? "text-primary font-semibold" : "text-foreground"
-                      }`}
-                      onClick={() => { setOwnerMutation.mutate(null); setShowOwnerMenu(false); }}
-                    >
-                      Shared
-                    </button>
-                    <div className="mx-2 my-0.5 border-t border-border/40" />
-                    {personOptions.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map(p => (
-                      <button
+              <Popover open={ownerPopoverOpen} onOpenChange={setOwnerPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5 bg-background/60 backdrop-blur-sm font-medium max-w-[180px] truncate"
+                    data-testid="button-owner-dropdown"
+                  >
+                    <User className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{ownerButtonLabel}</span>
+                    <ChevronDown className="h-2.5 w-2.5 opacity-70 shrink-0" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-52 p-2" align="end">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mb-2">Owners</p>
+                  <div className="space-y-1 max-h-52 overflow-y-auto">
+                    {personOptions.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((p: any) => (
+                      <label
                         key={p.id}
-                        className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted/70 transition-colors ${
-                          currentOwnerLabel === p.name ? "text-primary font-semibold" : "text-foreground"
-                        }`}
-                        onClick={() => { setOwnerMutation.mutate(p); setShowOwnerMenu(false); }}
+                        className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted/50 cursor-pointer"
                       >
-                        {p.name}
-                      </button>
+                        <Checkbox
+                          id={`owner-chk-${p.id}`}
+                          checked={checkedOwnerIds.has(p.id)}
+                          onCheckedChange={(checked) => {
+                            setCheckedOwnerIds(prev => {
+                              const next = new Set(prev);
+                              if (checked) next.add(p.id); else next.delete(p.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="text-xs truncate">{p.name}</span>
+                      </label>
                     ))}
                   </div>
-                )}
-              </div>
+                  <div className="mt-2 pt-2 border-t border-border/40">
+                    <Button
+                      size="sm"
+                      className="w-full h-7 text-xs"
+                      disabled={saveOwnersMutation.isPending}
+                      onClick={() => saveOwnersMutation.mutate(Array.from(checkedOwnerIds))}
+                      data-testid="button-owner-save"
+                    >
+                      {saveOwnersMutation.isPending ? "Saving…" : "Save"}
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
             )}
             <Button
               variant="outline"
@@ -10198,6 +10222,19 @@ export default function ProfileDetailPage() {
                       </div>
                     </div>
                   )}
+                  {/* Linked People, Liabilities, Assets inline in Overview */}
+                  <section className="mt-6">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
+                    <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
+                  </section>
+                  <section className="mt-6">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
+                    <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
+                  </section>
+                  <section className="mt-6">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
+                    <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
+                  </section>
                 </TabsContent>
               )}
 
@@ -10385,24 +10422,6 @@ export default function ProfileDetailPage() {
                     profileId={profile.id}
                     onChanged={handleSaved}
                   />
-                </TabsContent>
-              )}
-
-              {tabValues.has("rel-assets") && (
-                <TabsContent value="rel-assets" className="mt-4 px-1 sm:px-0">
-                  <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
-                </TabsContent>
-              )}
-
-              {tabValues.has("rel-liabilities") && (
-                <TabsContent value="rel-liabilities" className="mt-4 px-1 sm:px-0">
-                  <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
-                </TabsContent>
-              )}
-
-              {tabValues.has("rel-people") && (
-                <TabsContent value="rel-people" className="mt-4 px-1 sm:px-0">
-                  <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
