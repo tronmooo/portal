@@ -6872,7 +6872,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
-  const context = [
+  const context = (await Promise.all([
     `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => {
       const fields = p.fields || {};
       const keyFields = Object.entries(fields).filter(([k, v]) => v && !k.startsWith('_') && k !== 'notes').slice(0, 10).map(([k, v]) => `${k}: ${String(v).slice(0, 50)}`).join(', ');
@@ -6913,10 +6913,16 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       }).join('; ')}`;
     })(),
     // Liabilities (ALL — active AND paid-off) so chat NLP can find any of them by name, lender, asset, vehicle, or property keywords.
-    (() => {
+    // Includes ownership splits (party_profile_id → ownership_percentage) and asset collateral so the model can answer
+    // questions like "what's my share of the duplex?" or "who co-owns the timeshare?".
+    await (async () => {
       const liabProfiles = profiles.filter((p: any) => p.type === 'liability' || p.type === 'loan');
       if (liabProfiles.length === 0) return '';
-      return `Liabilities (${liabProfiles.length}): ${liabProfiles.map((l: any) => {
+      const [allPartyLinks, allAssetLinks] = await Promise.all([
+        Promise.all(liabProfiles.map((l: any) => storage.getLiabilityProfileLinks(l.id).catch(() => []))),
+        Promise.all(liabProfiles.map((l: any) => storage.getLiabilityAssetLinks(l.id).catch(() => []))),
+      ]);
+      return `Liabilities (${liabProfiles.length}): ${liabProfiles.map((l: any, idx: number) => {
         const f = l.fields || {};
         const bal = Number(f.currentBalance) || 0;
         const status = bal === 0 ? "PAID-OFF" : "active";
@@ -6934,7 +6940,30 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           f.monthlyPayment ? `mo: $${f.monthlyPayment}` : null,
           f.dueDay ? `due: ${f.dueDay}` : null,
         ].filter(Boolean).join(', ');
-        return `${l.name} [${subtype}, ${status}, id:${l.id.slice(0, 8)}, ${details}${keywords.length ? `, kw: ${keywords.join("|")}` : ""}]`;
+        // Ownership: "Self 50%, Tom 50%" — always state percentages explicitly.
+        const partyLinks = allPartyLinks[idx] || [];
+        let ownershipStr = "";
+        if (partyLinks.length > 0) {
+          const parts = partyLinks.map((pl: any) => {
+            const owner = profiles.find((p: any) => p.id === pl.partyProfileId);
+            const ownerName = owner?.name || "unknown";
+            const pct = Number(pl.ownershipPercentage ?? 100);
+            const role = pl.role && pl.role !== "owner" ? `:${pl.role}` : "";
+            return `${ownerName} ${pct}%${role}`;
+          });
+          ownershipStr = `, owners: ${parts.join("|")}`;
+        }
+        // Asset collateral: "collateral: 2025 Porsche Macan, 456 Oak Avenue Duplex"
+        const assetLinks = allAssetLinks[idx] || [];
+        let assetStr = "";
+        if (assetLinks.length > 0) {
+          const names = assetLinks.map((al: any) => {
+            const a = profiles.find((p: any) => p.id === al.assetProfileId);
+            return a?.name || "unknown";
+          });
+          assetStr = `, collateral: ${names.join("|")}`;
+        }
+        return `${l.name} [${subtype}, ${status}, id:${l.id.slice(0, 8)}, ${details}${ownershipStr}${assetStr}${keywords.length ? `, kw: ${keywords.join("|")}` : ""}]`;
       }).join('; ')}`;
     })(),
     `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
@@ -6982,7 +7011,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         return `${t.name}${latest ? ` (last taken: ${latest.timestamp?.slice(0,10)}, dosage: ${JSON.stringify(latest.values).slice(0,60)})` : " (no entries yet)"}`;
       }).join("; ")}`;
     })(),
-  ].filter(Boolean).join("\n");
+  ])).filter(Boolean).join("\n");
 
   const selfProfileId = profiles.find((p: any) => p.type === "self")?.id || '';
   const systemPrompt = buildSystemPrompt(context, selfProfileId, (storage as any)._timezone);
