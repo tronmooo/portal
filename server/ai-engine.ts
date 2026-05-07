@@ -4120,10 +4120,50 @@ async function executeTool(name: string, input: any): Promise<any> {
           parentProfileId,
         } as any);
       }
-      // Optional: auto-link an asset as collateral right after creation
+      // Optional: auto-link an asset as collateral right after creation.
+      // If no matching asset profile exists yet, auto-create a stub one so
+      // the user's mental model ("this loan is for my fridge") is preserved.
+      // Without this, asking the AI to "add a loan for my Samsung refrigerator"
+      // when no fridge profile exists would silently drop the link.
       if (input.linkAssetName && liability?.id) {
-        const asset = profiles.find((p: any) => p.name.toLowerCase() === String(input.linkAssetName).toLowerCase().trim())
-          || profiles.find((p: any) => p.name.toLowerCase().includes(String(input.linkAssetName).toLowerCase()));
+        const linkName = String(input.linkAssetName).trim();
+        const linkLC = linkName.toLowerCase();
+        // Only consider real asset-like profile types as collateral candidates
+        // — never another liability, person, etc.
+        const ASSET_TYPES = new Set(["asset", "vehicle", "property", "investment", "account"]);
+        let asset = profiles.find((p: any) => ASSET_TYPES.has(p.type) && p.name.toLowerCase() === linkLC)
+          || profiles.find((p: any) => ASSET_TYPES.has(p.type) && p.name.toLowerCase().includes(linkLC));
+        // Auto-create a stub asset profile if nothing matched. Subtype is
+        // inferred from the name when possible so the right tab set lights up.
+        if (!asset) {
+          try {
+            const blob = linkLC;
+            // Infer profile type — prefer vehicle/property when obvious.
+            let stubType: string = "asset";
+            let stubKey: string | undefined;
+            if (/\b(car|truck|suv|sedan|coupe|tesla|honda|toyota|ford|chevy|bmw|audi|nissan|hyundai|kia|jeep|subaru|lexus|acura|mazda|volkswagen|porsche|motorcycle|bike|moto|atv|rv|boat|yacht|jet ski)\b/.test(blob)) stubType = "vehicle";
+            else if (/\b(home|house|condo|apartment|duplex|property|land|street|avenue|ave|st\.|drive|dr\.|road|rd\.|lane|ln\.)\b/.test(blob)) stubType = "property";
+            else if (/\b(visa|mastercard|amex|sapphire|freedom|discover|credit card)\b/.test(blob)) { stubType = "asset"; stubKey = "credit_card"; }
+            else if (/\b(checking|savings|bank|chase account|wells fargo)\b/.test(blob)) { stubType = "asset"; stubKey = "bank_account"; }
+            else if (/\b(fridge|refrigerator|tv|television|laptop|macbook|iphone|console|playstation|xbox|nintendo|peloton|appliance|washer|dryer|oven|dishwasher)\b/.test(blob)) { stubType = "asset"; stubKey = "high_value_item"; }
+            const stubFields: Record<string, any> = {};
+            // Carry over rough financials so the asset's value reflects what's owed.
+            if (input.originalBalance != null) stubFields.purchasePrice = Number(input.originalBalance);
+            else if (input.currentBalance != null) stubFields.purchasePrice = Number(input.currentBalance);
+            asset = await storage.createProfile({
+              type: stubType,
+              type_key: stubKey,
+              name: linkName,
+              fields: stubFields,
+              notes: `Auto-created from liability "${input.name}" — update with details when ready.`,
+              tags: [],
+              parentProfileId,
+            } as any);
+            logger.info("ai", `auto-created stub asset "${linkName}" (${stubType}${stubKey ? `:${stubKey}` : ''}) for liability link`);
+          } catch (e: any) {
+            logger.warn("ai", `auto-create stub asset failed: ${e?.message}`);
+          }
+        }
         if (asset && asset.id !== liability.id) {
           try {
             await storage.createLiabilityAssetLink({

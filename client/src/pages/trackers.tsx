@@ -1718,7 +1718,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col"
+      className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col h-[140px]"
       style={{
         background: `linear-gradient(160deg, hsl(${catAccent} / 0.14) 0%, hsl(var(--card)) 45%)`,
         border: `1px solid hsl(${catAccent} / 0.2)`,
@@ -4689,7 +4689,7 @@ export default function TrackersPage() {
                   const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
                   return (
                     <Link key={liab.id} href={`/profiles/${liab.id}`}>
-                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`liab-card-${liab.id}`}>
+                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col h-[140px]" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`liab-card-${liab.id}`}>
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                           <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><TrendingDown className="h-3.5 w-3.5" /></div>
                           <p className="text-[10px] font-bold text-foreground truncate">{liab.name}</p>
@@ -4885,7 +4885,7 @@ export default function TrackersPage() {
                         const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
                         const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
                         return (
-                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)}>
+                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col h-[140px]" style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)}>
                             <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                               <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
                               <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>

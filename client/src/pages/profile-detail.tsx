@@ -6081,6 +6081,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6124,6 +6125,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6136,6 +6138,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6169,6 +6172,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   bank_account: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
@@ -6177,6 +6181,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   credit_card: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
@@ -6185,6 +6190,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   digital_asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "access", label: "Access", testId: "tab-access" },
     { value: "billing", label: "Billing", testId: "tab-billing" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6193,6 +6199,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   business: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Financials", testId: "tab-finances" },
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6201,6 +6208,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   collectible: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "valuation", label: "Valuation", testId: "tab-valuation" },
     { value: "finances", label: "History", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6216,6 +6224,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   high_value_item: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -7758,6 +7767,296 @@ function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOp
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// AssetLinkedLiabilitiesTab
+// ─────────────────────────────────────────────────────────────────────
+// Shown on asset / vehicle / property profiles. Lists every liability whose
+// `liability_asset_links` row points to *this* asset (many-to-many: a single
+// liability can be linked to multiple assets, and an asset can carry multiple
+// liabilities). Mirrors the LinkedLiabilitiesTab but uses the asset-side reverse
+// query and the liability_asset_links endpoints (collateral / secured_by) instead
+// of the party (ownership) endpoints.
+// ─────────────────────────────────────────────────────────────────────
+function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+
+  // Reverse query: every link row whose asset_profile_id is this profile.
+  const { data: assetLinks = [], refetch: refetchAssetLinks } = useQuery<any[]>({
+    queryKey: ["/api/assets", profileId, "liabilities"],
+    queryFn: () => apiRequest("GET", `/api/assets/${profileId}/liabilities`).then(r => r.json()),
+  });
+  const { data: allProfiles = [], refetch: refetchAllProfiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+
+  // Resolve link rows -> liability profiles. Drop dangling rows (deleted liability).
+  const liabilities = (assetLinks || [])
+    .map((link: any) => {
+      const lp = (allProfiles || []).find((p: any) => p.id === link.liabilityProfileId);
+      if (!lp) return null;
+      return { link, profile: lp };
+    })
+    .filter(Boolean) as Array<{ link: any; profile: any }>;
+  liabilities.sort((a, b) => (a.profile.name || "").localeCompare(b.profile.name || ""));
+
+  // ── totals (debt this asset secures) ────────────────────────────────
+  // Each link can specify a fractional ownership_percentage that scales how
+  // much of the liability balance this asset "secures". Sum that share so the
+  // header totals make sense even when one liability is split across two
+  // pieces of collateral (e.g. 60% car / 40% boat).
+  const totalSecuredBalance = liabilities.reduce((s, x) => {
+    const f = x.profile.fields || {};
+    const fin = f.finance || {};
+    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const pct = Number(x.link.ownershipPercentage ?? 100);
+    return s + (bal * pct) / 100;
+  }, 0);
+  const totalSecuredMonthly = liabilities.reduce((s, x) => {
+    const f = x.profile.fields || {};
+    const fin = f.finance || {};
+    const m = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
+    const pct = Number(x.link.ownershipPercentage ?? 100);
+    return s + (m * pct) / 100;
+  }, 0);
+
+  // ── unlink (remove the asset from a liability) ─────────────────────
+  const unlinkMutation = useMutation({
+    mutationFn: async (linkId: string) => {
+      await apiRequest("DELETE", `/api/liability-asset-links/${linkId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Unlinked" });
+      refetchAssetLinks();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to unlink", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // ── link existing liability to this asset ──────────────────────────
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkSearch, setLinkSearch] = useState("");
+  const [linkPct, setLinkPct] = useState("100");
+  const [pendingLiabilityId, setPendingLiabilityId] = useState<string | null>(null);
+
+  const linkedIds = new Set(liabilities.map(x => x.profile.id));
+  const candidateLiabilities = (allProfiles || [])
+    .filter((p: any) => p.type === "liability" || p.type === "loan")
+    .filter((p: any) => !linkedIds.has(p.id))
+    .filter((p: any) => !linkSearch.trim() || (p.name || "").toLowerCase().includes(linkSearch.toLowerCase()))
+    .slice(0, 50);
+
+  const linkMutation = useMutation({
+    mutationFn: async () => {
+      if (!pendingLiabilityId) throw new Error("No liability selected");
+      const pct = Math.max(0, Math.min(100, Number(linkPct) || 100));
+      await apiRequest("POST", "/api/liability-asset-links", {
+        liabilityProfileId: pendingLiabilityId,
+        assetProfileId: profileId,
+        ownershipPercentage: pct,
+        role: "collateral",
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Liability linked to asset" });
+      setLinkDialogOpen(false);
+      setPendingLiabilityId(null);
+      setLinkPct("100");
+      setLinkSearch("");
+      refetchAssetLinks();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      onChanged();
+    },
+    onError: (err: Error) => toast({ title: "Failed to link", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  // ── empty state ────────────────────────────────────────────────────
+  if (liabilities.length === 0) {
+    return (
+      <div className="space-y-3" data-testid="asset-liabilities-tab">
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setLinkDialogOpen(true)} data-testid="button-link-asset-liability-empty">
+                <Plus className="h-3 w-3 mr-1" /> Link Liability
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground text-center py-6">
+              No liabilities linked to this asset. Connect a mortgage, auto loan, financing plan, or any debt that this asset secures.
+            </p>
+          </CardContent>
+        </Card>
+        <LinkLiabilityDialog
+          open={linkDialogOpen}
+          onOpenChange={setLinkDialogOpen}
+          search={linkSearch}
+          setSearch={setLinkSearch}
+          candidates={candidateLiabilities}
+          pendingId={pendingLiabilityId}
+          setPendingId={setPendingLiabilityId}
+          pct={linkPct}
+          setPct={setLinkPct}
+          onSubmit={() => linkMutation.mutate()}
+          submitting={linkMutation.isPending}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3" data-testid="asset-liabilities-tab">
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <Badge variant="outline" className="text-xs" data-testid="badge-asset-liabilities-count">{liabilities.length}</Badge>
+              {totalSecuredBalance > 0 && (
+                <Badge variant="outline" className="text-xs text-red-500 border-red-500/30" data-testid="badge-asset-liabilities-balance">
+                  Secures {formatCurrency(totalSecuredBalance)}
+                </Badge>
+              )}
+              {totalSecuredMonthly > 0 && (
+                <Badge variant="outline" className="text-xs" data-testid="badge-asset-liabilities-monthly">
+                  {formatCurrency(totalSecuredMonthly)}/mo
+                </Badge>
+              )}
+            </div>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setLinkDialogOpen(true)} data-testid="button-link-asset-liability">
+              <Plus className="h-3 w-3 mr-1" /> Link
+            </Button>
+          </div>
+          <div className="divide-y divide-border/30">
+            {liabilities.map(({ link, profile: lp }) => (
+              <AssetLiabilityRow
+                key={link.id}
+                link={link}
+                liability={lp}
+                allProfiles={allProfiles}
+                refetchAll={() => { refetchAssetLinks(); refetchAllProfiles(); onChanged(); }}
+                onUnlink={() => unlinkMutation.mutate(link.id)}
+                onOpenLiability={() => navigate(`/profile/${lp.id}`)}
+              />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      <LinkLiabilityDialog
+        open={linkDialogOpen}
+        onOpenChange={setLinkDialogOpen}
+        search={linkSearch}
+        setSearch={setLinkSearch}
+        candidates={candidateLiabilities}
+        pendingId={pendingLiabilityId}
+        setPendingId={setPendingLiabilityId}
+        pct={linkPct}
+        setPct={setLinkPct}
+        onSubmit={() => linkMutation.mutate()}
+        submitting={linkMutation.isPending}
+      />
+    </div>
+  );
+}
+
+// ── Per-liability row on the asset side ─────────────────────────────
+// Same shape as LiabilityRow, but the bottom action says "Unlink from this
+// asset" so the user understands they're only severing the collateral
+// relationship — not deleting the liability or its other links.
+function AssetLiabilityRow({ link, liability, allProfiles: _allProfiles, refetchAll: _refetchAll, onUnlink, onOpenLiability }: {
+  link: any; liability: any; allProfiles: any[]; refetchAll: () => void; onUnlink: () => void; onOpenLiability: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+
+  const f = liability.fields || {};
+  const fin = f.finance || {};
+  const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+  const pct = Number(link.ownershipPercentage ?? 100);
+  const monthly = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
+  const securedShare = (bal * pct) / 100;
+  const role = String(link.role || "collateral");
+
+  return (
+    <div className="py-2" data-testid={`row-asset-liability-${liability.id}`}>
+      <div className="flex items-center justify-between gap-2 -mx-3 px-3 py-1 rounded">
+        <button
+          className="flex-1 min-w-0 flex items-center gap-2 hover:bg-muted/30 rounded px-1 -mx-1 py-1 text-left"
+          onClick={() => setExpanded(v => !v)}
+          data-testid={`button-expand-asset-liability-${liability.id}`}
+        >
+          <Pencil className="h-3 w-3 text-muted-foreground shrink-0" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium truncate">{liability.name}</p>
+            <p className="text-xs text-muted-foreground">
+              <span className="capitalize">{role.replace(/_/g, ' ')}</span> · {pct}% · {formatCurrency(securedShare)} of {formatCurrency(bal)}
+              {monthly > 0 && ` · ${formatCurrency((monthly * pct) / 100)}/mo`}
+            </p>
+          </div>
+        </button>
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onOpenLiability} data-testid={`button-open-asset-liability-${liability.id}`}>
+          Open
+        </Button>
+      </div>
+
+      {expanded && (
+        <div className="mt-2 ml-5 space-y-3 border-l-2 border-border/50 pl-3" data-testid={`detail-asset-liability-${liability.id}`}>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <p className="text-muted-foreground">Lender</p>
+              <p className="font-medium">{f.lender || fin.lender || '—'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">APR</p>
+              <p className="font-medium">{(() => {
+                const apr = Number(f.annualInterestRate ?? f.apr ?? fin.annualInterestRate ?? 0);
+                if (!apr) return '—';
+                return `${(apr < 1 ? apr * 100 : apr).toFixed(2)}%`;
+              })()}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Monthly</p>
+              <p className="font-medium">{monthly > 0 ? formatCurrency(monthly) : '—'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Role on this asset</p>
+              <p className="font-medium capitalize">{role.replace(/_/g, ' ')}</p>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-red-500 hover:text-red-600" onClick={() => setConfirmUnlink(true)} data-testid={`button-unlink-asset-${liability.id}`}>
+              <Trash2 className="h-3 w-3 mr-1" /> Unlink from this asset
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <AlertDialog open={confirmUnlink} onOpenChange={setConfirmUnlink}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlink liability from this asset?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the collateral link only — the liability itself, its payments, and any other linked assets are unchanged.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { onUnlink(); setConfirmUnlink(false); }} className="bg-red-500 hover:bg-red-600">
+              Unlink
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
 // ── Co-owners editor ────────────────────────────────────────────────
 function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
   liabilityId: string; coOwners: any[]; allProfiles: any[]; onChanged: () => void;
@@ -8177,6 +8476,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "valuation": return true;
         case "linked-subs": return true;
         case "linked-liabilities": return true;
+        case "asset-liabilities": return true;
         case "payments": return true;
         default: return false;
       }
@@ -8186,7 +8486,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "asset-liabilities", "payments"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -9261,6 +9561,12 @@ export default function ProfileDetailPage() {
               {tabValues.has("linked-liabilities") && (
                 <TabsContent value="linked-liabilities" className="mt-4 px-1 sm:px-0">
                   <LinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {tabValues.has("asset-liabilities") && (
+                <TabsContent value="asset-liabilities" className="mt-4 px-1 sm:px-0">
+                  <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
