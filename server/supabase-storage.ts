@@ -657,6 +657,51 @@ export class SupabaseStorage implements IStorage {
     // Auto-generate calendar events from profile date fields
     await this.autoGenerateProfileEvents(id, data.type, data.name, data.fields || {});
 
+    // ---- Default-ownership-to-self hook ----
+    // For new asset/liability profiles, auto-link the user's self profile at 100%
+    // ownership when no explicit ownership is provided. Best-effort — must not
+    // break the create response if it fails.
+    try {
+      const assetTypes = new Set(["asset", "vehicle", "property"]);
+      const liabilityTypes = new Set(["liability", "loan"]);
+      const isAsset = assetTypes.has(data.type);
+      const isLiability = liabilityTypes.has(data.type);
+      if (isAsset || isLiability) {
+        const selfProfile = await this.getSelfProfile();
+        if (selfProfile && selfProfile.id !== id) {
+          if (isAsset) {
+            const existing = await this.getAssetPartyLinks(id).catch(() => [] as any[]);
+            const already = (existing || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            if (!already) {
+              await this.createAssetPartyLink({
+                assetProfileId: id,
+                partyProfileId: selfProfile.id,
+                ownershipPercentage: 100,
+                role: "owner",
+              } as any).catch((e: any) => {
+                console.warn("[auto-ownership/storage] asset link failed:", e?.message || e);
+              });
+            }
+          } else if (isLiability) {
+            const existing = await this.getLiabilityProfileLinks(id).catch(() => [] as any[]);
+            const already = (existing || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            if (!already) {
+              await this.createLiabilityProfileLink({
+                liabilityProfileId: id,
+                partyProfileId: selfProfile.id,
+                ownershipPercentage: 100,
+                role: "owner",
+              } as any).catch((e: any) => {
+                console.warn("[auto-ownership/storage] liability link failed:", e?.message || e);
+              });
+            }
+          }
+        }
+      }
+    } catch (autoOwnErr: any) {
+      console.warn("[auto-ownership/storage] hook failed:", autoOwnErr?.message || autoOwnErr);
+    }
+
     return (await this.getProfile(id))!;
   }
 

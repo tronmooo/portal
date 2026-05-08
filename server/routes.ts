@@ -1202,6 +1202,58 @@ export async function registerRoutes(
     const created = await storage.createProfile(parsed.data);
     bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
 
+    // ---- Default-ownership-to-self hook ----
+    // When a new asset/liability is created without explicit ownership info,
+    // auto-link the account holder's self profile at 100% ownership.
+    // Best-effort — never blocks/fails the create response.
+    try {
+      const assetTypes = new Set(["asset", "vehicle", "property"]);
+      const liabilityTypes = new Set(["liability", "loan"]);
+      const isAsset = assetTypes.has(created.type);
+      const isLiability = liabilityTypes.has(created.type);
+      // Skip if caller explicitly provided ownership info
+      const hasExplicitOwnership =
+        Array.isArray((req.body as any).partyLinks) ||
+        Array.isArray((req.body as any).owners) ||
+        (req.body as any).partyProfileId ||
+        (req.body as any).ownerProfileId;
+      if ((isAsset || isLiability) && !hasExplicitOwnership) {
+        const selfProfile = existing.find(p => p.type === "self");
+        if (selfProfile) {
+          if (isAsset) {
+            // Idempotent: skip if a link already exists
+            const existingLinks = await storage.getAssetPartyLinks(created.id).catch(() => []);
+            const already = (existingLinks || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            if (!already) {
+              await storage.createAssetPartyLink({
+                assetProfileId: created.id,
+                partyProfileId: selfProfile.id,
+                ownershipPercentage: 100,
+                role: "owner",
+              } as any).catch((e: any) => {
+                console.warn("[auto-ownership] asset link failed:", e?.message || e);
+              });
+            }
+          } else if (isLiability) {
+            const existingLinks = await storage.getLiabilityProfileLinks(created.id).catch(() => []);
+            const already = (existingLinks || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            if (!already) {
+              await storage.createLiabilityProfileLink({
+                liabilityProfileId: created.id,
+                partyProfileId: selfProfile.id,
+                ownershipPercentage: 100,
+                role: "owner",
+              } as any).catch((e: any) => {
+                console.warn("[auto-ownership] liability link failed:", e?.message || e);
+              });
+            }
+          }
+        }
+      }
+    } catch (autoOwnErr: any) {
+      console.warn("[auto-ownership] hook failed:", autoOwnErr?.message || autoOwnErr);
+    }
+
     // ---- Location auto-attach hook ----
     // If the new profile has a name AND a parentProfileId, look at all siblings
     // (same parentProfileId, same userId, not this profile, not soft-deleted).
