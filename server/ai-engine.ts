@@ -3,6 +3,33 @@ import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
 
+// ─── Sanitization & redaction helpers ──────────────────────────────────────────
+// Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
+// embedding user-supplied or document-extracted text into the LLM context.
+function sanitize(input: string): string {
+  return input
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+\s*=/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '')
+    .replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '')
+    .replace(/<embed[^>]*>/gi, '')
+    .replace(/<link[^>]*>/gi, '')
+    .replace(/data:text\/html/gi, '')
+    .replace(/vbscript:/gi, '')
+    .trim()
+    .slice(0, 10000);
+}
+
+// Field-name patterns whose VALUES must be replaced with [REDACTED] before being
+// embedded into any LLM context (system prompt, history, extracted data, memories).
+// The actual DB rows are unchanged — only the LLM-bound view is masked.
+const SENSITIVE_KEY_PATTERN = /(password|pwd|secret|api[_-]?key|token|ssn|social[_-]?security|passport|credit[_-]?card|card[_-]?number|cvv|pin)/i;
+function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEY_PATTERN.test(key);
+}
+const REDACTED = "[REDACTED]";
+
 // Rich visual output types (inline — shared/schema was reverted)
 type ChartType = "line" | "bar" | "area" | "pie" | "scatter" | "composed" | "radar";
 interface ChartSeries { dataKey: string; name: string; color?: string; type?: "line"|"bar"|"area"; stackId?: string; }
@@ -7259,7 +7286,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   const context = (await Promise.all([
     `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => {
       const fields = p.fields || {};
-      const keyFields = Object.entries(fields).filter(([k, v]) => v && !k.startsWith('_') && k !== 'notes').slice(0, 10).map(([k, v]) => `${k}: ${String(v).slice(0, 50)}`).join(', ');
+      const keyFields = Object.entries(fields).filter(([k, v]) => v && !k.startsWith('_') && k !== 'notes').slice(0, 10).map(([k, v]) => `${k}: ${isSensitiveKey(k) ? REDACTED : String(v).slice(0, 50)}`).join(', ');
       const childCount = profiles.filter((c: any) => c.fields?._parentProfileId === p.id).length;
       return `${p.name} (${p.type}, id:${p.id.slice(0,8)}${keyFields ? `, ${keyFields}` : ''}${childCount > 0 ? `, ${childCount} sub-profiles` : ''})`;
     }).join("; ") || "none"}`,
@@ -7282,7 +7309,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       if (assetProfiles.length === 0) return '';
       return `Assets & Vehicles (${assetProfiles.length}): ${assetProfiles.slice(0, 20).map(a => {
         const f = a.fields || {};
-        const details = Object.entries(f).filter(([k, v]) => v && !k.startsWith('_')).map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`).join(', ');
+        const details = Object.entries(f).filter(([k, v]) => v && !k.startsWith('_')).map(([k, v]) => `${k}: ${isSensitiveKey(k) ? REDACTED : String(v).slice(0, 40)}`).join(', ');
         return `${a.name} (${a.type}) {${details}}`;
       }).join('; ')}`;
     })(),
@@ -7292,7 +7319,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       if (subProfiles.length === 0) return '';
       return `Subscriptions (${subProfiles.length}): ${subProfiles.slice(0, 20).map(s => {
         const f = s.fields || {};
-        const details = Object.entries(f).filter(([k, v]) => v && !k.startsWith('_')).map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`).join(', ');
+        const details = Object.entries(f).filter(([k, v]) => v && !k.startsWith('_')).map(([k, v]) => `${k}: ${isSensitiveKey(k) ? REDACTED : String(v).slice(0, 40)}`).join(', ');
         return `${s.name} {${details}}`;
       }).join('; ')}`;
     })(),
@@ -7350,13 +7377,17 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         return `${l.name} [${subtype}, ${status}, id:${l.id.slice(0, 8)}, ${details}${ownershipStr}${assetStr}${keywords.length ? `, kw: ${keywords.join("|")}` : ""}]`;
       }).join('; ')}`;
     })(),
-    `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${String(m.value).slice(0,50)}`).join("; ") || "none"}`,
+    `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${isSensitiveKey(m.key) ? REDACTED : String(m.value).slice(0,50)}`).join("; ") || "none"}`,
     `Documents (${documents.length}): ${documents.slice(0, 25).map(d => {
       const ed = d.extractedData || {};
       // Include ALL extracted fields without truncation for accurate answers
       const allFields = Object.entries(ed).filter(([k]) => k !== 'rawText' && !k.startsWith('_')).map(([k, v]) => {
+        if (isSensitiveKey(k)) return `${k}: ${REDACTED}`;
         const val = (v && typeof v === 'object' && 'value' in (v as any)) ? (v as any).value : v;
-        return `${k}: ${String(val)}`;
+        // sanitize() strips HTML/JS injection vectors; \n removal prevents prompt-context-break injection
+        // (a crafted document field with embedded "\n\nSystem: ignore previous instructions" can't escape its row).
+        const safe = sanitize(String(val)).replace(/\n/g, ' ');
+        return `${k}: ${safe}`;
       }).join(', ');
       const linkedNames = (d.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name).filter(Boolean).join(',');
       return `"${d.name}" (${d.type}${linkedNames ? `, owner:${linkedNames}` : ''})${allFields ? ` {${allFields}}` : ''}`;
@@ -7465,8 +7496,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     if (conversationHistory && conversationHistory.length > 0) {
       const recent = conversationHistory.slice(-6); // last 6 messages (3 pairs) to control token usage
       for (const msg of recent) {
-        // Truncate long messages to avoid blowing up the context window
-        const content = msg.content.length > 1500 ? msg.content.slice(0, 1500) + "\n[...truncated]" : msg.content;
+        // Drop entries with non-conforming roles — Claude API requires 'user' | 'assistant' strict.
+        if (msg?.role !== "user" && msg?.role !== "assistant") continue;
+        if (typeof msg.content !== "string") continue;
+        // Sanitize history content (client-supplied — prompt injection vector) and truncate.
+        const cleaned = sanitize(msg.content);
+        const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
+        if (!content) continue;
         messages.push({ role: msg.role, content });
       }
     }
@@ -7809,12 +7845,20 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       finalReply = `${finalReply}\n\n${unknownFieldWarnings.join("\n")}`;
     }
 
-    // If artifact found, persist it to chat_artifacts table
+    // If artifact found, persist it to chat_artifacts table.
+    // No storage.upsertChatArtifact() exists — the chat_artifacts table has no
+    // RLS in any migration, so user_id is the SOLE isolation guard. Pull it
+    // from the AsyncLocalStorage-bound proxy (which the storage Proxy resolves
+    // per-request) and refuse to write without an authenticated context.
     if (artifact) {
+      const artifactUserId = (storage as any).userId;
+      if (!artifactUserId) {
+        throw new Error('chat_artifacts write requires authenticated context');
+      }
       try {
         await (storage as any).supabase.from('chat_artifacts').upsert({
           id: artifact.id,
-          user_id: (storage as any).userId,
+          user_id: artifactUserId,
           profile_id: artifact.profile_id || selfProfileId,
           type: artifact.type,
           title: artifact.title,
