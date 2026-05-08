@@ -1,6 +1,9 @@
 import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { createClient } from "@supabase/supabase-js";
+import { execFile } from "child_process";
+import { promisify } from "util";
+const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 
 /** Extract user timezone from request header, with fallback */
@@ -4506,8 +4509,6 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // ---- Google Calendar Sync ----
   app.post("/api/calendar/sync", asyncHandler(async (req, res) => {
     try {
-      const { execFileSync } = require("child_process");
-
       // Determine date range — sync 2 months (1 month back, 1 month forward)
       const now = new Date();
       const startDate = new Date(now);
@@ -4531,13 +4532,18 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       let gcalResult: any;
       try {
-        const stdout = execFileSync("external-tool", ["call", params], {
+        const { stdout } = await execFileAsync("external-tool", ["call", params], {
           timeout: 30000,
+          maxBuffer: 10_000_000,
           encoding: "utf-8",
         });
         gcalResult = JSON.parse(stdout);
       } catch (err: any) {
         console.error("Google Calendar fetch failed:", err.message);
+        // promisified execFile signals a timeout via the SIGTERM signal.
+        if (err?.signal === "SIGTERM" || err?.killed === true || err?.code === "ETIMEDOUT") {
+          return res.status(504).json({ error: "Calendar sync timed out" });
+        }
         return res.status(502).json({ error: "Failed to connect to Google Calendar. Please try again." });
       }
 
@@ -4645,7 +4651,6 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // Export a Portol event to Google Calendar
   app.post("/api/calendar/export/:id", asyncHandler(async (req, res) => {
     try {
-      const { execFileSync } = require("child_process");
       const event = await storage.getEvent(req.params.id);
       if (!event) return res.status(404).json({ error: "Event not found" });
 
@@ -4695,10 +4700,19 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         },
       });
 
-      const stdout = execFileSync("external-tool", ["call", params], {
-        timeout: 30000,
-        encoding: "utf-8",
-      });
+      let stdout: string;
+      try {
+        ({ stdout } = await execFileAsync("external-tool", ["call", params], {
+          timeout: 30000,
+          maxBuffer: 10_000_000,
+          encoding: "utf-8",
+        }));
+      } catch (err: any) {
+        if (err?.signal === "SIGTERM" || err?.killed === true || err?.code === "ETIMEDOUT") {
+          return res.status(504).json({ error: "Calendar sync timed out" });
+        }
+        throw err;
+      }
       let result: any;
       try {
         result = JSON.parse(stdout);
