@@ -30,6 +30,8 @@ import {
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 
+const DOCUMENTS_BUCKET = "documents";
+
 /**
  * Parse a money-ish value into a number. Handles strings like "$25,000", "40k", "1.2m".
  * Number("$25,000") returns NaN — this is the root cause of asset values showing $0.
@@ -2112,6 +2114,7 @@ export class SupabaseStorage implements IStorage {
   // DOCUMENTS
   // ============================================================
   async getDocuments(): Promise<Document[]> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     // PERF: Exclude file_data from list queries — base64 blobs can be 10MB+ each.
     // Only getDocument(id) returns file_data when specifically needed.
     const { data, error } = await this.supabase.from("documents")
@@ -2124,6 +2127,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getDocument(id: string): Promise<Document | undefined> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     const { data, error } = await this.supabase.from("documents").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const doc = this.rowToDocument(data);
@@ -2132,7 +2136,7 @@ export class SupabaseStorage implements IStorage {
     if (doc.storagePath && !doc.fileData) {
       try {
         const { data: blob, error: dlErr } = await this.supabase.storage
-          .from('documents')
+          .from(DOCUMENTS_BUCKET)
           .download(doc.storagePath);
         if (dlErr) {
           console.error(`[getDocument] Storage download failed for ${doc.storagePath}:`, dlErr.message);
@@ -2153,6 +2157,10 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createDocument(data: any): Promise<Document> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    if (data.fileData && typeof data.fileData === 'string' && data.fileData.length > 12_000_000) {
+      throw new Error('File too large (max ~9MB decoded)');
+    }
     // TODO (Supabase Storage migration): This method attempts to upload file data
     // to a Supabase Storage bucket named 'documents'. The bucket must be created
     // manually in the Supabase dashboard (Storage > New bucket > "documents",
@@ -2172,7 +2180,7 @@ export class SupabaseStorage implements IStorage {
         const storagePath2 = `${this.userId}/${id}.${getExtension(data.mimeType)}`;
         const buffer = Buffer.from(data.fileData, 'base64');
         const { error: uploadError } = await this.supabase.storage
-          .from('documents')
+          .from(DOCUMENTS_BUCKET)
           .upload(storagePath2, buffer, {
             contentType: data.mimeType,
             upsert: true,
@@ -2212,6 +2220,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     const existing = await this.getDocument(id);
     if (!existing) return undefined;
     if (data.linkedProfiles) {
@@ -2249,6 +2258,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteDocument(id: string): Promise<boolean> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     // Capture storage_path BEFORE we mutate the row — we need it to remove the
     // underlying file from the Supabase Storage bucket. Without this, deleted
     // documents leave their files behind in the bucket forever, silently
@@ -2277,8 +2287,9 @@ export class SupabaseStorage implements IStorage {
     }
     // Clean junction table
     await this.supabase.from("profile_documents").delete().eq("document_id", id).eq("user_id", this.userId);
-    // Soft delete the document
-    const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    // Soft delete the document. Clear file_data to remove residual base64 PII
+    // from the row (the underlying Storage blob is removed below).
+    const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString(), file_data: '' }).eq("id", id).eq("user_id", this.userId);
     if (error) {
       console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
       return false;
@@ -2288,7 +2299,7 @@ export class SupabaseStorage implements IStorage {
     // user-visible delete. We log but don't fail — the row is already gone.
     if (storagePathToRemove) {
       try {
-        const { error: rmErr } = await this.supabase.storage.from("documents").remove([storagePathToRemove]);
+        const { error: rmErr } = await this.supabase.storage.from(DOCUMENTS_BUCKET).remove([storagePathToRemove]);
         if (rmErr) console.error(`[deleteDocument] Storage remove failed for ${storagePathToRemove}:`, rmErr.message);
       } catch (e: any) {
         console.error(`[deleteDocument] Storage remove exception for ${storagePathToRemove}:`, e.message);
@@ -2298,6 +2309,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getDocumentsForProfile(profileId: string): Promise<Document[]> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     const allDocs = await this.getDocuments();
     return allDocs.filter(d => d.linkedProfiles.includes(profileId));
   }
@@ -2324,7 +2336,7 @@ export class SupabaseStorage implements IStorage {
         const path = `${this.userId}/${doc.id}/${safeName}`;
         const buffer = Buffer.from(doc.file_data, 'base64');
         const { error: uploadErr } = await this.supabase.storage
-          .from('documents')
+          .from(DOCUMENTS_BUCKET)
           .upload(path, buffer, { contentType: doc.mime_type || 'application/octet-stream', upsert: true });
         if (uploadErr) {
           errors.push(`${doc.id}: ${uploadErr.message}`);

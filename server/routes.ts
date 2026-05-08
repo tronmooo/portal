@@ -35,6 +35,7 @@ import {
   insertLiabilityProfileLinkSchema,
   insertLiabilityPaymentSchema,
   insertAssetPartyLinkSchema,
+  insertDocumentSchema,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
@@ -100,6 +101,41 @@ function setCache(key: string, data: any, ttlMs: number = 10000): void {
 function clearAllCache(): void {
   responseCache.clear();
 }
+
+// Verify a client-supplied entity id belongs to the current user.
+// Returns true if owned, false if not owned or unknown entity type.
+async function verifyEntityOwnership(entityType: string, entityId: string): Promise<boolean> {
+  if (!entityId || typeof entityId !== "string") return false;
+  switch (entityType) {
+    case "expense":     return !!(await storage.getExpense(entityId));
+    case "task":        return !!(await storage.getTask(entityId));
+    case "document":    return !!(await storage.getDocument(entityId));
+    case "event":       return !!(await storage.getEvent(entityId));
+    case "tracker":     return !!(await storage.getTracker(entityId));
+    case "habit":       return !!(await storage.getHabit(entityId));
+    case "goal":        return !!(await storage.getGoal(entityId));
+    case "obligation":  return !!(await storage.getObligation(entityId));
+    case "artifact":    return !!(await storage.getArtifact(entityId));
+    case "profile":     return !!(await storage.getProfile(entityId));
+    case "journal": {
+      const list = await storage.getJournalEntries();
+      return list.some((j: any) => j.id === entityId);
+    }
+    case "domain": {
+      const list = await storage.getDomains();
+      return list.some((d: any) => d.id === entityId);
+    }
+    case "memory": {
+      const list = await storage.getMemories();
+      return list.some((m: any) => m.id === entityId);
+    }
+    default:
+      return false;
+  }
+}
+const KNOWN_ENTITY_TYPES = new Set([
+  "expense","task","document","event","tracker","habit","goal","obligation","artifact","profile","journal","domain","memory"
+]);
 
 // Middleware: clear server cache on ANY mutation (POST/PATCH/PUT/DELETE)
 // This ensures deleted documents, updated profiles, etc. are immediately reflected.
@@ -644,6 +680,20 @@ export async function registerRoutes(
       const { extractionId, confirmedFields, targetProfileId, createCalendarEvents, trackerEntries } = req.body;
       if (!extractionId) {
         return res.status(400).json({ error: "extractionId required" });
+      }
+
+      // Ownership: extractionId must point to a document owned by this user.
+      const extractionDoc = await storage.getDocument(extractionId);
+      if (!extractionDoc) {
+        return res.status(404).json({ error: "Resource not found" });
+      }
+
+      // If a targetProfileId was supplied by the client, verify it belongs to this user.
+      if (targetProfileId) {
+        const ownedProfile = await storage.getProfile(targetProfileId);
+        if (!ownedProfile) {
+          return res.status(404).json({ error: "Resource not found" });
+        }
       }
 
       log.info(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
@@ -1293,6 +1343,11 @@ export async function registerRoutes(
   }));
   app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
     const uid_p2 = (req as AuthenticatedRequest).userId || "anon";
+    {
+      const parsed = insertProfileSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
@@ -1381,9 +1436,15 @@ export async function registerRoutes(
   app.post("/api/profiles/:id/link", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
     if (!entityType || !entityId) return res.status(400).json({ error: "entityType and entityId required" });
-    // Verify profile exists
+    if (!KNOWN_ENTITY_TYPES.has(entityType)) {
+      return res.status(400).json({ error: "Validation failed: unknown entityType" });
+    }
+    // Verify profile exists and is owned by user
     const profile = await storage.getProfile(req.params.id);
-    if (!profile) return res.status(404).json({ error: "Profile not found" });
+    if (!profile) return res.status(404).json({ error: "Resource not found" });
+    // Verify the entity being linked belongs to this user
+    const entityOwned = await verifyEntityOwnership(entityType, entityId);
+    if (!entityOwned) return res.status(404).json({ error: "Resource not found" });
     try {
       await storage.linkProfileTo(req.params.id, entityType, entityId);
       // Auto-propagate document links up the profile chain
@@ -1788,6 +1849,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(created);
   }));
   app.patch("/api/trackers/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertTrackerSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
         return res.status(400).json({ error: "Tracker name must be a non-empty string" });
@@ -1947,6 +2013,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(newTask);
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertTaskSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || req.body.title.trim() === "") {
         return res.status(400).json({ error: "Task title must be a non-empty string" });
@@ -2109,6 +2180,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(newExpense);
   }));
   app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertExpenseSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.amount !== undefined && (typeof req.body.amount !== "number" || req.body.amount <= 0)) {
       return res.status(400).json({ error: "Expense amount must be a positive number" });
     }
@@ -2336,7 +2412,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
-    res.json(doc);
+    // Strip base64 fileData from JSON response — clients fetch binary via /file.
+    const { fileData, ...docMeta } = doc;
+    res.json(docMeta);
   }));
   app.post("/api/documents", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
@@ -2375,6 +2453,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
   app.get("/api/profiles/:id/documents", asyncHandler(async (req, res) => {
+    // Pre-check: verify the profile belongs to the requester before returning
+    // any docs linked to it, otherwise an attacker can enumerate another user's
+    // documents by guessing profile UUIDs.
+    const profile = await storage.getProfile(req.params.id);
+    if (!profile) return res.status(404).json({ error: "Resource not found" });
     res.json(await storage.getDocumentsForProfile(req.params.id));
   }));
 
@@ -2386,7 +2469,17 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.setHeader("Content-Type", doc.mimeType);
     // Sanitize filename: strip all non-alphanumeric except dots, hyphens, underscores
     const safeName = (doc.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
-    res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+    // Defence against MIME-confused script execution: force download for active
+    // content types and strip browser sniffing on every response.
+    const activeMime = new Set([
+      "text/html",
+      "image/svg+xml",
+      "application/xhtml+xml",
+    ]);
+    const disposition = activeMime.has((doc.mimeType || "").toLowerCase()) ? "attachment" : "inline";
+    res.setHeader("Content-Disposition", `${disposition}; filename="${safeName}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'");
     res.setHeader("Content-Length", buffer.length.toString());
     res.send(buffer);
   }));
@@ -2400,7 +2493,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Document not found" });
 
-    const RESEND_KEY = "re_ZrZvoDut_AQq9fXrvDnkSxuJViQjjChwQ";
+    const RESEND_KEY = process.env.RESEND_API_KEY;
+    if (!RESEND_KEY) {
+      console.error('[email] RESEND_API_KEY env var not set');
+      return res.status(503).json({ error: "Email service not configured" });
+    }
 
     // Build file extension for attachment filename
     const mimeExtMap: Record<string, string> = {
@@ -3250,7 +3347,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Data Cleanup ----
   // Migrate base64 documents from DB to Supabase Storage
-  app.post("/api/cleanup/migrate-documents-to-storage", asyncHandler(async (_req, res) => {
+  app.post("/api/cleanup/migrate-documents-to-storage", asyncHandler(async (req, res) => {
+    if (req.body?.confirm !== "MIGRATE") {
+      return res.status(400).json({ error: "Migration requires confirmation parameter" });
+    }
     const result = await storage.migrateDocumentsToStorage();
     res.json(result);
   }));
@@ -4130,6 +4230,17 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     try {
       const parsed = insertEntityLinkSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid request data" });
+      // Verify both endpoints of the link belong to this user — otherwise
+      // an attacker can create cross-user links pointing at foreign UUIDs.
+      const { sourceType, sourceId, targetType, targetId } = parsed.data as any;
+      if (!KNOWN_ENTITY_TYPES.has(sourceType) || !KNOWN_ENTITY_TYPES.has(targetType)) {
+        return res.status(400).json({ error: "Validation failed: unknown entity type" });
+      }
+      const [srcOwned, tgtOwned] = await Promise.all([
+        verifyEntityOwnership(sourceType, sourceId),
+        verifyEntityOwnership(targetType, targetId),
+      ]);
+      if (!srcOwned || !tgtOwned) return res.status(404).json({ error: "Resource not found" });
       const link = await storage.createEntityLink(parsed.data);
       res.json(link);
     } catch (err: any) {
@@ -4241,7 +4352,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     const { data, error } = await (storage as any).supabase
       .from("audit_log")
       .select("*")
-      .eq("user_id", (storage as any).userId)
+      .eq("user_id", (req as AuthenticatedRequest).userId)
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
     if (error) { console.error("[api]", error.message); return res.status(500).json({ error: "Failed to load data" }); }
@@ -4279,7 +4390,18 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     try {
       const { value } = req.body;
       if (typeof value !== "string") return res.status(400).json({ error: "value (string) required" });
-      await storage.setPreference(req.params.key, value);
+      // Block writes to sensitive / system-managed preference keys to prevent
+      // clients from overwriting OAuth tokens or onboarding state.
+      const key = req.params.key;
+      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_"];
+      const PREF_KEY_DENYLIST = new Set([
+        "gcal_refresh_token", "gcal_access_token",
+        "onboarding_completed", "ai_digest", "admin_override",
+      ]);
+      if (PREF_KEY_DENYLIST.has(key) || PREF_KEY_PREFIX_DENY.some(p => key.startsWith(p))) {
+        return res.status(400).json({ error: "Validation failed: preference key is reserved" });
+      }
+      await storage.setPreference(key, value);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to set preference" });
@@ -4561,7 +4683,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     const { data, error } = await (storage as any).supabase
       .from('chat_artifacts')
       .select('*')
-      .eq('user_id', (storage as any).userId)
+      .eq('user_id', (req as AuthenticatedRequest).userId)
       .order('created_at', { ascending: false });
     if (error) throw error;
     let results = data || [];
@@ -4576,7 +4698,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       .from('chat_artifacts')
       .delete()
       .eq('id', req.params.id)
-      .eq('user_id', (storage as any).userId);
+      .eq('user_id', (req as AuthenticatedRequest).userId);
     res.json({ success: true });
   }));
 
@@ -4596,6 +4718,12 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.post("/api/liability-asset-links", asyncHandler(async (req, res) => {
     const parsed = insertLiabilityAssetLinkSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    // Ownership: both profiles referenced must belong to the requester.
+    const [liabOwned, assetOwned] = await Promise.all([
+      storage.getProfile(parsed.data.liabilityProfileId),
+      storage.getProfile(parsed.data.assetProfileId),
+    ]);
+    if (!liabOwned || !assetOwned) return res.status(404).json({ error: "Resource not found" });
     const row = await storage.createLiabilityAssetLink(parsed.data);
     res.json(row);
   }));
@@ -4621,6 +4749,11 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.post("/api/liability-profile-links", asyncHandler(async (req, res) => {
     const parsed = insertLiabilityProfileLinkSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const [liabOwned, partyOwned] = await Promise.all([
+      storage.getProfile(parsed.data.liabilityProfileId),
+      storage.getProfile(parsed.data.partyProfileId),
+    ]);
+    if (!liabOwned || !partyOwned) return res.status(404).json({ error: "Resource not found" });
     const row = await storage.createLiabilityProfileLink(parsed.data);
     res.json(row);
   }));
@@ -4640,6 +4773,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     res.json(rows);
   }));
   app.post("/api/liabilities/:id/payments", asyncHandler(async (req, res) => {
+    // Ownership: the liability profile must belong to the requester.
+    const liability = await storage.getProfile(req.params.id);
+    if (!liability) return res.status(404).json({ error: "Resource not found" });
     const parsed = insertLiabilityPaymentSchema.safeParse({ ...req.body, liabilityProfileId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     const row = await storage.createLiabilityPayment(parsed.data);
@@ -4670,6 +4806,11 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.post("/api/asset-party-links", asyncHandler(async (req, res) => {
     const parsed = insertAssetPartyLinkSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const [assetOwned, partyOwned] = await Promise.all([
+      storage.getProfile(parsed.data.assetProfileId),
+      storage.getProfile(parsed.data.partyProfileId),
+    ]);
+    if (!assetOwned || !partyOwned) return res.status(404).json({ error: "Resource not found" });
     const row = await storage.createAssetPartyLink(parsed.data);
     res.json(row);
   }));
@@ -4700,6 +4841,9 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   app.post("/api/relationships/move-liability", asyncHandler(async (req, res) => {
     const { linkId, toAssetId, note } = req.body || {};
     if (!linkId || !toAssetId) return res.status(400).json({ error: "linkId and toAssetId required" });
+    // Ownership: the destination asset profile must belong to the requester.
+    const dest = await storage.getProfile(toAssetId);
+    if (!dest) return res.status(404).json({ error: "Resource not found" });
     const updated = await storage.updateLiabilityAssetLink(linkId, { assetProfileId: toAssetId } as any);
     if (!updated) return res.status(404).json({ error: "Link not found" });
     if (note) {
