@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -18,8 +19,6 @@ import {
   Plus,
   X,
   Check,
-  Link2,
-  ChevronDown,
   AlertCircle,
   Clock,
   ShieldCheck,
@@ -316,7 +315,6 @@ function DataPanel({
   const [addingField, setAddingField] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
-  const [linkingProfile, setLinkingProfile] = useState(false);
   const { toast } = useToast();
 
   const { data: profiles = [] } = useQuery<Profile[]>({
@@ -352,17 +350,6 @@ function DataPanel({
     setAddingField(false);
   };
 
-  const linkProfile = (profileId: string) => {
-    const already = doc.linkedProfiles || [];
-    if (already.includes(profileId)) return;
-    onUpdate({ linkedProfiles: [...already, profileId] });
-    setLinkingProfile(false);
-  };
-
-  const unlinkProfile = (profileId: string) => {
-    onUpdate({ linkedProfiles: (doc.linkedProfiles || []).filter((p) => p !== profileId) });
-  };
-
   const downloadFile = () => {
     const link = document.createElement("a");
     link.href = `data:${doc.mimeType};base64,${doc.fileData}`;
@@ -373,7 +360,11 @@ function DataPanel({
     toast({ title: "Download started", description: doc.name });
   };
 
-  const linkedProfileObjects = profiles.filter((p) => (doc.linkedProfiles || []).includes(p.id));
+  const contextProfileId = useMemo(
+    () => (doc.linkedProfiles && doc.linkedProfiles.length > 0 ? doc.linkedProfiles[0] : null),
+    [doc.linkedProfiles]
+  );
+
   const extractedEntries = Object.entries(doc.extractedData || {});
 
   return (
@@ -547,79 +538,13 @@ function DataPanel({
             <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
               Linked Profiles
             </h3>
-
-            {linkedProfileObjects.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mb-2" data-testid="linked-profiles-list">
-                {linkedProfileObjects.map((p) => (
-                  <div
-                    key={p.id}
-                    className="flex items-center gap-1 bg-muted rounded-full px-2.5 py-0.5"
-                    data-testid={`badge-profile-${p.id}`}
-                  >
-                    <span className="text-xs font-medium">{p.name}</span>
-                    <button
-                      onClick={() => unlinkProfile(p.id)}
-                      className="text-muted-foreground hover:text-destructive transition-colors ml-0.5"
-                      data-testid={`btn-unlink-profile-${p.id}`}
-                    >
-                      <X className="h-2.5 w-2.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {linkedProfileObjects.length === 0 && (
-              <p className="text-xs text-muted-foreground italic mb-2">No profiles linked</p>
-            )}
-
-            {linkingProfile ? (
-              <div className="rounded-md border border-border bg-card overflow-hidden shadow-sm" data-testid="link-profile-dropdown">
-                <p className="text-xs px-3 py-1.5 border-b border-border text-muted-foreground font-semibold uppercase tracking-wide bg-muted/10">
-                  Select a profile
-                </p>
-                {profiles.filter((p) => !(doc.linkedProfiles || []).includes(p.id)).length === 0 && (
-                  <p className="text-xs px-3 py-2 text-muted-foreground italic">All profiles already linked</p>
-                )}
-                {profiles
-                  .filter((p) => !(doc.linkedProfiles || []).includes(p.id))
-                  .map((p) => (
-                    <button
-                      key={p.id}
-                      className="flex items-center gap-2 px-3 py-2 text-xs w-full hover:bg-muted/50 transition-colors text-left"
-                      onClick={() => linkProfile(p.id)}
-                      data-testid={`btn-link-profile-${p.id}`}
-                    >
-                      <Link2 className="h-3 w-3 text-muted-foreground shrink-0" />
-                      <span className="truncate font-medium">{p.name}</span>
-                      <span className="text-xs text-muted-foreground ml-auto capitalize">{p.type}</span>
-                    </button>
-                  ))}
-                <div className="border-t border-border p-1.5">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 text-xs w-full"
-                    onClick={() => setLinkingProfile(false)}
-                    data-testid="btn-cancel-link-profile"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full h-7 text-xs gap-1.5 border-dashed"
-                onClick={() => setLinkingProfile(true)}
-                data-testid="btn-link-to-profile"
-                disabled={isUpdating}
-              >
-                <Link2 className="h-3 w-3" />
-                Link to Profile
-                <ChevronDown className="h-3 w-3 ml-auto" />
-              </Button>
-            )}
+            <DocumentLinkPicker
+              profiles={profiles}
+              linkedProfileIds={doc.linkedProfiles || []}
+              contextProfileId={contextProfileId}
+              onSave={(ids) => onUpdate({ linkedProfiles: ids })}
+              disabled={isUpdating}
+            />
           </section>
 
           {/* Tags */}
