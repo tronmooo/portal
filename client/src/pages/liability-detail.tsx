@@ -42,6 +42,7 @@ import {
   AlertTriangle,
   Edit,
   User,
+  Camera,
 } from "lucide-react";
 import {
   Select,
@@ -67,6 +68,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Popover,
@@ -375,6 +387,77 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [tab, setTab] = useState<TabKey>("overview");
   const { toast } = useToast();
   const qc = useQueryClient();
+
+  // ── Edit / delete / avatar — match asset profile parity ────────────────────
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showDeleteProfileDialog, setShowDeleteProfileDialog] = useState(false);
+  const [editName, setEditName] = useState<string>(profile.name || "");
+  const [editNotes, setEditNotes] = useState<string>((profile as any).notes || "");
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  const avatarMutation = useMutation({
+    mutationFn: async (base64: string) => {
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { avatar: base64 });
+    },
+    onSuccess: () => {
+      toast({ title: "Profile picture updated" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to update picture", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Please choose an image under 2MB", variant: "destructive" });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      avatarMutation.mutate(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const editProfileMutation = useMutation({
+    mutationFn: async (patch: { name: string; notes: string }) => {
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
+    },
+    onSuccess: () => {
+      toast({ title: "Profile updated" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      setShowEditDialog(false);
+    },
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const deleteProfileMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/profiles/${profile.id}`);
+    },
+    onSuccess: () => {
+      queryClient.setQueryData(["/api/profiles"], (old: any[]) =>
+        old?.filter((p: any) => p.id !== profile.id) || []
+      );
+      toast({ title: "Profile deleted", description: "All linked data has been removed" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      navigate("/profiles");
+    },
+    onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+  });
 
   // ── Multi-owner popover (mirrors asset profile picker) ──────────────────────
   const [ownerPopoverOpen, setOwnerPopoverOpen] = useState(false);
@@ -721,6 +804,28 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               variant="outline"
               size="sm"
               className="h-7 text-xs gap-1 bg-background/60 backdrop-blur-sm"
+              onClick={() => {
+                setEditName(profile.name || "");
+                setEditNotes((profile as any).notes || "");
+                setShowEditDialog(true);
+              }}
+              data-testid="button-header-edit-profile"
+            >
+              <Edit className="h-3 w-3" /> Edit
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1 text-destructive hover:text-destructive bg-background/60 backdrop-blur-sm"
+              onClick={() => setShowDeleteProfileDialog(true)}
+              data-testid="button-delete-profile"
+            >
+              <Trash2 className="h-3 w-3" /> Delete
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1 bg-background/60 backdrop-blur-sm"
               onClick={() => openPaymentDialog("minimum")}
               data-testid="quick-pay-min"
             >
@@ -731,9 +836,36 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
         {/* Icon + name + badge row */}
         <div className="flex items-start gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center shrink-0">
-            <Wallet className="w-7 h-7" />
-          </div>
+          <input
+            ref={avatarInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleAvatarChange}
+            data-testid="input-avatar-upload"
+          />
+          <button
+            className="relative rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center overflow-hidden group cursor-pointer shrink-0"
+            style={{ width: 56, height: 56 }}
+            onClick={() => avatarInputRef.current?.click()}
+            disabled={avatarMutation.isPending}
+            title="Change profile picture"
+            data-testid="button-avatar-upload"
+          >
+            {(profile as any).avatar ? (
+              <img src={(profile as any).avatar} alt={profile.name} className="w-full h-full object-cover" />
+            ) : (
+              <Wallet className="w-7 h-7" />
+            )}
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              <Camera className="h-4 w-4 text-white" />
+            </div>
+            {avatarMutation.isPending && (
+              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                <RefreshCw className="h-4 w-4 text-white animate-spin" />
+              </div>
+            )}
+          </button>
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-semibold" data-testid="liability-title">
               {profile.name || subtypeLabel}
@@ -831,6 +963,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           <TabsContent value="overview" className="mt-4 space-y-4">
             {/* AI insights card */}
             <AISummaryCard profileId={profile.id} />
+
+            {/* Linked assets — surfaced near the top for parity with asset profiles */}
+            <section data-testid="overview-linked-assets">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked assets</p>
+              <LinkedAssetsCard liabilityId={profile.id} />
+            </section>
 
             {/* Subtype-specific overview */}
             <SubtypeOverview
@@ -933,12 +1071,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               </CardContent>
             </Card>
 
-            {/* Nested sections — mirroring asset Overview layout */}
-            <section className="mt-6">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Nested Assets</p>
-              <LinkedAssetsCard liabilityId={profile.id} />
-            </section>
-
+            {/* Nested sections — mirroring asset Overview layout (Linked Assets is now surfaced near the top) */}
             <section className="mt-6">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Nested Liabilities</p>
               <NestedLiabilitiesCard liabilityId={profile.id} />
@@ -1160,6 +1293,70 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit profile dialog — name + notes only; deeper field edits live on the Details tab */}
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent data-testid="dialog-edit-liability-profile">
+          <DialogHeader>
+            <DialogTitle>Edit profile</DialogTitle>
+            <DialogDescription>Update the liability name and notes.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="liability-edit-name" className="text-xs">Name</Label>
+              <Input
+                id="liability-edit-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                data-testid="input-edit-name"
+              />
+            </div>
+            <div>
+              <Label htmlFor="liability-edit-notes" className="text-xs">Notes</Label>
+              <Textarea
+                id="liability-edit-notes"
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+                rows={4}
+                data-testid="input-edit-notes"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowEditDialog(false)}>Cancel</Button>
+            <Button
+              onClick={() => editProfileMutation.mutate({ name: editName.trim() || profile.name, notes: editNotes })}
+              disabled={editProfileMutation.isPending || !editName.trim()}
+              data-testid="button-save-edit-profile"
+            >
+              {editProfileMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <AlertDialog open={showDeleteProfileDialog} onOpenChange={setShowDeleteProfileDialog}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-profile">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{profile.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this liability and all its data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-profile">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteProfileMutation.mutate()}
+              disabled={deleteProfileMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-profile"
+            >
+              {deleteProfileMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
