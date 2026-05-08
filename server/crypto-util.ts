@@ -5,23 +5,40 @@ export const ENCRYPTED_PREFIX = 'enc:v1:';
 
 let keyMissingWarned = false;
 
+let cachedKey: Buffer | null | undefined = undefined;
+
 function tryGetKey(): Buffer | null {
-  const k = process.env.FIELD_ENCRYPTION_KEY;
-  if (!k) return null;
-  // Accept hex (64 chars) or base64; final key must be 32 bytes.
-  const buf = k.length === 64 ? Buffer.from(k, 'hex') : Buffer.from(k, 'base64');
-  if (buf.length !== 32) {
-    throw new Error('FIELD_ENCRYPTION_KEY must decode to 32 bytes');
+  if (cachedKey !== undefined) return cachedKey;
+  let k = process.env.FIELD_ENCRYPTION_KEY;
+  if (!k) { cachedKey = null; return null; }
+  // Strip accidental whitespace/quotes that some env-var systems include.
+  k = k.trim().replace(/^['"]|['"]$/g, '');
+  // Try hex first (64 chars = 32 bytes), fall back to base64.
+  let buf: Buffer | null = null;
+  if (/^[0-9a-fA-F]{64}$/.test(k)) {
+    buf = Buffer.from(k, 'hex');
+  } else {
+    try { buf = Buffer.from(k, 'base64'); } catch { buf = null; }
   }
+  if (!buf || buf.length !== 32) {
+    console.error('[crypto-util] FIELD_ENCRYPTION_KEY did not decode to 32 bytes (got ' + (buf ? buf.length : 'null') + '). Encryption disabled.');
+    cachedKey = null;
+    return null;
+  }
+  cachedKey = buf;
   return buf;
 }
 
+// Test-only — clears the cached key so tests can rebind env vars.
+export function _resetCryptoKeyCacheForTesting() { cachedKey = undefined; }
+
 export function encryptField(plaintext: string): string {
   if (!plaintext) return plaintext;
-  const key = tryGetKey();
+  let key: Buffer | null;
+  try { key = tryGetKey(); } catch { key = null; }
   if (!key) {
     if (!keyMissingWarned) {
-      console.warn('[crypto-util] FIELD_ENCRYPTION_KEY not set — sensitive fields stored as plaintext. Set the env var to enable encryption.');
+      console.warn('[crypto-util] FIELD_ENCRYPTION_KEY not configured — sensitive fields stored as plaintext. Set a 32-byte hex key to enable encryption.');
       keyMissingWarned = true;
     }
     return plaintext;
@@ -35,7 +52,8 @@ export function encryptField(plaintext: string): string {
 
 export function decryptField(ciphertext: string): string {
   if (!ciphertext || !ciphertext.startsWith(ENCRYPTED_PREFIX)) return ciphertext;
-  const key = tryGetKey();
+  let key: Buffer | null;
+  try { key = tryGetKey(); } catch { key = null; }
   if (!key) {
     // Encrypted payload exists but no key configured — surface as failure
     // string rather than throwing so reads don't crash the app.

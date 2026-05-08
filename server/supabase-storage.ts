@@ -2776,9 +2776,11 @@ export class SupabaseStorage implements IStorage {
     const finalCategory = data.category || existing?.category || "general";
     // Encrypt sensitive values at rest. Plaintext value is returned to the
     // caller via rowToMemory's pass-through path (non-prefixed plaintext).
-    const storedValue = (shouldEncryptMemory(finalCategory) && typeof data.value === "string" && data.value)
-      ? encryptField(data.value)
-      : data.value;
+    let storedValue = data.value;
+    if (shouldEncryptMemory(finalCategory) && typeof data.value === "string" && data.value) {
+      try { storedValue = encryptField(data.value); }
+      catch (e: any) { console.error('[saveMemory] encryption failed, storing plaintext:', e?.message || e); }
+    }
     if (existing) {
       await this.supabase.from("memories").update({
         value: storedValue, category: finalCategory, updated_at: now,
@@ -2822,9 +2824,12 @@ export class SupabaseStorage implements IStorage {
       effectiveCategory = existing?.category;
     }
     if (data.value !== undefined) {
-      updates.value = (shouldEncryptMemory(effectiveCategory) && typeof data.value === "string" && data.value)
-        ? encryptField(data.value)
-        : data.value;
+      let storedVal = data.value;
+      if (shouldEncryptMemory(effectiveCategory) && typeof data.value === "string" && data.value) {
+        try { storedVal = encryptField(data.value); }
+        catch (e: any) { console.error('[updateMemory] encryption failed, storing plaintext:', e?.message || e); }
+      }
+      updates.value = storedVal;
     }
     if (data.category !== undefined) updates.category = data.category;
     const { data: result, error } = await this.supabase
