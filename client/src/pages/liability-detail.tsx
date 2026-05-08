@@ -2288,7 +2288,7 @@ function PartyLinkRow({
 function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
   const [, navigate] = useLocation();
 
-  const graphQuery = useQuery<{ nodes: { id: string; name: string; typeKey: string; type?: string }[] }>({
+  const graphQuery = useQuery<{ rootId?: string; nodes: { id: string; name: string; typeKey: string; type?: string }[]; edges?: { from: string; to: string }[] }>({
     queryKey: [`/api/relationships/graph/${liabilityId}`, "hops2"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/relationships/graph/${liabilityId}?hops=2`);
@@ -2296,11 +2296,44 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
     },
   });
 
+  // Only surface DIRECTLY related liabilities. Don't bridge through person/self/pet/business
+  // nodes — sharing an owner doesn't make two liabilities related.
   const nestedLiabilities = useMemo(() => {
-    const nodes = graphQuery.data?.nodes || [];
-    return nodes.filter((n) => {
+    const data = graphQuery.data;
+    if (!data) return [];
+    const root = data.rootId || liabilityId;
+    const personTypes = new Set(["person", "self", "pet", "business"]);
+    const liabTypes = new Set(["liability", "loan"]);
+    const nodeById: Record<string, any> = {};
+    for (const n of (data.nodes || [])) nodeById[n.id] = n;
+    const adj: Record<string, Set<string>> = {};
+    const addEdge = (a: string, b: string) => { if (!adj[a]) adj[a] = new Set(); adj[a].add(b); };
+    for (const e of (data.edges || [])) {
+      const fromNode = nodeById[e.from];
+      const toNode = nodeById[e.to];
+      if (!fromNode || !toNode) continue;
+      const ft = (fromNode.typeKey || fromNode.type || "").toLowerCase();
+      const tt = (toNode.typeKey || toNode.type || "").toLowerCase();
+      if (personTypes.has(ft) || personTypes.has(tt)) continue;
+      addEdge(e.from, e.to);
+      addEdge(e.to, e.from);
+    }
+    const reachable = new Set<string>();
+    const queue: string[] = [root];
+    const visited = new Set<string>([root]);
+    while (queue.length) {
+      const cur = queue.shift()!;
+      for (const nb of (adj[cur] || [])) {
+        if (visited.has(nb)) continue;
+        visited.add(nb);
+        reachable.add(nb);
+        queue.push(nb);
+      }
+    }
+    return (data.nodes || []).filter((n) => {
+      if (!reachable.has(n.id)) return false;
       const tk = (n.typeKey || n.type || "").toLowerCase();
-      return (tk === "liability" || tk === "loan") && n.id !== liabilityId;
+      return liabTypes.has(tk);
     });
   }, [graphQuery.data, liabilityId]);
 

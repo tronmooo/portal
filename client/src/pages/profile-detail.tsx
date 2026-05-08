@@ -8652,12 +8652,43 @@ function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: str
       } else if (isLiability) {
         return apiRequest("GET", `/api/liabilities/${profileId}/parties`).then(r => r.json());
       } else {
-        // person: use graph 2 hops, filter person/self/business nodes
+        // Person/self: only show DIRECTLY co-owning people — i.e. people who
+        // share an explicit asset or liability with the root. Don't bridge
+        // through other person nodes (avoids pulling in the entire user graph).
         const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
         const root = g.rootId;
         const personTypes = new Set(["person","self","business","pet"]);
+        const nodeById: Record<string, any> = {};
+        for (const n of (g.nodes || [])) nodeById[n.id] = n;
+        const adj: Record<string, Set<string>> = {};
+        const addEdge = (a: string, b: string) => { if (!adj[a]) adj[a] = new Set(); adj[a].add(b); };
+        for (const e of (g.edges || [])) {
+          const fromNode = nodeById[e.from];
+          const toNode = nodeById[e.to];
+          if (!fromNode || !toNode) continue;
+          // Don't traverse through other person nodes (other than the root itself).
+          // Only edges to/from the root person + edges between asset/liability nodes are kept.
+          const fromIsPerson = personTypes.has(fromNode.typeKey || fromNode.type);
+          const toIsPerson = personTypes.has(toNode.typeKey || toNode.type);
+          if (fromIsPerson && fromNode.id !== root) continue;
+          if (toIsPerson && toNode.id !== root) continue;
+          addEdge(e.from, e.to);
+          addEdge(e.to, e.from);
+        }
+        const reachable = new Set<string>();
+        const queue: string[] = [root];
+        const visited = new Set<string>([root]);
+        while (queue.length) {
+          const cur = queue.shift()!;
+          for (const nb of (adj[cur] || [])) {
+            if (visited.has(nb)) continue;
+            visited.add(nb);
+            reachable.add(nb);
+            queue.push(nb);
+          }
+        }
         return (g.nodes || [])
-          .filter((n: any) => n.id !== root && personTypes.has(n.typeKey || n.type))
+          .filter((n: any) => reachable.has(n.id) && personTypes.has(n.typeKey || n.type))
           .map((n: any) => ({ id: n.id, party: { id: n.id, name: n.name, type: n.type, profileType: n.typeKey || n.type } }));
       }
     },
@@ -8749,12 +8780,48 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
         const assets = await apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json());
         return assets.map((a: any) => ({ id: a.asset?.id || a.id, name: a.asset?.name || a.name || "Asset", typeKey: a.asset?.profileType || a.asset?.type || "asset" }));
       } else {
-        // Asset: find related assets via graph 2 hops
+        // Asset: find DIRECTLY related assets via graph. We avoid hopping through
+        // person/self nodes — just because two assets share an owner does NOT make
+        // them "linked" to each other (that would surface every asset on every page).
+        // Direct links here means: shared liability, or asset↔asset edges if any.
         const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
         const root = g.rootId;
         const assetTypes = new Set(["asset","vehicle","property"]);
+        const personTypes = new Set(["person","self","pet","business"]);
+        const nodeById: Record<string, any> = {};
+        for (const n of (g.nodes || [])) nodeById[n.id] = n;
+        // Build adjacency from edges, but treat person/self nodes as non-traversable
+        // so two assets sharing an owner aren't considered "linked".
+        const adj: Record<string, Set<string>> = {};
+        const addEdge = (a: string, b: string) => {
+          if (!adj[a]) adj[a] = new Set();
+          adj[a].add(b);
+        };
+        for (const e of (g.edges || [])) {
+          const fromNode = nodeById[e.from];
+          const toNode = nodeById[e.to];
+          if (!fromNode || !toNode) continue;
+          // Skip edges that pass through a person/self/pet/business node — those
+          // are ownership edges, not asset-to-asset relationships.
+          if (personTypes.has(fromNode.typeKey || fromNode.type) || personTypes.has(toNode.typeKey || toNode.type)) continue;
+          addEdge(e.from, e.to);
+          addEdge(e.to, e.from);
+        }
+        // BFS from root, ignoring person nodes; keep only asset-type nodes.
+        const reachable = new Set<string>();
+        const queue: string[] = [root];
+        const visited = new Set<string>([root]);
+        while (queue.length) {
+          const cur = queue.shift()!;
+          for (const nb of (adj[cur] || [])) {
+            if (visited.has(nb)) continue;
+            visited.add(nb);
+            reachable.add(nb);
+            queue.push(nb);
+          }
+        }
         return (g.nodes || [])
-          .filter((n: any) => n.id !== root && assetTypes.has(n.typeKey || n.type))
+          .filter((n: any) => reachable.has(n.id) && assetTypes.has(n.typeKey || n.type))
           .map((n: any) => ({ id: n.id, name: n.name, typeKey: n.typeKey || n.type }));
       }
     },
@@ -8804,12 +8871,40 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
           typeKey: l.liabilityType || "liability",
         }));
       } else {
-        // Liability: graph 2 hops, filter liability nodes
+        // Liability: only show DIRECTLY related liabilities. Don't hop through
+        // person/self/pet/business nodes — sharing an owner doesn't link two
+        // liabilities together (otherwise every liability would surface here).
         const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
         const root = g.rootId;
         const liabTypes = new Set(["liability","loan"]);
+        const personTypes = new Set(["person","self","pet","business"]);
+        const nodeById: Record<string, any> = {};
+        for (const n of (g.nodes || [])) nodeById[n.id] = n;
+        const adj: Record<string, Set<string>> = {};
+        const addEdge = (a: string, b: string) => { if (!adj[a]) adj[a] = new Set(); adj[a].add(b); };
+        for (const e of (g.edges || [])) {
+          const fromNode = nodeById[e.from];
+          const toNode = nodeById[e.to];
+          if (!fromNode || !toNode) continue;
+          // Skip ownership edges (person/self bridges)
+          if (personTypes.has(fromNode.typeKey || fromNode.type) || personTypes.has(toNode.typeKey || toNode.type)) continue;
+          addEdge(e.from, e.to);
+          addEdge(e.to, e.from);
+        }
+        const reachable = new Set<string>();
+        const queue: string[] = [root];
+        const visited = new Set<string>([root]);
+        while (queue.length) {
+          const cur = queue.shift()!;
+          for (const nb of (adj[cur] || [])) {
+            if (visited.has(nb)) continue;
+            visited.add(nb);
+            reachable.add(nb);
+            queue.push(nb);
+          }
+        }
         return (g.nodes || [])
-          .filter((n: any) => n.id !== root && liabTypes.has(n.typeKey || n.type))
+          .filter((n: any) => reachable.has(n.id) && liabTypes.has(n.typeKey || n.type))
           .map((n: any) => ({ id: n.id, name: n.name, typeKey: n.typeKey || n.type }));
       }
     },
