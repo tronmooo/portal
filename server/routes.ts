@@ -2370,6 +2370,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(newEvent);
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertEventSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Event title must be a non-empty string" });
       req.body.title = sanitize(req.body.title);
@@ -2435,6 +2440,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
   }));
   app.patch("/api/documents/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertDocumentSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Document name must be a non-empty string" });
       req.body.name = sanitize(req.body.name);
@@ -2619,6 +2629,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {
+      {
+        const parsed = insertHabitSchema.partial().safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+        req.body = { ...req.body, ...parsed.data };
+      }
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
       const uid_h4 = (req as AuthenticatedRequest).userId || "anon";
@@ -2681,6 +2696,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(created);
   }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertObligationSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Obligation name must be a non-empty string" });
       req.body.name = sanitize(req.body.name);
@@ -2749,6 +2769,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(created);
   }));
   app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertArtifactSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Artifact title must be a non-empty string" });
       req.body.title = sanitize(req.body.title);
@@ -2907,6 +2932,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(newEntry);
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertJournalEntrySchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.content !== undefined) {
       if (typeof req.body.content !== "string") return res.status(400).json({ error: "Journal content must be a string" });
       req.body.content = sanitize(req.body.content);
@@ -2992,6 +3022,11 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.status(201).json(await storage.createDomain(parsed.data));
   }));
   app.patch("/api/domains/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertDomainSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Domain name must be a non-empty string" });
       req.body.name = sanitize(req.body.name);
@@ -4174,6 +4209,11 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   }));
 
   app.patch("/api/goals/:id", asyncHandler(async (req, res) => {
+    {
+      const parsed = insertGoalSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+      req.body = { ...req.body, ...parsed.data };
+    }
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Goal title must be a non-empty string" });
       req.body.title = sanitize(req.body.title);
