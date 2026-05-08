@@ -203,6 +203,32 @@ export function registerAuthRoutes(app: Express) {
     return entry.count > max;
   }
 
+  // Per-email signup limiter, layered on top of the per-IP one. Uses the same
+  // bounded Map (different keyspace) so we don't grow another unbounded store.
+  function checkEmailSignupRateLimit(email: string, max = 3, windowMs = 3600000): boolean {
+    return checkAuthRateLimit(`signup_email:${email.toLowerCase()}`, max, windowMs);
+  }
+
+  // Optional Cloudflare Turnstile verification. No-op if CAPTCHA_SECRET is
+  // not set, so the endpoint keeps working in dev/local environments.
+  async function verifyCaptcha(token: string | undefined, remoteIp: string): Promise<boolean> {
+    const secret = process.env.CAPTCHA_SECRET;
+    if (!secret) return true;
+    if (!token) return false;
+    try {
+      const params = new URLSearchParams({ secret, response: token, remoteip: remoteIp });
+      const resp = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+      const json = await resp.json() as { success?: boolean };
+      return !!json.success;
+    } catch {
+      return false;
+    }
+  }
+
   // Sign up with email/password
   app.post("/api/auth/signup", async (req: Request, res: Response) => {
     const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
@@ -213,9 +239,21 @@ export function registerAuthRoutes(app: Express) {
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const { email, password } = req.body;
+    const { email, password, captchaToken } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password required" });
+    }
+
+    // Per-email rate limit (stops one IP from cycling addresses, and stops
+    // distributed attackers from hammering a single target email).
+    if (checkEmailSignupRateLimit(email)) {
+      return res.status(429).json({ error: "Too many signup attempts for this email. Please wait and try again." });
+    }
+
+    // Optional CAPTCHA — only enforced when CAPTCHA_SECRET is configured.
+    const captchaOk = await verifyCaptcha(captchaToken, clientIp);
+    if (!captchaOk) {
+      return res.status(400).json({ error: "Captcha verification failed" });
     }
 
     const { data, error } = await supabase.auth.admin.createUser({

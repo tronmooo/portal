@@ -29,6 +29,7 @@ import {
   MOOD_SCORES,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
+import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -452,8 +453,18 @@ export class SupabaseStorage implements IStorage {
   }
 
   private rowToMemory(r: any): MemoryItem {
+    let value = r.value;
+    if (typeof value === "string" && value.startsWith(ENCRYPTED_PREFIX)) {
+      try {
+        value = decryptField(value);
+      } catch (err) {
+        // Tampered ciphertext, missing key, or AES-GCM auth failure — return
+        // a marker so callers don't render raw enc:v1: blobs to users.
+        value = "[decryption failed]";
+      }
+    }
     return {
-      id: r.id, key: r.key, value: r.value, category: r.category,
+      id: r.id, key: r.key, value, category: r.category,
       createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -2762,19 +2773,25 @@ export class SupabaseStorage implements IStorage {
     const now = new Date().toISOString();
     // Check if key exists — update
     const { data: existing } = await this.supabase.from("memories").select("*").eq("user_id", this.userId).eq("key", data.key).single();
+    const finalCategory = data.category || existing?.category || "general";
+    // Encrypt sensitive values at rest. Plaintext value is returned to the
+    // caller via rowToMemory's pass-through path (non-prefixed plaintext).
+    const storedValue = (shouldEncryptMemory(finalCategory) && typeof data.value === "string" && data.value)
+      ? encryptField(data.value)
+      : data.value;
     if (existing) {
       await this.supabase.from("memories").update({
-        value: data.value, category: data.category || existing.category, updated_at: now,
+        value: storedValue, category: finalCategory, updated_at: now,
       }).eq("id", existing.id).eq("user_id", this.userId);
-      return this.rowToMemory({ ...existing, value: data.value, category: data.category || existing.category, updated_at: now });
+      return this.rowToMemory({ ...existing, value: storedValue, category: finalCategory, updated_at: now });
     }
     const id = randomUUID();
     const { error } = await this.supabase.from("memories").insert({
-      id, user_id: this.userId, key: data.key, value: data.value,
-      category: data.category || "general", created_at: now, updated_at: now,
+      id, user_id: this.userId, key: data.key, value: storedValue,
+      category: finalCategory, created_at: now, updated_at: now,
     });
     if (error) throw error;
-    return { id, key: data.key, value: data.value, category: data.category || "general", createdAt: now, updatedAt: now };
+    return this.rowToMemory({ id, key: data.key, value: storedValue, category: finalCategory, created_at: now, updated_at: now });
   }
 
   async recallMemory(query: string): Promise<MemoryItem[]> {
@@ -2794,7 +2811,21 @@ export class SupabaseStorage implements IStorage {
 
   async updateMemory(id: string, data: Partial<any>): Promise<any | undefined> {
     const updates: Record<string, any> = {};
-    if (data.value !== undefined) updates.value = data.value;
+    // Determine the effective category for the encryption decision: use the
+    // incoming update if present, otherwise read the row to learn its current
+    // category. Prevents leaking a sensitive value when only `value` is sent
+    // and the existing row's category is sensitive.
+    let effectiveCategory: string | undefined = data.category;
+    if (data.value !== undefined && effectiveCategory === undefined) {
+      const { data: existing } = await this.supabase.from("memories")
+        .select("category").eq("id", id).eq("user_id", this.userId).single();
+      effectiveCategory = existing?.category;
+    }
+    if (data.value !== undefined) {
+      updates.value = (shouldEncryptMemory(effectiveCategory) && typeof data.value === "string" && data.value)
+        ? encryptField(data.value)
+        : data.value;
+    }
     if (data.category !== undefined) updates.category = data.category;
     const { data: result, error } = await this.supabase
       .from("memories")
@@ -2804,7 +2835,7 @@ export class SupabaseStorage implements IStorage {
       .select()
       .single();
     if (error || !result) return undefined;
-    return { id: result.id, key: result.key, value: result.value, category: result.category || "general", createdAt: result.created_at };
+    return this.rowToMemory(result);
   }
 
   // ============================================================
