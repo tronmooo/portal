@@ -1260,7 +1260,9 @@ export async function registerRoutes(
     // auto-link the account holder's self profile at 100% ownership.
     // Best-effort — never blocks/fails the create response.
     try {
-      const assetTypes = new Set(["asset", "vehicle", "property"]);
+      // Subscriptions, investments, insurance, account also use the
+      // asset_party_links table for ownership tracking.
+      const assetTypes = new Set(["asset", "vehicle", "property", "subscription", "investment", "insurance", "account"]);
       const liabilityTypes = new Set(["liability", "loan"]);
       const isAsset = assetTypes.has(created.type);
       const isLiability = liabilityTypes.has(created.type);
@@ -4814,7 +4816,14 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // ---- Party ↔ liability links ----
   app.get("/api/liabilities/:id/parties", asyncHandler(async (req, res) => {
     const rows = await storage.getLiabilityProfileLinks(req.params.id);
-    res.json(rows);
+    // Enrich with linked party profile names + types so the UI can avoid "Unknown".
+    const partyIds = Array.from(new Set((rows || []).map((r: any) => r.partyProfileId).filter(Boolean)));
+    const partyById: Record<string, any> = {};
+    await Promise.all(partyIds.map(async (pid: any) => {
+      try { const p: any = await storage.getProfile(pid); if (p) partyById[pid] = { id: p.id, name: p.name, type: p.type }; } catch {}
+    }));
+    const enriched = (rows || []).map((r: any) => ({ ...r, party: partyById[r.partyProfileId] || null }));
+    res.json(enriched);
   }));
   app.get("/api/parties/:id/liabilities", asyncHandler(async (req, res) => {
     const rows = await storage.getLiabilityProfileLinksForParty(req.params.id);
@@ -4871,7 +4880,15 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
   app.get("/api/assets/:id/parties", asyncHandler(async (req, res) => {
     const rows = await storage.getAssetPartyLinks(req.params.id);
-    res.json(rows);
+    // Enrich each link with the linked party profile's name + type so the
+    // client doesn't have to make N extra requests (and can stop showing "Unknown").
+    const partyIds = Array.from(new Set((rows || []).map((r: any) => r.partyProfileId).filter(Boolean)));
+    const partyById: Record<string, any> = {};
+    await Promise.all(partyIds.map(async (pid: any) => {
+      try { const p: any = await storage.getProfile(pid); if (p) partyById[pid] = { id: p.id, name: p.name, type: p.type }; } catch {}
+    }));
+    const enriched = (rows || []).map((r: any) => ({ ...r, party: partyById[r.partyProfileId] || null }));
+    res.json(enriched);
   }));
   app.get("/api/parties/:id/assets", asyncHandler(async (req, res) => {
     const rows = await storage.getAssetPartyLinksForParty(req.params.id);

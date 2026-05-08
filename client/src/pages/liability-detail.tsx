@@ -485,11 +485,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
   const [checkedOwnerIds, setCheckedOwnerIds] = useState<Set<string>>(new Set());
 
+  // Sync checked state when popover opens. If no links exist yet, default to
+  // the user's self profile so a single Save click confirms self-ownership.
   useEffect(() => {
     if (ownerPopoverOpen) {
-      setCheckedOwnerIds(new Set(linkedPersonIdSet));
+      if (linkedPersonIdSet.size === 0) {
+        const self = (personOptions || []).find((p: any) => p.type === "self");
+        setCheckedOwnerIds(self ? new Set([self.id]) : new Set());
+      } else {
+        setCheckedOwnerIds(new Set(linkedPersonIdSet));
+      }
     }
-  }, [ownerPopoverOpen, linkedPersonIdSet]);
+  }, [ownerPopoverOpen, linkedPersonIdSet, personOptions]);
 
   const saveOwnersMutation = useMutation({
     mutationFn: async (selectedIds: string[]) => {
@@ -534,11 +541,17 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     const linked = (currentPartyLinks || []).map((l: any) =>
       l.party?.name || personOptions.find((p: any) => p.id === (l.partyProfileId || l.party?.id))?.name
     ).filter(Boolean);
-    if (linked.length === 0) return "Set owner";
+    if (linked.length === 0) {
+      // Fall back to fields.ownerName, then self profile name, before "Set owner".
+      if ((profile as any)?.fields?.ownerName) return (profile as any).fields.ownerName;
+      const self = (personOptions || []).find((p: any) => p.type === "self");
+      if (self?.name) return self.name;
+      return "Set owner";
+    }
     if (linked.length === 1) return linked[0];
     if (linked.length === 2) return `Shared · ${linked[0]} + ${linked[1]}`;
     return `Shared · ${linked.length} people`;
-  }, [currentPartyLinks, personOptions]);
+  }, [currentPartyLinks, personOptions, profile]);
 
   const terms = useMemo(() => readTerms(profile), [profile]);
   // Subtype lookup: type_key is the canonical column on the profiles table

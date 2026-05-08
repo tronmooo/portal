@@ -2800,14 +2800,18 @@ function InfoTab({
         );
       })()}
 
-      {/* ── 6. Child Profiles ── */}
-      {(profile.childProfiles || []).length > 0 && (
+      {/* ── 6. Child Profiles (people/pets only — assets & liabilities have their own sections) ── */}
+      {(() => {
+        const assetLikeTypes = new Set(["asset","vehicle","property","subscription","investment","insurance","account","liability","loan"]);
+        const nonAssetChildren = (profile.childProfiles || []).filter((c: any) => !assetLikeTypes.has(c.type));
+        if (nonAssetChildren.length === 0) return null;
+        return (
         <Card>
           <CardHeader className="py-2.5 px-4">
             <CardTitle className="text-xs font-semibold">Linked Profiles</CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
-            {(profile.childProfiles || []).slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((child: any) => {
+            {nonAssetChildren.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((child: any) => {
               const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Package, loan: Wallet, liability: Wallet, investment: TrendingUp, property: Home, person: User, pet: PawPrint };
               const ChildIcon = iconMap[child.type] || Link2;
               return (
@@ -2829,7 +2833,8 @@ function InfoTab({
             })}
           </CardContent>
         </Card>
-      )}
+        );
+      })()}
 
       {/* ── 7. Notes ── */}
       {profile.notes && (
@@ -8645,7 +8650,7 @@ function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: str
       if (isAsset) {
         return apiRequest("GET", `/api/assets/${profileId}/parties`).then(r => r.json());
       } else if (isLiability) {
-        return apiRequest("GET", `/api/liabilities/${profileId}/profile-links`).then(r => r.json());
+        return apiRequest("GET", `/api/liabilities/${profileId}/parties`).then(r => r.json());
       } else {
         // person: use graph 2 hops, filter person/self/business nodes
         const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
@@ -9603,12 +9608,18 @@ export default function ProfileDetailPage() {
   // Local checked state for the popover (initialise from server data when popover opens)
   const [checkedOwnerIds, setCheckedOwnerIds] = useState<Set<string>>(new Set());
 
-  // Sync checked state when popover opens
+  // Sync checked state when popover opens. If no links exist yet, default to
+  // the user's self profile so a single Save click confirms self-ownership.
   useEffect(() => {
     if (ownerPopoverOpen) {
-      setCheckedOwnerIds(new Set(linkedPersonIdSet));
+      if (linkedPersonIdSet.size === 0) {
+        const self = (personOptions || []).find((p: any) => p.type === "self");
+        setCheckedOwnerIds(self ? new Set([self.id]) : new Set());
+      } else {
+        setCheckedOwnerIds(new Set(linkedPersonIdSet));
+      }
     }
-  }, [ownerPopoverOpen, linkedPersonIdSet]);
+  }, [ownerPopoverOpen, linkedPersonIdSet, personOptions]);
 
   const saveOwnersMutation = useMutation({
     mutationFn: async (selectedIds: string[]) => {
@@ -9666,12 +9677,16 @@ export default function ProfileDetailPage() {
     onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),
   });
 
-  // Derive display label for the owner button
+  // Derive display label for the owner button. When no party links exist yet,
+  // fall back to (in order) fields.ownerName, the user's self profile name, or
+  // "Set owner" — never leave it ambiguous since the user is the implicit owner.
   const ownerButtonLabel = useMemo(() => {
     const linked = (currentPartyLinks || []).map((l: any) => l.party?.name || personOptions.find((p: any) => p.id === (l.partyProfileId || l.party?.id))?.name).filter(Boolean);
     if (linked.length === 0) {
-      // Fall back to fields.ownerName if no party links yet
-      return profile?.fields?.ownerName || "Set owner";
+      if (profile?.fields?.ownerName) return profile.fields.ownerName;
+      const self = (personOptions || []).find((p: any) => p.type === "self");
+      if (self?.name) return self.name;
+      return "Set owner";
     }
     if (linked.length === 1) return linked[0];
     if (linked.length === 2) return `Shared · ${linked[0]} + ${linked[1]}`;
