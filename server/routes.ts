@@ -2496,6 +2496,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // ---- Document Email with Attachment (Resend) ----
   app.post("/api/documents/:id/send-email", asyncHandler(async (req, res) => {
+    const emailUserId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+    if (rateLimit(`email:${emailUserId}`, 10, 3600000)) {
+      return res.status(429).json({ error: "Too many email send attempts. Try again in an hour." });
+    }
     const { to, subject, message } = req.body as { to: string; subject?: string; message?: string };
     if (!to || !to.includes('@')) return res.status(400).json({ error: "Valid email required" });
 
@@ -3383,6 +3387,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // ---- Data Cleanup ----
   // Migrate base64 documents from DB to Supabase Storage
   app.post("/api/cleanup/migrate-documents-to-storage", asyncHandler(async (req, res) => {
+    const cleanupUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+    if (rateLimit(`cleanup:${cleanupUid}`, 2, 3600000)) {
+      return res.status(429).json({ error: "Migration already in progress or rate limited." });
+    }
     if (req.body?.confirm !== "MIGRATE") {
       return res.status(400).json({ error: "Migration requires confirmation parameter" });
     }
@@ -3391,6 +3399,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   app.post("/api/cleanup/tracker-entries", asyncHandler(async (req, res) => {
+    const cleanupTUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+    if (rateLimit(`cleanup-tracker:${cleanupTUid}`, 5, 3600000)) {
+      return res.status(429).json({ error: "Cleanup rate limited. Try again later." });
+    }
     const trackers = await storage.getTrackers();
     let cleaned = 0;
     const details: string[] = [];
@@ -3485,6 +3497,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   app.post("/api/import", asyncHandler(async (req, res) => {
     try {
+      const importUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+      if (rateLimit(`import:${importUid}`, 3, 3600000)) {
+        return res.status(429).json({ error: "Import rate limited. Try again in an hour." });
+      }
       const data = req.body;
       if (!data || !data.version) {
         return res.status(400).json({ error: "Invalid import file — missing version field" });
@@ -4402,6 +4418,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
   // ---- Delete All User Data ----
   app.delete("/api/data/all", asyncHandler(async (req, res) => {
     try {
+      const deleteUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+      if (rateLimit(`delete-all:${deleteUid}`, 1, 3600000)) {
+        return res.status(429).json({ error: "Account deletion rate limited. Try again in an hour." });
+      }
       const { confirmation } = req.body || {};
       if (confirmation !== "DELETE") {
         return res.status(400).json({ error: "You must send confirmation: 'DELETE' to proceed." });

@@ -335,6 +335,11 @@ export function registerAuthRoutes(app: Express) {
 
   // Change password (authenticated)
   app.post("/api/auth/change-password", async (req: Request, res: Response) => {
+    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    if (checkAuthRateLimit(clientIp, 5, 300000)) {
+      return res.status(429).json({ error: "Too many password change attempts. Please wait and try again." });
+    }
+
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
@@ -377,6 +382,11 @@ export function registerAuthRoutes(app: Express) {
 
   // Forgot password — sends a reset link email via Supabase
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
+    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    if (checkAuthRateLimit(clientIp, 3, 300000)) {
+      return res.status(429).json({ error: "Too many reset requests. Please wait and try again." });
+    }
+
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
@@ -404,6 +414,11 @@ export function registerAuthRoutes(app: Express) {
 
   // Reset password — updates password using the access token from the reset link
   app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
+    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    if (checkAuthRateLimit(clientIp, 5, 300000)) {
+      return res.status(429).json({ error: "Too many reset attempts. Please wait and try again." });
+    }
+
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
