@@ -21,6 +21,20 @@ function sanitize(input: string): string {
     .slice(0, 10000);
 }
 
+// A4 fix: stricter scrubber for short user-supplied identifiers (profile/tracker/
+// habit names, document titles, memory keys/values) that get embedded inline in
+// the system-prompt context block. In addition to sanitize()'s HTML/JS strip,
+// this collapses newlines (which an attacker could use to forge a new context
+// section) and strips backticks/triple-quotes that confuse Claude's parser.
+function sanitizeForPrompt(input: any, max = 200): string {
+  if (input == null) return '';
+  const s = typeof input === 'string' ? input : String(input);
+  return sanitize(s)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/```/g, "'''")
+    .slice(0, max);
+}
+
 // Field-name patterns whose VALUES must be replaced with [REDACTED] before being
 // embedded into any LLM context (system prompt, history, extracted data, memories).
 // The actual DB rows are unchanged — only the LLM-bound view is masked.
@@ -3468,15 +3482,53 @@ function safeLC(val: any): string {
   return (typeof val === "string" ? val : "").toLowerCase();
 }
 
+// A1 fix: word-boundary profile name matching. Prevents `"Max".includes()` from
+// hitting `"Maxwell"` / `"Maxine"` and silently picking a wrong profile.
+// Resolution order: exact match → word-boundary match in either direction.
+// Returns undefined when 0 matches OR multiple word-boundary matches (caller
+// can surface a disambiguation error). Single longest-name preference applies
+// for the bidirectional case.
+function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: any): T | undefined {
+  const name = safeLC(rawName).trim();
+  if (!name) return undefined;
+  // 1. exact name match wins immediately
+  const exact = profiles.find(p => p.name.toLowerCase() === name);
+  if (exact) return exact;
+  // 2. word-boundary match: name appears as a whole word in profile.name OR vice-versa
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const nameRe = new RegExp(`(^|\\b)${escapedName}(\\b|$)`);
+  const matches: T[] = [];
+  for (const p of profiles) {
+    const pn = p.name.toLowerCase();
+    if (nameRe.test(pn)) { matches.push(p); continue; }
+    const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(name)) matches.push(p);
+  }
+  if (matches.length === 0) return undefined;
+  if (matches.length === 1) return matches[0];
+  // Multiple ambiguous matches — prefer longest profile name (most specific).
+  // Caller can detect ambiguity if needed; logging here for debugging.
+  matches.sort((a, b) => b.name.length - a.name.length);
+  if (matches[0].name.length === matches[1].name.length) {
+    logger.warn("ai", `matchProfileByName ambiguous for "${rawName}" — ${matches.length} equal-length matches; returning first.`);
+  }
+  return matches[0];
+}
 
-async function executeTool(name: string, input: any): Promise<any> {
+
+async function executeTool(name: string, input: any, userId?: string): Promise<any> {
+  // A2 fix: userId scopes the in-memory dedup map; without this two users
+  // sending the same command within 30s would collide.
+  const dedupUser = userId || "_global";
   switch (name) {
     case "search": {
       const results = await storage.search(input.query);
       // Filter by profile if specified
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const matchedProfile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+        // A1 fix: word-boundary match instead of substring — prevents "Max"
+        // from matching "Maxwell" / "Maxine".
+        const matchedProfile = matchProfileByName(profiles, input.forProfile);
         if (matchedProfile) {
           const pid = matchedProfile.id;
           return results.filter((r: any) => {
@@ -3490,7 +3542,8 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "get_profile_data": {
       const profiles = await storage.getProfiles();
-      const profile = profiles.find(p => p.name.toLowerCase().includes((input.profileName || "").toLowerCase()));
+      // A1 fix: word-boundary match instead of substring.
+      const profile = matchProfileByName(profiles, input.profileName);
       if (!profile) return { error: `No profile found matching "${input.profileName}"` };
       const detail = await storage.getProfileDetail(profile.id);
       if (!detail) return { error: "Could not load profile data" };
@@ -3516,7 +3569,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let filterProfileId: string | undefined;
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const matched = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+        const matched = matchProfileByName(profiles, input.forProfile);
         if (matched) filterProfileId = matched.id;
       }
 
@@ -3585,7 +3638,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Resolve intended parent for child types
       let intendedParentId: string | undefined;
       if (isChildType && input.forProfile) {
-        const parentMatch = existingProfiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+        const parentMatch = matchProfileByName(existingProfiles, input.forProfile);
         if (parentMatch) intendedParentId = parentMatch.id;
       }
       const existingProfile = existingProfiles.find(p => {
@@ -3613,7 +3666,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         const profiles = await storage.getProfiles();
         // If forProfile is specified, find that profile as parent
         if (input.forProfile) {
-          const parent = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+          const parent = matchProfileByName(profiles, input.forProfile);
           if (parent) parentProfileId = parent.id;
         }
         // Default: link to self profile
@@ -3860,8 +3913,10 @@ async function executeTool(name: string, input: any): Promise<any> {
       // In-memory dedup lock (includes profile for cross-profile dedup safety)
       // Use the normalized title so trivial punctuation/casing differences
       // hit the same key within a short time window.
-      const taskDedupKey = `task:${incomingNorm}:${taskLinkedProfiles.join(",")}`;
-      if (isDuplicateCreation("_global", taskDedupKey)) {
+      // A9 fix: include forProfile in the key so the same task title for two
+      // different family members isn't suppressed as a duplicate.
+      const taskDedupKey = `task:${safeLC(input.forProfile || "")}:${incomingNorm}:${taskLinkedProfiles.join(",")}`;
+      if (isDuplicateCreation(dedupUser, taskDedupKey)) {
         logger.info("ai", `Dedup lock: skipped duplicate task "${input.title}"`);
         return { error: "Duplicate task detected — skipped" };
       }
@@ -3873,7 +3928,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         tags: input.tags || [],
         linkedProfiles: taskLinkedProfiles.length > 0 ? taskLinkedProfiles : undefined,
       });
-      markCreation("_global", taskDedupKey);
+      markCreation(dedupUser, taskDedupKey);
       // Ensure junction table is set
       for (const pid of taskLinkedProfiles) {
         await storage.linkProfileTo(pid, "task", newTask.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
@@ -3890,7 +3945,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let taskPool = tasks.filter(t => t.status !== "done");
       if (input.forProfile) {
         const allProfs = await storage.getProfiles();
-        const prof = allProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(allProfs, input.forProfile);
         if (prof) taskPool = taskPool.filter(t => (t.linkedProfiles || []).includes(prof.id));
       }
       const result = safeMatchEntity(taskPool, input.title || "", t => t.title);
@@ -3908,7 +3963,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let taskPool = tasks;
       if (input.forProfile) {
         const allProfs = await storage.getProfiles();
-        const prof = allProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(allProfs, input.forProfile);
         if (prof) taskPool = tasks.filter(t => (t.linkedProfiles || []).includes(prof.id));
       }
       const result = safeMatchEntity(taskPool, input.title || "", t => t.title, { isDestructive: true });
@@ -4894,7 +4949,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       }
       // In-memory dedup lock — catches concurrent requests before DB persistence
       const expDedupKey = `expense:${safeLC(input.description)}:${parsedAmount}:${input.date || ""}:${safeLC(input.forProfile || "")}`;
-      if (isDuplicateCreation("_global", expDedupKey)) {
+      if (isDuplicateCreation(dedupUser, expDedupKey)) {
         logger.info("ai", `Dedup lock: skipped duplicate expense $${parsedAmount} ${input.description}`);
         return { error: "Duplicate expense detected — skipped" };
       }
@@ -4984,7 +5039,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         tags: input.tags || [],
         linkedProfiles: expenseLinkedProfiles.length > 0 ? expenseLinkedProfiles : undefined,
       } as any);
-      markCreation("_global", expDedupKey);
+      markCreation(dedupUser, expDedupKey);
       // If we already linked above, just ensure junction table is set. Otherwise auto-link.
       if (expenseLinkedProfiles.length > 0) {
         for (const pid of expenseLinkedProfiles) {
@@ -5014,8 +5069,9 @@ async function executeTool(name: string, input: any): Promise<any> {
         return { error: "Valid event date (YYYY-MM-DD) is required" };
       }
       // In-memory dedup lock
-      const evtDedupKey = `event:${safeLC(input.title)}:${input.date}`;
-      if (isDuplicateCreation("_global", evtDedupKey)) {
+      // A9 fix: include forProfile in event dedup key.
+      const evtDedupKey = `event:${safeLC(input.forProfile || "")}:${safeLC(input.title)}:${input.date}`;
+      if (isDuplicateCreation(dedupUser, evtDedupKey)) {
         logger.info("ai", `Dedup lock: skipped duplicate event "${input.title}" on ${input.date}`);
         return { error: "Duplicate event detected — skipped" };
       }
@@ -5033,8 +5089,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let eventLinkedProfiles: string[] = [];
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const target = profiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
-          || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const target = matchProfileByName(profiles, input.forProfile);
         if (target) eventLinkedProfiles.push(target.id);
       }
       // Bug #42: when AI omits forProfile for a medical-looking event, try to
@@ -5082,7 +5137,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         linkedDocuments: [],
         tags: [],
       });
-      markCreation("_global", evtDedupKey);
+      markCreation(dedupUser, evtDedupKey);
       // Only auto-link if we didn't already resolve a profile pre-creation
       if (eventLinkedProfiles.length > 0) {
         for (const pid of eventLinkedProfiles) {
@@ -5109,8 +5164,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let targetProfileId: string | undefined;
       if (input.forProfile) {
         const allProfiles = await storage.getProfiles();
-        const targetP = allProfiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
-          || allProfiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const targetP = matchProfileByName(allProfiles, input.forProfile);
         if (targetP) targetProfileId = targetP.id;
       }
       const dupHabit = existingHabits.find(h => {
@@ -5135,8 +5189,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Direct profile linking — don't rely solely on text matching
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const target = profiles.find(p => p.name.toLowerCase() === safeLC(input.forProfile).trim())
-          || profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const target = matchProfileByName(profiles, input.forProfile);
         if (target) {
           await storage.updateHabit(habit.id, { linkedProfiles: [target.id] } as any);
           await storage.linkProfileTo(target.id, "habit", habit.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
@@ -5155,7 +5208,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let eligible = habits;
       if (input.forProfile) {
         const allProfs = await storage.getProfiles();
-        const prof = allProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(allProfs, input.forProfile);
         if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
       } else {
         // Default: prefer habits linked to self profile
@@ -5218,7 +5271,7 @@ async function executeTool(name: string, input: any): Promise<any> {
         // When creating for a specific person, only match existing profiles owned by THAT person
         let targetParentId: string | undefined;
         if (input.forProfile) {
-          const targetProfile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+          const targetProfile = matchProfileByName(profiles, input.forProfile);
           if (targetProfile) targetParentId = targetProfile.id;
         }
         const existingProfile = profiles.find(p => {
@@ -5316,8 +5369,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Direct profile linking for forProfile
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const target = profiles.find((p: any) => p.name.toLowerCase() === safeLC(input.forProfile).trim())
-          || profiles.find((p: any) => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const target = matchProfileByName(profiles, input.forProfile);
         if (target) {
           await storage.updateJournalEntry(entry.id, { linkedProfiles: [target.id] } as any);
           await storage.linkProfileTo(target.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
@@ -5391,7 +5443,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       });
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const profile = profiles.find((p: any) => p.name.toLowerCase().includes(safeLC(input.forProfile)));
+        const profile = matchProfileByName(profiles, input.forProfile);
         if (profile) await storage.linkProfileTo(profile.id, "document", doc.id);
       }
       return doc;
@@ -5443,9 +5495,8 @@ async function executeTool(name: string, input: any): Promise<any> {
       } else {
         // Direct profile linking for goals
         if (input.forProfile) {
-          const targetProfile = (await storage.getProfiles()).find(p => 
-            p.name.toLowerCase() === safeLC(input.forProfile).trim() ||
-            p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+          // A1 fix: word-boundary match.
+          const targetProfile = matchProfileByName(await storage.getProfiles(), input.forProfile);
           if (targetProfile) {
             await storage.updateGoal(goal.id, { linkedProfiles: [targetProfile.id] } as any);
             await storage.linkProfileTo(targetProfile.id, "goal", goal.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
@@ -5607,7 +5658,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let eligible = habits;
       if (input.forProfile) {
         const profs = await storage.getProfiles();
-        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(profs, input.forProfile);
         if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
       } else {
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
@@ -5629,7 +5680,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let evtPool = events;
       if (input.forProfile) {
         const profs = await storage.getProfiles();
-        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(profs, input.forProfile);
         if (prof) evtPool = events.filter(e => (e.linkedProfiles || []).includes(prof.id));
       }
       const ceResult = safeMatchEntity(evtPool, input.title || "", e => e.title);
@@ -5648,7 +5699,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let trackerPool = trackers;
       if (input.forProfile) {
         const profs = await storage.getProfiles();
-        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(profs, input.forProfile);
         if (prof) trackerPool = trackers.filter(t => (t.linkedProfiles || []).includes(prof.id));
       }
       const dteResult = safeMatchEntity(trackerPool, input.trackerName || "", t => t.name);
@@ -5669,7 +5720,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       let uteProfileId: string | undefined;
       const uteProfs = await storage.getProfiles();
       if (input.forProfile) {
-        const prof = uteProfs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(uteProfs, input.forProfile);
         if (prof) {
           trackerPool2 = trackers.filter(t => (t.linkedProfiles || []).includes(prof.id));
           uteProfileId = prof.id;
@@ -5720,7 +5771,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Also filter by profile if specified
       if (input.forProfile && matchEntry) {
         const profs = await storage.getProfiles();
-        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(profs, input.forProfile);
         if (prof) {
           const profEntry = entries.filter(e => ((e as any).linkedProfiles || []).includes(prof.id))
             .sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -5739,7 +5790,7 @@ async function executeTool(name: string, input: any): Promise<any> {
       if (!matchEntry2) matchEntry2 = entries.find(e => e.date === today2) ?? entries[entries.length - 1] ?? null;
       if (input.forProfile && matchEntry2) {
         const profs = await storage.getProfiles();
-        const prof = profs.find(p => p.name.toLowerCase().includes(safeLC(input.forProfile).trim()));
+        const prof = matchProfileByName(profs, input.forProfile);
         if (prof) {
           const profEntry = entries.filter(e => ((e as any).linkedProfiles || []).includes(prof.id))
             .sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -5950,9 +6001,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
       // Filter by profile if specified
       if (input.profileName) {
-        const profile = profiles.find((p: any) =>
-          p.name.toLowerCase().includes(safeLC(input.profileName))
-        );
+        const profile = matchProfileByName(profiles, input.profileName);
         if (profile) {
           candidates = candidates.filter((d: any) =>
             d.linkedProfiles?.includes(profile.id)
@@ -6021,7 +6070,7 @@ async function executeTool(name: string, input: any): Promise<any> {
 
     case "revalue_asset": {
       const profiles = await storage.getProfiles();
-      const profile = profiles.find(p => p.name.toLowerCase().includes(safeLC(input.profileName)));
+      const profile = matchProfileByName(profiles, input.profileName);
       if (!profile) return { error: "Profile not found: " + input.profileName };
 
       const valuation = await estimateAssetValue({ type: profile.type, name: profile.name, fields: profile.fields });
@@ -6277,7 +6326,9 @@ async function executeTool(name: string, input: any): Promise<any> {
       // Profile-specific data if requested
       let profileData: any = null;
       if (input.profileId) {
-        const profile = profiles.find(p => p.id === input.profileId || p.name.toLowerCase().includes(safeLC(input.profileId)));
+        // A1 fix: id match first, then word-boundary name match. profileId may carry
+        // either a uuid or a free-text name from the model.
+        const profile = profiles.find(p => p.id === input.profileId) || matchProfileByName(profiles, input.profileId);
         if (profile) {
           const profileExpenses = thisMonthExpenses.filter(e => e.linkedProfiles?.includes(profile.id));
           const profileTrackers = trackers.filter(t => t.linkedProfiles?.includes(profile.id));
@@ -6687,22 +6738,8 @@ async function autoUpdateGoalProgress(trackerId: string, values: Record<string, 
 async function directLinkToProfile(entityType: string, entityId: string, forProfile: string | undefined): Promise<string | undefined> {
   if (!forProfile) return undefined;
   const profiles = await storage.getProfiles();
-  const searchName = forProfile.toLowerCase().trim();
-  // Exact match first, then partial
-  // Word-boundary match — see expense match comment above for the
-  // motivation. We look both directions ("Bob" finding "Bob Smith" AND
-  // "Bob Smith" finding "Bob") but only on whole words.
-  const escaped = searchName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const wordRe = new RegExp(`(^|\\b)${escaped}(\\b|$)`);
-  const target = profiles.find(p => p.name.toLowerCase() === searchName)
-    || profiles.find(p => {
-      const pn = p.name.toLowerCase();
-      if (wordRe.test(pn)) return true;
-      // Also let a longer requested name find a shorter profile when the
-      // profile name appears as a whole word in the request.
-      const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(searchName);
-    });
+  // A1 fix: shared word-boundary matcher (handles exact, then word-boundary).
+  const target = matchProfileByName(profiles, forProfile);
   if (!target) {
     logger.warn("ai", `directLinkToProfile: profile "${forProfile}" not found`);
     return undefined;
@@ -6710,35 +6747,48 @@ async function directLinkToProfile(entityType: string, entityId: string, forProf
   // Set linkedProfiles on the entity
   await updateEntityLinkedProfiles(entityType, entityId, target.id);
   await storage.linkProfileTo(target.id, entityType, entityId).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-  
-  // For expenses ONLY: also link to self so it shows in owner's finance
-  if (entityType === "expense") {
-    const self = profiles.find(p => p.type === "self");
-    if (self && self.id !== target.id) {
-      await updateEntityLinkedProfiles(entityType, entityId, self.id);
-      await storage.linkProfileTo(self.id, entityType, entityId).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-    }
-  }
-  
+
+  // A7 fix: do NOT auto-link expenses to self when an explicit non-self profile
+  // was named. Previous behavior caused "Max spent $50" to show up under both
+  // Self and Max, double-counting the expense in dashboards. The user has the
+  // global rule that self owns by default — but only when no explicit profile
+  // is named. When the user said "Max", they meant Max alone.
+  // (Old auto-self-link logic removed.)
+
   logger.info("ai", `directLinkToProfile: linked ${entityType} to "${target.name}" (${target.id.substring(0, 8)})`);
   return target.id;
 }
 
 
-// Scan text for profile names when forProfile wasn't explicitly set
-async function resolveForProfile(forProfile: string | undefined, text: string): Promise<string | undefined> {
-  if (forProfile) return forProfile;
+// A8 fix: collect ALL profile mentions in free text. Returns up to N matches
+// in mention order (after long-name preference) so callers can decide whether
+// to split or surface a disambiguation question.
+async function resolveAllForProfiles(text: string): Promise<string[]> {
+  if (!text) return [];
   const profiles = await storage.getProfiles();
-  // Sort by name length descending — prefer longest match first to avoid "Rex" matching before "Rex Jr."
   const candidates = profiles
     .filter(p => p.type !== 'self' && p.name.length >= 2)
     .sort((a, b) => b.name.length - a.name.length);
+  const lc = text.toLowerCase();
+  const found: string[] = [];
   for (const p of candidates) {
-    if (text.toLowerCase().includes(p.name.toLowerCase())) {
-      return p.name;
+    const pn = p.name.toLowerCase();
+    const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Word-boundary check so "Max" doesn't pick up "Maxwell".
+    if (new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(lc)) {
+      if (!found.includes(p.name)) found.push(p.name);
     }
   }
-  return undefined;
+  return found;
+}
+
+// Scan text for profile names when forProfile wasn't explicitly set
+async function resolveForProfile(forProfile: string | undefined, text: string): Promise<string | undefined> {
+  if (forProfile) return forProfile;
+  // A8 fix: use shared multi-name resolver and pick the first (longest-name)
+  // hit. Callers that want all matches should use resolveAllForProfiles().
+  const all = await resolveAllForProfiles(text);
+  return all[0];
 }
 
 async function autoLinkToProfiles(entityType: string, entityId: string, text: string, explicitProfileName?: string): Promise<void> {
@@ -7429,7 +7479,12 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   ])).filter(Boolean).join("\n");
 
   const selfProfileId = profiles.find((p: any) => p.type === "self")?.id || '';
-  const systemPrompt = buildSystemPrompt(context, selfProfileId, (storage as any)._timezone);
+  // A4 fix: scrub the assembled context once at the boundary before injection
+  // into the system prompt — defense-in-depth against prompt-injection vectors
+  // hiding in profile names, memory keys/values, tracker names, etc. Stripping
+  // happens at the top level so per-row mistakes elsewhere can't leak through.
+  const safeContext = sanitize(context).replace(/```/g, "'''");
+  const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
 
   // ─── Smart model routing: Haiku by default, auto-escalate to Sonnet for complex queries ───
   // Rules:
@@ -7457,6 +7512,13 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     const questionMarks = (t.match(/\?/g) || []).length;
     if (questionMarks >= 2) return "complex";
     if (/[;]|\sand also\s|\sthen\s|\bafter that\b|\balso\s/.test(lc) && t.length > 120) return "complex";
+    // A6 fix: detect ` and ` followed by an action verb — catches
+    // "Add house $500k and car $30k", "Log Max's weight and Dad's BP", etc.
+    // The Haiku fast-path was running only the first action; routing to Sonnet
+    // gives the multi-step tool loop room to fire both.
+    const ACTION_VERBS = /(add|log|create|track|record|set|update|delete|remove|schedule|book|plan|spend|pay|owe|buy|sell|link|unlink)/;
+    const andVerbRe = new RegExp(`\\sand\\s+(?:a\\s+|an\\s+|the\\s+|my\\s+|her\\s+|his\\s+|their\\s+|\\$|\\d|${ACTION_VERBS.source})`, 'i');
+    if (andVerbRe.test(lc)) return "complex";
     // Multi-step / analytical intent verbs
     const complexIntents = [
       "analyze", "analyse", "compare", "comparison", "forecast", "project ", "projection",
@@ -7600,7 +7662,9 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         const inp = toolUse.input as Record<string, any>;
         const createToolNames = ["create_obligation", "create_expense", "create_event", "create_task", "create_profile"];
         if (createToolNames.includes(toolUse.name)) {
-          const key = `${toolUse.name}:${(inp.name || inp.title || inp.description || "").toLowerCase().trim()}`;
+          // A9 fix: include forProfile in per-response dedup key so the same
+          // task/expense title across two profiles isn't suppressed.
+          const key = `${toolUse.name}:${String(inp.forProfile || "").toLowerCase().trim()}:${(inp.name || inp.title || inp.description || "").toLowerCase().trim()}`;
           if (seenCreates.has(key)) {
             logger.info("ai", `Deduped tool call: ${key}`);
             toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify({ skipped: true, reason: "duplicate call" }) });
@@ -7621,7 +7685,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           if (validation.warnings.length > 0) {
             logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
           }
-          const result = await executeTool(toolUse.name, validation.normalized);
+          // A2 fix: thread userId so dedup map is scoped per-user.
+          const result = await executeTool(toolUse.name, validation.normalized, userId);
           
           // Invalidate context cache after any write operation
           const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
