@@ -49,7 +49,10 @@ CREATE TABLE IF NOT EXISTS tracker_entries (
   values JSONB DEFAULT '{}'::jsonb,
   computed JSONB DEFAULT '{}'::jsonb,
   notes TEXT,
-  mood TEXT CHECK (mood IS NULL OR mood IN ('great','good','okay','bad','terrible')),
+  -- D2 fix: unified 8-level mood enum across tracker_entries + journal_entries +
+  -- shared/schema.ts. The previous narrow set caused 500s when the AI inferred
+  -- 'amazing' or 'awful' (valid in code) and tried to insert into trackers.
+  mood TEXT CHECK (mood IS NULL OR mood IN ('amazing','great','good','okay','neutral','bad','awful','terrible')),
   tags JSONB DEFAULT '[]'::jsonb,
   timestamp TIMESTAMPTZ DEFAULT now()
 );
@@ -189,7 +192,9 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   date TEXT NOT NULL,
-  mood TEXT NOT NULL CHECK (mood IN ('amazing','good','neutral','bad','awful')),
+  -- D2 fix: unified 8-level mood enum (production was already migrated; this
+  -- aligns the source-of-truth migration file).
+  mood TEXT NOT NULL CHECK (mood IN ('amazing','great','good','okay','neutral','bad','awful','terrible')),
   content TEXT DEFAULT '',
   tags JSONB DEFAULT '[]'::jsonb,
   energy INTEGER CHECK (energy IS NULL OR (energy >= 1 AND energy <= 5)),

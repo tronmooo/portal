@@ -5,6 +5,7 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import { apiRequest } from "./queryClient";
 import { queryClient } from "./queryClient";
 import { clearChatCache } from "@/pages/chat";
+import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -71,6 +72,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     checkAuthConfig();
   }, []);
+
+  // ST3 fix: keep the profile filter namespaced to whichever user is currently
+  // signed in. When the user changes (sign-in, sign-out, OAuth callback, refresh),
+  // load that user's saved filter; on sign-out, clear it from memory so the
+  // next user does not inherit the previous user's selection.
+  useEffect(() => {
+    if (user?.id) {
+      setActiveUserForFilter(user.id);
+    } else {
+      clearProfileFilterForUser();
+    }
+  }, [user?.id]);
 
   // Background token refresh — renew 5 minutes before expiry to prevent silent 401s
   useEffect(() => {

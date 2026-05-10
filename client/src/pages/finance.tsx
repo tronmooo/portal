@@ -17,7 +17,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3 } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -91,6 +91,9 @@ export default function FinancePage() {
   const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  // U2 fix: confirmation state for paycheck deletion. Holds the paycheck object
+  // pending confirmation, or null when no dialog is showing.
+  const [paycheckToDelete, setPaycheckToDelete] = useState<{ id: string; source: string; amount: number } | null>(null);
   const [addPaycheckOpen, setAddPaycheckOpen] = useState(false);
   const [newPaycheck, setNewPaycheck] = useState({ source: "", amount: "", expectedDate: "" });
 
@@ -663,9 +666,13 @@ export default function FinancePage() {
                     <Check className="h-3 w-3" /> Received
                   </Button>
                 )}
-                <button className="text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center"
-                  onClick={stopProp(() => deletePaycheckMut.mutate(pc.id))}>
-                  <Trash2 className="h-3 w-3" />
+                {/* U2 fix: open confirmation dialog instead of deleting immediately.
+                    Also disable while a previous delete is in flight (avoids spam clicks). */}
+                <button className="text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center disabled:opacity-50"
+                  disabled={deletePaycheckMut.isPending}
+                  data-testid={`btn-delete-paycheck-${pc.id}`}
+                  onClick={stopProp(() => setPaycheckToDelete({ id: pc.id, source: pc.source, amount: (pc.actual_amount || pc.amount) }))}>
+                  {deletePaycheckMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
                 </button>
               </div>
             ))}
@@ -823,6 +830,29 @@ export default function FinancePage() {
           </div>
         )}
       </div>
+
+      {/* U2 fix: Delete Paycheck Confirmation — mirrors the expense pattern below. */}
+      <AlertDialog open={paycheckToDelete !== null} onOpenChange={(open) => { if (!open) setPaycheckToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this paycheck?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {paycheckToDelete ? `“${paycheckToDelete.source}” ($${paycheckToDelete.amount.toLocaleString()}) will be permanently deleted.` : "This paycheck will be permanently deleted."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="btn-confirm-delete-paycheck"
+              onClick={() => {
+                if (paycheckToDelete) deletePaycheckMut.mutate(paycheckToDelete.id);
+                setPaycheckToDelete(null);
+              }}
+            >Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete Expense Confirmation */}
       <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>

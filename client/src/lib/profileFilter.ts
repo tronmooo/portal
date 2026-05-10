@@ -1,10 +1,14 @@
 // Universal multi-select profile filter state
-// Persists in sessionStorage across navigation within the same session.
+// Persists in localStorage namespaced by authenticated user id, so signing
+// out and back in as a different user on the same device does not leak the
+// previous user's filter (ST3 fix).
 // "everyone" mode = no filter applied, all data shown (default).
 // Otherwise, selectedIds contains the checked profile IDs.
 
 const STORAGE_KEY = "portol_profile_filter";
-const LOCAL_KEY = "portol_profile_filter_v3"; // bumped to v3 to clear corrupted filter state
+const LOCAL_KEY_BASE = "portol_profile_filter_v4"; // bumped to v4 + per-user namespacing
+const USER_ID_KEY = "portol_active_user_id";
+const FILTER_EVENT = "portol:profile-filter-change";
 
 export type FilterMode = "everyone" | "selected";
 
@@ -14,29 +18,73 @@ interface FilterState {
   selectedNames: string[]; // parallel array for display
 }
 
-// Clean up old storage keys to prevent stale filter state
+// Clean up old (un-namespaced) storage keys to prevent stale filter state
 try {
   localStorage.removeItem("portol_profile_filter_v2");
+  localStorage.removeItem("portol_profile_filter_v3");
   localStorage.removeItem("portol_profile_filter");
   sessionStorage.removeItem("portol_profile_filter");
 } catch {}
+
+/** Get the storage key for the currently-active user. Falls back to a global
+ *  slot only if no user id is known yet (e.g. during initial page load before
+ *  auth resolves). The global slot is cleared on sign-out via clearProfileFilterForUser(). */
+function storageKey(): string {
+  try {
+    const uid = localStorage.getItem(USER_ID_KEY) || "";
+    return uid ? `${LOCAL_KEY_BASE}:${uid}` : LOCAL_KEY_BASE;
+  } catch {
+    return LOCAL_KEY_BASE;
+  }
+}
 
 let _state: FilterState = loadFromStorage();
 
 function loadFromStorage(): FilterState {
   try {
-    const raw = localStorage.getItem(LOCAL_KEY);
+    const raw = localStorage.getItem(storageKey());
     if (raw) return JSON.parse(raw);
   } catch {}
   return { mode: "everyone", selectedIds: [], selectedNames: [] };
 }
 
-const FILTER_EVENT = "portol:profile-filter-change";
+/** Auth layer calls this when a user signs in or the active session changes.
+ *  Reloads the in-memory filter state from this user's namespaced key so the
+ *  UI immediately shows their saved filter (or default "everyone"). */
+export function setActiveUserForFilter(userId: string | null) {
+  try {
+    if (userId) {
+      localStorage.setItem(USER_ID_KEY, userId);
+    } else {
+      localStorage.removeItem(USER_ID_KEY);
+    }
+  } catch {}
+  _state = loadFromStorage();
+  try {
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+      window.dispatchEvent(new CustomEvent(FILTER_EVENT, { detail: { ..._state } }));
+    }
+  } catch {}
+}
+
+/** Auth layer calls this on sign-out to clear in-memory state and any global slot. */
+export function clearProfileFilterForUser() {
+  _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
+  try {
+    localStorage.removeItem(USER_ID_KEY);
+    localStorage.removeItem(LOCAL_KEY_BASE); // legacy global slot
+  } catch {}
+  try {
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+      window.dispatchEvent(new CustomEvent(FILTER_EVENT, { detail: { ..._state } }));
+    }
+  } catch {}
+}
 
 function saveToStorage() {
   try {
     const json = JSON.stringify(_state);
-    localStorage.setItem(LOCAL_KEY, json);
+    localStorage.setItem(storageKey(), json);
     sessionStorage.setItem(STORAGE_KEY, json); // backward compat
   } catch {}
   // Broadcast so pages can sync their local state even if a child component's
@@ -63,7 +111,8 @@ export function subscribeProfileFilter(
   window.addEventListener(FILTER_EVENT, handler as EventListener);
   // Also react to other tabs writing to localStorage
   const storageHandler = (e: StorageEvent) => {
-    if (e.key !== LOCAL_KEY) return;
+    // Only react to the current user's namespaced key (ST3 fix).
+    if (e.key !== storageKey()) return;
     try {
       _state = e.newValue ? JSON.parse(e.newValue) : { mode: "everyone", selectedIds: [], selectedNames: [] };
       cb(getProfileFilter());

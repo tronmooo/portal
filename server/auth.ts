@@ -104,7 +104,13 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return res.status(401).json({ error: "Authentication required", code: "AUTH_REQUIRED" });
   }
 
-  const token = authHeader.replace("Bearer ", "");
+  const token = authHeader.replace("Bearer ", "").trim();
+  // S7 fix: reject empty / obviously-bogus tokens before round-tripping to Supabase.
+  // Real Supabase JWTs are 100+ chars; 20 is a safe lower bound that catches
+  // `Authorization: Bearer ` (trailing space) and similar malformed inputs.
+  if (!token || token.length < 20) {
+    return res.status(401).json({ error: "Invalid or expired token", code: "AUTH_INVALID" });
+  }
   const supabase = getSupabaseAuth();
   if (!supabase) {
     return res.status(500).json({ error: "Auth not configured" });

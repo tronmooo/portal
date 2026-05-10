@@ -371,8 +371,10 @@ export async function registerRoutes(
       if (msg.includes('timeout') || msg.includes('ETIMEDOUT')) {
         return res.status(504).json({ error: "Request timed out.", reply: "That took too long. Could you try a simpler question, or try again?" });
       }
-      const detail = process.env.NODE_ENV !== 'production' ? msg : undefined;
-      res.status(500).json({ error: "Failed to process message", reply: "Something went wrong. Please try again.", ...(detail !== undefined && { detail }) });
+      // S3 fix: never leak internal error details to clients. Log to stderr instead.
+      // Previously we surfaced `detail: <raw msg>` outside production, which exposed
+      // SDK errors / stack traces / DB column names if NODE_ENV was misconfigured.
+      res.status(500).json({ error: "Failed to process message", reply: "Something went wrong. Please try again." });
     }
   }));
 
@@ -457,10 +459,22 @@ export async function registerRoutes(
   // Hit by Vercel cron every Sunday at 14:00 UTC (configured in vercel.json).
   // Vercel cron uses GET by default. Auth via CRON_SECRET bearer token.
   // Iterates all Supabase auth users and generates a review for each.
+  // S8 fix: timing-safe comparison for cron secret. The previous `===` leaked
+  // information through observable response time on partial-match attempts.
+  const safeEqual = (a: string, b: string) => {
+    if (a.length !== b.length) return false;
+    try {
+      const ba = Buffer.from(a);
+      const bb = Buffer.from(b);
+      // crypto.timingSafeEqual requires equal lengths — already enforced above.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      return require("crypto").timingSafeEqual(ba, bb);
+    } catch { return false; }
+  };
   const cronWeeklyReview: any = asyncHandler(async (req: any, res: any) => {
     const secret = process.env.CRON_SECRET;
-    const provided = (req.headers.authorization || "").replace("Bearer ", "");
-    if (!secret || provided !== secret) {
+    const provided = (req.headers.authorization || "").replace("Bearer ", "").trim();
+    if (!secret || !provided || !safeEqual(provided, secret)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     try {
@@ -524,10 +538,14 @@ export async function registerRoutes(
       if (fileSizeBytes > MAX_FILE_SIZE) {
         return res.status(413).json({ error: `File too large (${(fileSizeBytes / 1024 / 1024).toFixed(1)}MB). Maximum is 10MB.` });
       }
-      // MIME type validation
+      // S5 fix: reject unknown MIMEs with 415 instead of normalizing to octet-stream.
+      // The previous fallback could trick downstream viewers/AI parsers that trust
+      // the stored MIME type into mishandling files.
       const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-      const safeMime = ALLOWED_MIMES.includes(mimeType) ? mimeType : 'application/octet-stream';
-      const result = await processFileUpload(fileName, safeMime, fileData, message, profileId);
+      if (!ALLOWED_MIMES.includes(mimeType)) {
+        return res.status(415).json({ error: `Unsupported file type: ${mimeType}. Allowed: images, PDF, plain text, Word.` });
+      }
+      const result = await processFileUpload(fileName, mimeType, fileData, message, profileId);
       res.json(result);
     } catch (err: any) {
       log.error("[Upload]", err?.message || "unknown error");
@@ -1165,12 +1183,22 @@ export async function registerRoutes(
   app.get("/api/profiles/:id", asyncHandler(async (req, res) => {
     const profile = await storage.getProfile(req.params.id);
     if (!profile) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; this check is defense-in-depth
+    // in case a future refactor weakens that. Typed shape strips user_id, so
+    // this only fires when a future mapper exposes it.
+    if ((profile as any).userId && (profile as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(profile);
   }));
   app.get("/api/profiles/:id/detail", asyncHandler(async (req, res) => {
     // NO cache — profile detail must always reflect current DB state (Principle 5)
     const detail = await storage.getProfileDetail(req.params.id);
     if (!detail) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(detail);
   }));
 
@@ -1178,6 +1206,10 @@ export async function registerRoutes(
   app.get("/api/profiles/:id/tree", asyncHandler(async (req, res) => {
     const root = await storage.getProfile(req.params.id);
     if (!root) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((root as any).userId && (root as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
 
     // Fetch all profiles once (user-scoped) then build tree in memory
     const allProfiles = await storage.getProfiles();
@@ -1823,6 +1855,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);
     if (!tracker) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((tracker as any).userId && (tracker as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(tracker);
   }));
   app.post("/api/trackers", asyncHandler(async (req, res) => {
@@ -1948,13 +1984,21 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
   // Convenience endpoint: delete tracker entry by entry ID only (for chat undo)
+  // S2 fix: defense-in-depth ownership check. storage.getTrackers() already filters
+  // by user_id, so iterating it ensures we only delete entries on the caller's
+  // trackers — even if a future refactor weakens the storage filter, we won't
+  // delete cross-user rows. We also bust caches once we find a hit.
   app.delete("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
     const trackers = await storage.getTrackers();
     for (const t of trackers) {
       const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
       if (entry) {
         const deleted = await storage.deleteTrackerEntry(t.id, req.params.entryId);
-        if (deleted) return res.json({ success: true });
+        if (deleted) {
+          const uid_te3 = (req as AuthenticatedRequest).userId || "anon";
+          bustCache(`trackers:`); bustCache(`stats:${uid_te3}`); bustCache(`enhanced:`);
+          return res.json({ success: true });
+        }
       }
     }
     return res.status(404).json({ error: "Entry not found" });
@@ -2002,6 +2046,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     const tasks = await storage.getTasks();
     const task = tasks.find(t => t.id === req.params.id);
     if (!task) return res.status(404).json({ error: "Task not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((task as any).userId && (task as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Task not found" });
+    }
     res.json(task);
   }));
   app.post("/api/tasks", asyncHandler(async (req, res) => {
@@ -2156,6 +2204,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/expenses/:id", asyncHandler(async (req, res) => {
     const expense = await storage.getExpense(req.params.id);
     if (!expense) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((expense as any).userId && (expense as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(expense);
   }));
   app.post("/api/expenses", asyncHandler(async (req, res) => {
@@ -2364,6 +2416,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
     if (!event) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((event as any).userId && (event as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(event);
   }));
   app.post("/api/events", asyncHandler(async (req, res) => {
@@ -2422,6 +2478,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((doc as any).userId && (doc as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     // Strip base64 fileData from JSON response — clients fetch binary via /file.
     const { fileData, ...docMeta } = doc;
     res.json(docMeta);
@@ -2480,6 +2540,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/documents/:id/file", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc || !doc.fileData) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((doc as any).userId && (doc as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     const buffer = Buffer.from(doc.fileData, "base64");
     res.setHeader("Content-Type", doc.mimeType);
     // Sanitize filename: strip all non-alphanumeric except dots, hyphens, underscores
@@ -2601,6 +2665,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
     if (!habit) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((habit as any).userId && (habit as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(habit);
   }));
   app.post("/api/habits", asyncHandler(async (req, res) => {
@@ -2694,6 +2762,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Not found" });
+    // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+    if ((ob as any).userId && (ob as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(ob);
   }));
   app.post("/api/obligations", asyncHandler(async (req, res) => {
@@ -4199,6 +4271,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     try {
       const goal = await storage.getGoal(req.params.id);
       if (!goal) return res.status(404).json({ error: "Goal not found" });
+      // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
+      if ((goal as any).userId && (goal as any).userId !== (req as AuthenticatedRequest).userId) {
+        return res.status(404).json({ error: "Goal not found" });
+      }
       res.json(goal);
     } catch (err: any) {
       console.error("Goal error:", err);

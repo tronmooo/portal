@@ -12,6 +12,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Progress } from "@/components/ui/progress";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription, DialogClose,
@@ -640,11 +644,15 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
 
 // ─── Tasks Popup ──────────────────────────────────────────────────────────────
 
+// U1 fix forward declaration: TasksPopup uses a confirmation AlertDialog before
+// permanently deleting a completed task. State held inside the component.
 function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: { open: boolean; onClose: () => void; filterIds?: string[]; filterMode?: string }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [addingTo, setAddingTo] = useState<string | null>(null);
+  // U1 fix: track which task is pending confirmation before delete.
+  const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
   // Force refetch when popup opens — prevents stale cache after AI chat mutations
   useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); } }, [open]);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -743,8 +751,9 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       </div>
       {dimmed && (
         <button
-          onClick={() => deleteMutation.mutate({ id: t.id })}
-          className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-destructive touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+          onClick={() => setTaskToDelete({ id: t.id, title: t.title })}
+          disabled={deleteMutation.isPending}
+          className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-destructive touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center disabled:opacity-40"
           aria-label="Delete task permanently"
           title="Delete task permanently"
           data-testid={`btn-delete-task-${t.id}`}
@@ -853,6 +862,29 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
           />
         </div>
       </DialogContent>
+      {/* U1 fix: confirmation dialog for the task delete — prevents accidental loss
+          when the dimmed completed-task X is hover-clicked. */}
+      <AlertDialog open={taskToDelete !== null} onOpenChange={(open) => { if (!open) setTaskToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {taskToDelete ? `“${taskToDelete.title}” will be permanently removed.` : "This task will be permanently removed."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (taskToDelete) deleteMutation.mutate({ id: taskToDelete.id });
+                setTaskToDelete(null);
+              }}
+              data-testid="btn-confirm-delete-task"
+            >Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
