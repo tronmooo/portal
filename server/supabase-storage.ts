@@ -1453,6 +1453,8 @@ export class SupabaseStorage implements IStorage {
     // Delete entries first, then the tracker
     await this.supabase.from("tracker_entries").delete().eq("tracker_id", id).eq("user_id", this.userId);
     await this.supabase.from("profile_trackers").delete().eq("tracker_id", id).eq("user_id", this.userId);
+    /* D1: clean up entity_links rows that reference this tracker */
+    await this.cleanupEntityLinks("tracker", id);
     const { error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -1533,6 +1535,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteTask(id: string): Promise<boolean> {
+    /* D1: clean up entity_links rows that reference this task */
+    await this.cleanupEntityLinks("task", id);
     await this.supabase.from("profile_tasks").delete().eq("task_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("tasks").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
@@ -1619,6 +1623,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteExpense(id: string): Promise<boolean> {
+    /* D1: clean up entity_links rows that reference this expense */
+    await this.cleanupEntityLinks("expense", id);
     await this.supabase.from("profile_expenses").delete().eq("expense_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("expenses").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
@@ -1755,6 +1761,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteEvent(id: string): Promise<boolean> {
+    /* D1: clean up entity_links rows that reference this event */
+    await this.cleanupEntityLinks("event", id);
     await this.supabase.from("profile_events").delete().eq("event_id", id).eq("user_id", this.userId);
     // Hard delete — events table doesn't have deleted_at column
     const { error } = await this.supabase.from("events").delete().eq("id", id).eq("user_id", this.userId);
@@ -2270,6 +2278,8 @@ export class SupabaseStorage implements IStorage {
 
   async deleteDocument(id: string): Promise<boolean> {
     if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    /* D1: clean up entity_links rows that reference this document */
+    await this.cleanupEntityLinks("document", id);
     // Capture storage_path BEFORE we mutate the row — we need it to remove the
     // underlying file from the Supabase Storage bucket. Without this, deleted
     // documents leave their files behind in the bucket forever, silently
@@ -2473,6 +2483,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteHabit(id: string): Promise<boolean> {
+    /* D1: clean up entity_links rows that reference this habit */
+    await this.cleanupEntityLinks("habit", id);
     // Soft delete — set deleted_at instead of removing the row
     const { error } = await this.supabase.from("habits").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
@@ -2578,6 +2590,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteObligation(id: string): Promise<boolean> {
+    /* D1: clean up entity_links rows that reference this obligation */
+    await this.cleanupEntityLinks("obligation", id);
     await this.supabase.from("obligation_payments").delete().eq("obligation_id", id).eq("user_id", this.userId);
     await this.supabase.from("profile_obligations").delete().eq("obligation_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("obligations").delete().eq("id", id).eq("user_id", this.userId);
@@ -2756,6 +2770,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteJournalEntry(id: string): Promise<boolean> {
+    /* D1: clean up entity_links rows that reference this journal */
+    await this.cleanupEntityLinks("journal", id);
     const { error } = await this.supabase.from("journal_entries").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -3106,6 +3122,24 @@ export class SupabaseStorage implements IStorage {
   async deleteEntityLink(id: string): Promise<boolean> {
     const { error } = await this.supabase.from("entity_links").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
+  }
+
+  /**
+   * D1: entity_links is polymorphic (source/target are TEXT pairs) so we
+   * can't declare typed FKs with ON DELETE CASCADE in the DB. Instead,
+   * every entity-delete path calls this helper to wipe links pointing at
+   * the deleted row from either side. Failures are logged but don't fail
+   * the parent delete — the parent row already has its own soft-delete
+   * flag, so a residual orphan link is a degraded-but-not-broken state.
+   */
+  private async cleanupEntityLinks(entityType: string, entityId: string): Promise<void> {
+    try {
+      await this.supabase.from("entity_links").delete()
+        .or(`and(source_type.eq.${entityType},source_id.eq.${entityId}),and(target_type.eq.${entityType},target_id.eq.${entityId})`)
+        .eq("user_id", this.userId);
+    } catch (e: any) {
+      console.warn(`[cleanupEntityLinks] ${entityType}/${entityId}: ${e?.message || e}`);
+    }
   }
 
   async getRelatedEntities(entityType: string, entityId: string): Promise<any[]> {
