@@ -67,12 +67,19 @@ export function setActiveUserForFilter(userId: string | null) {
   } catch {}
 }
 
-/** Auth layer calls this on sign-out to clear in-memory state and any global slot. */
+/** Auth layer calls this on sign-out to clear in-memory state, the active
+ *  user's namespaced slot, and any legacy global slot. Capturing the active
+ *  userId BEFORE removing USER_ID_KEY is required so we can target the
+ *  namespaced key — otherwise it would be left behind and rehydrated on the
+ *  next sign-in for the same user (filter persists across sign-out). */
 export function clearProfileFilterForUser() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
   try {
+    const uid = localStorage.getItem(USER_ID_KEY) || "";
+    if (uid) localStorage.removeItem(`${LOCAL_KEY_BASE}:${uid}`);
     localStorage.removeItem(USER_ID_KEY);
     localStorage.removeItem(LOCAL_KEY_BASE); // legacy global slot
+    sessionStorage.removeItem(STORAGE_KEY); // backward compat slot
   } catch {}
   try {
     if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
