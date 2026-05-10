@@ -89,6 +89,24 @@ export default function FinancePage() {
   }, [selfProfile]);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "" });
+  /* ST5: re-sync the form whenever the editing target changes. Previously
+     the form was seeded inside the click handler, so if React re-used the
+     dialog without remount the second open briefly showed the prior
+     expense's values. Keying the effect on editingExpense?.id keeps the
+     form authoritatively in sync with the currently-selected row. */
+  useEffect(() => {
+    if (editingExpense) {
+      setEditForm({
+        description: editingExpense.description ?? "",
+        amount: String((editingExpense as any).amount ?? ""),
+        category: (editingExpense as any).category ?? "",
+        vendor: (editingExpense as any).vendor ?? "",
+        date: (editingExpense as any).date?.slice(0, 10) ?? "",
+      });
+    } else {
+      setEditForm({ description: "", amount: "", category: "", vendor: "", date: "" });
+    }
+  }, [editingExpense?.id]);
   const [editSaving, setEditSaving] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   // U2 fix: confirmation state for paycheck deletion. Holds the paycheck object
@@ -297,7 +315,8 @@ export default function FinancePage() {
                     <Input placeholder="What was it for?" value={newExpense.description} onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))} data-testid="input-expense-description" /></div>
                   <div className="grid grid-cols-2 gap-3">
                     <div><Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
-                      <Input type="number" inputMode="decimal" step="0.01" placeholder="0.00" value={newExpense.amount} onChange={e => setNewExpense(p => ({ ...p, amount: e.target.value }))} data-testid="input-expense-amount" /></div>
+                      {/* U5: enforce non-negative amounts at the input level */}
+                      <Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" placeholder="0.00" value={newExpense.amount} onChange={e => setNewExpense(p => ({ ...p, amount: e.target.value }))} data-testid="input-expense-amount" /></div>
                     <div><Label className="text-xs">Category</Label>
                       <Select value={newExpense.category} onValueChange={v => setNewExpense(p => ({ ...p, category: v }))}>
                         <SelectTrigger data-testid="select-expense-category"><SelectValue /></SelectTrigger>
@@ -571,10 +590,9 @@ export default function FinancePage() {
                   </div>
                   <span className="text-sm font-semibold tabular-nums shrink-0">${expense.amount.toFixed(2)}</span>
                   <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={stopProp(() => {
-                      setEditingExpense(expense);
-                      setEditForm({ description: expense.description, amount: String(expense.amount), category: expense.category, vendor: expense.vendor || "", date: expense.date?.slice(0, 10) || "" });
-                    })} title="Edit"><Pencil className="h-3 w-3" /></Button>
+                    {/* ST5: form is now seeded by an effect on editingExpense?.id,
+                       so we just set the target row here. */}
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={stopProp(() => setEditingExpense(expense))} title="Edit"><Pencil className="h-3 w-3" /></Button>
                     <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={stopProp(() => setDeleteConfirmId(expense.id))} title="Delete"><Trash2 className="h-3 w-3" /></Button>
                   </div>
                 </div>
@@ -590,7 +608,8 @@ export default function FinancePage() {
           <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Description</Label><Input value={editForm.description} onChange={e => setEditForm(f => ({...f, description: e.target.value}))} /></div>
-            <div><Label>Amount</Label><Input type="number" inputMode="decimal" step="0.01" value={editForm.amount} onChange={e => setEditForm(f => ({...f, amount: e.target.value}))} /></div>
+            {/* U5: enforce non-negative amounts at the input level */}
+            <div><Label>Amount</Label><Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" value={editForm.amount} onChange={e => setEditForm(f => ({...f, amount: e.target.value}))} /></div>
             <div><Label>Category</Label>
               <Select value={editForm.category} onValueChange={v => setEditForm(f => ({...f, category: v}))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -602,7 +621,8 @@ export default function FinancePage() {
               </Select>
             </div>
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
-            <div><Label>Date</Label><Input type="date" value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
+            {/* U11: prevent picking a future date for an already-incurred expense */}
+            <div><Label>Date</Label><Input type="date" max={new Date().toISOString().slice(0,10)} value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingExpense(null)} disabled={editSaving}>Cancel</Button>
               <Button className="flex-1" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0 || editSaving} onClick={async () => {
@@ -690,10 +710,12 @@ export default function FinancePage() {
             <div><Label className="text-xs">Source Name <span className="text-destructive">*</span></Label>
               <Input placeholder="e.g. Employer, Freelance" value={newPaycheck.source} onChange={e => setNewPaycheck(p => ({ ...p, source: e.target.value }))} data-testid="input-paycheck-source" /></div>
             <div className="grid grid-cols-2 gap-3">
+              {/* U5: enforce non-negative paycheck amounts */}
               <div><Label className="text-xs">Expected Amount ($) <span className="text-destructive">*</span></Label>
-                <Input type="number" inputMode="decimal" step="0.01" placeholder="0.00" value={newPaycheck.amount} onChange={e => setNewPaycheck(p => ({ ...p, amount: e.target.value }))} data-testid="input-paycheck-amount" /></div>
+                <Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" placeholder="0.00" value={newPaycheck.amount} onChange={e => setNewPaycheck(p => ({ ...p, amount: e.target.value }))} data-testid="input-paycheck-amount" /></div>
+              {/* U12: paycheck is expected/future income — disallow past dates */}
               <div><Label className="text-xs">Expected Date <span className="text-destructive">*</span></Label>
-                <Input type="date" value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
+                <Input type="date" min={new Date().toISOString().slice(0,10)} value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
             </div>
             <Button className="w-full" onClick={() => addPaycheckMut.mutate()} disabled={!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate || addPaycheckMut.isPending} data-testid="button-save-paycheck">
               {addPaycheckMut.isPending ? "Saving..." : "Add Paycheck"}

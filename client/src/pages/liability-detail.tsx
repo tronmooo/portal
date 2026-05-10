@@ -1235,7 +1235,16 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       </div>
 
       {/* Quick payment dialog */}
-      <Dialog open={paymentDialog.open} onOpenChange={(o) => setPaymentDialog((s) => ({ ...s, open: o }))}>
+      {/* U3: when the dialog closes, reset state to defaults so the next open
+         doesn't show stale amount/date/notes from the previous attempt. We
+         keep the preset stable across closes since it's set by the opener. */}
+      <Dialog open={paymentDialog.open} onOpenChange={(o) => setPaymentDialog((s) => o ? { ...s, open: o } : {
+        open: false,
+        preset: s.preset,
+        amount: "",
+        paymentDate: new Date().toISOString().slice(0, 10),
+        notes: "",
+      })}>
         <DialogContent data-testid="payment-dialog">
           <DialogHeader>
             <DialogTitle>
@@ -1254,11 +1263,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           <div className="space-y-3">
             <div>
               <Label htmlFor="liability-payment-amount">Amount</Label>
+              {/* U4: min=0 prevents negative input at the browser level
+                 U10: max=999999999 prevents the JS-Number precision loss
+                 that starts around 1e16 */}
               <Input
                 id="liability-payment-amount"
                 type="number"
                 step="0.01"
                 min="0"
+                max="999999999"
                 value={paymentDialog.amount}
                 onChange={(e) => setPaymentDialog((s) => ({ ...s, amount: e.target.value }))}
                 data-testid="payment-amount-input"
@@ -1308,7 +1321,16 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       </Dialog>
 
       {/* Edit profile dialog — name + notes only; deeper field edits live on the Details tab */}
-      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+      {/* U8: re-seed the form from the current profile every time the dialog
+         opens. Without this, opening the dialog after the profile mutated
+         elsewhere (e.g. an AI update) would show the old name/notes. */}
+      <Dialog open={showEditDialog} onOpenChange={(o) => {
+        if (o) {
+          setEditName(profile.name || "");
+          setEditNotes((profile as any).notes || "");
+        }
+        setShowEditDialog(o);
+      }}>
         <DialogContent data-testid="dialog-edit-liability-profile">
           <DialogHeader>
             <DialogTitle>Edit profile</DialogTitle>

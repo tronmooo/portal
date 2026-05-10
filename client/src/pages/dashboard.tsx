@@ -1136,15 +1136,25 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
 // "Pay rent" today doesn't permanently hide it — the next day the bucket
 // flips and the dismissal expires. This matches the user-mental-model of
 // "dismiss for today" without requiring a server round-trip.
-const DISMISSED_LS_KEY = "portol_dismissed_action_v1";
+// ST6: bucket dismissals by {tz, date}. If the user travels across
+// timezones or DST shifts, the bucket invalidates and the dismissal
+// expires. v2 = added tz field; v1 buckets are ignored (treated as
+// empty) since they could be from a stale timezone.
+const DISMISSED_LS_KEY = "portol_dismissed_action_v2";
+const DISMISSED_LS_KEY_LEGACY = "portol_dismissed_action_v1";
 function loadDismissed(): Set<string> {
   try {
+    // Clean up legacy v1 slot so it doesn't accumulate.
+    localStorage.removeItem(DISMISSED_LS_KEY_LEGACY);
     const raw = localStorage.getItem(DISMISSED_LS_KEY);
     if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as { date: string; ids: string[] };
+    const parsed = JSON.parse(raw) as { tz?: string; date: string; ids: string[] };
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-    if (parsed.date !== todayStr) {
-      // New day — wipe yesterday's dismissals.
+    // Bucket expires when EITHER the date OR the timezone changes. The tz
+    // check catches travelers and DST hops mid-day; without it, a user who
+    // dismissed something at 11pm before "spring forward" would still see it
+    // hidden after the clock jump.
+    if (parsed.date !== todayStr || parsed.tz !== BROWSER_TIMEZONE) {
       localStorage.removeItem(DISMISSED_LS_KEY);
       return new Set();
     }
@@ -1154,7 +1164,11 @@ function loadDismissed(): Set<string> {
 function saveDismissed(ids: Set<string>) {
   try {
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-    localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify({ date: todayStr, ids: Array.from(ids) }));
+    localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify({
+      tz: BROWSER_TIMEZONE,
+      date: todayStr,
+      ids: Array.from(ids),
+    }));
   } catch { /* ignore quota errors */ }
 }
 

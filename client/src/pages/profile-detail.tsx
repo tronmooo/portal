@@ -5857,6 +5857,22 @@ function EditProfileDialog({
     return result;
   });
 
+  /* ST8: re-seed form fields whenever the underlying profile changes
+     (different id OR mutated in the cache by another flow). The initial
+     useState seed only runs on first mount — without this effect, opening
+     the dialog for profile B after editing profile A would briefly show
+     A's values, and AI-driven mutations to the open profile would be
+     overwritten on save. */
+  useEffect(() => {
+    setName(profile.name);
+    setNotes(profile.notes || "");
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(profile.fields || {})) {
+      if (v != null && typeof v !== "object") result[k] = String(v);
+    }
+    setFields(result);
+  }, [profile.id, open]);
+
   const validateFields = (): boolean => {
     const emailKeys = Object.keys(fields).filter(k => k.toLowerCase().includes("email"));
     for (const key of emailKeys) {
