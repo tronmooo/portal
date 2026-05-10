@@ -2919,7 +2919,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     let token = existing.shareToken;
     if (!token) {
       const { randomBytes } = await import("crypto");
-      token = randomBytes(16).toString("hex");
+      // S4: 32-byte token (was 16). 64 hex chars = 2^256 keyspace, making
+      // online enumeration of valid tokens computationally infeasible.
+      token = randomBytes(32).toString("hex");
       if (typeof storage.setArtifactShareToken === "function") {
         await storage.setArtifactShareToken(req.params.id, token);
       } else {
@@ -2943,16 +2945,42 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // Public read-only viewer endpoint — no auth, looked up by share token via service role.
   // Sanitised: drops linked_profiles and only exposes fields needed to render.
+  //
+  // S4 hardening:
+  //   - Per-IP rate limit (10/min) so an attacker can't enumerate token space.
+  //   - Generic 404 body for ALL failures (invalid format / not found /
+  //     internal error) so response shape doesn't distinguish valid from
+  //     invalid tokens.
+  //   - Constant-ish response delay floor (~80ms) on negative responses to
+  //     flatten the 200-vs-404 timing oracle.
   app.get("/api/public/artifacts/:token", asyncHandler(async (req, res) => {
-    const token = String(req.params.token || "").trim();
-    if (!token || token.length < 16 || token.length > 128) {
-      return res.status(400).json({ error: "Invalid token" });
+    const NOT_FOUND_BODY = { error: "Not found" };
+    const NOT_FOUND_DELAY_MS = 80;
+    async function deny(status: number = 404) {
+      // Sleep a constant floor before responding so an attacker can't
+      // distinguish "invalid format" (fast) from "unknown token" (slow DB).
+      await new Promise((r) => setTimeout(r, NOT_FOUND_DELAY_MS));
+      return res.status(status).json(NOT_FOUND_BODY);
     }
-    // Use a service-role storage instance (no userId scoping) so we can look
-    // up the artifact regardless of which user owns it.
+    // Per-IP rate limit: 10 requests / minute is generous for a real viewer
+    // (page loads once, then it's cached) but cuts enumeration throughput by
+    // ~6 orders of magnitude vs the unlimited baseline.
+    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+      || req.socket.remoteAddress
+      || "unknown";
+    if (rateLimit(`public-artifact:${ip}`, 10, 60_000)) {
+      return res.status(429).json(NOT_FOUND_BODY);
+    }
+    const token = String(req.params.token || "").trim();
+    // Accept legacy 16-byte (32 hex) tokens AND new 32-byte (64 hex) tokens.
+    // Reject anything that isn't hex of an expected length so we don't even
+    // hit the DB for obvious garbage.
+    if (!/^[a-f0-9]+$/i.test(token) || (token.length !== 32 && token.length !== 64)) {
+      return deny();
+    }
     const url = process.env.VITE_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !key) return res.status(500).json({ error: "Supabase env vars missing" });
+    if (!url || !key) return deny(500);
     const { createClient } = await import("@supabase/supabase-js");
     const admin = createClient(url, key);
     const { data, error } = await admin
@@ -2960,9 +2988,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       .select("id, type, title, content, items, metadata, created_at, updated_at")
       .filter("metadata->>shareToken", "eq", token)
       .limit(1);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return deny(500);
     const row = (data || [])[0];
-    if (!row) return res.status(404).json({ error: "Not found" });
+    if (!row) return deny();
     const md = (row.metadata as Record<string, any>) || {};
     res.setHeader("Cache-Control", "public, max-age=60");
     res.json({

@@ -1,6 +1,54 @@
 import type { Request, Response, NextFunction } from "express";
 
 /**
+ * S6: Origin-based CSRF protection for mutating endpoints.
+ *
+ * The app uses bearer-token auth (Authorization header, not cookies), which
+ * already mitigates classic CSRF — a malicious cross-origin form can't read
+ * tokens from localStorage and can't ride along on a cookie that doesn't
+ * exist. This middleware is defense-in-depth in case we ever flip to cookie
+ * auth or someone adds a third-party widget that does.
+ *
+ * Behavior: for any mutating method (POST/PATCH/PUT/DELETE) on /api/*, the
+ * Origin (or Referer, for HTTP/1.0 clients) header must match one of the
+ * known production hosts. Same-origin browser requests always send Origin.
+ * Missing Origin AND missing Referer means it's either a server-side caller
+ * (curl, CI) or a deeply broken client — those are allowed since they're
+ * not vulnerable to CSRF.
+ */
+const ALLOWED_HOST_SUFFIXES = [
+  "portol.me",
+  "localhost",
+  "127.0.0.1",
+  "vercel.app", // preview deploys
+];
+export function csrfOriginCheck(req: Request, res: Response, next: NextFunction) {
+  const m = req.method.toUpperCase();
+  if (m !== "POST" && m !== "PATCH" && m !== "PUT" && m !== "DELETE") return next();
+  // Public viewer + auth bootstrap routes are intentionally unauthenticated
+  // and can be reached pre-auth from email links etc. Skip the check there.
+  if (
+    req.path.startsWith("/api/auth/") ||
+    req.path.startsWith("/api/public/") ||
+    req.path.startsWith("/api/cron/")
+  ) return next();
+  const origin = req.headers.origin || "";
+  const referer = req.headers.referer || "";
+  // No browser header at all — not a CSRF vector (no cookies, no auto-attached creds).
+  if (!origin && !referer) return next();
+  const source = origin || referer;
+  try {
+    const url = new URL(source);
+    const host = url.hostname.toLowerCase();
+    const ok = ALLOWED_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith(`.${suf}`));
+    if (!ok) return res.status(403).json({ error: "Cross-origin request denied" });
+  } catch {
+    return res.status(403).json({ error: "Cross-origin request denied" });
+  }
+  return next();
+}
+
+/**
  * Shared security headers middleware — single source of truth for CSP and other security headers.
  * Used by both local dev server (index.ts) and Vercel entry (vercel-entry.ts).
  */

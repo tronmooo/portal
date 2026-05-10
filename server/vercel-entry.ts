@@ -31,8 +31,9 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: 'text/csv', limit: '10mb' }));
 
 // Security headers
-import { securityHeaders } from "./security-headers";
+import { securityHeaders, csrfOriginCheck } from "./security-headers";
 app.use(securityHeaders);
+app.use("/api", csrfOriginCheck);
 
 // Register auth endpoints (before auth middleware)
 registerAuthRoutes(app);
