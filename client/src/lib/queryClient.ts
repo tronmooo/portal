@@ -128,10 +128,16 @@ export const queryClient = new QueryClient({
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,    // Same idea after a network blip
       refetchOnMount: true,        // Refetch if data is stale on mount
-      // 5-second stale time: data shows instantly from cache, but refetches in background
-      // after 5 seconds. This means navigating between pages always gets fresh data
-      // while still feeling instant (cache serves immediately, refetch updates in background).
-      staleTime: 5000,
+      /* P6: staleTime bumped from 5s -> 30s. The 5s window was thrashing the
+         API on every tab switch and quick navigation — every page mount
+         within 5s of focus regain refetched all visible queries. 30s gives
+         the cache a real chance to serve, while refetchOnWindowFocus still
+         catches updates from another tab/device when the user returns. The
+         mutation cascade below (invalidates ~25 collections) overrides the
+         staleTime anyway whenever the user actively changes data, so this
+         doesn't sacrifice the "every calculation updates in real time"
+         requirement — it only reduces the cost of passive page-hopping. */
+      staleTime: 30_000,
       gcTime: 30 * 60 * 1000, // Keep unused data for 30 minutes
       retry: (failureCount, error) => {
         if (error instanceof Error) {

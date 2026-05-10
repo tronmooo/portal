@@ -335,6 +335,28 @@ export async function registerRoutes(
   });
 
   // ---- Chat / AI ----
+  /* A3: in-memory idempotency cache for AI chat. Keyed by (userId, key),
+     with the key supplied by the client in an `Idempotency-Key` header.
+     If two requests with the same key arrive within 5 minutes, the second
+     returns the cached response from the first instead of re-running the
+     tool chain. This eliminates the duplicate-write window when a client
+     retries on a timed-out request whose server work actually succeeded.
+     Entries auto-expire via a setTimeout cleanup. */
+  type IdempotencyEntry = { status: "pending" | "done"; result?: any; expires: number };
+  const idempotencyCache = new Map<string, IdempotencyEntry>();
+  const IDEM_TTL_MS = 5 * 60_000;
+  function idemKey(userId: string, key: string) { return `${userId}:${key}`; }
+  function getIdem(userId: string, key: string): IdempotencyEntry | undefined {
+    const e = idempotencyCache.get(idemKey(userId, key));
+    if (!e) return undefined;
+    if (Date.now() > e.expires) { idempotencyCache.delete(idemKey(userId, key)); return undefined; }
+    return e;
+  }
+  function setIdem(userId: string, key: string, entry: IdempotencyEntry) {
+    idempotencyCache.set(idemKey(userId, key), entry);
+    setTimeout(() => idempotencyCache.delete(idemKey(userId, key)), IDEM_TTL_MS + 1000);
+  }
+
   app.post("/api/chat", asyncHandler(async (req, res) => {
     const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`chat:${userId}`, 20)) {
@@ -348,10 +370,36 @@ export async function registerRoutes(
       if (message.length > 5000) {
         return res.status(400).json({ error: "Message too long (max 5000 characters)" });
       }
+
+      /* A3: honor Idempotency-Key. Valid keys are 8-128 chars of
+         [A-Za-z0-9._:-]. We don't validate semantics — the client (or a
+         generated UUID) is responsible for uniqueness per logical action. */
+      const rawIdem = (req.headers["idempotency-key"] || req.headers["x-idempotency-key"] || "") as string;
+      const idem = typeof rawIdem === "string" && /^[A-Za-z0-9._:\-]{8,128}$/.test(rawIdem) ? rawIdem : "";
+      if (idem) {
+        const existing = getIdem(userId, idem);
+        if (existing?.status === "done" && existing.result) {
+          // Replay the prior successful response. Adding a header so the
+          // client can observe that the body came from cache (useful for
+          // debugging, opt-in metrics).
+          res.setHeader("X-Idempotent-Replay", "1");
+          return res.json(existing.result);
+        }
+        if (existing?.status === "pending") {
+          // A concurrent retry hit while the first call is still running.
+          // Tell the client to back off briefly so the original call can
+          // finish and populate the cache.
+          res.setHeader("Retry-After", "2");
+          return res.status(409).json({ error: "In-flight request with the same Idempotency-Key. Retry in a moment." });
+        }
+        setIdem(userId, idem, { status: "pending", expires: Date.now() + IDEM_TTL_MS });
+      }
+
       // Pass user's timezone to AI engine so all date operations use the correct local date
       const tz = getTimezone(req);
       (storage as any)._timezone = tz;
       const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
+      if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
       // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
       // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
