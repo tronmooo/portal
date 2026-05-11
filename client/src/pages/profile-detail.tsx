@@ -6083,7 +6083,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
@@ -6096,7 +6095,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "finances", label: "Finance", testId: "tab-finances" },
     { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
@@ -6111,14 +6109,12 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "tasks", label: "Reminders", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   // Vehicle — maintenance + cost focused
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
@@ -6134,7 +6130,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   // Investment
@@ -6144,7 +6139,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   // Subscription
@@ -6162,14 +6156,12 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Visits", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   // Property / Home
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
@@ -6183,7 +6175,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
@@ -6196,7 +6187,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
 };
@@ -6210,7 +6200,6 @@ const DEFAULT_TABS: TabDef[] = [
   { value: "activity", label: "Activity", testId: "tab-activity" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
   { value: "notes", label: "Notes", testId: "tab-notes" },
-  { value: "connections", label: "Connections", testId: "tab-connections" },
   { value: "history", label: "History", testId: "tab-history" },
 ];
 
@@ -6226,7 +6215,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   credit_card: [
@@ -6236,7 +6224,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   digital_asset: [
@@ -6246,7 +6233,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "billing", label: "Billing", testId: "tab-billing" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   business: [
@@ -6256,7 +6242,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   collectible: [
@@ -6266,7 +6251,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "History", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   loan_receivable: [
@@ -6275,7 +6259,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "finances", label: "Payments", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   high_value_item: [
@@ -6285,7 +6268,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
 };
@@ -7514,14 +7496,14 @@ function LinkedSubsTab({ profile }: { profile: any }) {
               <LinkedSheetView
                 rows={sortedChildren}
                 columns={subColumns}
-                onRowClick={(s) => navigate(`/profile/${s.id}`)}
+                onRowClick={(s) => navigate(`/profiles/${s.id}`)}
                 emptyMessage="No subscriptions linked"
                 testId="linked-subs-sheet"
               />
             ) : (
               <div className="divide-y divide-border/30">
                 {sortedChildren.map((sub: any) => (
-                  <div key={sub.id} className="flex items-center justify-between py-2 cursor-pointer hover:bg-muted/30 -mx-3 px-3 rounded" onClick={() => navigate(`/profile/${sub.id}`)}>
+                  <div key={sub.id} className="flex items-center justify-between py-2 cursor-pointer hover:bg-muted/30 -mx-3 px-3 rounded" onClick={() => navigate(`/profiles/${sub.id}`)}>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-medium truncate">{sub.name}</p>
                       <p className="text-xs text-muted-foreground">{sub.fields?.frequency || "monthly"}</p>
@@ -7712,7 +7694,7 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
                 allProfiles={allProfiles}
                 refetchAll={() => { refetchPartyLinks(); refetchAllProfiles(); onChanged(); }}
                 onUnlink={() => unlinkMutation.mutate(link.id)}
-                onOpenLiability={() => navigate(`/profile/${lp.id}`)}
+                onOpenLiability={() => navigate(`/profiles/${lp.id}`)}
               />
             ))}
           </div>
@@ -8007,7 +7989,7 @@ function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile:
                 allProfiles={allProfiles}
                 refetchAll={() => { refetchAssetLinks(); refetchAllProfiles(); onChanged(); }}
                 onUnlink={() => unlinkMutation.mutate(link.id)}
-                onOpenLiability={() => navigate(`/profile/${lp.id}`)}
+                onOpenLiability={() => navigate(`/profiles/${lp.id}`)}
               />
             ))}
           </div>
@@ -9202,7 +9184,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments", "connections", "history"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments", "history"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -10403,12 +10385,6 @@ export default function ProfileDetailPage() {
                     profileId={profile.id}
                     onChanged={handleSaved}
                   />
-                </TabsContent>
-              )}
-
-              {tabValues.has("connections") && (
-                <TabsContent value="connections" className="mt-4 px-1 sm:px-0">
-                  <ConnectionsTab profileId={profile.id} />
                 </TabsContent>
               )}
 

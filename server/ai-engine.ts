@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
+import { normalizeTrackerEntry } from "./tracker-normalize";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -4042,28 +4043,30 @@ async function executeTool(name: string, input: any, userId?: string): Promise<a
           logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
           return recentDup;
         }
-        // Detect any AI-supplied fields that don't exist on the tracker so we
-        // can surface them in the chat reply instead of silently dropping them.
+        // Normalize the AI-supplied values to the tracker's schema:
+        //  - rename unknown fields via alias/single-numeric fallback
+        //  - strip unit suffixes ("99°F" → 99)
+        //  - convert to tracker's canonical unit when possible
+        // This keeps chat-logged entries identical in shape to
+        // document-extracted ones, so the tracker card can always read
+        // the same field.
+        const { values: normalizedValues, warnings: normWarnings } = normalizeTrackerEntry(tracker, entryValues);
+        if (normWarnings.length > 0) {
+          logger.info("ai", `normalize ${tracker.name}: ${normWarnings.join("; ")}`);
+        }
+        // Re-detect unknown fields AFTER normalization so we only warn
+        // about ones we genuinely couldn't map.
         const knownFieldNames = new Set((tracker.fields || []).map((f: any) => String(f.name).toLowerCase()));
-        const COMMON_TRACKER_ALIASES: Record<string, string> = {
-          steps: "value", count: "value", amount: "value", total: "value", score: "value", reading: "value", number: "value",
-          time: "duration", minutes: "duration", hours: "duration", length: "duration",
-          miles: "distance", km: "distance", meters: "distance",
-          lbs: "weight", kg: "weight", mass: "weight",
-        };
         const unknownFields: string[] = [];
-        for (const k of Object.keys(entryValues)) {
+        for (const k of Object.keys(normalizedValues)) {
           if (k === "_notes") continue;
-          const lc = k.toLowerCase();
-          if (knownFieldNames.has(lc)) continue;
-          const aliasTarget = COMMON_TRACKER_ALIASES[lc];
-          if (aliasTarget && knownFieldNames.has(aliasTarget)) continue;
+          if (knownFieldNames.has(k.toLowerCase())) continue;
           unknownFields.push(k);
         }
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: entryValues, forProfile: targetProfileId, profileId: targetProfileId });
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: normalizedValues, forProfile: targetProfileId, profileId: targetProfileId });
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
-        await autoUpdateGoalProgress(tracker.id, entryValues);
+        await autoUpdateGoalProgress(tracker.id, normalizedValues);
         // Attach a non-persistent hint so the chat reply builder can warn the user
         // (e.g., "saved — note: 'quality' isn't a Sleep field").
         if (entry && unknownFields.length > 0) {
@@ -4118,7 +4121,11 @@ async function executeTool(name: string, input: any, userId?: string): Promise<a
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
       } as any);
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: entryValues, forProfile: targetProfileId, profileId: targetProfileId });
+      // Even for brand-new trackers, run values through the normalizer
+      // so unit suffixes get stripped (e.g. "99°F" → 99) before the
+      // first entry is written.
+      const { values: nv } = normalizeTrackerEntry(newTracker as any, entryValues);
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId });
       return entry;
     }
 

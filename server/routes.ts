@@ -17,6 +17,7 @@ interface AuthenticatedRequest extends Request {
 }
 import { storage } from "./storage";
 import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
+import { normalizeTrackerEntry } from "./tracker-normalize";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
 import Anthropic from "@anthropic-ai/sdk";
 import {
@@ -977,8 +978,15 @@ export async function registerRoutes(
                 } catch { /* non-critical */ }
               }
             }
-            // Log the entry with proper values object
-            const entryValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
+            // Log the entry with proper values object — run through the
+            // shared normalizer so document-extracted entries land in the
+            // exact same shape as chat-logged entries (same field names,
+            // same units, no "99°F" raw strings).
+            const rawValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
+            const { values: entryValues, warnings: normWarnings } = normalizeTrackerEntry(tracker as any, rawValues);
+            if (normWarnings.length > 0) {
+              console.log(`[extraction normalize] ${tracker.name}: ${normWarnings.join("; ")}`);
+            }
             await storage.logEntry({
               trackerId: tracker.id,
               values: entryValues,
