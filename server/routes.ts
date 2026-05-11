@@ -4767,8 +4767,58 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     res.json(enriched);
   }));
   app.get("/api/parties/:id/liabilities", asyncHandler(async (req, res) => {
-    const rows = await storage.getLiabilityProfileLinksForParty(req.params.id);
-    res.json(rows);
+    // Direct liabilities (party is named on liability_profile_links) PLUS
+    // propagated liabilities reached through assets the party owns. The
+    // propagated set is what makes ownership feel "alive": if Jane owns
+    // 50% of the Home and the Home secures a mortgage, Jane's profile
+    // shows that mortgage with her allocated share. Each row carries a
+    // `source` field so the UI can label the path.
+    const partyId = req.params.id;
+    const directRows: any[] = await storage.getLiabilityProfileLinksForParty(partyId);
+
+    // Walk assets-owned -> liability_asset_links to find propagated liabilities.
+    const assetLinks: any[] = await storage.getAssetPartyLinksForParty(partyId).catch(() => []);
+    const propagated: any[] = [];
+    for (const aLink of assetLinks || []) {
+      const assetId = aLink.assetProfileId;
+      if (!assetId) continue;
+      const personPct = Number(aLink.ownershipPercentage ?? 0);
+      if (!personPct) continue;
+      const liabLinks: any[] = await storage.getLiabilityAssetLinksForAsset(assetId).catch(() => []);
+      for (const lLink of liabLinks) {
+        const assetPct = Number(lLink.ownershipPercentage ?? lLink.allocationPercentage ?? 100);
+        const effectivePct = (personPct / 100) * (assetPct / 100) * 100;
+        propagated.push({
+          id: `propagated:${assetId}:${lLink.liabilityProfileId}`,
+          liabilityProfileId: lLink.liabilityProfileId,
+          partyProfileId: partyId,
+          ownershipPercentage: effectivePct,
+          role: "propagated",
+          source: "via-asset",
+          viaAssetId: assetId,
+          viaAssetOwnership: personPct,
+          assetAllocation: assetPct,
+        });
+      }
+    }
+
+    // Tag direct rows + enrich both with joined liability profile.
+    const tagged = [
+      ...(directRows || []).map((r: any) => ({ ...r, source: "direct" })),
+      ...propagated,
+    ];
+    const liabIds = Array.from(new Set(tagged.map((r: any) => r.liabilityProfileId).filter(Boolean)));
+    const liabById: Record<string, any> = {};
+    await Promise.all(liabIds.map(async (lid: any) => {
+      try {
+        const p: any = await storage.getProfile(lid);
+        if (p) liabById[lid] = { id: p.id, name: p.name, type: p.type, currentBalance: p.currentBalance ?? null, monthlyPayment: p.monthlyPayment ?? null };
+      } catch {}
+    }));
+    const enriched = tagged
+      .filter((r: any) => r.liabilityProfileId && liabById[r.liabilityProfileId])
+      .map((r: any) => ({ ...r, liability: liabById[r.liabilityProfileId] }));
+    res.json(enriched);
   }));
   app.post("/api/liability-profile-links", asyncHandler(async (req, res) => {
     const parsed = insertLiabilityProfileLinkSchema.safeParse(req.body);
@@ -4832,8 +4882,24 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     res.json(enriched);
   }));
   app.get("/api/parties/:id/assets", asyncHandler(async (req, res) => {
+    // Enrich each ownership row with the joined asset profile so the client
+    // (LinkedAssetsTab / Belongings) can render real names, types, and
+    // current values without an N+1 fetch. Orphan rows (asset profile was
+    // deleted) are filtered out server-side so stale links can never produce
+    // ghost "Asset / Asset" cards on the profile page.
     const rows = await storage.getAssetPartyLinksForParty(req.params.id);
-    res.json(rows);
+    const assetIds = Array.from(new Set((rows || []).map((r: any) => r.assetProfileId).filter(Boolean)));
+    const assetById: Record<string, any> = {};
+    await Promise.all(assetIds.map(async (aid: any) => {
+      try {
+        const p: any = await storage.getProfile(aid);
+        if (p) assetById[aid] = { id: p.id, name: p.name, type: p.type, currentValue: p.currentValue ?? null };
+      } catch {}
+    }));
+    const enriched = (rows || [])
+      .filter((r: any) => r.assetProfileId && assetById[r.assetProfileId])
+      .map((r: any) => ({ ...r, asset: assetById[r.assetProfileId] }));
+    res.json(enriched);
   }));
   app.post("/api/asset-party-links", asyncHandler(async (req, res) => {
     const parsed = insertAssetPartyLinkSchema.safeParse(req.body);

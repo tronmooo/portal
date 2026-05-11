@@ -7551,8 +7551,22 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
-  // Resolve link rows → liability profiles
-  const liabilities = (partyLinks || [])
+  // Resolve link rows → liability profiles. The server now returns BOTH
+  // direct ownership rows AND propagated rows (reached via an asset the
+  // person owns part of). If the same liability appears in both lists —
+  // e.g. Jane is both a direct co-borrower AND a 50% owner of the
+  // securing asset — we keep the direct row and drop the propagated
+  // duplicate so totals aren't double-counted.
+  const dedupByLiab = new Map<string, any>();
+  for (const link of (partyLinks || [])) {
+    const existing = dedupByLiab.get(link.liabilityProfileId);
+    if (!existing) { dedupByLiab.set(link.liabilityProfileId, link); continue; }
+    // Prefer direct over via-asset.
+    if (existing.source === "via-asset" && link.source !== "via-asset") {
+      dedupByLiab.set(link.liabilityProfileId, link);
+    }
+  }
+  const liabilities = Array.from(dedupByLiab.values())
     .map((link: any) => {
       const lp = (allProfiles || []).find((p: any) => p.id === link.liabilityProfileId);
       if (!lp) return null;
@@ -7750,7 +7764,12 @@ function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOp
 
   return (
     <div className="py-2" data-testid={`row-liability-${liability.id}`}>
-      {/* Header row */}
+      {/* Header row.
+          Propagated rows (link.source === "via-asset") come from the
+          server walking person -> owned asset -> liability collateralized
+          by that asset. They can't be unlinked here (the link lives on
+          the asset), so we surface a chip explaining the path and hide
+          the unlink button. */}
       <div className="flex items-center justify-between gap-2 -mx-3 px-3 py-1 rounded">
         <button
           className="flex-1 min-w-0 flex items-center gap-2 hover:bg-muted/30 rounded px-1 -mx-1 py-1 text-left"
@@ -7759,9 +7778,20 @@ function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOp
         >
           <Pencil className="h-3 w-3 text-muted-foreground shrink-0" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium truncate">{liability.name}</p>
+            <div className="flex items-center gap-2 min-w-0">
+              <p className="text-xs font-medium truncate">{liability.name}</p>
+              {link.source === "via-asset" && (() => {
+                const viaAsset = (allProfiles || []).find((p: any) => p.id === link.viaAssetId);
+                const viaName = viaAsset?.name || "asset";
+                return (
+                  <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0" data-testid={`badge-via-asset-${liability.id}`}>
+                    via {viaName}
+                  </Badge>
+                );
+              })()}
+            </div>
             <p className="text-xs text-muted-foreground">
-              {pct}% · {formatCurrency(userShare)} of {formatCurrency(bal)}
+              {pct.toFixed(pct % 1 === 0 ? 0 : 1)}% · {formatCurrency(userShare)} of {formatCurrency(bal)}
               {monthly > 0 && ` · ${formatCurrency((monthly * pct) / 100)}/mo`}
             </p>
           </div>
@@ -7788,12 +7818,18 @@ function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOp
             allProfiles={allProfiles}
             onChanged={() => { refetchCollateral(); refetchAll(); }}
           />
-          {/* Unlink current person */}
-          <div className="flex justify-end">
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-red-500 hover:text-red-600" onClick={() => setConfirmUnlink(true)} data-testid={`button-unlink-${liability.id}`}>
-              <Trash2 className="h-3 w-3 mr-1" /> Remove from this person
-            </Button>
-          </div>
+          {/* Unlink current person — hidden for propagated rows because
+              the relationship lives on the asset, not the person. */}
+          {link.source !== "via-asset" && (
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" className="h-7 text-xs text-red-500 hover:text-red-600" onClick={() => setConfirmUnlink(true)} data-testid={`button-unlink-${liability.id}`}>
+                <Trash2 className="h-3 w-3 mr-1" /> Remove from this person
+              </Button>
+            </div>
+          )}
+          {link.source === "via-asset" && (
+            <p className="text-xs text-muted-foreground italic">This liability is attached to an asset you own a share of. Change it by editing the asset’s collateral.</p>
+          )}
         </div>
       )}
 
@@ -8567,13 +8603,18 @@ function RelPartyCard({
 // for hydrating `name` from the live profile list; if it's still empty we
 // fall back to a humanised version of `typeKey` rather than the literal
 // word "Asset" so it at least reads naturally.
-function RelAssetCard({ id, name, typeKey }: { id: string; name: string; typeKey: string }) {
+function RelAssetCard({ id, name, typeKey, sharePct, currentValue }: { id: string; name: string; typeKey: string; sharePct?: number; currentValue?: number | null }) {
   const safeName = (name && name.trim()) ? name.trim() : (
     typeKey === "vehicle" ? "Untitled vehicle" :
     typeKey === "property" ? "Untitled property" :
     typeKey === "investment" ? "Untitled investment" :
     "Untitled item"
   );
+  // sharePct + currentValue come from the enriched /api/parties/:id/assets
+  // endpoint. When present we surface the per-owner share inline so the
+  // user can see "Jane: 50% • $X" right on the card without a click.
+  const pct = sharePct != null ? Number(sharePct) : null;
+  const share = (pct != null && currentValue != null) ? (Number(currentValue) * pct) / 100 : null;
   return (
     <Card style={{height: 160}} className="overflow-hidden">
       <CardContent className="p-3 h-full flex flex-col justify-between">
@@ -8581,7 +8622,19 @@ function RelAssetCard({ id, name, typeKey }: { id: string; name: string; typeKey
           <span className="text-muted-foreground mt-0.5">{typeKeyIcon(typeKey)}</span>
           <div className="flex-1 min-w-0">
             <a href={`#/profiles/${id}`} className="text-sm font-semibold hover:underline truncate block">{safeName}</a>
-            <span className="text-xs text-muted-foreground capitalize">{typeKey}</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs text-muted-foreground capitalize">{typeKey}</span>
+              {pct != null && pct < 100 && (
+                <Badge variant="outline" className="text-[10px] h-4 px-1.5" data-testid={`badge-asset-share-${id}`}>
+                  {pct.toFixed(pct % 1 === 0 ? 0 : 1)}% owner
+                </Badge>
+              )}
+            </div>
+            {share != null && (
+              <p className="text-xs text-muted-foreground mt-1 tabular-nums">
+                Your share: <span className="font-medium text-foreground">{formatCurrency(share)}</span>
+              </p>
+            )}
           </div>
         </div>
         <div>
@@ -8941,7 +8994,73 @@ function AddLinkedPersonModal({
   );
 }
 
-// ── Linked Assets tab ──
+// NetWorthStrip
+// ----------------------------------------------------------------------
+// Lightweight per-person net-worth header. Reads the same two enriched
+// endpoints that drive the Belongings sections so the headline matches
+// the detail rows. Numbers update live via the existing react-query
+// cache (no separate subscription needed) — a refetch on the assets or
+// liabilities lists automatically refreshes this strip.
+function NetWorthStrip({ profileId }: { profileId: string }) {
+  const { data: assetRows = [] } = useQuery<any[]>({
+    queryKey: ["/api/parties", profileId, "assets"],
+    queryFn: () => apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json()),
+  });
+  const { data: liabRows = [] } = useQuery<any[]>({
+    queryKey: ["/api/parties", profileId, "liabilities"],
+    queryFn: () => apiRequest("GET", `/api/parties/${profileId}/liabilities`).then(r => r.json()),
+  });
+
+  const totalAssets = (assetRows || []).reduce((s: number, r: any) => {
+    const v = Number(r?.asset?.currentValue ?? 0);
+    const pct = Number(r?.ownershipPercentage ?? 100);
+    return s + (v * pct) / 100;
+  }, 0);
+  // Dedupe liabilities by liability id (direct beats propagated) so we
+  // don't double-count when someone is both a direct borrower and an
+  // owner of the collateral asset.
+  const seen = new Map<string, any>();
+  for (const r of (liabRows || [])) {
+    const id = r?.liabilityProfileId; if (!id) continue;
+    const cur = seen.get(id);
+    if (!cur || (cur.source === "via-asset" && r.source !== "via-asset")) seen.set(id, r);
+  }
+  const totalLiab = Array.from(seen.values()).reduce((s: number, r: any) => {
+    const bal = Number(r?.liability?.currentBalance ?? 0);
+    const pct = Number(r?.ownershipPercentage ?? 100);
+    return s + (bal * pct) / 100;
+  }, 0);
+  const monthly = Array.from(seen.values()).reduce((s: number, r: any) => {
+    const m = Number(r?.liability?.monthlyPayment ?? 0);
+    const pct = Number(r?.ownershipPercentage ?? 100);
+    return s + (m * pct) / 100;
+  }, 0);
+  const netWorth = totalAssets - totalLiab;
+
+  if ((assetRows?.length || 0) === 0 && (liabRows?.length || 0) === 0) return null;
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="net-worth-strip">
+      <div className="rounded-lg border border-border/40 px-3 py-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Assets</p>
+        <p className="text-sm font-bold tabular-nums">{formatCurrency(totalAssets)}</p>
+      </div>
+      <div className="rounded-lg border border-border/40 px-3 py-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Liabilities</p>
+        <p className="text-sm font-bold tabular-nums text-red-500">{formatCurrency(totalLiab)}</p>
+      </div>
+      <div className="rounded-lg border border-border/40 px-3 py-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Net Worth</p>
+        <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-emerald-500" : "text-red-500"}`}>{formatCurrency(netWorth)}</p>
+      </div>
+      <div className="rounded-lg border border-border/40 px-3 py-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Monthly debt</p>
+        <p className="text-sm font-bold tabular-nums">{formatCurrency(monthly)}</p>
+      </div>
+    </div>
+  );
+}
+
 function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profileType: string }) {
   const { toast } = useToast();
   const isLiability = profileType === "liability" || profileType === "loan";
@@ -8964,9 +9083,18 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
         const links = await apiRequest("GET", `/api/liabilities/${profileId}/assets`).then(r => r.json());
         return links.map((l: any) => ({ id: l.assetProfileId || l.id, name: l.assetName || l.name || "", typeKey: l.assetType || "asset" }));
       } else if (isPerson) {
-        // /api/parties/:id/assets
-        const assets = await apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json());
-        return assets.map((a: any) => ({ id: a.asset?.id || a.id, name: a.asset?.name || a.name || "", typeKey: a.asset?.profileType || a.asset?.type || "asset" }));
+        // Server now enriches each row with `asset: { id, name, type, currentValue }`
+        // and drops orphan rows whose asset profile was deleted. We pass through
+        // the share % so cards can render "50% owner" chips.
+        const rows = await apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json());
+        return (rows || []).filter((a: any) => a?.asset?.id).map((a: any) => ({
+          id: a.asset.id,
+          name: a.asset.name || "",
+          typeKey: a.asset.type || "asset",
+          sharePct: Number(a.ownershipPercentage ?? 100),
+          currentValue: a.asset.currentValue ?? null,
+          role: a.role || "owner",
+        }));
       } else {
         // Asset: ONLY show assets directly linked via a shared liability (co-collateral).
         // We deliberately do NOT bridge through owner/person nodes — co-ownership does
@@ -8993,13 +9121,18 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
 
   // Filter out orphan links (profile id no longer exists in /api/profiles)
   // and hydrate the display name + type from the live profile so we never
-  // render a placeholder "Asset" card again.
+  // render a placeholder "Asset" card again. Preserve sharePct from the
+  // ownership row, and prefer live currentValue (kept fresh by edits) over
+  // the snapshot in the link payload.
   const items = (rawItems || []).filter((it: any) => it && it.id && liveById.has(it.id)).map((it: any) => {
     const live = liveById.get(it.id);
+    const liveValue = live?.currentValue ?? live?.fields?.currentValue ?? live?.fields?.value ?? null;
     return {
       id: it.id,
       name: (live?.name || it.name || "").trim(),
       typeKey: live?.type || it.typeKey || "asset",
+      sharePct: it.sharePct,
+      currentValue: liveValue != null ? Number(liveValue) : (it.currentValue ?? null),
     };
   });
 
@@ -9015,7 +9148,14 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       {items.map((item: any, i: number) => (
-        <RelAssetCard key={item.id || i} id={item.id} name={item.name} typeKey={item.typeKey} />
+        <RelAssetCard
+          key={item.id || i}
+          id={item.id}
+          name={item.name}
+          typeKey={item.typeKey}
+          sharePct={item.sharePct}
+          currentValue={item.currentValue}
+        />
       ))}
     </div>
   );
@@ -10261,6 +10401,14 @@ export default function ProfileDetailPage() {
                   ordered. */}
               {tabValues.has("belongings") && (
                 <TabsContent value="belongings" className="mt-4 px-1 sm:px-0 space-y-6">
+                  {/* Top-of-tab Net Worth strip — only for person/self,
+                      since vehicle/property/loan don't have a meaningful
+                      "my net worth" rollup. Reads from the same enriched
+                      endpoints the sections below use so numbers stay
+                      consistent. */}
+                  {["person","self"].includes(profile.type) && (
+                    <NetWorthStrip profileId={profile.id} />
+                  )}
                   <section>
                     <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Assets</p>
                     <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
