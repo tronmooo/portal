@@ -4189,7 +4189,15 @@ export default function TrackersPage() {
           linked item as a single flat table regardless of section. This
           replaces the per-section card grids below. */}
       {viewMode === "table" && (() => {
-        type Row = { id: string; kind: "asset" | "liability" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; };
+        // ── Person-grouped list view ──
+        // Every asset, liability, document and tracker has at least one
+        // "owner" — the person profile it belongs to (the user themselves,
+        // or a family member / dependent). The previous flat list lost that
+        // information so the user couldn't tell which Blood Pressure reading
+        // belonged to whom. We now group rows by their primary owner, give
+        // each person a deterministic hue, and color the row icon by that
+        // hue so the visual scan answers "whose data is this?" at a glance.
+        type Row = { id: string; kind: "asset" | "liability" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; ownerIds: string[]; };
         const rows: Row[] = [];
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone";
@@ -4198,6 +4206,30 @@ export default function TrackersPage() {
           if (typeof v === 'number' && isFinite(v)) return v;
           if (typeof v === 'string') { const n = parseFloat(v.replace(/[$,\s]/g, '')); return isFinite(n) ? n : null; }
           return null;
+        };
+        // Build a fast lookup of all person-like profiles so we can resolve
+        // owner ids → display names without scanning the whole list each time.
+        const personProfiles = (profiles || []).filter(p => p.type === "self" || p.type === "person" || p.type === "pet");
+        const personById = new Map<string, { id: string; name: string; type: string }>();
+        personProfiles.forEach(p => personById.set(p.id, { id: p.id, name: p.name || "Unnamed", type: p.type }));
+        const selfProfileId = personProfiles.find(p => p.type === "self")?.id || "";
+        // Walks up parent chain on an asset/liability profile to find the
+        // first person-type ancestor. Assets are often nested under other
+        // assets (e.g. a TV under a Home), so the immediate parent is not
+        // always a person.
+        const resolveOwnerFromProfile = (p: any): string | null => {
+          let cur: any = p;
+          for (let i = 0; i < 8 && cur; i++) {
+            const parentId = cur.fields?._parentProfileId || cur.parentProfileId;
+            if (!parentId) break;
+            const parent = (profiles || []).find(x => x.id === parentId);
+            if (!parent) break;
+            if (parent.type === "self" || parent.type === "person" || parent.type === "pet") return parent.id;
+            cur = parent;
+          }
+          // No person ancestor found — fall back to the self profile so the
+          // user can still find their own untagged items.
+          return selfProfileId || null;
         };
         // Assets
         if (sectionFilter === "all" || sectionFilter === "profiles") {
@@ -4208,13 +4240,11 @@ export default function TrackersPage() {
             const f = p.fields || {}; const fin = f.finance || {}; const housing = f.housing || {}; const other = f.other || {};
             const cv = toNum(f.currentValue) ?? toNum(housing.currentValue) ?? toNum(other.currentValue) ?? toNum(other.value) ?? toNum(fin.balance) ?? toNum(f.value);
             const sub = p.type.charAt(0).toUpperCase() + p.type.slice(1);
-            rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}` });
+            const owner = resolveOwnerFromProfile(p);
+            rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
           });
         }
-        // Liabilities — includes loans/mortgages/credit cards AND subscriptions
-        // (recurring bills like Netflix, rent, utilities). For loans we show
-        // the outstanding balance; for subscriptions we show the per-period
-        // cost so the meta column always carries something useful.
+        // Liabilities — includes loans/mortgages/credit cards AND subscriptions.
         if (sectionFilter === "all" || sectionFilter === "liabilities") {
           (profiles || []).forEach(p => {
             if (!isLiabilityLikeProfile(p)) return;
@@ -4228,20 +4258,28 @@ export default function TrackersPage() {
             const meta = bal != null && bal > 0
               ? `$${Math.round(bal).toLocaleString()}`
               : (cost != null && cost > 0 ? `$${Math.round(cost).toLocaleString()}/${freq.startsWith('y') ? 'yr' : freq.startsWith('w') ? 'wk' : 'mo'}` : "—");
-            rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta, href: `/profiles/${p.id}` });
+            const owner = resolveOwnerFromProfile(p);
+            rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta, href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
           });
         }
-        // Documents
+        // Documents — linkedProfiles[] tells us which people the doc is for.
         if (sectionFilter === "all" || sectionFilter === "documents") {
           (allDocuments || []).forEach(d => {
-            const dParent = (d as any).profileId;
-            if (!isShowAll && !(dParent && filterIds.includes(dParent))) return;
+            const linked: string[] = ((d as any).linkedProfiles || []) as string[];
+            const ownerIds = linked.filter(id => personById.has(id));
+            // If no person is linked, attribute to self so the user sees
+            // it under their own section rather than "Unassigned".
+            const finalOwners = ownerIds.length > 0 ? ownerIds : (selfProfileId ? [selfProfileId] : []);
+            if (!isShowAll) {
+              const inScope = linked.some(id => filterIds.includes(id));
+              if (!inScope) return;
+            }
             const sub = ((d as any).type || "Document").toString();
             const dt = d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "";
-            rows.push({ id: d.id, kind: "document", name: d.name || "Untitled", subtitle: sub, meta: dt, href: `/documents/${d.id}` });
+            rows.push({ id: d.id, kind: "document", name: d.name || "Untitled", subtitle: sub, meta: dt, href: `/documents/${d.id}`, ownerIds: finalOwners });
           });
         }
-        // Trackers
+        // Trackers — linkedProfiles[] tells us who each tracker is for.
         if (sectionFilter === "all" || sectionFilter === "trackers") {
           (filteredTrackers || []).forEach(t => {
             const sub = t.category || "Tracker";
@@ -4249,7 +4287,10 @@ export default function TrackersPage() {
             const pf = t.fields.find(fld => fld.isPrimary)?.name || t.fields[0]?.name || "value";
             const v = last?.values?.[pf];
             const meta = v != null ? `${typeof v === 'number' ? Number(v).toFixed(1) : String(v)}${t.unit ? ' ' + t.unit : ''}` : "—";
-            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers/${t.id}` });
+            const linked: string[] = (t.linkedProfiles || []) as string[];
+            const ownerIds = linked.filter(id => personById.has(id));
+            const finalOwners = ownerIds.length > 0 ? ownerIds : (selfProfileId ? [selfProfileId] : []);
+            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers/${t.id}`, ownerIds: finalOwners });
           });
         }
         if (rows.length === 0) {
@@ -4260,34 +4301,107 @@ export default function TrackersPage() {
           );
         }
         const kindIcons: Record<Row["kind"], any> = { asset: Star, liability: TrendingDown, document: FileText, tracker: Activity };
-        const kindColors: Record<Row["kind"], string> = { asset: "262 60% 62%", liability: "0 72% 55%", document: "200 60% 50%", tracker: "142 60% 45%" };
+        // Deterministic per-person hue. We hash the person id into a hue in
+        // [0, 360) so the same person always gets the same color across
+        // sessions, but different people get visually distinct colors.
+        // Saturation/lightness are fixed so contrast stays uniform.
+        const hueForPerson = (id: string): number => {
+          let h = 0;
+          for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+          // Spread across the wheel but avoid the muddy yellow-green band
+          // around 60-80° which is hard to read on dark cards.
+          const raw = h % 320;
+          return raw < 60 ? raw : raw + 30;
+        };
+        const personAccent = (id: string) => `${hueForPerson(id)} 65% 58%`;
+        // Group rows by primary owner. "Unassigned" catches anything that
+        // truly has no person attribution.
+        type Group = { ownerId: string; ownerName: string; accent: string; rows: Row[] };
+        const groupsMap = new Map<string, Group>();
+        const orderedOwnerIds: string[] = [];
+        rows.forEach(r => {
+          const primary = r.ownerIds[0] || "__unassigned__";
+          if (!groupsMap.has(primary)) {
+            orderedOwnerIds.push(primary);
+            const person = personById.get(primary);
+            groupsMap.set(primary, {
+              ownerId: primary,
+              ownerName: person?.name || "Unassigned",
+              accent: primary === "__unassigned__" ? "220 10% 50%" : personAccent(primary),
+              rows: [],
+            });
+          }
+          groupsMap.get(primary)!.rows.push(r);
+        });
+        // Always render the self profile first if present, then other people
+        // sorted alphabetically, with Unassigned last.
+        const sortedGroups = orderedOwnerIds
+          .map(id => groupsMap.get(id)!)
+          .sort((a, b) => {
+            if (a.ownerId === selfProfileId) return -1;
+            if (b.ownerId === selfProfileId) return 1;
+            if (a.ownerId === "__unassigned__") return 1;
+            if (b.ownerId === "__unassigned__") return -1;
+            return a.ownerName.localeCompare(b.ownerName);
+          });
+        const initials = (name: string) => name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() || "").join("") || "?";
         return (
-          <div className="rounded-lg border border-border/40 overflow-hidden bg-card" data-testid="linked-list-view">
-            <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-1.5 border-b border-border/40 bg-muted/30 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              <span className="w-5" />
-              <span>Name</span>
-              <span className="text-right">Type</span>
-              <span className="text-right min-w-[80px]">Value</span>
-            </div>
-            {rows.map(r => {
-              const Icon = kindIcons[r.kind];
-              const ac = kindColors[r.kind];
-              return (
-                <Link key={`${r.kind}-${r.id}`} href={r.href}>
-                  <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-2 border-b border-border/30 last:border-b-0 cursor-pointer hover:bg-muted/40 transition-colors" data-testid={`linked-list-row-${r.kind}-${r.id}`}>
-                    <div className="w-5 h-5 rounded flex items-center justify-center" style={{ backgroundColor: `hsl(${ac} / 0.15)`, color: `hsl(${ac})` }}>
-                      <Icon className="h-3 w-3" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground truncate">{r.name}</p>
-                      <p className="text-[10px] text-muted-foreground truncate">{r.subtitle}</p>
-                    </div>
-                    <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${ac} / 0.12)`, color: `hsl(${ac})` }}>{r.kind}</span>
-                    <span className="text-sm font-bold tabular-nums text-foreground text-right min-w-[80px]">{r.meta}</span>
+          <div className="space-y-3" data-testid="linked-list-view">
+            {sortedGroups.map(group => (
+              <div key={group.ownerId} className="rounded-lg border border-border/40 overflow-hidden bg-card" data-testid={`linked-list-group-${group.ownerId}`}>
+                {/* Person header with avatar + count */}
+                <div
+                  className="flex items-center gap-2.5 px-3 py-2 border-b border-border/40"
+                  style={{ background: `linear-gradient(135deg, hsl(${group.accent} / 0.14) 0%, hsl(${group.accent} / 0.04) 100%)` }}
+                >
+                  <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
+                    style={{ backgroundColor: `hsl(${group.accent} / 0.25)`, color: `hsl(${group.accent})`, border: `1px solid hsl(${group.accent} / 0.4)` }}
+                  >
+                    {initials(group.ownerName)}
                   </div>
-                </Link>
-              );
-            })}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-foreground truncate" style={{ color: `hsl(${group.accent})` }}>{group.ownerName}</p>
+                  </div>
+                  <span
+                    className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
+                    style={{ backgroundColor: `hsl(${group.accent} / 0.18)`, color: `hsl(${group.accent})` }}
+                  >
+                    {group.rows.length} {group.rows.length === 1 ? "item" : "items"}
+                  </span>
+                </div>
+                {/* Column headers (within group, smaller so they don't dominate) */}
+                <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-1 border-b border-border/40 bg-muted/20 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <span className="w-5" />
+                  <span>Name</span>
+                  <span className="text-right">Type</span>
+                  <span className="text-right min-w-[80px]">Value</span>
+                </div>
+                {group.rows.map(r => {
+                  const Icon = kindIcons[r.kind];
+                  // Icon color = person hue (so the icon column tells you
+                  // "whose item" before you read anything). Type badge keeps
+                  // its own kind-based hue so you can still scan asset vs
+                  // liability vs tracker at a glance.
+                  const ac = group.accent;
+                  return (
+                    <Link key={`${r.kind}-${r.id}`} href={r.href}>
+                      <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-2 border-b border-border/30 last:border-b-0 cursor-pointer hover:bg-muted/40 transition-colors" data-testid={`linked-list-row-${r.kind}-${r.id}`}>
+                        <div className="w-5 h-5 rounded flex items-center justify-center" style={{ backgroundColor: `hsl(${ac} / 0.18)`, color: `hsl(${ac})` }}>
+                          <Icon className="h-3 w-3" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-foreground truncate">{r.name}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">{r.subtitle}</p>
+                        </div>
+                        <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{r.kind}</span>
+                        <span className="text-sm font-bold tabular-nums text-foreground text-right min-w-[80px]">{r.meta}</span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         );
       })()}
