@@ -16,6 +16,7 @@ interface AuthenticatedRequest extends Request {
   userId?: string;
 }
 import { storage } from "./storage";
+import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
 import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
@@ -4812,7 +4813,11 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     await Promise.all(liabIds.map(async (lid: any) => {
       try {
         const p: any = await storage.getProfile(lid);
-        if (p) liabById[lid] = { id: p.id, name: p.name, type: p.type, currentBalance: p.currentBalance ?? null, monthlyPayment: p.monthlyPayment ?? null };
+        if (p) {
+          const bal = resolveLiabilityValue((p as any).fields);
+          const mp = resolveMonthlyPayment((p as any).fields);
+          liabById[lid] = { id: p.id, name: p.name, type: p.type, currentBalance: bal || null, monthlyPayment: mp || null };
+        }
       } catch {}
     }));
     const enriched = tagged
@@ -4893,7 +4898,10 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     await Promise.all(assetIds.map(async (aid: any) => {
       try {
         const p: any = await storage.getProfile(aid);
-        if (p) assetById[aid] = { id: p.id, name: p.name, type: p.type, currentValue: p.currentValue ?? null };
+        if (p) {
+          const v = resolveAssetValue((p as any).fields);
+          assetById[aid] = { id: p.id, name: p.name, type: p.type, currentValue: v || null };
+        }
       } catch {}
     }));
     const enriched = (rows || [])

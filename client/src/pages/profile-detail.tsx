@@ -3960,11 +3960,42 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 3 — Subscriptions & Bills                      */}
       {/* ═══════════════════════════════════════════════════════ */}
+      {(() => {
+        // Normalize every obligation to a monthly $ figure so the header
+        // can sum a single "per month" total across mixed frequencies.
+        const toMonthly = (amount: number, freq: string | undefined) => {
+          const f = (freq || "monthly").toLowerCase();
+          if (f === "yearly" || f === "annual" || f === "annually") return amount / 12;
+          if (f === "quarterly") return amount / 3;
+          if (f === "weekly") return amount * (52 / 12);
+          if (f === "biweekly" || f === "bi-weekly") return amount * (26 / 12);
+          if (f === "daily") return amount * (365 / 12);
+          return amount; // monthly default
+        };
+        const subs = (obligations || []).filter((o: any) => (o.category || "").toLowerCase() === "subscription");
+        const bills = (obligations || []).filter((o: any) => (o.category || "").toLowerCase() !== "subscription");
+        const subsMonthly = subs.reduce((s, o) => s + toMonthly(Number(o.amount) || 0, o.frequency), 0);
+        const billsMonthly = bills.reduce((s, o) => s + toMonthly(Number(o.amount) || 0, o.frequency), 0);
+        const totalMonthly = subsMonthly + billsMonthly;
+        return (
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
-            <CreditCard className="h-4 w-4 text-muted-foreground" /> Subscriptions &amp; Bills
+          <CardTitle className="text-sm font-semibold flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <CreditCard className="h-4 w-4 text-muted-foreground" /> Subscriptions &amp; Bills
+            </span>
+            {obligations.length > 0 && (
+              <span className="flex items-center gap-2">
+                <Badge variant="outline" className="text-xs font-normal tabular-nums" data-testid="subs-bills-total">{formatCurrency(totalMonthly)}/mo</Badge>
+              </span>
+            )}
           </CardTitle>
+          {obligations.length > 0 && (subsMonthly > 0 || billsMonthly > 0) && (
+            <div className="flex items-center gap-3 text-[11px] text-muted-foreground pt-1">
+              {subsMonthly > 0 && <span data-testid="subs-monthly"><span className="font-medium tabular-nums">{formatCurrency(subsMonthly)}/mo</span> subscriptions · {subs.length}</span>}
+              {billsMonthly > 0 && <span data-testid="bills-monthly"><span className="font-medium tabular-nums">{formatCurrency(billsMonthly)}/mo</span> bills · {bills.length}</span>}
+            </div>
+          )}
         </CardHeader>
         <CardContent className="pt-0">
           {obligations.length === 0 ? (
@@ -4019,6 +4050,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           )}
         </CardContent>
       </Card>
+        );
+      })()}
 
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 4 — Loan Amortization (loans only)             */}
@@ -9080,6 +9113,80 @@ function NetWorthStrip({ profileId }: { profileId: string }) {
   );
 }
 
+// ────────────────────────────────────────────────────────────────────
+// CostOfOwnershipCard
+//
+// For asset / vehicle / property profiles. Sums the last 12 months of
+// linked expenses (via profile.relatedExpenses) plus normalized monthly
+// obligations whose category matches the asset type, into a single
+// "cost of ownership" card. This is the read-only side of the relationship
+// the audit flagged: expenses ARE linked to assets via `linked_profiles`
+// but the asset profile never surfaced the total.
+// ────────────────────────────────────────────────────────────────────
+function CostOfOwnershipCard({ profile }: { profile: any }) {
+  const expenses = (profile.relatedExpenses || []) as any[];
+  const obligations = (profile.relatedObligations || []) as any[];
+  const now = new Date();
+  const twelveMonthsAgo = new Date(now); twelveMonthsAgo.setMonth(now.getMonth() - 12);
+
+  const trailing12 = expenses.filter(e => {
+    const d = e?.date ? new Date(e.date) : null;
+    return d && d >= twelveMonthsAgo && d <= now;
+  });
+  const trailing12Total = trailing12.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const expensesMonthlyAvg = trailing12Total / 12;
+
+  // Recurring monthly obligations linked to this asset (insurance premium,
+  // HOA, lease payment, fuel card subscription, etc.). Normalize each to
+  // a per-month amount so the rollup is comparable.
+  const toMonthly = (amount: number, freq: string | undefined) => {
+    const f = (freq || "monthly").toLowerCase();
+    if (f === "yearly" || f === "annual" || f === "annually") return amount / 12;
+    if (f === "quarterly") return amount / 3;
+    if (f === "weekly") return amount * (52 / 12);
+    if (f === "biweekly" || f === "bi-weekly") return amount * (26 / 12);
+    if (f === "daily") return amount * (365 / 12);
+    return amount;
+  };
+  const recurringMonthly = obligations.reduce((s, o) => s + toMonthly(Number(o.amount) || 0, o.frequency), 0);
+
+  if (expenses.length === 0 && obligations.length === 0) return null;
+
+  return (
+    <Card data-testid="cost-of-ownership-card">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <Wallet className="h-4 w-4 text-muted-foreground" /> Cost of ownership
+          </span>
+          <Badge variant="outline" className="text-xs font-normal tabular-nums">
+            {formatCurrency(expensesMonthlyAvg + recurringMonthly)}/mo
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="text-center p-2 rounded-lg bg-muted/30">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Trailing 12mo</p>
+            <p className="text-sm font-bold tabular-nums">{formatCurrency(trailing12Total)}</p>
+            <p className="text-[10px] text-muted-foreground/70">{trailing12.length} expenses</p>
+          </div>
+          <div className="text-center p-2 rounded-lg bg-muted/30">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg / month</p>
+            <p className="text-sm font-bold tabular-nums">{formatCurrency(expensesMonthlyAvg)}</p>
+            <p className="text-[10px] text-muted-foreground/70">from expenses</p>
+          </div>
+          <div className="text-center p-2 rounded-lg bg-muted/30">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Recurring</p>
+            <p className="text-sm font-bold tabular-nums">{formatCurrency(recurringMonthly)}/mo</p>
+            <p className="text-[10px] text-muted-foreground/70">{obligations.length} bill{obligations.length !== 1 ? "s" : ""}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profileType: string }) {
   const { toast } = useToast();
   const isLiability = profileType === "liability" || profileType === "loan";
@@ -10377,6 +10484,14 @@ export default function ProfileDetailPage() {
                       still rely on these inline sections. */}
                   {!(["person", "self"].includes(profile.type)) && (
                     <>
+                      {/* Cost of ownership rollup for asset-like profiles.
+                          Self-hides when there are no linked expenses or
+                          recurring obligations to summarize. */}
+                      {["asset","vehicle","property","investment"].includes(profile.type) && (
+                        <div className="mt-4">
+                          <CostOfOwnershipCard profile={profile} />
+                        </div>
+                      )}
                       {profile.relatedTrackers.length > 0 && (
                         <div className="mt-4">
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>

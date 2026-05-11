@@ -60,7 +60,7 @@ function parseMoney(input: any): number {
 // Different code paths (form save, AI extraction, find-value, legacy migrations) wrote
 // to different nested keys; this checks every known location and returns the first
 // positive number.
-function resolveAssetValue(fields: any): number {
+export function resolveAssetValue(fields: any): number {
   if (!fields || typeof fields !== "object") return 0;
   const housing = fields.housing || {};
   const other = fields.other || {};
@@ -96,7 +96,7 @@ function resolveAssetValue(fields: any): number {
 
 // Resolve any outstanding loan/debt balance for liability calculations. Includes
 // nested finance.loans[] entries which were created by AI extraction.
-function resolveLiabilityValue(fields: any): number {
+export function resolveLiabilityValue(fields: any): number {
   if (!fields || typeof fields !== "object") return 0;
   const finance = fields.finance || {};
   const loan = fields.loan || {};
@@ -128,6 +128,34 @@ function resolveLiabilityValue(fields: any): number {
   const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
   if (loans.length > 0) {
     const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
+    if (sum > 0) return sum;
+  }
+  return 0;
+}
+
+// Resolve the monthly payment $ for a liability/loan profile across all known
+// nested storage paths. Used by server endpoints that enrich liability rows
+// for the NetWorthStrip "Monthly debt" card and the Belongings debt service rollup.
+export function resolveMonthlyPayment(fields: any): number {
+  if (!fields || typeof fields !== "object") return 0;
+  const finance = fields.finance || {};
+  const loan = fields.loan || {};
+  const other = fields.other || {};
+  const candidates = [
+    fields.monthlyPayment, fields.monthly_payment, fields.monthlyAmount, fields.monthly_amount,
+    finance.monthlyPayment, finance.monthly_payment, finance.monthlyAmount, finance.monthly_amount,
+    loan.monthlyPayment, loan.monthly_payment,
+    other.monthlyPayment, other.monthly_payment,
+    fields.minimumPayment, fields.minimum_payment,
+    finance.minimumPayment, finance.minimum_payment,
+  ];
+  for (const c of candidates) {
+    const n = parseMoney(c);
+    if (n > 0) return n;
+  }
+  const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
+  if (loans.length > 0) {
+    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.monthlyPayment || l?.monthly_payment || l?.monthlyAmount), 0);
     if (sum > 0) return sum;
   }
   return 0;
