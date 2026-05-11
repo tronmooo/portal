@@ -197,7 +197,7 @@ export function getCategoryAccent(category: string): string {
 // ── Canonical Category Groups ──────────────────────────────────────────────────
 // Map raw DB categories → canonical display groups
 const CANONICAL_GROUP_MAP: Record<string, string> = {
-  // Health (body vitals, medical, sleep, nutrition, mental)
+  // Health (body vitals, medical, sleep, nutrition, mental, lab work)
   health:       "Health",
   sleep:        "Health",
   nutrition:    "Health",
@@ -207,6 +207,38 @@ const CANONICAL_GROUP_MAP: Record<string, string> = {
   hydration:    "Health",
   diet:         "Health",
   mood:         "Mental & Wellness",
+  physical:     "Health",
+  // Lab panels / blood work / clinical results all roll up into Health
+  "metabolic panel":      "Health",
+  "complete blood count": "Health",
+  "lipid panel":          "Health",
+  "lipid profile":        "Health",
+  "thyroid panel":        "Health",
+  "liver panel":          "Health",
+  "kidney panel":         "Health",
+  "basic metabolic":      "Health",
+  "comprehensive metabolic": "Health",
+  "cbc":                  "Health",
+  "bmp":                  "Health",
+  "cmp":                  "Health",
+  "lab":                  "Health",
+  "labs":                 "Health",
+  "lab results":          "Health",
+  "lab work":             "Health",
+  "blood":                "Health",
+  "blood work":           "Health",
+  "cholesterol":          "Health",
+  "glucose":              "Health",
+  "hormone":              "Health",
+  "hormones":             "Health",
+  "hormone panel":        "Health",
+  "vitamin":              "Health",
+  "vitamins":             "Health",
+  "urinalysis":           "Health",
+  "endocrine":            "Health",
+  "immunology":           "Health",
+  "hematology":           "Health",
+  "chemistry":            "Health",
   // Fitness (movement, exercise, performance)
   fitness:      "Fitness",
   exercise:     "Fitness",
@@ -274,7 +306,26 @@ const CANONICAL_GROUPS: Record<string, {
 };
 
 function getCanonicalGroup(category: string): string {
-  return CANONICAL_GROUP_MAP[category?.toLowerCase()] || "Other";
+  const c = (category || "").toLowerCase().trim();
+  if (!c) return "Other";
+  // Exact match first
+  const exact = CANONICAL_GROUP_MAP[c];
+  if (exact) return exact;
+  // Keyword fallback — categories like "Metabolic Panel - Fasting" or
+  // "Vitals (morning)" should still land in Health.
+  const healthKw = ["panel", "blood", "lab", "vital", "metabolic", "cbc", "bmp", "cmp", "glucose", "cholesterol", "hormone", "thyroid", "vitamin", "medical", "clinical", "health", "diet", "nutrition", "sleep", "hydration"];
+  if (healthKw.some(k => c.includes(k))) return "Health";
+  const fitnessKw = ["workout", "exercise", "run", "cardio", "strength", "sport", "steps", "gym", "yoga", "hike"];
+  if (fitnessKw.some(k => c.includes(k))) return "Fitness";
+  const financeKw = ["finance", "money", "budget", "saving", "invest", "spend", "income"];
+  if (financeKw.some(k => c.includes(k))) return "Finance";
+  const medKw = ["med", "prescription", "supplement", "drug", "dose"];
+  if (medKw.some(k => c.includes(k))) return "Medication";
+  const mentalKw = ["mood", "anxiety", "stress", "meditation", "journal", "therapy"];
+  if (mentalKw.some(k => c.includes(k))) return "Mental & Wellness";
+  const habitKw = ["habit", "routine", "daily"];
+  if (habitKw.some(k => c.includes(k))) return "Habits & Routines";
+  return "Other";
 }
 
 // Emoji icon for each canonical category group

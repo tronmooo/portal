@@ -577,13 +577,25 @@ export function DocumentViewerDialog({
   const [docType, setDocType] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Track whether the document actually has a file blob attached. We must know
+  // this BEFORE deciding whether to render the inline viewer (which fetches
+  // /api/documents/:id/file). If the doc has no file_data the /file endpoint
+  // returns 404 and the inline viewer would spin forever.
+  const [hasFile, setHasFile] = useState<boolean>(false);
+  const [actualMime, setActualMime] = useState<string>(mimeType);
+
   useEffect(() => {
     if (open) {
-      // Always fetch fresh data when dialog opens
+      // Always fetch fresh metadata when dialog opens. The /api/documents/:id
+      // endpoint deliberately strips fileData from the JSON to keep payloads
+      // small — the actual binary is served by /api/documents/:id/file. We rely
+      // on `fileSize` (set server-side) to know whether a binary exists.
       setLoading(true);
       setFetchedData(null);
       setExtractedData(null);
       setDocType(null);
+      setHasFile(false);
+      setActualMime(mimeType);
       apiRequest("GET", `/api/documents/${id}`)
         .then(res => res.json())
         .then(doc => {
@@ -592,19 +604,27 @@ export function DocumentViewerDialog({
             setExtractedData(doc.extractedData);
           }
           if (doc.type) setDocType(doc.type);
+          if (doc.mimeType) setActualMime(doc.mimeType);
+          // The server may include `fileSize` or `hasFile`; if not, fall back to
+          // checking fileData / probing the /file endpoint.
+          const reportedHasFile = !!(doc.fileData) || (typeof doc.fileSize === "number" && doc.fileSize > 0) || doc.hasFile === true;
+          setHasFile(reportedHasFile);
           setLoading(false);
         })
-        .catch(() => setLoading(false));
+        .catch(() => { setLoading(false); setHasFile(false); });
     } else {
-      // Reset all state on close
       setFetchedData(null);
       setExtractedData(null);
       setDocType(null);
       setLoading(false);
+      setHasFile(false);
     }
-  }, [open, id]);
+  }, [open, id, mimeType]);
 
+  // The inline viewer always has the id and will fetch the binary via /file when needed.
   const displayData = data || fetchedData || "";
+  // Show the inline viewer whenever we know a file exists OR caller passed data.
+  const shouldShowPreview = hasFile || !!displayData;
   const formatFieldKey = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase()).trim();
 
   return (
@@ -660,15 +680,40 @@ export function DocumentViewerDialog({
                 minHeight: 0,
               }}
             >
-              {displayData ? (
+              {shouldShowPreview ? (
                 <div className="flex-1 min-h-0" style={{ height: '100%' }}>
-                  <DocumentViewer id={id} name={name} mimeType={mimeType} data={displayData} inline />
+                  <DocumentViewer id={id} name={name} mimeType={actualMime} data={displayData} inline />
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
+                <div className="flex flex-col items-center justify-center py-8 text-center px-4">
                   <FileText className="h-10 w-10 text-muted-foreground mb-3" />
                   <p className="text-sm font-medium">{name}</p>
-                  <p className="text-xs text-muted-foreground mt-1">No preview available.</p>
+                  <p className="text-xs text-muted-foreground mt-2 max-w-md">
+                    This document was added without a file attached — only the extracted details below are saved.
+                  </p>
+                  <label className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 hover:bg-muted/50 cursor-pointer text-xs font-medium">
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = async () => {
+                          const base64 = String(reader.result).split(",")[1];
+                          try {
+                            await apiRequest("PATCH", `/api/documents/${id}`, { fileData: base64, mimeType: file.type });
+                            setFetchedData(base64);
+                          } catch (err) {
+                            console.error("Upload failed", err);
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                    Attach a file
+                  </label>
                 </div>
               )}
             </div>

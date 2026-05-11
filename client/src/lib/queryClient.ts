@@ -27,7 +27,8 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 15000; // 15s timeout for most API requests — a hung query shouldn't feel like a frozen tab
+const DEFAULT_TIMEOUT_MS = 60000; // 60s timeout — long enough for document file fetches (base64 PDFs/images can be MBs) but bounded so a truly hung request can't freeze the UI forever
+const DOC_TIMEOUT_MS = 90000; // 90s for document binary fetches — file_data can be very large
 const CHAT_TIMEOUT_MS = 120000; // 120s for chat (complex multi-action queries need multiple AI rounds)
 
 export async function apiRequest(
@@ -35,7 +36,9 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const timeoutMs = (url.includes('/api/chat') || url.includes('/api/upload')) ? CHAT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = (url.includes('/api/chat') || url.includes('/api/upload')) ? CHAT_TIMEOUT_MS
+    : (url.includes('/api/documents/')) ? DOC_TIMEOUT_MS
+    : DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -69,7 +72,9 @@ export const getQueryFn: <T>(options: {
     // after the tab regains focus can't hang the UI. React Query passes its own
     // AbortSignal too; we combine both so either path cancels the request.
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+    // Document fetches can carry large base64 file_data — use the longer doc timeout for those.
+    const queryTimeoutMs = url.includes('/api/documents/') ? DOC_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+    const timer = setTimeout(() => ctrl.abort(), queryTimeoutMs);
     if (signal) {
       signal.addEventListener("abort", () => ctrl.abort(), { once: true });
     }

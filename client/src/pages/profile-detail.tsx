@@ -8780,11 +8780,12 @@ function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: str
 
 // ── Linked Assets tab ──
 function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profileType: string }) {
+  const { toast } = useToast();
   const isLiability = profileType === "liability" || profileType === "loan";
   const isPerson = profileType === "person" || profileType === "self";
   const isAsset = ["asset","vehicle","property"].includes(profileType);
 
-  const { data: items = [] } = useQuery<any[]>({
+  const { data: items = [], refetch } = useQuery<any[]>({
     queryKey: ["/api/rel-assets", profileType, profileId],
     queryFn: async () => {
       if (isLiability) {
@@ -8796,49 +8797,25 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
         const assets = await apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json());
         return assets.map((a: any) => ({ id: a.asset?.id || a.id, name: a.asset?.name || a.name || "Asset", typeKey: a.asset?.profileType || a.asset?.type || "asset" }));
       } else {
-        // Asset: find DIRECTLY related assets via graph. We avoid hopping through
-        // person/self nodes — just because two assets share an owner does NOT make
-        // them "linked" to each other (that would surface every asset on every page).
-        // Direct links here means: shared liability, or asset↔asset edges if any.
-        const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
-        const root = g.rootId;
-        const assetTypes = new Set(["asset","vehicle","property"]);
-        const personTypes = new Set(["person","self","pet","business"]);
-        const nodeById: Record<string, any> = {};
-        for (const n of (g.nodes || [])) nodeById[n.id] = n;
-        // Build adjacency from edges, but treat person/self nodes as non-traversable
-        // so two assets sharing an owner aren't considered "linked".
-        const adj: Record<string, Set<string>> = {};
-        const addEdge = (a: string, b: string) => {
-          if (!adj[a]) adj[a] = new Set();
-          adj[a].add(b);
-        };
-        for (const e of (g.edges || [])) {
-          const fromNode = nodeById[e.from];
-          const toNode = nodeById[e.to];
-          if (!fromNode || !toNode) continue;
-          // Skip edges that pass through a person/self/pet/business node — those
-          // are ownership edges, not asset-to-asset relationships.
-          if (personTypes.has(fromNode.typeKey || fromNode.type) || personTypes.has(toNode.typeKey || toNode.type)) continue;
-          addEdge(e.from, e.to);
-          addEdge(e.to, e.from);
+        // Asset: ONLY show assets directly linked via a shared liability (co-collateral).
+        // We deliberately do NOT bridge through owner/person nodes — co-ownership does
+        // not make two assets "linked". Direct co-collateral via the same liability does.
+        const liabs = await apiRequest("GET", `/api/assets/${profileId}/liabilities`).then(r => r.json()).catch(() => []);
+        if (!Array.isArray(liabs) || liabs.length === 0) return [];
+        const liabIds = Array.from(new Set(liabs.map((l: any) => l.liabilityProfileId).filter(Boolean)));
+        const peers: Record<string, { id: string; name: string; typeKey: string }> = {};
+        for (const lid of liabIds) {
+          try {
+            const assetLinks = await apiRequest("GET", `/api/liabilities/${lid}/assets`).then(r => r.json());
+            for (const al of (assetLinks || [])) {
+              const aid = al.assetProfileId;
+              if (!aid || aid === profileId) continue;
+              if (peers[aid]) continue;
+              peers[aid] = { id: aid, name: al.assetName || al.name || "Asset", typeKey: al.assetType || "asset" };
+            }
+          } catch { /* ignore */ }
         }
-        // BFS from root, ignoring person nodes; keep only asset-type nodes.
-        const reachable = new Set<string>();
-        const queue: string[] = [root];
-        const visited = new Set<string>([root]);
-        while (queue.length) {
-          const cur = queue.shift()!;
-          for (const nb of (adj[cur] || [])) {
-            if (visited.has(nb)) continue;
-            visited.add(nb);
-            reachable.add(nb);
-            queue.push(nb);
-          }
-        }
-        return (g.nodes || [])
-          .filter((n: any) => reachable.has(n.id) && assetTypes.has(n.typeKey || n.type))
-          .map((n: any) => ({ id: n.id, name: n.name, typeKey: n.typeKey || n.type }));
+        return Object.values(peers);
       }
     },
   });
@@ -8863,15 +8840,21 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
 
 // ── Linked Liabilities tab (rel-liabilities) ──
 function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string; profileType: string }) {
+  const { toast } = useToast();
   const isLiability = profileType === "liability" || profileType === "loan";
   const isPerson = profileType === "person" || profileType === "self";
   const isAsset = ["asset","vehicle","property"].includes(profileType);
 
-  const { data: items = [] } = useQuery<any[]>({
+  // Picker state (asset profiles can link an existing liability to themselves)
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerPendingId, setPickerPendingId] = useState<string | null>(null);
+  const [pickerPct, setPickerPct] = useState("100");
+
+  const { data: items = [], refetch } = useQuery<any[]>({
     queryKey: ["/api/rel-liabilities", profileType, profileId],
     queryFn: async () => {
       if (isPerson) {
-        // /api/parties/:id/liabilities
         const links = await apiRequest("GET", `/api/parties/${profileId}/liabilities`).then(r => r.json());
         return links.map((l: any) => ({
           id: l.liabilityProfileId || l.id,
@@ -8879,83 +8862,120 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
           typeKey: l.liabilityType || "liability",
         }));
       } else if (isAsset) {
-        // /api/assets/:id/liabilities (same as asset-liabilities tab)
         const links = await apiRequest("GET", `/api/assets/${profileId}/liabilities`).then(r => r.json());
         return links.map((l: any) => ({
           id: l.liabilityProfileId || l.id,
+          linkId: l.id,
           name: l.liabilityName || l.name || "Liability",
           typeKey: l.liabilityType || "liability",
         }));
       } else {
-        // Liability: only show DIRECTLY related liabilities. Don't hop through
-        // person/self/pet/business nodes — sharing an owner doesn't link two
-        // liabilities together (otherwise every liability would surface here).
-        const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
-        const root = g.rootId;
-        const liabTypes = new Set(["liability","loan"]);
-        const personTypes = new Set(["person","self","pet","business"]);
-        const nodeById: Record<string, any> = {};
-        for (const n of (g.nodes || [])) nodeById[n.id] = n;
-        const adj: Record<string, Set<string>> = {};
-        const addEdge = (a: string, b: string) => { if (!adj[a]) adj[a] = new Set(); adj[a].add(b); };
-        for (const e of (g.edges || [])) {
-          const fromNode = nodeById[e.from];
-          const toNode = nodeById[e.to];
-          if (!fromNode || !toNode) continue;
-          // Skip ownership edges (person/self bridges)
-          if (personTypes.has(fromNode.typeKey || fromNode.type) || personTypes.has(toNode.typeKey || toNode.type)) continue;
-          addEdge(e.from, e.to);
-          addEdge(e.to, e.from);
-        }
-        const reachable = new Set<string>();
-        const queue: string[] = [root];
-        const visited = new Set<string>([root]);
-        while (queue.length) {
-          const cur = queue.shift()!;
-          for (const nb of (adj[cur] || [])) {
-            if (visited.has(nb)) continue;
-            visited.add(nb);
-            reachable.add(nb);
-            queue.push(nb);
-          }
-        }
-        return (g.nodes || [])
-          .filter((n: any) => reachable.has(n.id) && liabTypes.has(n.typeKey || n.type))
-          .map((n: any) => ({ id: n.id, name: n.name, typeKey: n.typeKey || n.type }));
+        // Liability profile: nothing to show here (we don't bridge through owners).
+        return [];
       }
     },
   });
 
-  if (items.length === 0) {
-    return (
-      <div className="text-center py-10">
-        <CreditCard className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-sm text-muted-foreground">No linked liabilities</p>
-      </div>
-    );
-  }
+  // Candidates: all user liabilities not already linked
+  const { data: allProfiles = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    enabled: isAsset && pickerOpen,
+  });
+  const linkedLiabIds = useMemo(() => new Set((items || []).map((i: any) => i.id).filter(Boolean)), [items]);
+  const candidates = useMemo(() => {
+    return (allProfiles || [])
+      .filter((p: any) => (p.type === "liability" || p.type === "loan") && !linkedLiabIds.has(p.id))
+      .filter((p: any) => !pickerSearch.trim() || (p.name || "").toLowerCase().includes(pickerSearch.toLowerCase()));
+  }, [allProfiles, linkedLiabIds, pickerSearch]);
+
+  const linkMut = useMutation({
+    mutationFn: async () => {
+      if (!pickerPendingId) return;
+      await apiRequest("POST", "/api/liability-asset-links", {
+        liabilityProfileId: pickerPendingId,
+        assetProfileId: profileId,
+        role: "collateral",
+        ownershipPercentage: Number(pickerPct) || 100,
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Liability linked" });
+      setPickerOpen(false);
+      setPickerPendingId(null);
+      setPickerPct("100");
+      setPickerSearch("");
+      refetch();
+    },
+    onError: (err: Error) => toast({ title: "Failed to link", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const unlinkMut = useMutation({
+    mutationFn: async (linkId: string) => { await apiRequest("DELETE", `/api/liability-asset-links/${linkId}`); },
+    onSuccess: () => { toast({ title: "Unlinked" }); refetch(); },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {items.map((item: any, i: number) => (
-        <Card key={item.id || i} style={{height: 160}} className="overflow-hidden">
-          <CardContent className="p-3 h-full flex flex-col justify-between">
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground mt-0.5">{typeKeyIcon(item.typeKey)}</span>
-              <div className="flex-1 min-w-0">
-                <a href={`#/profiles/${item.id}`} className="text-sm font-semibold hover:underline truncate block">{item.name}</a>
-                <span className="text-xs text-muted-foreground capitalize">{item.typeKey}</span>
-              </div>
-            </div>
-            <div>
-              <Button size="sm" variant="ghost" className="h-6 text-xs px-2" asChild>
-                <a href={`#/profiles/${item.id}`}><ExternalLink className="h-3 w-3 mr-1" />View</a>
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+    <>
+      {isAsset && (
+        <div className="flex justify-end mb-2">
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setPickerOpen(true)} data-testid="btn-link-liability">
+            <Plus className="h-3.5 w-3.5 mr-1" /> Link Liability
+          </Button>
+        </div>
+      )}
+      {items.length === 0 ? (
+        <div className="text-center py-10">
+          <CreditCard className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No linked liabilities</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {items.map((item: any, i: number) => (
+            <Card key={item.id || i} style={{height: 160}} className="overflow-hidden">
+              <CardContent className="p-3 h-full flex flex-col justify-between">
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground mt-0.5">{typeKeyIcon(item.typeKey)}</span>
+                  <div className="flex-1 min-w-0">
+                    <a href={`#/profiles/${item.id}`} className="text-sm font-semibold hover:underline truncate block">{item.name}</a>
+                    <span className="text-xs text-muted-foreground capitalize">{item.typeKey}</span>
+                  </div>
+                  {isAsset && item.linkId && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 shrink-0"
+                      onClick={() => { if (confirm("Unlink this liability?")) unlinkMut.mutate(item.linkId); }}
+                      data-testid={`btn-unlink-liability-${item.id}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+                <div>
+                  <Button size="sm" variant="ghost" className="h-6 text-xs px-2" asChild>
+                    <a href={`#/profiles/${item.id}`}><ExternalLink className="h-3 w-3 mr-1" />View</a>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+      <LinkLiabilityDialog
+        open={pickerOpen}
+        onOpenChange={(b) => { setPickerOpen(b); if (!b) { setPickerPendingId(null); setPickerSearch(""); } }}
+        search={pickerSearch}
+        setSearch={setPickerSearch}
+        candidates={candidates}
+        pendingId={pickerPendingId}
+        setPendingId={setPickerPendingId}
+        pct={pickerPct}
+        setPct={setPickerPct}
+        onSubmit={() => linkMut.mutate()}
+        submitting={linkMut.isPending}
+      />
+    </>
   );
 }
 

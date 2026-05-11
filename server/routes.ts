@@ -2531,8 +2531,12 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       return res.status(404).json({ error: "Not found" });
     }
     // Strip base64 fileData from JSON response — clients fetch binary via /file.
-    const { fileData, ...docMeta } = doc;
-    res.json(docMeta);
+    // But tell the client whether a binary exists so the preview UI can render
+    // <img src=/file> instead of showing "No preview available" for docs that
+    // DO have a file.
+    const { fileData, ...docMeta } = doc as any;
+    const hasFile = !!fileData && String(fileData).length > 0;
+    res.json({ ...docMeta, hasFile, fileSize: hasFile ? Math.floor(String(fileData).length * 0.75) : 0 });
   }));
   app.post("/api/documents", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
