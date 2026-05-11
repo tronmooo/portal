@@ -3020,6 +3020,11 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
   const [summary, setSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
+  // Guard so we don't kick off the same fetch twice (StrictMode double-mount
+  // in dev, or the component re-mounting from layout changes). Once a summary
+  // has been requested for this dashboard visit we won't re-request unless
+  // the user explicitly hits Refresh.
+  const autoStarted = useRef(false);
 
   const generateSummary = async () => {
     setLoading(true);
@@ -3047,25 +3052,50 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
     }
   };
 
-  return summary ? (
+  // Auto-generate on mount. The user explicitly asked for the summary to
+  // "automatically generate a report every time I go onto the dashboard"
+  // instead of having to click a button. We wait until the dashboard's
+  // stats payload has arrived so the AI has fresh context to draw from.
+  useEffect(() => {
+    if (autoStarted.current) return;
+    if (!stats) return; // wait until dashboard data is loaded
+    autoStarted.current = true;
+    generateSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stats]);
+
+  return (
     <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
       <div className="space-y-2">
-        <RenderMarkdown text={summary} />
-        <div className="flex items-center justify-between">
-          {lastGenerated && <span className="text-xs text-muted-foreground">Generated at {lastGenerated}</span>}
-          <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={generateSummary} disabled={loading}>
+        {summary ? (
+          <RenderMarkdown text={summary} />
+        ) : loading ? (
+          // Skeleton lines while the briefing is being written so the
+          // bottom of the dashboard doesn't snap-jump when content lands.
+          <div className="space-y-1.5 py-1" data-testid="ai-summary-skeleton">
+            <div className="h-3 rounded bg-muted/40 animate-pulse w-[92%]" />
+            <div className="h-3 rounded bg-muted/40 animate-pulse w-[78%]" />
+            <div className="h-3 rounded bg-muted/40 animate-pulse w-[85%]" />
+            <div className="h-3 rounded bg-muted/40 animate-pulse w-[60%]" />
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground py-1">Preparing your daily briefing…</p>
+        )}
+        <div className="flex items-center justify-between pt-1">
+          <span className="text-[10px] text-muted-foreground">
+            {loading ? "Generating…" : lastGenerated ? `Generated at ${lastGenerated}` : ""}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-xs gap-1"
+            onClick={generateSummary}
+            disabled={loading}
+            data-testid="button-refresh-ai-summary"
+          >
             <RotateCcw className={`h-2.5 w-2.5 ${loading ? "animate-spin" : ""}`} /> Refresh
           </Button>
         </div>
-      </div>
-    </CollapsibleSection>
-  ) : (
-    <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
-      <div className="flex flex-col items-center gap-2 py-3">
-        <p className="text-xs text-muted-foreground">Get a personalized AI-powered daily briefing</p>
-        <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" onClick={generateSummary} disabled={loading}>
-          {loading ? <><RotateCcw className="h-3 w-3 animate-spin" /> Generating...</> : <><Sparkles className="h-3 w-3" /> Generate Summary</>}
-        </Button>
       </div>
     </CollapsibleSection>
   );
@@ -3147,7 +3177,6 @@ interface DashboardSection {
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
-  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
   // Left+Right columns: only short, snappy sections — no tall sections in either column
   { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
@@ -3157,12 +3186,16 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "full" },
   { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
+  // AI Summary intentionally sits LAST — the user wants to see their real
+  // data first (recent entries, bills, etc.) and then a synthesized AI
+  // recap at the bottom that auto-generates on every dashboard load.
+  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
 ];
 // Layout rule: LEFT = [Today, Health] RIGHT = [Action Required, Goals]
-// FULL = [Finance, Bills, Activity]
+// FULL = [Finance, Bills, Activity, AI Summary]
 // Uses CSS columns (masonry) layout — sections flow naturally and fill space without dead zones
 
-const LAYOUT_VERSION = 4; // Bump: Finance/Bills/Activity moved to full-width to eliminate column dead zones
+const LAYOUT_VERSION = 5; // Bump: AI Summary moved to bottom (after Recent Activity)
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
