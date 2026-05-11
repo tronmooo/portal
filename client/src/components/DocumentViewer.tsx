@@ -482,8 +482,11 @@ export default function DocumentViewer({
 
   // Inline mode (inside chat bubble or document dialog)
   if (inline) {
-    // PDFs fill their parent container; images keep explicit heights
-    const maxH = expanded ? "85vh" : "480px";
+    // Fill the parent container — the dialog (or chat bubble) decides the
+    // height. Using a hardcoded 480px here caused the image to overflow the
+    // dialog's preview half. "100%" lets the renderImage flex box scale the
+    // <img> via object-contain.
+    const maxH = expanded ? "85vh" : "100%";
     return (
       <div
         className="rounded-xl overflow-hidden border border-border bg-muted/10 flex flex-col"
@@ -672,15 +675,13 @@ export function DocumentViewerDialog({
           // desktop, ~200px on mobile) when there's extracted data; full-size
           // only when no data exists to show.
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Document preview — small thumbnail so extracted data is readable */}
+            {/* Document preview — 50% of dialog height when extracted data is
+                present, 100% otherwise. Image inside is constrained by the
+                inline viewer's flex container with object-contain. */}
             <div
-              className="shrink-0 px-4 pt-2 pb-2 flex flex-col"
+              className="px-4 pt-2 pb-2 flex flex-col"
               style={{
-                // With extracted data: lock preview to a small fixed height so
-                // the data fields below get the majority of the dialog space.
-                // Without extracted data: let the preview expand.
-                flex: extractedData && Object.keys(extractedData).length > 0 ? "0 0 auto" : "1 1 auto",
-                height: extractedData && Object.keys(extractedData).length > 0 ? 260 : undefined,
+                flex: extractedData && Object.keys(extractedData).length > 0 ? "1 1 0" : "1 1 auto",
                 minHeight: 0,
               }}
             >
