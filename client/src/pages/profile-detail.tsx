@@ -3166,13 +3166,32 @@ function DocumentsTab({
                         </div>
                       );
                     })()}
-                    <button className="flex-1 min-w-0 text-left" onClick={async () => {
-                      try {
-                        const res = await apiRequest("GET", `/api/documents/${doc.id}`);
-                        const fullDoc = await res.json();
-                        setViewingDoc(fullDoc);
-                      } catch { setViewingDoc(doc); }
-                    }}>
+                    {/* Outer wrapper is intentionally a div (not a button)
+                        because EditableTitle renders its own buttons inside.
+                        Nested <button> elements are invalid HTML and break
+                        the rename click in some browsers. We bind onClick
+                        on the div and add role/tabIndex for accessibility. */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      className="flex-1 min-w-0 text-left cursor-pointer"
+                      onClick={async () => {
+                        try {
+                          const res = await apiRequest("GET", `/api/documents/${doc.id}`);
+                          const fullDoc = await res.json();
+                          setViewingDoc(fullDoc);
+                        } catch { setViewingDoc(doc); }
+                      }}
+                      onKeyDown={async (e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        e.preventDefault();
+                        try {
+                          const res = await apiRequest("GET", `/api/documents/${doc.id}`);
+                          const fullDoc = await res.json();
+                          setViewingDoc(fullDoc);
+                        } catch { setViewingDoc(doc); }
+                      }}
+                    >
                       <div className="text-sm font-medium text-primary" onClick={(e) => e.stopPropagation()}>
                         <EditableTitle
                           value={doc.name}
@@ -3206,7 +3225,7 @@ function DocumentsTab({
                           </span>
                         )}
                       </div>
-                    </button>
+                    </div>
                     <div className="flex gap-1 shrink-0">
                       <Button
                         variant="ghost"

@@ -69,17 +69,26 @@ export default function EditableTitle({
     setEditing(false);
   };
 
+  // stopPropagation is critical: this control is often rendered inside a
+  // larger clickable card (e.g. a document row whose parent <button> opens
+  // the viewer). Without it, clicking the pencil or pressing Enter would
+  // bubble up and trigger the parent click, swallowing the rename intent.
+  const stop = (e: React.SyntheticEvent) => { e.stopPropagation(); };
+
   if (editing) {
     return (
-      <div className="flex items-center gap-1 min-w-0">
+      <div className="flex items-center gap-1 min-w-0" onClick={stop}>
         <input
           ref={inputRef}
           type="text"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onClick={stop}
+          onMouseDown={stop}
           onKeyDown={(e) => {
-            if (e.key === "Enter") handleSave();
-            if (e.key === "Escape") handleCancel();
+            e.stopPropagation();
+            if (e.key === "Enter") { e.preventDefault(); handleSave(); }
+            if (e.key === "Escape") { e.preventDefault(); handleCancel(); }
           }}
           maxLength={maxLength}
           placeholder={placeholder}
@@ -90,7 +99,9 @@ export default function EditableTitle({
           )}
         />
         <button
-          onClick={handleSave}
+          type="button"
+          onClick={(e) => { stop(e); handleSave(); }}
+          onMouseDown={stop}
           disabled={saving}
           className="shrink-0 p-0.5 rounded hover:bg-muted/50 text-primary"
           title="Save"
@@ -98,7 +109,9 @@ export default function EditableTitle({
           <Check className="h-3.5 w-3.5" />
         </button>
         <button
-          onClick={handleCancel}
+          type="button"
+          onClick={(e) => { stop(e); handleCancel(); }}
+          onMouseDown={stop}
           disabled={saving}
           className="shrink-0 p-0.5 rounded hover:bg-muted/50 text-muted-foreground"
           title="Cancel"
@@ -114,8 +127,10 @@ export default function EditableTitle({
       <span className="truncate">{value || placeholder}</span>
       {!disabled && (
         <button
-          onClick={() => setEditing(true)}
-          className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted/50 text-muted-foreground"
+          type="button"
+          onClick={(e) => { stop(e); setEditing(true); }}
+          onMouseDown={stop}
+          className="shrink-0 opacity-60 group-hover:opacity-100 focus:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted/50 text-muted-foreground"
           title="Edit title"
           data-testid="button-edit-title"
         >

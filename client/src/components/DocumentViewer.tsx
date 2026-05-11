@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import EditableTitle from "@/components/EditableTitle";
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { Button } from "@/components/ui/button";
 import {
@@ -578,6 +579,12 @@ export function DocumentViewerDialog({
   const [extractedData, setExtractedData] = useState<Record<string, any> | null>(null);
   const [docType, setDocType] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // liveName tracks the displayed title locally so the rename feels
+  // instant even before parent caches invalidate. Synced from `name`
+  // when it changes from the outside.
+  const [liveName, setLiveName] = useState<string>(name);
+  useEffect(() => { setLiveName(name); }, [name]);
+  const { toast } = useToast();
 
   // Track whether the document actually has a file blob attached. We must know
   // this BEFORE deciding whether to render the inline viewer (which fetches
@@ -637,10 +644,30 @@ export function DocumentViewerDialog({
       <DialogContent className="max-w-[96vw] md:max-w-5xl lg:max-w-6xl xl:max-w-[1400px] max-h-[90vh] sm:h-[90vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
         <DialogHeader className="px-3 py-2 border-b border-border shrink-0">
           <div className="flex items-center justify-between gap-2">
-            <DialogTitle className="text-sm flex items-center gap-2 min-w-0">
-              <FileText className="h-4 w-4 shrink-0" />
-              <span className="truncate">{name}</span>
-              {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal shrink-0">{docType.replace(/_/g, ' ')}</span>}
+            {/* Title is inline-editable here so the user doesn't have to
+                close the viewer just to rename. EditableTitle stops click
+                propagation internally so the dialog won't close on edit
+                clicks. Saves via the same PATCH /api/documents/:id route
+                used elsewhere and refreshes both the dialog title and any
+                lists that show this document. */}
+            <DialogTitle className="text-sm flex items-center gap-2 min-w-0 flex-1" asChild>
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <FileText className="h-4 w-4 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <EditableTitle
+                    value={liveName}
+                    inputClassName="text-sm"
+                    onSave={async (newName) => {
+                      await apiRequest("PATCH", `/api/documents/${id}`, { name: newName });
+                      setLiveName(newName);
+                      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+                      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+                      toast({ title: `Renamed to “${newName}”` });
+                    }}
+                  />
+                </div>
+                {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal shrink-0">{docType.replace(/_/g, ' ')}</span>}
+              </div>
             </DialogTitle>
             {displayData && (
               <Button
@@ -651,7 +678,7 @@ export function DocumentViewerDialog({
                   const link = document.createElement("a");
                   const prefix = mimeType === "application/pdf" ? "data:application/pdf;base64," : `data:${mimeType};base64,`;
                   link.href = displayData.startsWith("data:") ? displayData : prefix + displayData;
-                  link.download = name;
+                  link.download = liveName;
                   link.click();
                 }}
               >
