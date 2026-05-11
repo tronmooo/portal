@@ -634,7 +634,7 @@ export function DocumentViewerDialog({
       {/* Wave 11: Cap dialog at 85vh on desktop, 90vh on mobile, with a tighter
           max-w on wide displays so it never feels like it eats the viewport.
           Header is single-row (title + Download + close) instead of stacked. */}
-      <DialogContent className="max-w-[96vw] md:max-w-4xl lg:max-w-5xl max-h-[85vh] sm:h-[85vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
+      <DialogContent className="max-w-[96vw] md:max-w-5xl lg:max-w-6xl xl:max-w-[1400px] max-h-[90vh] sm:h-[90vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
         <DialogHeader className="px-3 py-2 border-b border-border shrink-0">
           <div className="flex items-center justify-between gap-2">
             <DialogTitle className="text-sm flex items-center gap-2 min-w-0">
@@ -668,26 +668,54 @@ export function DocumentViewerDialog({
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          // Wave 21: preview wrapper is a HARD-CAPPED pixel height container.
-          // Outer div has overflow: hidden so the image can NEVER push the
-          // extracted-data section out of view, no matter what the inline
-          // viewer renders. 200px is small enough to leave room for fields.
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Document preview — hard 200px tall, overflow hidden. */}
-            <div
-              className="px-4 pt-2 pb-2 flex shrink-0 overflow-hidden"
-              style={{ height: 200 }}
-            >
+          // Real-app layout: side-by-side on desktop (extracted data on the left
+          // sidebar, document preview takes the rest), stacked on mobile.
+          // Each pane scrolls independently so neither one squishes the other.
+          <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+            {/* ── Left sidebar: Extracted Data ────────────────────────────── */}
+            <aside className="shrink-0 md:w-[40%] md:max-w-[480px] md:min-w-[320px] border-b md:border-b-0 md:border-r border-border bg-muted/30 flex flex-col min-h-0 max-h-[35vh] md:max-h-none">
+              <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/60 bg-background/40">
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Extracted Data
+                </p>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+                {extractedData && Object.keys(extractedData).length > 0 ? (
+                  <div className="space-y-2">
+                    {Object.entries(extractedData)
+                      .filter(([_, v]) => v != null && v !== '')
+                      .map(([key, rawVal]) => {
+                        const val = (rawVal && typeof rawVal === 'object' && 'value' in rawVal) ? rawVal.value : rawVal;
+                        const display = typeof val === 'object' ? JSON.stringify(val) : String(val);
+                        if (!display || display === 'null' || display === 'undefined') return null;
+                        return (
+                          <div key={key} className="flex flex-col gap-0.5">
+                            <span className="text-[10px] uppercase tracking-wide text-muted-foreground/80">{formatFieldKey(key)}</span>
+                            <span className="text-sm font-medium text-foreground break-words" title={display}>{display}</span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground py-3">No extracted data for this document.</p>
+                )}
+              </div>
+            </aside>
+
+            {/* ── Right pane: Document preview ────────────────────────────── */}
+            <div className="flex-1 min-h-0 flex flex-col bg-neutral-900/40 dark:bg-black/30">
               {shouldShowPreview ? (
-                <div className="w-full h-full overflow-hidden" style={{ height: '100%' }}>
-                  <DocumentViewer id={id} name={name} mimeType={actualMime} data={displayData} inline />
+                <div className="flex-1 min-h-0 overflow-auto flex items-start justify-center p-4">
+                  <div className="w-full h-full max-w-full">
+                    <DocumentViewer id={id} name={name} mimeType={actualMime} data={displayData} inline />
+                  </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center py-8 text-center px-4">
+                <div className="flex-1 flex flex-col items-center justify-center py-8 text-center px-4">
                   <FileText className="h-10 w-10 text-muted-foreground mb-3" />
                   <p className="text-sm font-medium">{name}</p>
                   <p className="text-xs text-muted-foreground mt-2 max-w-md">
-                    This document was added without a file attached — only the extracted details below are saved.
+                    This document was added without a file attached — only the extracted details on the left are saved.
                   </p>
                   <label className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 hover:bg-muted/50 cursor-pointer text-xs font-medium">
                     <input
@@ -714,36 +742,6 @@ export function DocumentViewerDialog({
                   </label>
                 </div>
               )}
-            </div>
-
-            {/* Extracted data section — always rendered so the layout is
-                stable; shows a placeholder when no data exists. Independently
-                scrollable so every field is reachable. */}
-            <div className="flex-1 min-h-0 border-t border-border bg-muted/10 flex flex-col">
-              <p className="shrink-0 text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider px-4 pt-2 pb-1">
-                Extracted Data
-              </p>
-              <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
-                {extractedData && Object.keys(extractedData).length > 0 ? (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3 gap-y-0.5">
-                    {Object.entries(extractedData)
-                      .filter(([_, v]) => v != null && v !== '')
-                      .map(([key, rawVal]) => {
-                        const val = (rawVal && typeof rawVal === 'object' && 'value' in rawVal) ? rawVal.value : rawVal;
-                        const display = typeof val === 'object' ? JSON.stringify(val) : String(val);
-                        if (!display || display === 'null' || display === 'undefined') return null;
-                        return (
-                          <div key={key} className="flex justify-between items-baseline py-[2px] gap-1">
-                            <span className="text-xs-tight text-muted-foreground shrink-0 truncate">{formatFieldKey(key)}</span>
-                            <span className="text-xs-tight font-medium text-foreground text-right break-words" title={display}>{display}</span>
-                          </div>
-                        );
-                      })}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground py-3">No extracted data for this document.</p>
-                )}
-              </div>
             </div>
           </div>
         )}
