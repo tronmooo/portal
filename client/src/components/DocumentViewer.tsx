@@ -424,7 +424,7 @@ export default function DocumentViewer({
       className={`relative overflow-hidden rounded-lg bg-muted/30 flex items-center justify-center ${
         isDragging ? "cursor-grabbing" : zoom > 1 ? "cursor-grab" : ""
       }`}
-      style={{ height: "100%", maxHeight: maxH, minHeight: "200px" }}
+      style={{ height: "100%", maxHeight: maxH, minHeight: inline ? 0 : "200px" }}
       onWheel={handleWheel}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -669,19 +669,19 @@ export function DocumentViewerDialog({
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          // Wave 18: shrink preview so the extracted data panel below is the
-          // focus. The image used to dominate the dialog and push the data
-          // fields out of view. Preview is now a fixed thumbnail (~260px on
-          // desktop, ~200px on mobile) when there's extracted data; full-size
-          // only when no data exists to show.
+          // Wave 19: preview is a SMALL fixed thumbnail (~180px desktop /
+          // ~140px mobile) so the extracted data panel below gets the bulk of
+          // the dialog. Earlier 50/50 split still dwarfed the data fields.
+          // Only when no extracted data exists does the preview grow to fill.
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Document preview — 50% of dialog height when extracted data is
-                present, 100% otherwise. Image inside is constrained by the
+            {/* Document preview — small fixed thumbnail when extracted data is
+                present, full-size otherwise. Image inside is constrained by the
                 inline viewer's flex container with object-contain. */}
             <div
-              className="px-4 pt-2 pb-2 flex flex-col"
+              className="px-4 pt-2 pb-2 flex flex-col shrink-0"
               style={{
-                flex: extractedData && Object.keys(extractedData).length > 0 ? "1 1 0" : "1 1 auto",
+                height: extractedData && Object.keys(extractedData).length > 0 ? 260 : undefined,
+                flex: extractedData && Object.keys(extractedData).length > 0 ? undefined : "1 1 auto",
                 minHeight: 0,
               }}
             >
