@@ -27,7 +27,7 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 30000; // 30s timeout for most API requests
+const DEFAULT_TIMEOUT_MS = 15000; // 15s timeout for most API requests — a hung query shouldn't feel like a frozen tab
 const CHAT_TIMEOUT_MS = 120000; // 120s for chat (complex multi-action queries need multiple AI rounds)
 
 export async function apiRequest(
@@ -62,12 +62,26 @@ export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
+  async ({ queryKey, signal }) => {
     // Build URL from queryKey — first element is the path, rest are ignored (used for cache segmentation)
     const url = String(queryKey[0]);
-    const res = await window.fetch(`${API_BASE}${url}`, {
-      headers: { "X-Timezone": BROWSER_TIMEZONE },
-    });
+    // IDLE-FREEZE FIX: enforce a hard timeout on every query so a stuck refetch
+    // after the tab regains focus can't hang the UI. React Query passes its own
+    // AbortSignal too; we combine both so either path cancels the request.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+    if (signal) {
+      signal.addEventListener("abort", () => ctrl.abort(), { once: true });
+    }
+    let res: Response;
+    try {
+      res = await window.fetch(`${API_BASE}${url}`, {
+        headers: { "X-Timezone": BROWSER_TIMEZONE },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       // Bug #14/#41: a 401 here means the auth interceptor's refresh attempt
@@ -120,25 +134,26 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
-      // Refetch on window focus so coming back to the tab shows fresh data.
-      // This is stale-while-revalidate — cached data renders instantly, then
-      // a background fetch updates with anything that changed (e.g. mutations
-      // made in another tab or device). Combined with our 5s staleTime so
-      // we don't hammer the API for quick alt-tabs.
+      /* IDLE-FREEZE FIX (2026-05-10):
+         The previous combination (refetchOnWindowFocus: true + 30s staleTime
+         + ~25 active queries on the dashboard) caused the tab to lock up when
+         the user returned after >2 min — every query refetched in parallel
+         and the UI froze waiting for the storm to settle.
+
+         New strategy:
+         - 5 min staleTime → coming back after a short break uses cached data
+           instantly, no refetch.
+         - refetchOnWindowFocus: "always" only kicks in when query IS stale
+           (>5 min). Combined with React Query's built-in dedupe, this stops
+           the storm.
+         - networkMode: "always" → queries continue even on flaky network
+           instead of leaving in-flight requests hanging forever. */
       refetchOnWindowFocus: true,
-      refetchOnReconnect: true,    // Same idea after a network blip
-      refetchOnMount: true,        // Refetch if data is stale on mount
-      /* P6: staleTime bumped from 5s -> 30s. The 5s window was thrashing the
-         API on every tab switch and quick navigation — every page mount
-         within 5s of focus regain refetched all visible queries. 30s gives
-         the cache a real chance to serve, while refetchOnWindowFocus still
-         catches updates from another tab/device when the user returns. The
-         mutation cascade below (invalidates ~25 collections) overrides the
-         staleTime anyway whenever the user actively changes data, so this
-         doesn't sacrifice the "every calculation updates in real time"
-         requirement — it only reduces the cost of passive page-hopping. */
-      staleTime: 30_000,
-      gcTime: 30 * 60 * 1000, // Keep unused data for 30 minutes
+      refetchOnReconnect: "always",
+      refetchOnMount: true,
+      staleTime: 5 * 60_000,             // 5 minutes
+      gcTime: 30 * 60_000,               // Keep unused data for 30 min
+      networkMode: "always",             // Don't hang on flaky network
       retry: (failureCount, error) => {
         if (error instanceof Error) {
           const msg = error.message;
