@@ -6118,7 +6118,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
@@ -6170,7 +6169,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
@@ -6185,7 +6183,6 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "connections", label: "Connections", testId: "tab-connections" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "finances", label: "Costs", testId: "tab-finances" },
@@ -6225,7 +6222,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   bank_account: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
@@ -6236,7 +6232,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   credit_card: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Transactions", testId: "tab-finances" },
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
@@ -6247,7 +6242,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   digital_asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "access", label: "Access", testId: "tab-access" },
     { value: "billing", label: "Billing", testId: "tab-billing" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6258,7 +6252,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   business: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Financials", testId: "tab-finances" },
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6269,7 +6262,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   collectible: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "valuation", label: "Valuation", testId: "tab-valuation" },
     { value: "finances", label: "History", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6289,7 +6281,6 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   high_value_item: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "asset-liabilities", label: "Liabilities", testId: "tab-asset-liabilities" },
     { value: "finances", label: "Expenses", testId: "tab-finances" },
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6300,7 +6291,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
 };
 
 // ─── Loan Tab ─────────────────────────────────────────────────────────
-function LoanTab({ profile, obligations }: { profile: any; obligations: any[] }) {
+function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obligations: any[]; hideEmptyEditor?: boolean }) {
   const { toast } = useToast();
   // Walk every known camelCase + snake_case + nested storage path. Loans created
   // by the AI engine store at fields.finance.{lender,apr,term,monthlyPayment,...},
@@ -6552,6 +6543,13 @@ function LoanTab({ profile, obligations }: { profile: any; obligations: any[] })
     },
     onError: (err: Error) => toast({ title: "Payment failed", description: formatApiError(err), variant: "destructive" }),
   });
+
+  // When liabilities are linked to this asset, the linked liability's profile
+  // owns the canonical loan data — suppress the empty "Add Loan Details" form
+  // on the asset itself so the user doesn't see a confusing blank editor.
+  if (!editing && !hasLoanData && hideEmptyEditor) {
+    return null;
+  }
 
   return (
     <div className="space-y-4">
@@ -9195,7 +9193,6 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "valuation": return true;
         case "linked-subs": return true;
         case "linked-liabilities": return true;
-        case "asset-liabilities": return true;
         case "payments": return true;
         default: return false;
       }
@@ -9205,7 +9202,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "asset-liabilities", "payments", "connections", "history"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments", "connections", "history"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -10211,10 +10208,6 @@ export default function ProfileDetailPage() {
                     <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
                   </section>
                   <section className="mt-6">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
-                    <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
-                  </section>
-                  <section className="mt-6">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
                     <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
                   </section>
@@ -10258,7 +10251,18 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("loan-detail") && (
                 <TabsContent value="loan-detail" className="mt-4 px-1 sm:px-0">
-                  <LoanTab profile={profile} obligations={profile.relatedObligations || []} />
+                  {/* Single source of truth for liability+loan info on asset profiles.
+                      Shows linked liability cards (Secures $X, $Y/mo) at top, then the
+                      inline loan editor / amortization below. Liability profiles still
+                      see only the LoanTab editor since they have no liabilities to link. */}
+                  {["asset","vehicle","property"].includes(profile.type) && (
+                    <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                  )}
+                  <LoanTab
+                    profile={profile}
+                    obligations={profile.relatedObligations || []}
+                    hideEmptyEditor={["asset","vehicle","property"].includes(profile.type)}
+                  />
                 </TabsContent>
               )}
 
@@ -10325,12 +10329,6 @@ export default function ProfileDetailPage() {
               {tabValues.has("linked-liabilities") && (
                 <TabsContent value="linked-liabilities" className="mt-4 px-1 sm:px-0">
                   <LinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-                </TabsContent>
-              )}
-
-              {tabValues.has("asset-liabilities") && (
-                <TabsContent value="asset-liabilities" className="mt-4 px-1 sm:px-0">
-                  <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                 </TabsContent>
               )}
 
