@@ -669,19 +669,18 @@ export function DocumentViewerDialog({
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          // Wave 19: preview is a SMALL fixed thumbnail (~180px desktop /
-          // ~140px mobile) so the extracted data panel below gets the bulk of
-          // the dialog. Earlier 50/50 split still dwarfed the data fields.
-          // Only when no extracted data exists does the preview grow to fill.
+          // Wave 20: preview is ALWAYS a medium fixed thumbnail (~280px) so
+          // extracted data is always visible below it. Extracted data area
+          // always rendered — shows "No extracted data" placeholder when empty
+          // so layout doesn't shift when async fetch resolves.
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Document preview — small fixed thumbnail when extracted data is
-                present, full-size otherwise. Image inside is constrained by the
-                inline viewer's flex container with object-contain. */}
+            {/* Document preview — fixed 280px thumbnail at the top. Image is
+                constrained by the inline viewer's flex container with
+                object-contain so tall photos shrink to fit. */}
             <div
               className="px-4 pt-2 pb-2 flex flex-col shrink-0"
               style={{
-                height: extractedData && Object.keys(extractedData).length > 0 ? 260 : undefined,
-                flex: extractedData && Object.keys(extractedData).length > 0 ? undefined : "1 1 auto",
+                height: 280,
                 minHeight: 0,
               }}
             >
@@ -723,15 +722,15 @@ export function DocumentViewerDialog({
               )}
             </div>
 
-            {/* Extracted data section — independently scrollable so every field
-                is reachable even on long documents (driver's licenses, leases,
-                receipts …). */}
-            {extractedData && Object.keys(extractedData).length > 0 && (
-              <div className="flex-1 min-h-0 border-t border-border bg-muted/10 flex flex-col">
-                <p className="shrink-0 text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider px-4 pt-2 pb-1">
-                  Extracted Data
-                </p>
-                <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
+            {/* Extracted data section — always rendered so the layout is
+                stable; shows a placeholder when no data exists. Independently
+                scrollable so every field is reachable. */}
+            <div className="flex-1 min-h-0 border-t border-border bg-muted/10 flex flex-col">
+              <p className="shrink-0 text-xs-tight font-semibold text-muted-foreground uppercase tracking-wider px-4 pt-2 pb-1">
+                Extracted Data
+              </p>
+              <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
+                {extractedData && Object.keys(extractedData).length > 0 ? (
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3 gap-y-0.5">
                     {Object.entries(extractedData)
                       .filter(([_, v]) => v != null && v !== '')
@@ -747,9 +746,11 @@ export function DocumentViewerDialog({
                         );
                       })}
                   </div>
-                </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground py-3">No extracted data for this document.</p>
+                )}
               </div>
-            )}
+            </div>
           </div>
         )}
       </DialogContent>
