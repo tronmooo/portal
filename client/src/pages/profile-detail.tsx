@@ -6195,12 +6195,11 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
-  // Subscription
+  // Subscription — Billing + Details collapsed into Money; Impact stays separate.
   subscription: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "billing", label: "Billing", testId: "tab-billing" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "impact", label: "Impact", testId: "tab-impact" },
-    { value: "details", label: "Details", testId: "tab-details" },
   ],
   // Medical provider
   medical: [
@@ -10696,30 +10695,45 @@ export default function ProfileDetailPage() {
               )}
 
               {/* MONEY — consolidated finance tab. Replaces the separate Loan + Costs
-                  (or Loan + Payments / Loan + Transactions) pair on asset, vehicle,
-                  property, loan and account profile types. Renders the linked-liability
-                  cards, inline loan editor, and the recurring-bill + expense feed in
-                  vertical sections so the user sees the full money picture on one tab. */}
+                  (or Loan + Payments / Loan + Transactions / Billing + Details) pair
+                  across asset, vehicle, property, loan, subscription and account types.
+                  For subscriptions it renders the billing + details editors stacked;
+                  for everything else it renders linked-liabilities + loan + bills. */}
               {tabValues.has("money") && (
                 <TabsContent value="money" className="mt-4 px-1 sm:px-0 space-y-6">
-                  {["asset","vehicle","property"].includes(profile.type) && (
-                    <section>
-                      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Linked liabilities</h3>
-                      <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-                    </section>
+                  {profile.type === "subscription" ? (
+                    <>
+                      <section>
+                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Billing</h3>
+                        <SubscriptionBillingTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                      </section>
+                      <section>
+                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Plan details</h3>
+                        <SubscriptionDetailsTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                      </section>
+                    </>
+                  ) : (
+                    <>
+                      {["asset","vehicle","property"].includes(profile.type) && (
+                        <section>
+                          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Linked liabilities</h3>
+                          <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                        </section>
+                      )}
+                      <section>
+                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Loan</h3>
+                        <LoanTab
+                          profile={profile}
+                          obligations={profile.relatedObligations || []}
+                          hideEmptyEditor={["asset","vehicle","property"].includes(profile.type)}
+                        />
+                      </section>
+                      <section>
+                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Bills &amp; expenses</h3>
+                        <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                      </section>
+                    </>
                   )}
-                  <section>
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Loan</h3>
-                    <LoanTab
-                      profile={profile}
-                      obligations={profile.relatedObligations || []}
-                      hideEmptyEditor={["asset","vehicle","property"].includes(profile.type)}
-                    />
-                  </section>
-                  <section>
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Bills &amp; expenses</h3>
-                    <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-                  </section>
                 </TabsContent>
               )}
 

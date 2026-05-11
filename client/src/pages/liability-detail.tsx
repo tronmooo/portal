@@ -87,7 +87,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
+import { HistoryTab } from "@/components/ProfileSharedTabs";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import {
@@ -366,7 +366,6 @@ type TabKey =
   | "payments"
   | "documents"
   | "activity"
-  | "connections"
   | "history";
 
 const PROFILE_LINK_ROLES: { value: string; label: string }[] = [
@@ -978,7 +977,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <TabsTrigger value="payments" className="text-xs px-3 whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
               <TabsTrigger value="documents" className="text-xs px-3 whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
               <TabsTrigger value="activity" className="text-xs px-3 whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
-              <TabsTrigger value="connections" className="text-xs px-3 whitespace-nowrap" data-testid="tab-connections">Connections</TabsTrigger>
               <TabsTrigger value="history" className="text-xs px-3 whitespace-nowrap" data-testid="tab-history">History</TabsTrigger>
             </TabsList>
           </div>
@@ -1303,11 +1301,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               profileId={profile.id}
               payments={payments}
             />
-          </TabsContent>
-
-          {/* CONNECTIONS */}
-          <TabsContent value="connections" className="mt-4 px-1 sm:px-0">
-            <ConnectionsTab profileId={profile.id} />
           </TabsContent>
 
           {/* HISTORY */}
