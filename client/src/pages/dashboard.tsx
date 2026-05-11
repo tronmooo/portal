@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setDashboardProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
@@ -680,31 +681,87 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       }
       toast({ title: "Failed to create task", variant: "destructive" });
     },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task added" }); },
+    onSettled: () => { invalidateDomain("tasks"); toast({ title: "Task added" }); },
   });
+
+  // ─ Helper: optimistically adjust stats.activeTasks & dashboard-enhanced ─
+  // The KPI tile (Open Tasks) and the popup pull from different queries.
+  // To make the chip flip instantly when you check a task off, we patch
+  // both /api/stats and /api/dashboard-enhanced in the cache BEFORE the
+  // server roundtrip resolves. Server data wins on next refetch.
+  const patchStatsTaskDelta = (delta: number) => {
+    const statsKey = ["/api/stats", filterMode, ...filterIds];
+    queryClient.setQueryData<any>(statsKey, (old: any) => {
+      if (!old) return old;
+      const next = Number(old.activeTasks || 0) + delta;
+      return { ...old, activeTasks: Math.max(0, next) };
+    });
+    const dashKey = ["/api/dashboard-enhanced", filterMode, ...filterIds];
+    queryClient.setQueryData<any>(dashKey, (old: any) => {
+      if (!old || !old.taskSnapshot) return old;
+      const open = Math.max(0, Number(old.taskSnapshot.open || 0) + delta);
+      return { ...old, taskSnapshot: { ...old.taskSnapshot, open } };
+    });
+  };
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string; title?: string }) => apiRequest("PATCH", `/api/tasks/${id}`, { status }),
     onMutate: async ({ id, status }) => {
-      const prev = queryClient.getQueryData(["/api/tasks", filterMode, ...filterIds]);
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks", filterMode, ...filterIds] });
+      const prev = queryClient.getQueryData<any[]>(["/api/tasks", filterMode, ...filterIds]);
+      const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
+      const prevDash = queryClient.getQueryData<any>(["/api/dashboard-enhanced", filterMode, ...filterIds]);
+      // Update the task list itself
       queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
         (old || []).map((t: any) => t.id === id ? { ...t, status } : t)
       );
-      return { prev };
+      // Compute the active-task delta from the PREVIOUS state so toggling
+      // back and forth always adjusts correctly.
+      const prevTask = (prev || []).find(t => t.id === id);
+      const wasDone = String(prevTask?.status || "").toLowerCase() === "done";
+      const isDone = String(status).toLowerCase() === "done";
+      if (wasDone !== isDone) {
+        patchStatsTaskDelta(isDone ? -1 : +1);
+      }
+      return { prev, prevStats, prevDash };
     },
-    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); toast({ title: "Failed to update task", variant: "destructive" }); },
-    onSettled: (_d, _e, variables) => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: variables.status === 'done' ? "Task completed" : "Task updated" }); },
+    onError: (_e, _v, ctx: any) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
+      if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
+      if (ctx?.prevDash !== undefined) queryClient.setQueryData(["/api/dashboard-enhanced", filterMode, ...filterIds], ctx.prevDash);
+      toast({ title: "Failed to update task", variant: "destructive" });
+    },
+    onSettled: (_d, _e, variables) => {
+      invalidateDomain("tasks");
+      toast({ title: variables.status === 'done' ? "Task completed" : "Task updated" });
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: ({ id }: { id: string }) => apiRequest("DELETE", `/api/tasks/${id}`),
     onMutate: async ({ id }) => {
-      const prev = queryClient.getQueryData(["/api/tasks", filterMode, ...filterIds]);
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks", filterMode, ...filterIds] });
+      const prev = queryClient.getQueryData<any[]>(["/api/tasks", filterMode, ...filterIds]);
+      const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
+      const prevDash = queryClient.getQueryData<any>(["/api/dashboard-enhanced", filterMode, ...filterIds]);
+      const removed = (prev || []).find(t => t.id === id);
       queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) => (old || []).filter((t: any) => t.id !== id));
-      return { prev };
+      // If the deleted task was open, drop the active-task count too
+      if (removed && String(removed.status || "").toLowerCase() !== "done") {
+        patchStatsTaskDelta(-1);
+      }
+      return { prev, prevStats, prevDash };
     },
-    onError: (_e, _v, ctx: any) => { queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx?.prev); toast({ title: "Failed to delete task", variant: "destructive" }); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Task deleted" }); },
+    onError: (_e, _v, ctx: any) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
+      if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
+      if (ctx?.prevDash !== undefined) queryClient.setQueryData(["/api/dashboard-enhanced", filterMode, ...filterIds], ctx.prevDash);
+      toast({ title: "Failed to delete task", variant: "destructive" });
+    },
+    onSettled: () => {
+      invalidateDomain("tasks");
+      toast({ title: "Task deleted" });
+    },
   });
 
   const todayStr = new Date().toLocaleDateString('en-CA');
@@ -917,26 +974,48 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
     enabled: open,
   });
 
+  // Optimistically bump stats.habitCompletionRate so the dashboard
+  // donut ring jumps to 100% the instant the user marks every habit
+  // done, instead of waiting on the server roundtrip.
+  const recomputeStatsHabitRate = (habitsList: any[]) => {
+    if (!habitsList || habitsList.length === 0) return;
+    const total = habitsList.filter((h: any) => !h.archivedAt).length;
+    if (total === 0) return;
+    const completed = habitsList.filter((h: any) =>
+      !h.archivedAt && (h.checkins || []).some((c: any) => c.date === today)
+    ).length;
+    const pct = Math.round((completed / total) * 100);
+    const statsKey = ["/api/stats", filterMode, ...filterIds];
+    queryClient.setQueryData<any>(statsKey, (old: any) => {
+      if (!old) return old;
+      return { ...old, habitCompletionRate: pct, totalHabits: total };
+    });
+  };
+
   const checkinMutation = useMutation({
     mutationFn: ({ id }: { id: string }) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: today }),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
+      // Optimistically add today's check-in to the habit.
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === id
           ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }] }
           : h)
       );
-      return { prev };
+      // Recompute completion% from the (now-updated) cache.
+      const updated = queryClient.getQueryData<any[]>(["/api/habits", filterMode, ...filterIds]);
+      if (updated) recomputeStatsHabitRate(updated);
+      return { prev, prevStats };
     },
     onError: (_e: any, _v: any, ctx: any) => {
       if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
       toast({ title: "Failed to check in habit", variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomain("habits");
       toast({ title: "Habit checked in" });
     },
   });

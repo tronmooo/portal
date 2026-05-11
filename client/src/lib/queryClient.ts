@@ -171,37 +171,22 @@ export const queryClient = new QueryClient({
     mutations: {
       retry: false,
       onSuccess: () => {
-        // Global: after ANY successful mutation, invalidate every collection the
-        // dashboard reads from so the KPI tiles, popups, charts and every linked
-        // tab card update in real time. Without invalidating /api/profiles,
-        // /api/expenses, /api/obligations, and /api/incomes, the FinanceWidget
-        // tile and Net Worth popup can keep stale numbers even after a CRUD
-        // mutation succeeds.
-        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/budgets"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/insights"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/ai-digest"] });
+        // Global safety net: after ANY successful mutation, refresh every
+        // /api/* query that has active observers on screen. This is the
+        // backstop — individual mutations should still call
+        // invalidateDomains() for the specific domain so optimistic updates
+        // happen instantly. Without this default, ad-hoc apiRequest calls
+        // or third-party mutations would leave stale data on screen.
+        //
+        // We use refetchType:"active" so only on-screen queries refetch;
+        // background data is marked stale and refreshes on next view.
+        // We use predicate matching so nested keys like
+        // ["/api/profiles", id, "detail"] also bust — the previous
+        // top-level list missed those.
+        queryClient.invalidateQueries({
+          predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
+          refetchType: "active",
+        });
       },
       onError: (error: Error) => {
         console.error("Mutation failed:", error.message);
