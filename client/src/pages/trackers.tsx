@@ -4489,7 +4489,7 @@ export default function TrackersPage() {
               {collapsedSections.has("profiles") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
             {!collapsedSections.has("profiles") && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 items-start" style={{ gridAutoRows: 160 }}>
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
                   const fields = child.fields || {};
@@ -4580,11 +4580,14 @@ export default function TrackersPage() {
                   const valueLabel = (currentVal == null || currentVal === 0) && purchaseVal != null && purchaseVal > 0 ? 'purchase' : null;
 
                   return (
-                    <Link key={child.id} href={`/profiles/${child.id}`} className="block">
+                    <Link key={child.id} href={`/profiles/${child.id}`} className="block" style={{ height: 160 }}>
                       <div
                         className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] grid"
                         style={{
                           height: 160,
+                          minHeight: 160,
+                          maxHeight: 160,
+                          boxSizing: 'border-box',
                           background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`,
                           border: `1px solid hsl(${accentHsl} / 0.2)`,
                           boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)`,

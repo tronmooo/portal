@@ -666,17 +666,21 @@ export function DocumentViewerDialog({
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          // Wave 17: split layout. Preview takes ~55% of dialog height so the
-          // whole document is visible at once; details panel takes the rest and
-          // is independently scrollable so users can read every extracted field.
+          // Wave 18: shrink preview so the extracted data panel below is the
+          // focus. The image used to dominate the dialog and push the data
+          // fields out of view. Preview is now a fixed thumbnail (~260px on
+          // desktop, ~200px on mobile) when there's extracted data; full-size
+          // only when no data exists to show.
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Document preview — capped to leave room for extracted data */}
+            {/* Document preview — small thumbnail so extracted data is readable */}
             <div
               className="shrink-0 px-4 pt-2 pb-2 flex flex-col"
               style={{
-                // If we have extracted data, the preview gets ~55% of the
-                // available content area; otherwise it gets everything.
-                flex: extractedData && Object.keys(extractedData).length > 0 ? "0 0 55%" : "1 1 auto",
+                // With extracted data: lock preview to a small fixed height so
+                // the data fields below get the majority of the dialog space.
+                // Without extracted data: let the preview expand.
+                flex: extractedData && Object.keys(extractedData).length > 0 ? "0 0 auto" : "1 1 auto",
+                height: extractedData && Object.keys(extractedData).length > 0 ? 260 : undefined,
                 minHeight: 0,
               }}
             >
