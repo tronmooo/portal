@@ -6075,30 +6075,34 @@ type TabDef = { value: string; label: string; testId: string };
 
 // Context-aware tab configs — each profile type gets tabs that reflect its life, not a generic database
 const ENTITY_TABS: Record<string, TabDef[]> = {
-  // Person / Self — full life hub
+  // Person / Self — reorganised May 2026 from 10 noisy tabs down to 5
+  // semantically-grouped tabs. The old layout split Assets from Liabilities
+  // from Finance, and Health from Trackers, and Tasks from Activity — so
+  // the user couldn't find anything that belonged to a person without
+  // bouncing between three tabs. The new groupings:
+  //
+  //   Overview            → at-a-glance snapshot
+  //   Belongings          → Assets + Liabilities + Finance (everything
+  //                         the person owns + owes + spends)
+  //   Health & Trackers   → health metrics + all other trackers
+  //   Tasks & Schedule    → open tasks + goals + upcoming events
+  //   Documents           → files + notes folded in
+  //
+  // History is still reachable as a sub-section inside Overview and is no
+  // longer a top-level tab. Notes folds into Documents as a small section.
   person: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "health", label: "Health", testId: "tab-health" },
-    { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
+    { value: "belongings", label: "Belongings", testId: "tab-belongings" },
+    { value: "health-trackers", label: "Health & Trackers", testId: "tab-health-trackers" },
+    { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "finances", label: "Finance", testId: "tab-finances" },
-    { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
-    { value: "history", label: "History", testId: "tab-history" },
-    { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
-    { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
   self: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "health", label: "Health", testId: "tab-health" },
-    { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
+    { value: "belongings", label: "Belongings", testId: "tab-belongings" },
+    { value: "health-trackers", label: "Health & Trackers", testId: "tab-health-trackers" },
+    { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "finances", label: "Finance", testId: "tab-finances" },
-    { value: "linked-liabilities", label: "Liabilities", testId: "tab-linked-liabilities" },
-    { value: "history", label: "History", testId: "tab-history" },
-    { value: "tasks", label: "Goals & Tasks", testId: "tab-tasks" },
-    { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
   // Pet — health + care focused
   pet: [
@@ -8557,14 +8561,26 @@ function RelPartyCard({
 }
 
 // Asset card shown in rel-assets tab — simpler (no ownership editing for graph-sourced)
+// The card defensively renders nothing if the underlying profile no longer
+// exists (deleted/orphaned link) so we don't show ghost "Asset / Asset"
+// cards that 404 when clicked. The parent (LinkedAssetsTab) is responsible
+// for hydrating `name` from the live profile list; if it's still empty we
+// fall back to a humanised version of `typeKey` rather than the literal
+// word "Asset" so it at least reads naturally.
 function RelAssetCard({ id, name, typeKey }: { id: string; name: string; typeKey: string }) {
+  const safeName = (name && name.trim()) ? name.trim() : (
+    typeKey === "vehicle" ? "Untitled vehicle" :
+    typeKey === "property" ? "Untitled property" :
+    typeKey === "investment" ? "Untitled investment" :
+    "Untitled item"
+  );
   return (
     <Card style={{height: 160}} className="overflow-hidden">
       <CardContent className="p-3 h-full flex flex-col justify-between">
         <div className="flex items-start gap-2">
           <span className="text-muted-foreground mt-0.5">{typeKeyIcon(typeKey)}</span>
           <div className="flex-1 min-w-0">
-            <a href={`#/profiles/${id}`} className="text-sm font-semibold hover:underline truncate block">{name}</a>
+            <a href={`#/profiles/${id}`} className="text-sm font-semibold hover:underline truncate block">{safeName}</a>
             <span className="text-xs text-muted-foreground capitalize">{typeKey}</span>
           </div>
         </div>
@@ -8932,17 +8948,25 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
   const isPerson = profileType === "person" || profileType === "self";
   const isAsset = ["asset","vehicle","property"].includes(profileType);
 
-  const { data: items = [], refetch } = useQuery<any[]>({
+  // Live profiles list is used to (a) filter out orphan links pointing at
+  // deleted profiles — clicking those used to land the user on a "Profile
+  // not found" screen — and (b) recover the canonical name when the link
+  // record only has an empty/stale name field (that was producing the
+  // ghost "Asset / Asset" cards in the screenshot).
+  const { data: liveProfiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const liveById = new Map<string, any>(liveProfiles.map((p: any) => [p.id, p]));
+
+  const { data: rawItems = [], refetch } = useQuery<any[]>({
     queryKey: ["/api/rel-assets", profileType, profileId],
     queryFn: async () => {
       if (isLiability) {
         // Server endpoint is /assets (not /asset-links).
         const links = await apiRequest("GET", `/api/liabilities/${profileId}/assets`).then(r => r.json());
-        return links.map((l: any) => ({ id: l.assetProfileId || l.id, name: l.assetName || l.name || "Asset", typeKey: l.assetType || "asset" }));
+        return links.map((l: any) => ({ id: l.assetProfileId || l.id, name: l.assetName || l.name || "", typeKey: l.assetType || "asset" }));
       } else if (isPerson) {
         // /api/parties/:id/assets
         const assets = await apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json());
-        return assets.map((a: any) => ({ id: a.asset?.id || a.id, name: a.asset?.name || a.name || "Asset", typeKey: a.asset?.profileType || a.asset?.type || "asset" }));
+        return assets.map((a: any) => ({ id: a.asset?.id || a.id, name: a.asset?.name || a.name || "", typeKey: a.asset?.profileType || a.asset?.type || "asset" }));
       } else {
         // Asset: ONLY show assets directly linked via a shared liability (co-collateral).
         // We deliberately do NOT bridge through owner/person nodes — co-ownership does
@@ -8965,6 +8989,18 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
         return Object.values(peers);
       }
     },
+  });
+
+  // Filter out orphan links (profile id no longer exists in /api/profiles)
+  // and hydrate the display name + type from the live profile so we never
+  // render a placeholder "Asset" card again.
+  const items = (rawItems || []).filter((it: any) => it && it.id && liveById.has(it.id)).map((it: any) => {
+    const live = liveById.get(it.id);
+    return {
+      id: it.id,
+      name: (live?.name || it.name || "").trim(),
+      typeKey: live?.type || it.typeKey || "asset",
+    };
   });
 
   if (items.length === 0) {
@@ -9176,6 +9212,11 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "linked-subs": return true;
         case "linked-liabilities": return true;
         case "payments": return true;
+        // New aggregate tabs for person/self profiles — always show because
+        // they're the primary navigation, not optional data-driven tabs.
+        case "belongings": return true;
+        case "health-trackers": return true;
+        case "tasks-schedule": return true;
         default: return false;
       }
     })();
@@ -9184,7 +9225,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments", "history"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments", "history", "belongings", "health-trackers", "tasks-schedule"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -10161,37 +10202,159 @@ export default function ProfileDetailPage() {
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
                   <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
-                  {/* All trackers at bottom of Overview */}
-                  {profile.relatedTrackers.length > 0 && (
-                    <div className="mt-4">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>
-                      <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
-                        {profile.relatedTrackers.map((t: any) => {
-                          const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
-                          const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
-                          const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
-                          return (
-                            <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium truncate">{t.name}</p>
-                                <p className="text-xs text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
-                              </div>
-                              <span className="text-sm font-bold tabular-nums">{displayVal}</span>
-                              {t.unit && <span className="text-xs text-muted-foreground">{t.unit}</span>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
+                  {/* Linked People only — Linked Assets used to live here too
+                      and produced ghost "Asset / Asset" cards that 404'd on
+                      click. Assets, Liabilities and Finance now live on the
+                      dedicated "Belongings" tab, so the Overview stays a
+                      true at-a-glance snapshot. */}
+                  {(["person", "self"].includes(profile.type)) && (
+                    <section className="mt-6">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
+                      <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
+                    </section>
                   )}
-                  {/* Linked People, Liabilities, Assets inline in Overview */}
-                  <section className="mt-6">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
-                    <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
-                  </section>
-                  <section className="mt-6">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
+                  {/* For non-person profiles we keep the old Overview layout
+                      because their sub-type pages (vehicle/property/loan)
+                      still rely on these inline sections. */}
+                  {!(["person", "self"].includes(profile.type)) && (
+                    <>
+                      {profile.relatedTrackers.length > 0 && (
+                        <div className="mt-4">
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>
+                          <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
+                            {profile.relatedTrackers.map((t: any) => {
+                              const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
+                              const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
+                              const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
+                              return (
+                                <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium truncate">{t.name}</p>
+                                    <p className="text-xs text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
+                                  </div>
+                                  <span className="text-sm font-bold tabular-nums">{displayVal}</span>
+                                  {t.unit && <span className="text-xs text-muted-foreground">{t.unit}</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      <section className="mt-6">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
+                        <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
+                      </section>
+                      <section className="mt-6">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
+                        <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
+                      </section>
+                    </>
+                  )}
+                </TabsContent>
+              )}
+
+              {/* ── Aggregate "Belongings" tab for person/self ──
+                  Merges Assets + Liabilities + Finance so the user has a
+                  single place to see everything this person owns, owes,
+                  and spends. The internal headings act as anchors so
+                  deep-links like #belongings→Liabilities still feel
+                  ordered. */}
+              {tabValues.has("belongings") && (
+                <TabsContent value="belongings" className="mt-4 px-1 sm:px-0 space-y-6">
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Assets</p>
                     <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
+                  </section>
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Liabilities</p>
+                    <LinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                  </section>
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Finance</p>
+                    <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                  </section>
+                </TabsContent>
+              )}
+
+              {/* ── Aggregate "Health & Trackers" tab for person/self ──
+                  Health metrics surface first, then every other tracker
+                  below. Replaces the two near-duplicate tabs the user
+                  was bouncing between. */}
+              {tabValues.has("health-trackers") && (
+                <TabsContent value="health-trackers" className="mt-4 px-1 sm:px-0 space-y-6">
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Health</p>
+                    <HealthTabView profile={profile} onChanged={handleSaved} />
+                  </section>
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">All Trackers</p>
+                    {profile.relatedTrackers.length > 0 ? (
+                      <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                    ) : (
+                      <Card>
+                        <CardContent className="py-8 text-center">
+                          <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                          <p className="text-sm text-muted-foreground">No trackers linked to this profile</p>
+                          <p className="text-xs text-muted-foreground mt-1">Create trackers via chat or the Linked page, then link them here</p>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </section>
+                </TabsContent>
+              )}
+
+              {/* ── Aggregate "Tasks & Schedule" tab for person/self ──
+                  Open tasks + upcoming events stacked together. Past
+                  events fall to the bottom of the activity feed. */}
+              {tabValues.has("tasks-schedule") && (
+                <TabsContent value="tasks-schedule" className="mt-4 px-1 sm:px-0 space-y-6">
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Tasks & Goals</p>
+                    <TasksTab
+                      tasks={profile.relatedTasks}
+                      profileId={profile.id}
+                      onChanged={handleSaved}
+                    />
+                  </section>
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Schedule & Activity</p>
+                    {(() => {
+                      const feed: Array<{date: string; type: string; title: string; subtitle?: string; color: string}> = [];
+                      for (const t of (profile.relatedTasks || [])) {
+                        feed.push({ date: (t as any).createdAt || t.dueDate || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
+                      }
+                      for (const ev of (profile.relatedEvents || [])) {
+                        feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: '#3b82f6' });
+                      }
+                      for (const e of (profile.relatedExpenses || [])) {
+                        feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
+                      }
+                      feed.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                      if (feed.length === 0) {
+                        return (
+                          <div className="text-center py-8">
+                            <Activity className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
+                            <p className="text-xs text-muted-foreground">No activity yet</p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-1.5 pb-4">
+                          {feed.slice(0, 50).map((item, i) => (
+                            <div key={i} className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50">
+                              <div className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: item.color }} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium truncate">{item.title}</p>
+                                {item.subtitle && <p className="text-xs text-muted-foreground">{item.subtitle}</p>}
+                              </div>
+                              <span className="text-xs text-muted-foreground shrink-0">
+                                {item.date ? new Date(item.date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </section>
                 </TabsContent>
               )}
@@ -10228,6 +10391,16 @@ export default function ProfileDetailPage() {
                     profileType={profile.type}
                     onUploaded={handleSaved}
                   />
+                  {/* For person/self profiles fold Notes here so the
+                      standalone Notes tab can disappear — keeps freeform
+                      writing next to formal docs, where users actually
+                      look for it. */}
+                  {["person", "self"].includes(profile.type) && (
+                    <section className="mt-6">
+                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Notes</p>
+                      <NotesTab profileId={id} currentNotes={profile.notes || ""} updatedAt={profile.updatedAt} onChanged={handleSaved} />
+                    </section>
+                  )}
                 </TabsContent>
               )}
 
