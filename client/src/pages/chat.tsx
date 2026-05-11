@@ -2370,7 +2370,7 @@ export default function ChatPage() {
                                     if (ps.notes !== undefined) body.notes = ps.notes;
                                     if (ps.tags !== undefined) body.tags = ps.tags;
                                     if (ps.type !== undefined) body.type = ps.type;
-                                    await apiRequest("PUT", `/api/profiles/${ps.profileId}`, body);
+                                    await apiRequest("PATCH", `/api/profiles/${ps.profileId}`, body);
                                     action.data = { ...action.data, _undone: true };
                                     setMessages(prev => prev.map(m => ({
                                       ...m,

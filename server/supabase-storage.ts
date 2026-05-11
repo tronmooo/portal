@@ -1460,6 +1460,32 @@ export class SupabaseStorage implements IStorage {
     return { id, values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: ts };
   }
 
+  async updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<any> {
+    // Fetch existing row so we can merge values + recompute computed fields.
+    const { data: existing, error: fetchErr } = await this.supabase.from("tracker_entries")
+      .select("*").eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId).maybeSingle();
+    if (fetchErr || !existing) return undefined;
+    const mergedValues = patch.values ? { ...(existing.values || {}), ...patch.values } : (existing.values || {});
+    const update: any = { values: mergedValues };
+    if (patch.notes !== undefined) update.notes = patch.notes;
+    if (patch.mood !== undefined) update.mood = patch.mood;
+    if (patch.tags !== undefined) update.tags = patch.tags;
+    if (patch.timestamp) update.timestamp = patch.timestamp;
+    const { data, error } = await this.supabase.from("tracker_entries").update(update)
+      .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId)
+      .select().maybeSingle();
+    if (error || !data) return undefined;
+    return {
+      id: data.id,
+      values: data.values,
+      computed: data.computed,
+      notes: data.notes,
+      mood: data.mood,
+      tags: data.tags,
+      timestamp: data.timestamp,
+    };
+  }
+
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {
     const { error } = await this.supabase.from("tracker_entries").delete()
       .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId);

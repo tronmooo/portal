@@ -8417,9 +8417,15 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
 
   const recordMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", `/api/profiles/${profileId}/expenses`, {
+      // Server has no POST /api/profiles/:id/expenses route. Use the
+      // POST /api/expenses + POST /api/profiles/:id/link pattern instead
+      // (same pattern used elsewhere in this file).
+      const created = await apiRequest("POST", "/api/expenses", {
         description: `Payment - ${profile.name}`, amount: payAmt, date: payDate, category: "payment",
-      });
+      }).then(r => r.json());
+      if (created?.id) {
+        await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "expense", entityId: created.id });
+      }
     },
     onSuccess: () => {
       toast({ title: "Payment recorded" });
@@ -8789,8 +8795,8 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
     queryKey: ["/api/rel-assets", profileType, profileId],
     queryFn: async () => {
       if (isLiability) {
-        // Use liability asset links
-        const links = await apiRequest("GET", `/api/liabilities/${profileId}/asset-links`).then(r => r.json());
+        // Server endpoint is /assets (not /asset-links).
+        const links = await apiRequest("GET", `/api/liabilities/${profileId}/assets`).then(r => r.json());
         return links.map((l: any) => ({ id: l.assetProfileId || l.id, name: l.assetName || l.name || "Asset", typeKey: l.assetType || "asset" }));
       } else if (isPerson) {
         // /api/parties/:id/assets

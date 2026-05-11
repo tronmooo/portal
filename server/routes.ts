@@ -2024,6 +2024,27 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     bustCache(`trackers:`); bustCache(`stats:${uid_te1}`); bustCache(`enhanced:`);
     res.status(201).json(entry);
   }));
+  app.patch("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
+    const { values, notes, mood, tags, timestamp } = req.body || {};
+    // Apply the same numeric validation we use on POST entries so edits can't
+    // smuggle bad numbers around the original bounds.
+    if (values && typeof values === 'object') {
+      if (Object.values(values).some((v: any) => typeof v === 'number' && isNaN(v))) {
+        return res.status(400).json({ error: "All values must be valid numbers" });
+      }
+    }
+    const patch: any = {};
+    if (values && typeof values === 'object') patch.values = values;
+    if (notes !== undefined) patch.notes = notes;
+    if (mood !== undefined) patch.mood = mood;
+    if (tags !== undefined) patch.tags = tags;
+    if (timestamp && typeof timestamp === 'string') patch.timestamp = timestamp;
+    const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, patch);
+    if (!updated) return res.status(404).json({ error: "Entry not found" });
+    const uid_tep = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`trackers:`); bustCache(`stats:${uid_tep}`); bustCache(`enhanced:`);
+    res.json(updated);
+  }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
     if (!deleted) return res.status(404).json({ error: "Entry not found" });

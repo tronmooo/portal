@@ -51,6 +51,7 @@ export interface IStorage {
   createTracker(data: InsertTracker): Promise<Tracker>;
   updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined>;
   logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined>;
+  updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<TrackerEntry | undefined>;
   deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean>;
   deleteTracker(id: string): Promise<boolean>;
   migrateUnlinkedTrackersToSelf(): Promise<number>;
@@ -992,6 +993,24 @@ export class MemStorage implements IStorage {
     const updated = { ...tracker, ...data };
     this.trackers.set(id, updated);
     this.logActivity("tracker", `Updated tracker: ${updated.name}`);
+    return updated;
+  }
+  async updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<TrackerEntry | undefined> {
+    const tracker = this.trackers.get(trackerId);
+    if (!tracker) return undefined;
+    const idx = tracker.entries.findIndex(e => e.id === entryId);
+    if (idx === -1) return undefined;
+    const existing = tracker.entries[idx];
+    const updated: TrackerEntry = {
+      ...existing,
+      values: patch.values ? { ...existing.values, ...patch.values } : existing.values,
+      notes: patch.notes !== undefined ? patch.notes : existing.notes,
+      mood: patch.mood !== undefined ? patch.mood : existing.mood,
+      tags: patch.tags !== undefined ? patch.tags : existing.tags,
+      timestamp: patch.timestamp || existing.timestamp,
+    };
+    tracker.entries[idx] = updated;
+    this.logActivity("tracker", `Updated entry on tracker: ${tracker.name}`);
     return updated;
   }
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {
