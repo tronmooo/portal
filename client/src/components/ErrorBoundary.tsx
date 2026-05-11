@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { hashNavigate } from "@/lib/hashNavigate";
 
 interface Props {
   children: ReactNode;
@@ -60,7 +61,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button onClick={() => window.location.reload()} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium">
               Refresh Page
             </button>
-            <button onClick={() => { window.location.hash = '/dashboard'; window.location.reload(); }} className="px-4 py-2 bg-muted text-foreground rounded-lg text-sm font-medium">
+            <button onClick={() => { hashNavigate('/dashboard'); window.location.reload(); }} className="px-4 py-2 bg-muted text-foreground rounded-lg text-sm font-medium">
               Go to Dashboard
             </button>
           </div>

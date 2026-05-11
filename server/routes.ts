@@ -31,7 +31,6 @@ import {
   insertArtifactSchema,
   insertJournalEntrySchema,
   insertMemorySchema,
-  insertDomainSchema,
   insertGoalSchema,
   insertEntityLinkSchema,
   insertLiabilityAssetLinkSchema,
@@ -42,6 +41,7 @@ import {
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
+import { requireAdmin } from "./auth";
 
 const isProd = process.env.NODE_ENV === "production";
 const log = {
@@ -1668,7 +1668,7 @@ Respond ONLY in JSON format:
                 return res.json(parsed);
               }
             }
-          } catch {}
+          } catch (err) { console.error("[routes:profile-ai-summary] cache parse failed:", err); }
         }
       }
 
@@ -3187,64 +3187,6 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
 
-  // ---- Domains ----
-  app.get("/api/domains", asyncHandler(async (req, res) => {
-    let items: any[] = await storage.getDomains();
-    const profileId = req.query.profileId as string | undefined;
-    if (profileId) {
-      items = items.filter((item: any) =>
-        (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
-      );
-    }
-    res.json(paginate(items, req, res));
-  }));
-  app.post("/api/domains", asyncHandler(async (req, res) => {
-    const parsed = insertDomainSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    res.status(201).json(await storage.createDomain(parsed.data));
-  }));
-  app.patch("/api/domains/:id", asyncHandler(async (req, res) => {
-    {
-      const parsed = insertDomainSchema.partial().safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
-      req.body = { ...req.body, ...parsed.data };
-    }
-    if (req.body.name !== undefined) {
-      if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Domain name must be a non-empty string" });
-      req.body.name = sanitize(req.body.name);
-    }
-    try {
-      const result = await storage.updateDomain(req.params.id, req.body);
-      if (!result) return res.status(404).json({ error: "Domain not found" });
-      res.json(result);
-    } catch (e: any) { console.error("[domains]", e?.message || e); res.status(500).json({ error: "Failed to update domain" }); }
-  }));
-  app.delete("/api/domains/:id", asyncHandler(async (req, res) => {
-    try {
-      const result = await storage.deleteDomain(req.params.id);
-      if (!result) return res.status(404).json({ error: "Domain not found" });
-      res.json({ success: true });
-    } catch (e: any) { console.error("[domains]", e?.message || e); res.status(500).json({ error: "Failed to delete domain" }); }
-  }));
-  app.get("/api/domains/:id/entries", asyncHandler(async (req, res) => {
-    res.json(await storage.getDomainEntries(req.params.id));
-  }));
-  app.post("/api/domains/:id/entries", asyncHandler(async (req, res) => {
-    const { values, tags, notes } = req.body;
-    if (!values || typeof values !== "object") {
-      return res.status(400).json({ error: "Entry values are required and must be an object" });
-    }
-    if (tags !== undefined && !Array.isArray(tags)) {
-      return res.status(400).json({ error: "Tags must be an array" });
-    }
-    if (notes !== undefined && typeof notes !== "string") {
-      return res.status(400).json({ error: "Notes must be a string" });
-    }
-    const entry = await storage.addDomainEntry(req.params.id, values, tags, notes);
-    if (!entry) return res.status(404).json({ error: "Domain not found" });
-    res.status(201).json(entry);
-  }));
-
   // ---- Notifications (computed on each request) ----
   app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
@@ -3563,8 +3505,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Data Cleanup ----
+  // S1: admin-only — destructive / global-state mutations. To grant access,
+  // set ADMIN_EMAILS=foo@bar.com,baz@qux.com in the env.
   // Migrate base64 documents from DB to Supabase Storage
-  app.post("/api/cleanup/migrate-documents-to-storage", asyncHandler(async (req, res) => {
+  app.post("/api/cleanup/migrate-documents-to-storage", requireAdmin, asyncHandler(async (req, res) => {
     const cleanupUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`cleanup:${cleanupUid}`, 2, 3600000)) {
       return res.status(429).json({ error: "Migration already in progress or rate limited." });
@@ -3576,7 +3520,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json(result);
   }));
 
-  app.post("/api/cleanup/tracker-entries", asyncHandler(async (req, res) => {
+  app.post("/api/cleanup/tracker-entries", requireAdmin, asyncHandler(async (req, res) => {
     const cleanupTUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`cleanup-tracker:${cleanupTUid}`, 5, 3600000)) {
       return res.status(429).json({ error: "Cleanup rate limited. Try again later." });
@@ -3912,196 +3856,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   }));
 
   // ---- Budgets (duplicate GET removed — canonical handler is above near line 1363) ----
-  // TODO: PUT /api/budgets (preferences-based) removed — no client callers found.
-  //       The canonical budget CRUD lives above (GET/POST/PATCH/DELETE /api/budgets).
-
-  // ---- Spending Analytics ----
-  app.get("/api/analytics/spending", asyncHandler(async (req, res) => {
-    try {
-      const monthsBack = Math.min(Math.max(parseInt(req.query.months as string) || 6, 1), 24);
-      // Use the user's timezone for month boundaries — server runs in UTC and
-      // rolls past midnight roughly 5pm PT, which would otherwise show the user
-      // "next month" data hours before their actual month change.
-      const userTz = (storage as any)._timezone || 'America/Los_Angeles';
-      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTz }); // YYYY-MM-DD in user TZ
-      const [thisYearStr, thisMonthStr, todayDayStr] = todayStr.split('-');
-      const thisYear = parseInt(thisYearStr);
-      const thisMonth = parseInt(thisMonthStr) - 1; // 0-indexed for Date math
-      const todayDate = parseInt(todayDayStr);
-      const daysInCurrentMonth = new Date(thisYear, thisMonth + 1, 0).getDate();
-      const daysElapsed = todayDate;
-      const daysRemaining = daysInCurrentMonth - todayDate;
-      const currentMonthPrefix = `${thisYearStr}-${thisMonthStr}`; // 'YYYY-MM' for string-prefix matching
-
-      const allExpenses = await storage.getExpenses();
-      const obligations = await storage.getObligations();
-
-      // --- Current month data ---
-      // Match by YYYY-MM string prefix on the stored date string. expense.date
-      // is stored as 'YYYY-MM-DD' in the user's TZ — string match is both
-      // faster and immune to UTC-rollover skew that `new Date(date).getMonth()`
-      // would introduce when the server is in UTC.
-      const currentMonthExpenses = allExpenses.filter(e => {
-        return typeof e.date === 'string' && e.date.startsWith(currentMonthPrefix);
-      });
-
-      const currentTotal = currentMonthExpenses.reduce((s, e) => s + e.amount, 0);
-
-      // By category
-      const catMap: Record<string, { amount: number; count: number }> = {};
-      for (const e of currentMonthExpenses) {
-        const cat = e.category || "other";
-        if (!catMap[cat]) catMap[cat] = { amount: 0, count: 0 };
-        catMap[cat].amount += e.amount;
-        catMap[cat].count++;
-      }
-      const byCategory = Object.entries(catMap)
-        .map(([category, { amount, count }]) => ({
-          category,
-          amount: Math.round(amount * 100) / 100,
-          percentage: currentTotal > 0 ? Math.round((amount / currentTotal) * 1000) / 10 : 0,
-          count,
-        }))
-        .sort((a, b) => b.amount - a.amount);
-
-      // By vendor
-      const vendorMap: Record<string, { amount: number; count: number }> = {};
-      for (const e of currentMonthExpenses) {
-        const v = e.vendor || e.description || "Unknown";
-        if (!vendorMap[v]) vendorMap[v] = { amount: 0, count: 0 };
-        vendorMap[v].amount += e.amount;
-        vendorMap[v].count++;
-      }
-      const byVendor = Object.entries(vendorMap)
-        .map(([vendor, { amount, count }]) => ({
-          vendor,
-          amount: Math.round(amount * 100) / 100,
-          count,
-        }))
-        .sort((a, b) => b.amount - a.amount);
-
-      // Daily spending
-      const dailyMap: Record<string, number> = {};
-      for (const e of currentMonthExpenses) {
-        const day = e.date.slice(0, 10);
-        dailyMap[day] = (dailyMap[day] || 0) + e.amount;
-      }
-      const dailySpending = Object.entries(dailyMap)
-        .map(([date, amount]) => ({ date, amount: Math.round(amount * 100) / 100 }))
-        .sort((a, b) => a.date.localeCompare(b.date));
-
-      const avgPerDay = daysElapsed > 0 ? Math.round((currentTotal / daysElapsed) * 100) / 100 : 0;
-      const projectedMonthTotal = Math.round(avgPerDay * daysInCurrentMonth * 100) / 100;
-
-      // --- Monthly trend ---
-      const monthlyTrend: Array<{ month: string; total: number; byCategory: Record<string, number> }> = [];
-      for (let i = 0; i < monthsBack; i++) {
-        const d = new Date(thisYear, thisMonth - i, 1);
-        const m = d.getMonth();
-        const y = d.getFullYear();
-        const monthStr = `${y}-${String(m + 1).padStart(2, "0")}`;
-        const monthExpenses = allExpenses.filter(e => {
-          return typeof e.date === 'string' && e.date.startsWith(monthStr);
-        });
-        const total = Math.round(monthExpenses.reduce((s, e) => s + e.amount, 0) * 100) / 100;
-        const byCat: Record<string, number> = {};
-        for (const e of monthExpenses) {
-          byCat[e.category || "other"] = (byCat[e.category || "other"] || 0) + e.amount;
-        }
-        // Round category values
-        for (const k of Object.keys(byCat)) byCat[k] = Math.round(byCat[k] * 100) / 100;
-        monthlyTrend.push({ month: monthStr, total, byCategory: byCat });
-      }
-      monthlyTrend.reverse(); // oldest first
-
-      // --- Budgets ---
-      let budgetLimits: Record<string, number> = {};
-      try {
-        const raw = await storage.getPreference("budgets");
-        if (raw) budgetLimits = JSON.parse(raw);
-      } catch {}
-      const budgets = Object.entries(budgetLimits).map(([category, limit]) => {
-        const spent = catMap[category]?.amount || 0;
-        return {
-          category,
-          limit,
-          spent: Math.round(spent * 100) / 100,
-          remaining: Math.round((limit - spent) * 100) / 100,
-          percentUsed: limit > 0 ? Math.round((spent / limit) * 1000) / 10 : 0,
-        };
-      });
-
-      // --- Obligations (monthly committed) ---
-      const monthlyCommitted = Math.round(
-        obligations.reduce((s, o) => {
-          switch (o.frequency) {
-            case "weekly": return s + o.amount * 4.33;
-            case "biweekly": return s + o.amount * 2.17;
-            case "monthly": return s + o.amount;
-            case "quarterly": return s + o.amount / 3;
-            case "yearly": return s + o.amount / 12;
-            default: return s;
-          }
-        }, 0) * 100
-      ) / 100;
-      const monthlyDiscretionary = Math.round((currentTotal - monthlyCommitted) * 100) / 100;
-
-      // --- Insights ---
-      // Highest spending day
-      let highestDay = { date: "", amount: 0 };
-      for (const ds of dailySpending) {
-        if (ds.amount > highestDay.amount) highestDay = ds;
-      }
-
-      // Top category
-      const topCategory = byCategory.length > 0
-        ? { category: byCategory[0].category, amount: byCategory[0].amount }
-        : { category: "none", amount: 0 };
-
-      // vs last month
-      const lastMonthDate = new Date(thisYear, thisMonth - 1, 1);
-      const lastMonthPrefix = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, "0")}`;
-      const lastMonthExpenses = allExpenses.filter(e => {
-        return typeof e.date === 'string' && e.date.startsWith(lastMonthPrefix);
-      });
-      const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
-      const change = Math.round((currentTotal - lastMonthTotal) * 100) / 100;
-      const percentChange = lastMonthTotal > 0 ? Math.round((change / lastMonthTotal) * 1000) / 10 : 0;
-
-      // Average monthly (across all months with data)
-      const monthTotals = monthlyTrend.map(m => m.total).filter(t => t > 0);
-      const avgMonthly = monthTotals.length > 0
-        ? Math.round((monthTotals.reduce((s, t) => s + t, 0) / monthTotals.length) * 100) / 100
-        : 0;
-
-      res.json({
-        currentMonth: {
-          total: Math.round(currentTotal * 100) / 100,
-          byCategory,
-          byVendor,
-          dailySpending,
-          avgPerDay,
-          projectedMonthTotal,
-          daysRemaining,
-        },
-        monthlyTrend,
-        budgets,
-        obligations: {
-          monthlyCommitted,
-          monthlyDiscretionary: Math.max(monthlyDiscretionary, 0),
-        },
-        insights: {
-          highestDay,
-          topCategory,
-          vsLastMonth: { change, percentChange },
-          avgMonthly,
-        },
-      });
-    } catch (err: any) {
-      console.error("Spending analytics error:", err);
-      res.status(500).json({ error: "Failed to compute spending analytics" });
-    }
-  }));
+  // Note: the legacy preferences-based PUT /api/budgets was removed (no client
+  // callers). Canonical budget CRUD lives above (GET/POST/PATCH/DELETE /api/budgets).
 
   // ---- AI Digest ----
   app.get("/api/ai-digest", asyncHandler(async (req, res) => {
@@ -4120,7 +3876,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
                 return res.json(parsed);
               }
             }
-          } catch {}
+          } catch (err) { console.error("[routes:ai-digest] cache parse failed:", err); }
         }
       }
 
@@ -4211,7 +3967,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
               const exp = new Date(value);
               const diff = (exp.getTime() - now.getTime()) / 86400000;
               if (diff >= -30 && diff <= 60) return true;
-            } catch {}
+            } catch (err) { console.error("[routes:ai-digest] document expiration parse failed:", err); }
           }
         }
         return false;
@@ -5122,7 +4878,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
           action: "move", fieldChanged: "asset_profile_id", oldValue: null, newValue: toAssetId,
           changedBy: "user", note,
         });
-      } catch {}
+      } catch (err) { console.error("[routes:move-liability] failed to record ownership history:", err); }
     }
     res.json(updated);
   }));

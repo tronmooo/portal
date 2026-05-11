@@ -912,7 +912,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           setDetailItem(null);
           setEditEvent(ev);
         })
-        .catch(() => {});
+        .catch((err) => { console.error("[CalendarView] failed to load event for edit:", err); });
       return;
     }
     // Obligations and tasks don't have an inline edit dialog inside the calendar

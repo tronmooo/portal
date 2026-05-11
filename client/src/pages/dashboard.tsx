@@ -3295,7 +3295,7 @@ export default function DashboardPage() {
       try {
         const res = await apiRequest("GET", `/api/dashboard-enhanced${statsProfileParam}`);
         return res.json();
-      } catch { return null; }
+      } catch (err) { console.error("[dashboard-enhanced] fetch failed:", err); return null; }
     },
     retry: false,
     refetchOnMount: "always",

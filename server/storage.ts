@@ -946,8 +946,10 @@ export class MemStorage implements IStorage {
   }
 
   async wouldCreateCycle(_userId: string, profileId: string, newParentId: string | null): Promise<boolean> {
-    // TODO: MemStorage is dev-only; full cycle detection deferred to SupabaseStorage.
-    // Basic implementation: walk up from newParentId via parentProfileId.
+    // MemStorage is dev-only. The walk-up parent-chain check below matches the
+    // production SupabaseStorage implementation behavior-for-behavior (both
+    // guard against pre-existing cycles via a visited set), so no further
+    // work is needed here.
     if (!newParentId) return false;
     if (newParentId === profileId) return true;
     let current: Profile | undefined = this.profiles.get(newParentId);

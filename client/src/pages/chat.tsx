@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
 import { Button } from "@/components/ui/button";
@@ -369,7 +370,7 @@ function NewDocSheetButton({ disabled }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const go = (type: "doc" | "sheet") => {
     setOpen(false);
-    window.location.hash = `#/editor/new/${type}?source=chat`;
+    hashNavigate(`/editor/new/${type}?source=chat`);
   };
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -2401,14 +2402,14 @@ export default function ChatPage() {
                             const atype = (action.data as any)?.type;
                             const open = () => {
                               if (atype === "doc" || atype === "sheet") {
-                                if (aid) window.location.hash = `#/editor/${aid}`;
-                                else window.location.hash = "#/artifacts";
+                                if (aid) hashNavigate(`/editor/${aid}`);
+                                else hashNavigate("/artifacts");
                                 return;
                               }
                               // Other types: open the side panel viewer directly when we
                               // have the full payload, else go to /artifacts.
                               if (action.data) setActiveArtifact(action.data as any);
-                              else window.location.hash = "#/artifacts";
+                              else hashNavigate("/artifacts");
                             };
                             return (
                             <div className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer" onClick={open}>

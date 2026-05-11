@@ -209,6 +209,3 @@ export const queryClient = new QueryClient({
     },
   },
 });
-
-// Expose queryClient for pull-to-refresh
-(window as any).__portol_queryClient = queryClient;

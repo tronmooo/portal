@@ -1,6 +1,7 @@
 import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
+import { hashNavigate } from "./lib/hashNavigate";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -240,9 +241,8 @@ function PullToRefresh() {
       setPulling(false);
       if (dy >= threshold) {
         setRefreshing(true);
-        // Invalidate all React Query cache
-        const qc = (window as any).__portol_queryClient;
-        if (qc) await qc.invalidateQueries();
+        // Invalidate all React Query cache via the imported client instance.
+        await queryClient.invalidateQueries();
         setTimeout(() => setRefreshing(false), 1200);
       }
     };
@@ -499,7 +499,7 @@ function App() {
                       {/* Search trigger — centre-right in header */}
                       <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
-                        <Button variant="ghost" size="icon" onClick={() => window.location.hash = "#/profiles"} className="h-8 w-8" title="Profiles" aria-label="Open profiles" data-testid="button-profiles-header">
+                        <Button variant="ghost" size="icon" onClick={() => hashNavigate("/profiles")} className="h-8 w-8" title="Profiles" aria-label="Open profiles" data-testid="button-profiles-header">
                           <Users className="h-4 w-4" />
                         </Button>
                         <NotificationBell />

@@ -73,6 +73,27 @@ declare global {
 }
 
 /**
+ * Admin gate — must run AFTER authMiddleware so req.userEmail is set.
+ * Allowed emails come from `ADMIN_EMAILS` (comma-separated). If unset, the
+ * built-in default below is used. To add more admins, set
+ * `ADMIN_EMAILS=alice@example.com,bob@example.com` in the environment.
+ */
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  // Local SQLite dev mode bypasses auth entirely; mirror that here so
+  // /api/cleanup/* stays callable in dev without Supabase configured.
+  if (!isSupabaseStorage()) return next();
+  const raw = process.env.ADMIN_EMAILS || "tronmoooo@gmail.com";
+  const allowed = new Set(
+    raw.split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
+  );
+  const email = (req.userEmail || "").toLowerCase();
+  if (!email || !allowed.has(email)) {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+  return next();
+}
+
+/**
  * Auth middleware — extracts user from Supabase JWT in Authorization header.
  * If Supabase is not configured, allows all requests (local dev mode).
  */

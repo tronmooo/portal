@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { hashNavigate } from "./lib/hashNavigate";
 
 // Hash-router URL normalization.
 // The app uses wouter's useHashLocation, so the canonical URL shape is
@@ -17,7 +18,7 @@ import "./index.css";
   const SERVER_PATHS = ["/api/", "/auth/callback"];
   if (hash) return; // already a hash route, leave alone
   if (STATIC_PATHS.has(pathname)) {
-    window.location.hash = "#/";
+    hashNavigate("/");
     return;
   }
   if (SERVER_PATHS.some(p => pathname.startsWith(p))) return;

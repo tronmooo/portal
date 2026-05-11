@@ -347,7 +347,7 @@ export default function DocumentViewer({
       .then(blob => {
         if (!cancelled) setBlobUrl(URL.createObjectURL(blob));
       })
-      .catch(() => {});
+      .catch((err) => { console.error("[DocumentViewer] failed to fetch file blob:", err); });
     return () => { cancelled = true; };
   }, [id, data]);
 

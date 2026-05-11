@@ -10,7 +10,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { MessageSquare, LayoutDashboard, Link2, Archive, Settings, Calendar, Circle } from "lucide-react";
+import { MessageSquare, LayoutDashboard, Link2, Archive, Settings, Calendar, Circle, Sparkles } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 const NAV_ITEMS = [
@@ -18,6 +18,7 @@ const NAV_ITEMS = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
   { label: "Linked",    href: "/linked",    icon: Link2,          accent: "155 60% 44%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
+  { label: "Insights",  href: "/insights",  icon: Sparkles,       accent: "45 90% 55%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
 ];
 
@@ -55,7 +56,7 @@ export function AppSidebar() {
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
                       data-testid={`nav-${item.label.toLowerCase()}`}
-                      onClick={() => { window.location.hash = item.href; }}
+                      onClick={() => { navigate(item.href); }}
                       aria-current={isActive ? "page" : undefined}
                       style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
                       className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg relative cursor-pointer"
@@ -90,7 +91,7 @@ export function AppSidebar() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild data-testid="nav-settings">
-                  <button onClick={() => { window.location.hash = '/settings'; }}
+                  <button onClick={() => { navigate('/settings'); }}
                     style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
                     className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-muted/60 w-full text-left">
                     <div className="w-7 h-7 rounded-lg bg-muted/50 flex items-center justify-center">

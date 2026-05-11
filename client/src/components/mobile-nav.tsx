@@ -1,11 +1,12 @@
 import { useLocation } from "wouter";
-import { MessageSquare, LayoutDashboard, Link2, Archive, Calendar } from "lucide-react";
+import { MessageSquare, LayoutDashboard, Link2, Archive, Calendar, Sparkles } from "lucide-react";
 
 const TABS = [
   { label: "Chat",      href: "/",          icon: MessageSquare,  accent: "188 50% 52%" },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
   { label: "Linked",    href: "/linked",    icon: Link2,          accent: "155 60% 44%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
+  { label: "Insights",  href: "/insights",  icon: Sparkles,       accent: "45 90% 55%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
 ];
 
@@ -29,7 +30,7 @@ export function MobileBottomNav() {
             <a
               key={tab.href}
               href={`#${tab.href}`}
-              onClick={(e) => { e.preventDefault(); window.location.hash = tab.href; }}
+              onClick={(e) => { e.preventDefault(); navigate(tab.href); }}
               className="relative flex flex-col items-center justify-center gap-0.5 min-h-[44px] min-w-[52px] px-2 py-1.5 rounded-xl select-none"
               style={{
                 WebkitTapHighlightColor: "transparent",

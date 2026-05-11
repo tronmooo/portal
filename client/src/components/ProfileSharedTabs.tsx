@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
+import { hashNavigate } from "@/lib/hashNavigate";
 
 // ─── Connections Tab (radial SVG graph) ──────────────────────────────────────
 
@@ -210,7 +211,7 @@ export function ConnectionsTab({ profileId }: { profileId: string }) {
                 key={n.id}
                 style={{ cursor: "pointer" }}
                 onClick={() => {
-                  window.location.hash = `/profiles/${n.id}`;
+                  hashNavigate(`/profiles/${n.id}`);
                 }}
               >
                 <title>

@@ -2223,14 +2223,12 @@ export class SupabaseStorage implements IStorage {
     if (data.fileData && typeof data.fileData === 'string' && data.fileData.length > 12_000_000) {
       throw new Error('File too large (max ~9MB decoded)');
     }
-    // TODO (Supabase Storage migration): This method attempts to upload file data
-    // to a Supabase Storage bucket named 'documents'. The bucket must be created
-    // manually in the Supabase dashboard (Storage > New bucket > "documents",
-    // set to private). Until the bucket exists, uploads will fail and the code
-    // automatically falls back to storing base64 in the file_data DB column.
-    // Once the bucket is created, new documents will use storage_path instead
-    // of file_data, and the backfill route POST /api/cleanup/migrate-documents-to-storage
-    // can be used to migrate existing base64 records.
+    // Supabase Storage migration: uploads target the private 'documents' bucket.
+    // The bucket must exist in the Supabase dashboard (Storage > New bucket >
+    // "documents", private). If absent, uploads fail and the code falls back
+    // to base64 in the file_data column. After creating the bucket, new
+    // documents use storage_path; existing base64 records can be migrated via
+    // POST /api/cleanup/migrate-documents-to-storage.
     const id = randomUUID();
     const now = new Date().toISOString();
     let storagePath: string | null = null;

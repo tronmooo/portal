@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { hashNavigate } from "@/lib/hashNavigate";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/EmptyState";
@@ -361,9 +362,9 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
     if (item.type === "document" || item.type === "scan") {
       // Legacy documents/scans (not Artifact rows) live under /documents/:id.
       if (item.isArtifact) onSelect?.(item);
-      else window.location.hash = `#/documents/${item.id}`;
+      else hashNavigate(`/documents/${item.id}`);
     } else if (item.type === "note") {
-      window.location.hash = "#/dashboard/journal";
+      hashNavigate("/dashboard/journal");
     } else {
       // ai_report, chart, code, markdown, html, react, svg, mermaid, checklist —
       // all open the dialog renderer.
@@ -475,7 +476,7 @@ export default function ArtifactsPage() {
   const handleSelect = (item: UnifiedArtifact) => {
     const t = item.source?.type;
     if (t === "doc" || t === "sheet") {
-      window.location.hash = `#/editor/${item.id}`;
+      hashNavigate(`/editor/${item.id}`);
       return;
     }
     setSelectedArtifact(item);

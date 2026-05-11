@@ -446,8 +446,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     if (profile) {
       try {
         await storage.updateJournalEntry(entry.id, { linkedProfiles: [profile.id] } as any);
-        await storage.linkProfileTo(profile.id, "journal", entry.id).catch(() => {});
-      } catch {}
+        await storage.linkProfileTo(profile.id, "journal", entry.id)
+          .catch((err) => { console.error("[ai-engine:journal-fast-path] linkProfileTo failed:", err); });
+      } catch (err) { console.error("[ai-engine:journal-fast-path] failed to link journal entry to profile:", err); }
     }
     actions.push({ type: "journal_entry", category: "journal", data: { mood, content, forProfile: profileName } });
     results.push(entry);

@@ -269,8 +269,11 @@ function formatCurrency(val: number) {
 
 // ============================================================
 // NESTED ASSETS — ASSET ROLLUP HELPER
-// TODO: replace with import from @shared/asset-rollup once available
-// import { computeAssetRollup } from "@shared/asset-rollup";
+// DEFERRED: @shared/asset-rollup exists but walks fewer nested namespaces
+// (e.g. it doesn't read fields.housing.currentValue, fields.vehicles.*, or
+// sum a `loans[]` array). Swapping would regress value extraction for
+// finance / housing / vehicles. Unify only after the shared helper covers
+// every legacy path the local extractor handles.
 // ============================================================
 
 const NESTED_ASSET_TYPES = ["vehicle", "property", "investment", "asset", "account"] as const;

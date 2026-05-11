@@ -115,6 +115,35 @@ export default function FinancePage() {
   const [addPaycheckOpen, setAddPaycheckOpen] = useState(false);
   const [newPaycheck, setNewPaycheck] = useState({ source: "", amount: "", expectedDate: "" });
 
+  // ── Income CRUD state ────────────────────────────────────────────────────
+  const [addIncomeOpen, setAddIncomeOpen] = useState(false);
+  const [newIncome, setNewIncome] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" });
+  const [editingIncome, setEditingIncome] = useState<any | null>(null);
+  const [editIncomeForm, setEditIncomeForm] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" });
+  const [incomeToDelete, setIncomeToDelete] = useState<{ id: string; description: string; amount: number } | null>(null);
+  useEffect(() => {
+    if (editingIncome) {
+      setEditIncomeForm({
+        description: editingIncome.description ?? "",
+        amount: String(editingIncome.amount ?? ""),
+        category: editingIncome.category ?? "salary",
+        frequency: editingIncome.frequency ?? "monthly",
+        date: editingIncome.date?.slice(0, 10) ?? "",
+      });
+    }
+  }, [editingIncome?.id]);
+
+  // ── Cashflow entry state ─────────────────────────────────────────────────
+  const [addCashflowOpen, setAddCashflowOpen] = useState(false);
+  const [newCashflow, setNewCashflow] = useState({
+    month: new Date().toISOString().slice(0, 7),
+    week: "1",
+    projected_income: "",
+    projected_expenses: "",
+    actual_income: "",
+    actual_expenses: "",
+  });
+
   const addExpenseMutation = useMutation({
     mutationFn: async () => {
       // Defense-in-depth: validate amount before sending. The submit button
@@ -226,9 +255,109 @@ export default function FinancePage() {
     },
   });
 
+  // ── Incomes (separate from paychecks: recurring income streams) ──────────
+  const { data: incomes = [] } = useQuery<any[]>({ queryKey: ["/api/incomes"] });
+
+  const addIncomeMut = useMutation({
+    mutationFn: async () => {
+      const amt = parseFloat(newIncome.amount);
+      if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
+      const desc = newIncome.description.trim();
+      if (!desc) throw new Error("Description is required");
+      await apiRequest("POST", "/api/incomes", {
+        description: desc,
+        amount: amt,
+        category: newIncome.category,
+        frequency: newIncome.frequency,
+        date: newIncome.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
+        tags: [],
+        ...(expenseProfileId ? { linkedProfiles: [expenseProfileId] } : {}),
+      });
+      return { description: desc, amount: amt };
+    },
+    onSuccess: ({ description, amount }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      setAddIncomeOpen(false);
+      setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" });
+      toast({ title: `Income added`, description: `${description} — $${amount.toFixed(2)}` });
+    },
+    onError: (err: Error) => toast({ title: "Failed to add income", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const editIncomeMut = useMutation({
+    mutationFn: async (input: { id: string }) => {
+      const amt = parseFloat(editIncomeForm.amount);
+      if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
+      const desc = editIncomeForm.description.trim();
+      if (!desc) throw new Error("Description is required");
+      await apiRequest("PATCH", `/api/incomes/${input.id}`, {
+        description: desc,
+        amount: amt,
+        category: editIncomeForm.category,
+        frequency: editIncomeForm.frequency,
+        ...(editIncomeForm.date ? { date: editIncomeForm.date } : {}),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      setEditingIncome(null);
+      toast({ title: "Income updated" });
+    },
+    onError: (err: Error) => toast({ title: "Failed to update income", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const deleteIncomeMut = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/incomes/${id}`); return id; },
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData(["/api/incomes"], (old: any[]) => old?.filter(i => i.id !== id) || []);
+      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({ title: "Income deleted" });
+    },
+    onError: (err: Error) => toast({ title: "Failed to delete income", description: formatApiError(err), variant: "destructive" }),
+  });
+
   // Cashflow
   const cfMonth = new Date().toISOString().slice(0, 7);
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
+
+  // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
+  const addCashflowMut = useMutation({
+    mutationFn: async () => {
+      const wk = parseInt(newCashflow.week, 10);
+      if (!isFinite(wk) || wk < 1 || wk > 6) throw new Error("Week must be between 1 and 6");
+      if (!/^\d{4}-\d{2}$/.test(newCashflow.month)) throw new Error("Month must be in YYYY-MM format");
+      const body: Record<string, any> = { month: newCashflow.month, week: wk };
+      for (const k of ["projected_income", "projected_expenses", "actual_income", "actual_expenses"] as const) {
+        const raw = (newCashflow as any)[k] as string;
+        if (raw === "" || raw == null) continue;
+        const n = Number(raw);
+        if (!isFinite(n)) throw new Error(`${k} must be a number`);
+        body[k] = n;
+      }
+      await apiRequest("POST", "/api/cashflow", body);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      setAddCashflowOpen(false);
+      setNewCashflow({
+        month: new Date().toISOString().slice(0, 7),
+        week: "1", projected_income: "", projected_expenses: "", actual_income: "", actual_expenses: "",
+      });
+      toast({ title: "Cashflow entry saved" });
+    },
+    onError: (err: Error) => toast({ title: "Failed to save cashflow", description: formatApiError(err), variant: "destructive" }),
+  });
 
   // ── ALL useMemo hooks MUST be before early returns (React Rules of Hooks) ──
   // Apply profile filter client-side using the shared rule so finance,
@@ -724,6 +853,219 @@ export default function FinancePage() {
         </DialogContent>
       </Dialog>
 
+      {/* ── Income Section ── */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <TrendingUp className="h-3.5 w-3.5" /> Income ({incomes.length})
+          </h2>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddIncomeOpen(true)} data-testid="button-add-income">
+            <Plus className="h-3 w-3 mr-1" /> Add Income
+          </Button>
+        </div>
+        {incomes.length === 0 ? (
+          <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
+            <p className="text-sm text-muted-foreground">No recurring income yet.</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
+            {incomes.slice().sort((a: any, b: any) => (a.description || '').localeCompare(b.description || '')).map((inc: any) => (
+              <div key={inc.id} className="flex items-center gap-3 px-3 py-2 group">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">{inc.description}</p>
+                  <p className="text-[10px] text-muted-foreground capitalize">
+                    {inc.category || 'income'} · {inc.frequency || 'monthly'}
+                    {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}
+                  </p>
+                </div>
+                <span className="text-xs font-bold tabular-nums">${Number(inc.amount || 0).toLocaleString()}</span>
+                <button
+                  className="text-muted-foreground/60 hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center disabled:opacity-50"
+                  onClick={stopProp(() => setEditingIncome(inc))}
+                  data-testid={`btn-edit-income-${inc.id}`}
+                  aria-label="Edit income"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button
+                  className="text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center disabled:opacity-50"
+                  disabled={deleteIncomeMut.isPending}
+                  onClick={stopProp(() => setIncomeToDelete({ id: inc.id, description: inc.description, amount: Number(inc.amount || 0) }))}
+                  data-testid={`btn-delete-income-${inc.id}`}
+                  aria-label="Delete income"
+                >
+                  {deleteIncomeMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add Income Dialog */}
+      <Dialog open={addIncomeOpen} onOpenChange={(open) => { if (!open) setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" }); setAddIncomeOpen(open); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Income</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Description <span className="text-destructive">*</span></Label>
+              <Input placeholder="e.g. Salary, Rental, Dividends" value={newIncome.description}
+                onChange={e => setNewIncome(p => ({ ...p, description: e.target.value }))}
+                data-testid="input-income-description" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
+                <Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" placeholder="0.00"
+                  value={newIncome.amount}
+                  onChange={e => setNewIncome(p => ({ ...p, amount: e.target.value }))}
+                  data-testid="input-income-amount" />
+              </div>
+              <div>
+                <Label className="text-xs">Date</Label>
+                <Input type="date" value={newIncome.date}
+                  onChange={e => setNewIncome(p => ({ ...p, date: e.target.value }))}
+                  data-testid="input-income-date" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Category</Label>
+                <Select value={newIncome.category} onValueChange={v => setNewIncome(p => ({ ...p, category: v }))}>
+                  <SelectTrigger data-testid="select-income-category"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="salary">Salary</SelectItem>
+                    <SelectItem value="freelance">Freelance</SelectItem>
+                    <SelectItem value="business">Business</SelectItem>
+                    <SelectItem value="rental">Rental</SelectItem>
+                    <SelectItem value="investment">Investment</SelectItem>
+                    <SelectItem value="gift">Gift</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Frequency</Label>
+                <Select value={newIncome.frequency} onValueChange={v => setNewIncome(p => ({ ...p, frequency: v }))}>
+                  <SelectTrigger data-testid="select-income-frequency"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="one_time">One-time</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Biweekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="yearly">Yearly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Button
+              className="w-full"
+              onClick={() => addIncomeMut.mutate()}
+              disabled={!newIncome.description.trim() || !newIncome.amount || parseFloat(newIncome.amount) <= 0 || addIncomeMut.isPending}
+              data-testid="button-save-income"
+            >
+              {addIncomeMut.isPending ? "Saving..." : "Add Income"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Income Dialog */}
+      <Dialog open={editingIncome !== null} onOpenChange={(open) => { if (!open) setEditingIncome(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Edit Income</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Description <span className="text-destructive">*</span></Label>
+              <Input value={editIncomeForm.description}
+                onChange={e => setEditIncomeForm(p => ({ ...p, description: e.target.value }))}
+                data-testid="input-edit-income-description" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
+                <Input type="number" inputMode="decimal" step="0.01" min="0" value={editIncomeForm.amount}
+                  onChange={e => setEditIncomeForm(p => ({ ...p, amount: e.target.value }))}
+                  data-testid="input-edit-income-amount" />
+              </div>
+              <div>
+                <Label className="text-xs">Date</Label>
+                <Input type="date" value={editIncomeForm.date}
+                  onChange={e => setEditIncomeForm(p => ({ ...p, date: e.target.value }))}
+                  data-testid="input-edit-income-date" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Category</Label>
+                <Select value={editIncomeForm.category} onValueChange={v => setEditIncomeForm(p => ({ ...p, category: v }))}>
+                  <SelectTrigger data-testid="select-edit-income-category"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="salary">Salary</SelectItem>
+                    <SelectItem value="freelance">Freelance</SelectItem>
+                    <SelectItem value="business">Business</SelectItem>
+                    <SelectItem value="rental">Rental</SelectItem>
+                    <SelectItem value="investment">Investment</SelectItem>
+                    <SelectItem value="gift">Gift</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Frequency</Label>
+                <Select value={editIncomeForm.frequency} onValueChange={v => setEditIncomeForm(p => ({ ...p, frequency: v }))}>
+                  <SelectTrigger data-testid="select-edit-income-frequency"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="one_time">One-time</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Biweekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="yearly">Yearly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Button
+              className="w-full"
+              onClick={() => editingIncome && editIncomeMut.mutate({ id: editingIncome.id })}
+              disabled={!editIncomeForm.description.trim() || !editIncomeForm.amount || parseFloat(editIncomeForm.amount) <= 0 || editIncomeMut.isPending}
+              data-testid="button-save-edit-income"
+            >
+              {editIncomeMut.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Income Confirmation */}
+      <AlertDialog open={incomeToDelete !== null} onOpenChange={(open) => { if (!open) setIncomeToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this income?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {incomeToDelete ? `"${incomeToDelete.description}" ($${incomeToDelete.amount.toLocaleString()}) will be permanently deleted.` : "This income will be permanently deleted."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="btn-confirm-delete-income"
+              onClick={() => {
+                if (incomeToDelete) deleteIncomeMut.mutate(incomeToDelete.id);
+                setIncomeToDelete(null);
+              }}
+            >Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* ── Loan Amortization Section ── */}
       <div className="space-y-2">
         <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
@@ -792,9 +1134,14 @@ export default function FinancePage() {
 
       {/* ── Cash Flow Section ── */}
       <div className="space-y-2">
-        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-          <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {new Date(cfMonth + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {new Date(cfMonth + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+          </h2>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddCashflowOpen(true)} data-testid="button-add-cashflow">
+            <Plus className="h-3 w-3 mr-1" /> Add Entry
+          </Button>
+        </div>
         {cashflow.length === 0 ? (
           <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
             <p className="text-sm text-muted-foreground">No cashflow data available.</p>
@@ -852,6 +1199,76 @@ export default function FinancePage() {
           </div>
         )}
       </div>
+
+      {/* Add Cashflow Entry Dialog (POST /api/cashflow upserts {month, week, projected_*, actual_*}) */}
+      <Dialog open={addCashflowOpen} onOpenChange={(open) => { if (!open) {
+        setNewCashflow({ month: new Date().toISOString().slice(0,7), week: "1", projected_income: "", projected_expenses: "", actual_income: "", actual_expenses: "" });
+      } setAddCashflowOpen(open); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Cashflow Entry</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Month <span className="text-destructive">*</span></Label>
+                <Input type="month" value={newCashflow.month}
+                  onChange={e => setNewCashflow(p => ({ ...p, month: e.target.value }))}
+                  data-testid="input-cashflow-month" />
+              </div>
+              <div>
+                <Label className="text-xs">Week (1-6) <span className="text-destructive">*</span></Label>
+                <Input type="number" min="1" max="6" step="1" value={newCashflow.week}
+                  onChange={e => setNewCashflow(p => ({ ...p, week: e.target.value }))}
+                  data-testid="input-cashflow-week" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Projected Income ($)</Label>
+                <Input type="number" inputMode="decimal" step="0.01" placeholder="0.00" value={newCashflow.projected_income}
+                  onChange={e => setNewCashflow(p => ({ ...p, projected_income: e.target.value }))}
+                  data-testid="input-cashflow-projected-income" />
+              </div>
+              <div>
+                <Label className="text-xs">Projected Expenses ($)</Label>
+                <Input type="number" inputMode="decimal" step="0.01" placeholder="0.00" value={newCashflow.projected_expenses}
+                  onChange={e => setNewCashflow(p => ({ ...p, projected_expenses: e.target.value }))}
+                  data-testid="input-cashflow-projected-expenses" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Actual Income ($)</Label>
+                <Input type="number" inputMode="decimal" step="0.01" placeholder="0.00" value={newCashflow.actual_income}
+                  onChange={e => setNewCashflow(p => ({ ...p, actual_income: e.target.value }))}
+                  data-testid="input-cashflow-actual-income" />
+              </div>
+              <div>
+                <Label className="text-xs">Actual Expenses ($)</Label>
+                <Input type="number" inputMode="decimal" step="0.01" placeholder="0.00" value={newCashflow.actual_expenses}
+                  onChange={e => setNewCashflow(p => ({ ...p, actual_expenses: e.target.value }))}
+                  data-testid="input-cashflow-actual-expenses" />
+              </div>
+            </div>
+            <p className="text-[10px] text-muted-foreground">Upserts on (month, week). Leave any number blank to keep its current value.</p>
+            <Button
+              className="w-full"
+              onClick={() => addCashflowMut.mutate()}
+              disabled={
+                !/^\d{4}-\d{2}$/.test(newCashflow.month) ||
+                !newCashflow.week ||
+                parseInt(newCashflow.week, 10) < 1 ||
+                parseInt(newCashflow.week, 10) > 6 ||
+                addCashflowMut.isPending
+              }
+              data-testid="button-save-cashflow"
+            >
+              {addCashflowMut.isPending ? "Saving..." : "Save Entry"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* U2 fix: Delete Paycheck Confirmation — mirrors the expense pattern below. */}
       <AlertDialog open={paycheckToDelete !== null} onOpenChange={(open) => { if (!open) setPaycheckToDelete(null); }}>
