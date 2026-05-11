@@ -1520,6 +1520,57 @@ function KpiLine({ label, value, accent }: { label: string; value: string | numb
   );
 }
 
+// ── Status helper: returns Apple-Health-style status pill {label, color} ──
+function getTrackerStatus(
+  tracker: Tracker,
+  spec: ReturnType<typeof detectSpecialization>,
+  lastEntry: TrackerEntry | undefined,
+  primaryField: string,
+): { label: string; bg: string; fg: string } | null {
+  if (!lastEntry) return null;
+  const v = lastEntry.values[primaryField] as number | undefined;
+
+  const GREEN = { bg: 'rgba(34,197,94,0.15)', fg: '#16a34a' };
+  const YELLOW = { bg: 'rgba(234,179,8,0.18)', fg: '#ca8a04' };
+  const RED = { bg: 'rgba(239,68,68,0.15)', fg: '#dc2626' };
+  const BLUE = { bg: 'rgba(59,130,246,0.15)', fg: '#2563eb' };
+
+  // Blood pressure: AHA categories
+  if (spec === 'bloodpressure') {
+    const sys = (lastEntry.values['systolic'] ?? lastEntry.values['systolic_pressure']) as number | undefined;
+    const dia = (lastEntry.values['diastolic'] ?? lastEntry.values['diastolic_pressure']) as number | undefined;
+    if (sys == null || dia == null) return null;
+    if (sys >= 180 || dia >= 120) return { label: 'Crisis', ...RED };
+    if (sys >= 140 || dia >= 90) return { label: 'High', ...RED };
+    if (sys >= 130 || dia >= 80) return { label: 'Elevated', ...YELLOW };
+    if (sys < 90 || dia < 60) return { label: 'Low', ...YELLOW };
+    return { label: 'In range', ...GREEN };
+  }
+
+  // Sleep: hours per night
+  if (spec === 'sleep' && typeof v === 'number') {
+    if (v >= 7 && v <= 9) return { label: 'In range', ...GREEN };
+    if (v >= 6 && v < 7) return { label: 'Moderate', ...YELLOW };
+    return { label: 'Low', ...RED };
+  }
+
+  // Medication: today's dose taken?
+  if (spec === 'medication') {
+    const today = new Date().toLocaleDateString('en-CA');
+    const entries = tracker.entries || [];
+    const takenToday = entries.some(e => new Date(e.timestamp).toLocaleDateString('en-CA') === today);
+    return takenToday ? { label: 'Taken', ...GREEN } : { label: 'Due', ...YELLOW };
+  }
+
+  // Weight / Running / generic: freshness-based status
+  const ageMs = Date.now() - new Date(lastEntry.timestamp).getTime();
+  const ageDays = ageMs / 86400000;
+  if (ageDays <= 1) return { label: 'Today', ...GREEN };
+  if (ageDays <= 7) return { label: 'This week', ...BLUE };
+  if (ageDays <= 30) return { label: 'This month', ...YELLOW };
+  return { label: 'Stale', ...RED };
+}
+
 function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void }) {
   const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
   const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
@@ -1538,33 +1589,8 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
     return e.values[primaryField] as number;
   }).filter((v): v is number => typeof v === 'number');
 
-  const weekAgo = Date.now() - 7 * 86400000;
-  const weekEntries = entries.filter(e => new Date(e.timestamp).getTime() > weekAgo);
-  const monthAgo = Date.now() - 30 * 86400000;
-  const monthEntries = entries.filter(e => new Date(e.timestamp).getTime() > monthAgo);
   const timeAgo = lastEntry ? timeAgoShort(lastEntry.timestamp) : null;
-
-  const getVal = (name: string) => {
-    const f = tracker.fields.find(ff => ff.name === name);
-    return (f as any)?.default || lastEntry?.values?.[name] || '';
-  };
-
-  // Compute stats
-  const avg = recentVals.length > 0 ? recentVals.reduce((a, b) => a + b, 0) / recentVals.length : null;
-  const mn = recentVals.length > 0 ? Math.min(...recentVals) : null;
-  const mx = recentVals.length > 0 ? Math.max(...recentVals) : null;
-
-  // Streak calculator
-  const streak = (() => {
-    let s = 0;
-    for (let i = 0; i < 30; i++) {
-      const d = new Date(); d.setDate(d.getDate() - i);
-      const ds = d.toLocaleDateString('en-CA');
-      if (entries.some(e => new Date(e.timestamp).toLocaleDateString('en-CA') === ds)) s++;
-      else break;
-    }
-    return s;
-  })();
+  const status = getTrackerStatus(tracker, spec, lastEntry, primaryField);
 
   const specIcon = spec === 'medication' ? <Pill className="h-3.5 w-3.5" />
     : spec === 'bloodpressure' ? <Heart className="h-3.5 w-3.5" />
@@ -1575,232 +1601,90 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
     : tracker.category?.toLowerCase() === 'fitness' ? <Dumbbell className="h-3.5 w-3.5" />
     : <Activity className="h-3.5 w-3.5" />;
 
-  // ── Type-specific rich body ──
-  function renderBody() {
-    // ── MEDICATION ──
-    if (spec === 'medication') {
-      const dosage = getVal('dosage') || tracker.unit || '';
-      const freq = getVal('frequency') || '';
-      const today = new Date().toLocaleDateString('en-CA');
-      const todayCount = entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === today).length;
-      const adherencePct = monthEntries.length > 0 ? Math.round((monthEntries.length / 30) * 100) : 0;
-      return (
-        <>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold text-foreground">{dosage}</p>
-              {freq && <p className="text-[8px] text-muted-foreground">{freq}</p>}
-            </div>
-            <Donut pct={adherencePct / 100} color={ac} size={34} label={`${adherencePct}%`} />
-          </div>
-          <KpiLine label="Today" value={todayCount > 0 ? `${todayCount} dose${todayCount > 1 ? 's' : ''}` : 'Not taken'} accent={todayCount > 0 ? '#22c55e' : '#ef4444'} />
-          <KpiLine label="This Week" value={`${weekEntries.length} doses`} />
-          <KpiLine label="Streak" value={`${streak}d`} accent={streak >= 7 ? '#22c55e' : undefined} />
-          <WeekBars entries={entries} color={ac} />
-        </>
-      );
-    }
+  // ── Compute big metric value + unit (uniform across categories) ──
+  let bigValue: string = '—';
+  let bigUnit: string = '';
 
-    // ── BLOOD PRESSURE ──
-    if (isBP) {
-      const sys = lastEntry?.values['systolic'] ?? lastEntry?.values['systolic_pressure'];
-      const dia = lastEntry?.values['diastolic'] ?? lastEntry?.values['diastolic_pressure'];
-      const sysVals = entries.slice(-14).map(e => (e.values['systolic'] ?? e.values['systolic_pressure']) as number).filter((v): v is number => typeof v === 'number');
-      const diaVals = entries.slice(-14).map(e => (e.values['diastolic'] ?? e.values['diastolic_pressure']) as number).filter((v): v is number => typeof v === 'number');
-      const sysAvg = sysVals.length > 0 ? Math.round(sysVals.reduce((a, b) => a + b, 0) / sysVals.length) : null;
-      const diaAvg = diaVals.length > 0 ? Math.round(diaVals.reduce((a, b) => a + b, 0) / diaVals.length) : null;
-      return (
-        <>
-          <div className="flex items-baseline gap-0.5">
-            <span className="text-xl font-black tabular-nums" style={{ color: ac }}>{sys ?? '—'}</span>
-            <span className="text-sm font-bold text-muted-foreground/50">/</span>
-            <span className="text-xl font-black tabular-nums" style={{ color: ac }}>{dia ?? '—'}</span>
-          </div>
-          {sysAvg && <KpiLine label="Avg" value={`${sysAvg}/${diaAvg}`} />}
-          <KpiLine label="Readings" value={`${entries.length} total`} />
-          <KpiLine label="This Week" value={`${weekEntries.length}`} />
-          <Sparkline values={sysVals} color={ac} h={24} />
-        </>
-      );
-    }
-
-    // ── RUNNING ──
-    if (spec === 'running') {
-      const distField = tracker.fields.find(f => f.name.toLowerCase().includes('dist') || f.name.toLowerCase().includes('mile'));
-      const paceField = tracker.fields.find(f => f.name.toLowerCase().includes('pace'));
-      const calField = tracker.fields.find(f => f.name.toLowerCase().includes('cal'));
-      const dist = lastEntry?.values[distField?.name || primaryField];
-      const pace = lastEntry?.values[paceField?.name || 'pace'];
-      const cal = lastEntry?.values[calField?.name || 'caloriesBurned'];
-      const allDists = entries.map(e => e.values[distField?.name || primaryField] as number).filter((v): v is number => typeof v === 'number');
-      const totalDist = allDists.reduce((a, b) => a + b, 0);
-      const unit = distField?.unit || tracker.unit || 'mi';
-      return (
-        <>
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="flex items-baseline gap-0.5">
-                <span className="text-xl font-black tabular-nums text-foreground">{typeof totalDist === 'number' ? totalDist.toFixed(1) : '—'}</span>
-                <span className="text-[9px] text-muted-foreground">{unit} total</span>
-              </div>
-            </div>
-            <Donut pct={weekEntries.length / 5} color={ac} size={34} label={`${weekEntries.length}/5`} />
-          </div>
-          {dist != null && <KpiLine label="Last Run" value={`${typeof dist === 'number' ? dist.toFixed(1) : dist} ${unit}`} />}
-          {pace && <KpiLine label="Pace" value={`${pace}`} />}
-          {cal && <KpiLine label="Burned" value={`${cal} cal`} />}
-          <KpiLine label="Total Runs" value={`${entries.length}`} />
-          <Sparkline values={allDists.slice(-10)} color={ac} h={22} />
-        </>
-      );
-    }
-
-    // ── SLEEP ──
-    if (spec === 'sleep') {
-      const v = lastEntry?.values[primaryField];
-      const sleepAvg = avg;
-      return (
-        <>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl font-black tabular-nums text-foreground">{typeof v === 'number' ? v.toFixed(1) : '—'}</span>
-            <span className="text-[9px] text-muted-foreground">hrs last</span>
-          </div>
-          {sleepAvg && <KpiLine label="Avg" value={`${sleepAvg.toFixed(1)} hrs`} />}
-          {mn != null && mx != null && <KpiLine label="Range" value={`${mn.toFixed(1)}–${mx.toFixed(1)}`} />}
-          <KpiLine label="This Week" value={`${weekEntries.length} nights`} />
-          <Sparkline values={recentVals} color={ac} h={22} />
-        </>
-      );
-    }
-
-    // ── WEIGHT ──
-    if (spec === 'weight') {
-      const v = lastEntry?.values[primaryField];
-      const unit = tracker.unit || tracker.fields[0]?.unit || 'lbs';
-      const trend = recentVals.length >= 2 ? recentVals[recentVals.length - 1] - recentVals[0] : null;
-      return (
-        <>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl font-black tabular-nums text-foreground">{typeof v === 'number' ? v.toFixed(1) : '—'}</span>
-            <span className="text-[9px] text-muted-foreground">{unit}</span>
-          </div>
-          {trend != null && <KpiLine label="Trend" value={`${trend > 0 ? '+' : ''}${trend.toFixed(1)} ${unit}`} accent={trend < 0 ? '#22c55e' : trend > 0 ? '#ef4444' : undefined} />}
-          {avg && <KpiLine label="Avg" value={`${avg.toFixed(1)} ${unit}`} />}
-          <KpiLine label="Entries" value={`${entries.length}`} />
-          <Sparkline values={recentVals} color={ac} h={22} />
-        </>
-      );
-    }
-
-    // ── FITNESS ──
-    if (['fitness', 'exercise', 'workout', 'sport', 'cardio', 'strength'].includes(tracker.category?.toLowerCase())) {
-      const numFields = tracker.fields.filter(f => f.type === 'number');
-      const heroField = numFields[0];
-      const heroVal = lastEntry?.values[heroField?.name || primaryField];
-      return (
-        <>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[9px] text-muted-foreground">Weekly Sessions</p>
-              <span className="text-xl font-black tabular-nums text-foreground">{weekEntries.length}</span>
-            </div>
-            <Donut pct={weekEntries.length / 5} color={ac} size={34} label={`${weekEntries.length}`} />
-          </div>
-          {heroVal != null && heroField && <KpiLine label={heroField.name} value={`${typeof heroVal === 'number' ? heroVal.toLocaleString() : heroVal}${heroField.unit ? ` ${heroField.unit}` : ''}`} />}
-          <KpiLine label="Total" value={`${entries.length} sessions`} />
-          {streak > 0 && <KpiLine label="Streak" value={`${streak}d`} accent={streak >= 7 ? '#22c55e' : undefined} />}
-          <WeekBars entries={entries} color={ac} />
-        </>
-      );
-    }
-
-    // ── NUTRITION / HYDRATION ──
-    if (['nutrition', 'hydration', 'diet'].includes(tracker.category?.toLowerCase())) {
-      const latestVal = lastEntry?.values[primaryField];
-      // Show up to 3 field values from last entry
-      const fieldLines = tracker.fields.slice(0, 3).map(f => {
-        const v = lastEntry?.values[f.name];
-        if (v == null) return null;
-        return { label: f.name, value: `${typeof v === 'number' ? v.toLocaleString() : v}${f.unit ? ` ${f.unit}` : ''}` };
-      }).filter(Boolean) as { label: string; value: string }[];
-      return (
-        <>
-          {latestVal != null ? (
-            <div className="flex items-baseline gap-1">
-              <span className="text-base font-black tabular-nums text-foreground">
-                {typeof latestVal === 'number' ? latestVal.toLocaleString() : String(latestVal).slice(0, 16)}
-              </span>
-              {tracker.unit && <span className="text-[9px] text-muted-foreground">{tracker.unit}</span>}
-            </div>
-          ) : <p className="text-[9px] text-muted-foreground/60 italic">No data</p>}
-          {fieldLines.map((fl, i) => <KpiLine key={i} label={fl.label} value={fl.value} />)}
-          <KpiLine label="This Week" value={`${weekEntries.length} entries`} />
-          <KpiLine label="Total" value={`${entries.length}`} />
-          {recentVals.length >= 2 ? <Sparkline values={recentVals} color={ac} h={20} /> : <WeekBars entries={entries} color={ac} />}
-        </>
-      );
-    }
-
-    // ── DEFAULT ──
+  if (isBP) {
+    const sys = lastEntry?.values['systolic'] ?? lastEntry?.values['systolic_pressure'];
+    const dia = lastEntry?.values['diastolic'] ?? lastEntry?.values['diastolic_pressure'];
+    bigValue = `${sys ?? '—'}/${dia ?? '—'}`;
+    bigUnit = 'mmHg';
+  } else {
     const v = lastEntry?.values[primaryField];
-    const fieldLines = tracker.fields.slice(0, 3).map(f => {
-      const fv = lastEntry?.values[f.name];
-      if (fv == null) return null;
-      return { label: f.name, value: `${typeof fv === 'number' ? fv.toLocaleString() : String(fv).slice(0, 20)}${f.unit ? ` ${f.unit}` : ''}` };
-    }).filter(Boolean) as { label: string; value: string }[];
-    return (
-      <>
-        {v != null ? (
-          <div className="flex items-baseline gap-1">
-            <span className="text-base font-black tabular-nums text-foreground">
-              {typeof v === 'number' ? v.toLocaleString() : String(v).slice(0, 16)}
-            </span>
-            {tracker.unit && <span className="text-[9px] text-muted-foreground">{tracker.unit}</span>}
-          </div>
-        ) : <p className="text-[9px] text-muted-foreground/60 italic">No entries</p>}
-        {fieldLines.map((fl, i) => <KpiLine key={i} label={fl.label} value={fl.value} />)}
-        <KpiLine label="Entries" value={`${entries.length}`} />
-        {streak > 0 && <KpiLine label="Streak" value={`${streak}d`} />}
-        {recentVals.length >= 2 ? <Sparkline values={recentVals} color={ac} h={20} /> : entries.length > 0 ? <WeekBars entries={entries} color={ac} /> : null}
-      </>
-    );
+    if (typeof v === 'number') {
+      // Format: 1 decimal for small numbers, none for large
+      bigValue = v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(v % 1 === 0 ? 0 : 1);
+    } else if (v != null) {
+      bigValue = String(v).slice(0, 12);
+    }
+    const f = tracker.fields.find(ff => ff.name === primaryField);
+    bigUnit = f?.unit || tracker.unit || '';
   }
 
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col"
+      className="rounded-2xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col relative"
       style={{
-        height: 160,
+        height: 180,
         background: `linear-gradient(160deg, hsl(${catAccent} / 0.14) 0%, hsl(var(--card)) 45%)`,
         border: `1px solid hsl(${catAccent} / 0.2)`,
         boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
       }}
       onClick={() => onOpenDetail?.(tracker.id)}
     >
-      {/* Header: icon + title + profile */}
-      <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
+      {/* Header: icon + title */}
+      <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
+        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
           {specIcon}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-bold text-foreground truncate leading-tight">
+          <p className="text-[13px] font-semibold text-foreground truncate leading-tight">
             {profileLabel ? `${profileLabel}: ` : ''}{tracker.name}
           </p>
         </div>
       </div>
 
-      {/* Rich body */}
-      <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5 min-h-0">
-        {renderBody()}
+      {/* Big metric */}
+      <div className="px-3 pt-1 pb-0">
+        <div className="flex items-baseline gap-1">
+          <span className="text-[28px] leading-none font-black tabular-nums text-foreground" style={{ color: ac }}>
+            {bigValue}
+          </span>
+          {bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{bigUnit}</span>}
+        </div>
       </div>
 
-      {/* Footer */}
-      <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
-        <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${catAccent} / 0.12)`, color: ac }}>
-          {tracker.category || 'custom'}
-        </span>
-        <span className="text-[7px] text-muted-foreground tabular-nums">{timeAgo || `${entries.length} entries`}</span>
+      {/* Dominant sparkline filling remaining space */}
+      <div className="flex-1 px-2 pt-1 min-h-0 flex items-end">
+        {recentVals.length >= 2 ? (
+          <Sparkline values={recentVals} color={ac} h={56} />
+        ) : entries.length > 0 ? (
+          <div className="w-full opacity-50"><Sparkline values={[1, 1]} color={ac} h={56} /></div>
+        ) : (
+          <div className="w-full text-center text-[10px] text-muted-foreground/60 italic pb-2">No data yet</div>
+        )}
+      </div>
+
+      {/* Footer: status pill (left) + time-ago (right) */}
+      <div className="px-3 pb-2.5 pt-1 flex items-center justify-between">
+        {status ? (
+          <span
+            className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+            style={{ backgroundColor: status.bg, color: status.fg }}
+          >
+            {status.label}
+          </span>
+        ) : (
+          <span
+            className="text-[10px] font-semibold capitalize px-2 py-0.5 rounded-full"
+            style={{ backgroundColor: `hsl(${catAccent} / 0.15)`, color: ac }}
+          >
+            {tracker.category || 'custom'}
+          </span>
+        )}
+        <span className="text-[10px] text-muted-foreground tabular-nums">{timeAgo || `${entries.length} entries`}</span>
       </div>
     </div>
   );
