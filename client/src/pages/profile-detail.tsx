@@ -8659,7 +8659,7 @@ function EditAssetPartyLinkModal({
 }
 
 // ── Linked People tab (shown on ASSET profiles via /api/assets/:id/parties) ──
-function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: string; profileType: string; onChanged: () => void }) {
+export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: string; profileType: string; onChanged: () => void }) {
   const { toast } = useToast();
   const isAsset = ["asset","vehicle","property"].includes(profileType);
   const isLiability = profileType === "liability" || profileType === "loan";

@@ -57,6 +57,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { LinkedPeopleTab } from "@/pages/profile-detail";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -931,6 +932,16 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <section data-testid="overview-linked-assets">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked assets</p>
               <LinkedAssetsCard liabilityId={profile.id} />
+            </section>
+
+            {/* Linked people — single source of truth for ownership/links. */}
+            <section data-testid="overview-linked-people">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked people</p>
+              <LinkedPeopleTab
+                profileId={profile.id}
+                profileType={profile.type}
+                onChanged={() => { /* React Query invalidations handled inside */ }}
+              />
             </section>
 
             {/* Subtype-specific overview */}
