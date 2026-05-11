@@ -761,58 +761,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             Back
           </Button>
           <div className="flex items-center gap-1.5">
-            {/* Multi-owner checkbox picker — same UX as asset profiles */}
-            {personOptions.length > 0 && (
-              <Popover open={ownerPopoverOpen} onOpenChange={setOwnerPopoverOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs gap-1.5 bg-background/60 backdrop-blur-sm font-medium max-w-[180px] truncate"
-                    data-testid="button-owner-dropdown"
-                  >
-                    <User className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{ownerButtonLabel}</span>
-                    <ChevronDown className="h-2.5 w-2.5 opacity-70 shrink-0" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-52 p-2" align="end">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mb-2">Owners</p>
-                  <div className="space-y-1 max-h-52 overflow-y-auto">
-                    {personOptions.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((p: any) => (
-                      <label
-                        key={p.id}
-                        className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted/50 cursor-pointer"
-                      >
-                        <Checkbox
-                          id={`owner-chk-${p.id}`}
-                          checked={checkedOwnerIds.has(p.id)}
-                          onCheckedChange={(checked) => {
-                            setCheckedOwnerIds(prev => {
-                              const next = new Set(prev);
-                              if (checked) next.add(p.id); else next.delete(p.id);
-                              return next;
-                            });
-                          }}
-                        />
-                        <span className="text-xs truncate">{p.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="mt-2 pt-2 border-t border-border/40">
-                    <Button
-                      size="sm"
-                      className="w-full h-7 text-xs"
-                      disabled={saveOwnersMutation.isPending}
-                      onClick={() => saveOwnersMutation.mutate(Array.from(checkedOwnerIds))}
-                      data-testid="button-owner-save"
-                    >
-                      {saveOwnersMutation.isPending ? "Saving…" : "Save"}
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
-            )}
+            {/* Owner picker removed from header — the single source of truth
+                for owners is the Linked People / Linked Profiles section. */}
             <Button
               variant="outline"
               size="sm"

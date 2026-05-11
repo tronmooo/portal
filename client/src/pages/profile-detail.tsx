@@ -1425,13 +1425,12 @@ function NestedAssetSections({
 
   return (
     <div className="space-y-3" data-testid="nested-asset-sections">
-      {/* Section 1 & 2: Belongs-to + Location */}
-      <Card data-testid="card-belongs-to-location">
+      {/* Section 1: Location (the legacy "Belongs to" parent picker has been
+          removed — ownership is now the single source of truth via the Linked
+          People section below). */}
+      <Card data-testid="card-location">
         <CardContent className="p-3 space-y-1">
-          <BelongsToEditor profile={profile} allProfiles={allProfiles} onSaved={onSaved} />
-          <div className="border-t border-border/30 pt-2">
-            <LocationEditor profile={profile} onSaved={onSaved} />
-          </div>
+          <LocationEditor profile={profile} onSaved={onSaved} />
         </CardContent>
       </Card>
 
@@ -8720,6 +8719,22 @@ function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: str
   });
 
   const [editState, setEditState] = useState<{linkId:string;role:string;pct:number}|null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+
+  // Fetch all profiles so we can offer eligible people in the picker.
+  // Only asset + liability profile types need this; person/self read-only view.
+  const { data: allProfiles = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: isAsset || isLiability,
+  });
+
+  const linkedIds = new Set(
+    (parties || []).map((p: any) => (p.party?.id) || p.partyProfileId || p.id)
+  );
+  const availablePeople = (allProfiles || [])
+    .filter((p: any) => ["self", "person"].includes(p.type))
+    .filter((p: any) => !linkedIds.has(p.id));
 
   const removeMutation = useMutation({
     mutationFn: async (linkId: string) => {
@@ -8737,11 +8752,36 @@ function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: str
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
+  const canAdd = (isAsset || isLiability) && availablePeople.length > 0;
+
   if (parties.length === 0) {
     return (
-      <div className="text-center py-10">
-        <User className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-sm text-muted-foreground">No linked people</p>
+      <div className="space-y-3">
+        <div className="text-center py-10">
+          <User className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No linked people</p>
+          {canAdd && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 h-7 text-xs gap-1"
+              onClick={() => setAddOpen(true)}
+              data-testid="button-add-linked-person"
+            >
+              <Plus className="h-3 w-3" /> Add Person
+            </Button>
+          )}
+        </div>
+        {addOpen && (isAsset || isLiability) && (
+          <AddLinkedPersonModal
+            open={addOpen}
+            mode={isAsset ? "asset" : "liability"}
+            entityId={profileId}
+            availablePeople={availablePeople}
+            onClose={() => setAddOpen(false)}
+            onSaved={() => { refetch(); onChanged(); }}
+          />
+        )}
       </div>
     );
   }
@@ -8757,6 +8797,29 @@ function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: str
           onClose={() => setEditState(null)}
           onSaved={() => { refetch(); onChanged(); }}
         />
+      )}
+      {addOpen && (isAsset || isLiability) && (
+        <AddLinkedPersonModal
+          open={addOpen}
+          mode={isAsset ? "asset" : "liability"}
+          entityId={profileId}
+          availablePeople={availablePeople}
+          onClose={() => setAddOpen(false)}
+          onSaved={() => { refetch(); onChanged(); }}
+        />
+      )}
+      {canAdd && (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            onClick={() => setAddOpen(true)}
+            data-testid="button-add-linked-person"
+          >
+            <Plus className="h-3 w-3" /> Add Person
+          </Button>
+        </div>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {parties.map((item: any) => {
@@ -8784,6 +8847,101 @@ function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: str
         })}
       </div>
     </div>
+  );
+}
+
+// Unified add-linked-person modal used by LinkedPeopleTab on both asset and
+// liability profiles. Replaces the separate header Owners popover + Belongs-to
+// parent picker so there's only one place to add owners on a profile.
+function AddLinkedPersonModal({
+  open, mode, entityId, availablePeople, onClose, onSaved,
+}: {
+  open: boolean;
+  mode: "asset" | "liability";
+  entityId: string;
+  availablePeople: any[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useToast();
+  const [personId, setPersonId] = useState<string>(availablePeople[0]?.id || "");
+  const [role, setRole] = useState<string>("owner");
+  const [pct, setPct] = useState<string>("100");
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const ownershipPercentage = Math.max(0, Math.min(100, Number(pct) || 0));
+      if (mode === "asset") {
+        await apiRequest("POST", "/api/asset-party-links", {
+          assetProfileId: entityId,
+          partyProfileId: personId,
+          ownershipPercentage,
+          role,
+        });
+      } else {
+        await apiRequest("POST", "/api/liability-profile-links", {
+          liabilityProfileId: entityId,
+          partyProfileId: personId,
+          ownershipPercentage,
+          role,
+        });
+      }
+    },
+    onSuccess: () => {
+      toast({ title: "Person linked" });
+      onSaved();
+      onClose();
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Add Linked Person</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium">Person</label>
+            <Select value={personId} onValueChange={setPersonId}>
+              <SelectTrigger className="mt-1" data-testid="select-add-linked-person">
+                <SelectValue placeholder="Choose a person" />
+              </SelectTrigger>
+              <SelectContent>
+                {availablePeople.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs font-medium">Role</label>
+            <Select value={role} onValueChange={setRole}>
+              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["Owner","Co-Owner","Beneficiary","Trustee","Manager","Guarantor"].map(r =>
+                  <SelectItem key={r} value={r.toLowerCase().replace(/ /g,"-")}>{r}</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs font-medium">Ownership %</label>
+            <Input type="number" min={0} max={100} value={pct}
+              onChange={e => setPct(e.target.value)} className="mt-1" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={!personId || mutation.isPending}
+            data-testid="button-save-add-linked-person"
+          >
+            {mutation.isPending ? "Saving..." : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -9900,58 +10058,8 @@ export default function ProfileDetailPage() {
             <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
           </Link>
           <div className="flex items-center gap-1.5">
-            {/* Owner multi-select — only on asset / vehicle / loan / subscription etc. */}
-            {isAssetProfile && personOptions.length > 0 && (
-              <Popover open={ownerPopoverOpen} onOpenChange={setOwnerPopoverOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs gap-1.5 bg-background/60 backdrop-blur-sm font-medium max-w-[180px] truncate"
-                    data-testid="button-owner-dropdown"
-                  >
-                    <User className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{ownerButtonLabel}</span>
-                    <ChevronDown className="h-2.5 w-2.5 opacity-70 shrink-0" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-52 p-2" align="end">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mb-2">Owners</p>
-                  <div className="space-y-1 max-h-52 overflow-y-auto">
-                    {personOptions.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((p: any) => (
-                      <label
-                        key={p.id}
-                        className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted/50 cursor-pointer"
-                      >
-                        <Checkbox
-                          id={`owner-chk-${p.id}`}
-                          checked={checkedOwnerIds.has(p.id)}
-                          onCheckedChange={(checked) => {
-                            setCheckedOwnerIds(prev => {
-                              const next = new Set(prev);
-                              if (checked) next.add(p.id); else next.delete(p.id);
-                              return next;
-                            });
-                          }}
-                        />
-                        <span className="text-xs truncate">{p.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="mt-2 pt-2 border-t border-border/40">
-                    <Button
-                      size="sm"
-                      className="w-full h-7 text-xs"
-                      disabled={saveOwnersMutation.isPending}
-                      onClick={() => saveOwnersMutation.mutate(Array.from(checkedOwnerIds))}
-                      data-testid="button-owner-save"
-                    >
-                      {saveOwnersMutation.isPending ? "Saving…" : "Save"}
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
-            )}
+            {/* Owner picker removed from header — the single source of truth
+                for owners is the Linked People section in the Overview. */}
             <Button
               variant="outline"
               size="sm"
