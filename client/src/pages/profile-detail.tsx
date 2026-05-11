@@ -6161,28 +6161,26 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health & Vet", testId: "tab-health" },
     { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
-    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "tasks", label: "Reminders", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
-  // Vehicle — maintenance + cost focused
+  // Vehicle — maintenance + money focused. Loan + Costs collapsed into Money.
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
-    { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
-  // Loan — payment focused
+  // Loan — payment focused. Loan + Payments collapsed into Money.
   loan: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "finances", label: "Payments", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -6191,7 +6189,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Investment
   investment: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "finances", label: "Performance", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -6208,31 +6206,27 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   medical: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Records", testId: "tab-health" },
-    { value: "finances", label: "Billing", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Visits", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
-  // Property / Home
+  // Property / Home. Loan + Costs collapsed into Money.
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
-    { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
-  // Asset (laptop, device, etc.) — loan tab so an item financed on a card or
-  // installment plan can carry its own loan instead of needing a separate Loan
-  // profile. Same data shape as the Vehicle/Property loan tab.
+  // Asset (laptop, device, etc.) — Loan + Costs collapsed into Money.
   asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
-    { value: "finances", label: "Costs", testId: "tab-finances" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
@@ -6240,18 +6234,17 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Account
   account: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "finances", label: "Transactions", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "History", testId: "tab-timeline" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
 };
 
-// Fallback for any type not explicitly defined
+// Fallback for any type not explicitly defined. Money tab fuses loan + finances.
 const DEFAULT_TABS: TabDef[] = [
   { value: "info", label: "Overview", testId: "tab-info" },
-  { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-  { value: "finances", label: "Finance", testId: "tab-finances" },
+  { value: "money", label: "Money", testId: "tab-money" },
   { value: "trackers", label: "Documents", testId: "tab-trackers" },
   { value: "activity", label: "Activity", testId: "tab-activity" },
   { value: "timeline", label: "Timeline", testId: "tab-timeline" },
@@ -6266,8 +6259,7 @@ const DEFAULT_TABS: TabDef[] = [
 const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   bank_account: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "finances", label: "Transactions", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
@@ -6275,8 +6267,7 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   credit_card: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "finances", label: "Transactions", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
@@ -6284,17 +6275,15 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   digital_asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "access", label: "Access", testId: "tab-access" },
-    { value: "billing", label: "Billing", testId: "tab-billing" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   business: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "finances", label: "Financials", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "insights", label: "Insights", testId: "tab-insights" },
@@ -6302,25 +6291,22 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   collectible: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "valuation", label: "Valuation", testId: "tab-valuation" },
-    { value: "finances", label: "History", testId: "tab-finances" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   loan_receivable: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Amortization", testId: "tab-loan" },
-    { value: "finances", label: "Payments", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
   high_value_item: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "loan-detail", label: "Loan", testId: "tab-loan" },
-    { value: "finances", label: "Expenses", testId: "tab-finances" },
+    { value: "money", label: "Money", testId: "tab-money" },
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
@@ -10706,6 +10692,34 @@ export default function ProfileDetailPage() {
               {tabValues.has("finances") && (
                 <TabsContent value="finances" className="mt-4 px-1 sm:px-0">
                   <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {/* MONEY — consolidated finance tab. Replaces the separate Loan + Costs
+                  (or Loan + Payments / Loan + Transactions) pair on asset, vehicle,
+                  property, loan and account profile types. Renders the linked-liability
+                  cards, inline loan editor, and the recurring-bill + expense feed in
+                  vertical sections so the user sees the full money picture on one tab. */}
+              {tabValues.has("money") && (
+                <TabsContent value="money" className="mt-4 px-1 sm:px-0 space-y-6">
+                  {["asset","vehicle","property"].includes(profile.type) && (
+                    <section>
+                      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Linked liabilities</h3>
+                      <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                    </section>
+                  )}
+                  <section>
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Loan</h3>
+                    <LoanTab
+                      profile={profile}
+                      obligations={profile.relatedObligations || []}
+                      hideEmptyEditor={["asset","vehicle","property"].includes(profile.type)}
+                    />
+                  </section>
+                  <section>
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Bills &amp; expenses</h3>
+                    <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                  </section>
                 </TabsContent>
               )}
 

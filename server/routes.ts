@@ -17,6 +17,110 @@ interface AuthenticatedRequest extends Request {
 }
 import { storage } from "./storage";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
+
+// ────────────────────────────────────────────────────────────────────
+// syncLiabilityObligation
+//
+// Keep a liability profile (type=liability|loan) in sync with a backing
+// `obligations` row so the monthly payment shows up on the bills feed,
+// calendar, and dashboard "monthly debt service" rollups.
+//
+//   liability.fields.monthlyPayment > 0   → ensure an obligation exists,
+//                                            update its amount, name,
+//                                            and link via linked_obligation_id
+//   liability.fields.monthlyPayment = 0   → leave existing obligation alone
+//                                            (the user may have set it manually)
+//
+// Best-effort: errors are logged but never block the calling request.
+// ────────────────────────────────────────────────────────────────────
+async function syncLiabilityObligation(profileId: string): Promise<void> {
+  try {
+    const p: any = await storage.getProfile(profileId);
+    if (!p) return;
+    if (p.type !== "liability" && p.type !== "loan") return;
+
+    const monthly = resolveMonthlyPayment(p.fields);
+    if (!(monthly > 0)) return;
+
+    const fields = p.fields || {};
+    const finance = fields.finance || {};
+    const loan = fields.loan || {};
+    // Try common storage paths for a due date / first payment date.
+    const nextDueRaw =
+      fields.nextDueDate || fields.next_due_date ||
+      finance.nextDueDate || finance.next_due_date ||
+      finance.firstPaymentDate || finance.first_payment_date ||
+      loan.firstPaymentDate || loan.first_payment_date ||
+      fields.firstPaymentDate || fields.first_payment_date || null;
+    let nextDueDate: string | undefined = undefined;
+    if (nextDueRaw && /^\d{4}-\d{2}-\d{2}/.test(String(nextDueRaw))) {
+      nextDueDate = String(nextDueRaw).slice(0, 10);
+    }
+    // Day-of-month ("the 15th of every month") overrides whatever next_due_date
+    // was stored — recompute to the next future occurrence so the obligation
+    // lands on the calendar at the right cadence.
+    const dueDayRaw = fields.dueDay ?? fields.due_day ?? fields.paymentDueDay ?? fields.payment_due_day;
+    const dueDayNum = Number(dueDayRaw);
+    if (Number.isFinite(dueDayNum) && dueDayNum >= 1 && dueDayNum <= 31) {
+      const today = new Date();
+      // Clamp to last day of current month (e.g. Feb has 28/29, day 31 → 28/29).
+      const clampDay = (year: number, monthZero: number, day: number) => {
+        const lastDay = new Date(year, monthZero + 1, 0).getDate();
+        return Math.min(day, lastDay);
+      };
+      let y = today.getFullYear();
+      let m = today.getMonth();
+      let d = clampDay(y, m, Math.floor(dueDayNum));
+      let candidate = new Date(y, m, d);
+      if (candidate < today) {
+        m += 1;
+        if (m > 11) { m = 0; y += 1; }
+        d = clampDay(y, m, Math.floor(dueDayNum));
+        candidate = new Date(y, m, d);
+      }
+      const yyyy = candidate.getFullYear().toString().padStart(4, "0");
+      const mm = (candidate.getMonth() + 1).toString().padStart(2, "0");
+      const dd = candidate.getDate().toString().padStart(2, "0");
+      nextDueDate = `${yyyy}-${mm}-${dd}`;
+    }
+
+    const category = "loan_payment";
+    const name = p.name || "Loan payment";
+
+    if (p.linkedObligationId) {
+      // Update existing obligation. Don't touch nextDueDate if not provided
+      // — the user may have advanced it manually after a payment.
+      const patch: any = { amount: monthly, name, category, frequency: "monthly" };
+      if (nextDueDate) patch.nextDueDate = nextDueDate;
+      await storage.updateObligation(p.linkedObligationId, patch).catch((e: any) => {
+        console.warn("[syncLiabilityObligation] update failed:", e?.message || e);
+      });
+      return;
+    }
+
+    // No backing obligation yet — create one and link it.
+    const obl = await storage.createObligation({
+      name,
+      amount: monthly,
+      frequency: "monthly",
+      category,
+      nextDueDate: nextDueDate || new Date().toISOString().slice(0, 10),
+      autopay: false,
+      linkedProfiles: [profileId],
+      notes: "Auto-created from liability monthly payment",
+    } as any).catch((e: any) => {
+      console.warn("[syncLiabilityObligation] create failed:", e?.message || e);
+      return null;
+    });
+    if (obl?.id) {
+      await storage.updateProfile(profileId, { linkedObligationId: obl.id } as any).catch((e: any) => {
+        console.warn("[syncLiabilityObligation] link-back failed:", e?.message || e);
+      });
+    }
+  } catch (err: any) {
+    console.warn("[syncLiabilityObligation] hook error:", err?.message || err);
+  }
+}
 import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
@@ -1398,6 +1502,15 @@ export async function registerRoutes(
       console.warn("[auto-ownership] hook failed:", autoOwnErr?.message || autoOwnErr);
     }
 
+    // ---- Auto-bill: create a backing obligation for liabilities ----
+    // If a liability/loan is created with a monthlyPayment, ensure a
+    // matching obligation row exists so the loan appears on bills feeds,
+    // calendar, and the NetWorthStrip's "monthly debt" rollup.
+    if (created.type === "liability" || created.type === "loan") {
+      await syncLiabilityObligation(created.id);
+      bustCache(`profile-detail:${uid_p1}:`);
+    }
+
     // ---- Location auto-attach hook ----
     // If the new profile has a name AND a parentProfileId, look at all siblings
     // (same parentProfileId, same userId, not this profile, not soft-deleted).
@@ -1509,6 +1622,12 @@ export async function registerRoutes(
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
+    // Auto-bill sync: if monthlyPayment was added or changed on a liability,
+    // keep its backing obligation row in step so dashboards stay accurate.
+    if (updated.type === "liability" || updated.type === "loan") {
+      await syncLiabilityObligation(updated.id);
+      bustCache(`profile-detail:${uid_p2}:`);
+    }
     res.json(updated);
   }));
   app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {

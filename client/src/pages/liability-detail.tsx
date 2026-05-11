@@ -440,6 +440,66 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
 
+  // ── Inline edit for loan terms (Details tab) ───────────────────────────────
+  // Lets the user set monthlyPayment + dueDay + firstPaymentDate inline so the
+  // payment lands on the calendar. The server's syncLiabilityObligation hook
+  // turns those fields into a recurring obligation automatically.
+  const [editingTerms, setEditingTerms] = useState(false);
+  const [tBalance, setTBalance] = useState("");
+  const [tOriginal, setTOriginal] = useState("");
+  const [tRate, setTRate] = useState("");
+  const [tTerm, setTTerm] = useState("");
+  const [tMonthly, setTMonthly] = useState("");
+  const [tDueDay, setTDueDay] = useState("");
+  const [tFirstPayment, setTFirstPayment] = useState("");
+  const [tLender, setTLender] = useState("");
+  const saveTermsMutation = useMutation({
+    mutationFn: async () => {
+      const fields: Record<string, any> = {};
+      const num = (s: string) => (s.trim() === "" ? null : Number(s));
+      if (tBalance !== "") fields.currentBalance = num(tBalance);
+      if (tOriginal !== "") fields.originalBalance = num(tOriginal);
+      if (tRate !== "") {
+        // Accept either 6 or 0.06 — store as decimal (0.06) consistent with
+        // existing fields.annualInterestRate.
+        const r = num(tRate);
+        if (r != null) fields.annualInterestRate = r > 1 ? r / 100 : r;
+      }
+      if (tTerm !== "") fields.remainingTermMonths = num(tTerm);
+      if (tMonthly !== "") fields.monthlyPayment = num(tMonthly);
+      if (tDueDay !== "") {
+        const d = num(tDueDay);
+        if (d != null && d >= 1 && d <= 31) fields.dueDay = d;
+      }
+      if (tFirstPayment !== "") fields.firstPaymentDate = tFirstPayment;
+      if (tLender !== "") fields.lender = tLender;
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+    },
+    onSuccess: () => {
+      toast({ title: "Loan terms saved", description: "Calendar will update with the new due date." });
+      setEditingTerms(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
+  });
+  const openTermsEditor = () => {
+    setTBalance(terms.currentBalance ? String(terms.currentBalance) : "");
+    setTOriginal(terms.originalBalance ? String(terms.originalBalance) : "");
+    // annualRate from terms is a percent (e.g. 6 not 0.06) per liability page convention
+    setTRate(terms.annualRate ? String(terms.annualRate) : "");
+    setTTerm(terms.remainingTermMonths ? String(terms.remainingTermMonths) : "");
+    setTMonthly(terms.monthlyPayment ? String(terms.monthlyPayment) : "");
+    setTDueDay(terms.dueDay ? String(terms.dueDay) : "");
+    setTFirstPayment(terms.firstPaymentDate || "");
+    setTLender(terms.lender || "");
+    setEditingTerms(true);
+  };
+
   const deleteProfileMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("DELETE", `/api/profiles/${profile.id}`);
@@ -1054,29 +1114,91 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* DETAILS */}
           <TabsContent value="details" className="mt-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Loan terms</CardTitle>
-              </CardHeader>
-              <CardContent className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                <Row label="Subtype" value={subtypeLabel} />
-                <Row label="Lender / creditor" value={terms.lender || "—"} />
-                <Row label="Account ····" value={terms.accountNumberLast4 || "—"} />
-                <Row label="Original balance" value={terms.originalBalance ? fmtUSD(terms.originalBalance) : "—"} />
-                <Row label="Current balance" value={fmtUSD(terms.currentBalance)} />
-                <Row label="Annual interest rate" value={fmtPct(terms.annualRate)} />
-                <Row label="Monthly payment" value={fmtUSD(terms.monthlyPayment || summary.monthlyPayment)} />
-                <Row label="Remaining term"
-                  value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : `${summary.remainingMonths} mo`} />
-                <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
-                <Row label="Due day of month"
-                  value={terms.dueDay ? `Day ${terms.dueDay}` : "—"} />
-              </CardContent>
-            </Card>
-            <p className="text-xs text-muted-foreground mt-3">
-              Edit these terms from the standard profile editor. (Inline editing
-              comes in Phase 5.)
-            </p>
+            {editingTerms ? (
+              <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-base">Edit loan terms</CardTitle>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingTerms(false)} data-testid="button-cancel-terms-edit">
+                    Cancel
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Lender / creditor</Label>
+                      <Input value={tLender} onChange={(e) => setTLender(e.target.value)} placeholder="e.g. Chase Auto" data-testid="input-terms-lender" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Current balance ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tBalance} onChange={(e) => setTBalance(e.target.value)} placeholder="e.g. 25000" data-testid="input-terms-balance" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Original balance ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tOriginal} onChange={(e) => setTOriginal(e.target.value)} placeholder="e.g. 35000" data-testid="input-terms-original" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Annual interest rate (%)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tRate} onChange={(e) => setTRate(e.target.value)} placeholder="e.g. 6.5" data-testid="input-terms-rate" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Monthly payment ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 1000" data-testid="input-terms-monthly" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Remaining term (months)</Label>
+                      <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Due day of month (1–31)</Label>
+                      <Input type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="e.g. 15" data-testid="input-terms-due-day" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">First payment date</Label>
+                      <Input type="date" value={tFirstPayment} onChange={(e) => setTFirstPayment(e.target.value)} data-testid="input-terms-first-payment" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Setting a monthly payment and due day creates a recurring bill that lands on your calendar each month.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => saveTermsMutation.mutate()}
+                      disabled={saveTermsMutation.isPending}
+                      data-testid="button-save-terms"
+                    >
+                      {saveTermsMutation.isPending ? "Saving…" : "Save terms"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingTerms(false)} data-testid="button-cancel-terms-edit-2">
+                      Cancel
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-base">Loan terms</CardTitle>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={openTermsEditor} data-testid="button-edit-terms">
+                    <Edit className="h-3 w-3" /> Edit
+                  </Button>
+                </CardHeader>
+                <CardContent className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                  <Row label="Subtype" value={subtypeLabel} />
+                  <Row label="Lender / creditor" value={terms.lender || "—"} />
+                  <Row label="Account ····" value={terms.accountNumberLast4 || "—"} />
+                  <Row label="Original balance" value={terms.originalBalance ? fmtUSD(terms.originalBalance) : "—"} />
+                  <Row label="Current balance" value={fmtUSD(terms.currentBalance)} />
+                  <Row label="Annual interest rate" value={fmtPct(terms.annualRate)} />
+                  <Row label="Monthly payment" value={fmtUSD(terms.monthlyPayment || summary.monthlyPayment)} />
+                  <Row label="Remaining term"
+                    value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : `${summary.remainingMonths} mo`} />
+                  <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
+                  <Row label="Due day of month"
+                    value={terms.dueDay ? `Day ${terms.dueDay}` : "—"} />
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           {/* PAYMENTS — unified tab: payment history + payoff calculator + amortization schedule */}
