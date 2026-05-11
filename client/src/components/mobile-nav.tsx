@@ -1,12 +1,11 @@
 import { useLocation } from "wouter";
-import { MessageSquare, LayoutDashboard, Link2, Archive, Calendar, Sparkles } from "lucide-react";
+import { MessageSquare, LayoutDashboard, Link2, Archive, Calendar } from "lucide-react";
 
 const TABS = [
   { label: "Chat",      href: "/",          icon: MessageSquare,  accent: "188 50% 52%" },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
   { label: "Linked",    href: "/linked",    icon: Link2,          accent: "155 60% 44%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
-  { label: "Insights",  href: "/insights",  icon: Sparkles,       accent: "45 90% 55%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
 ];
 
