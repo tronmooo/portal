@@ -489,8 +489,7 @@ export default function DocumentViewer({
     const maxH = expanded ? "85vh" : "100%";
     return (
       <div
-        className="rounded-xl overflow-hidden border border-border bg-muted/10 flex flex-col"
-        style={isPdf ? { height: '100%', minHeight: '400px' } : undefined}
+        className="rounded-xl overflow-hidden border border-border bg-muted/10 flex flex-col h-full"
         data-testid={`doc-viewer-${id}`}
       >
         <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/20 shrink-0">
@@ -669,23 +668,18 @@ export function DocumentViewerDialog({
             <span className="ml-3 text-sm text-muted-foreground">Loading document...</span>
           </div>
         ) : (
-          // Wave 20: preview is ALWAYS a medium fixed thumbnail (~280px) so
-          // extracted data is always visible below it. Extracted data area
-          // always rendered — shows "No extracted data" placeholder when empty
-          // so layout doesn't shift when async fetch resolves.
+          // Wave 21: preview wrapper is a HARD-CAPPED pixel height container.
+          // Outer div has overflow: hidden so the image can NEVER push the
+          // extracted-data section out of view, no matter what the inline
+          // viewer renders. 200px is small enough to leave room for fields.
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Document preview — fixed 280px thumbnail at the top. Image is
-                constrained by the inline viewer's flex container with
-                object-contain so tall photos shrink to fit. */}
+            {/* Document preview — hard 200px tall, overflow hidden. */}
             <div
-              className="px-4 pt-2 pb-2 flex flex-col shrink-0"
-              style={{
-                height: 280,
-                minHeight: 0,
-              }}
+              className="px-4 pt-2 pb-2 flex shrink-0 overflow-hidden"
+              style={{ height: 200 }}
             >
               {shouldShowPreview ? (
-                <div className="flex-1 min-h-0" style={{ height: '100%' }}>
+                <div className="w-full h-full overflow-hidden" style={{ height: '100%' }}>
                   <DocumentViewer id={id} name={name} mimeType={actualMime} data={displayData} inline />
                 </div>
               ) : (
