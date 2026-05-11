@@ -982,6 +982,23 @@ export class SupabaseStorage implements IStorage {
         .eq("user_id", this.userId);
     } catch (e) { errors.push("entity_links"); }
 
+    try { // 12. Asset/Liability ownership + collateral link rows.
+      // Belt-and-suspenders: clean up explicitly so the profile-row DELETE
+      // doesn't have to rely on FK CASCADE firing through the owner-
+      // enforcement triggers (which are patched to no-op when the profile
+      // is gone, but cleaning up directly here is safer and avoids any
+      // trigger churn in the same transaction).
+      await this.supabase.from("asset_party_links").delete()
+        .or(`asset_profile_id.eq.${id},party_profile_id.eq.${id}`)
+        .eq("user_id", this.userId);
+      await this.supabase.from("liability_profile_links").delete()
+        .or(`liability_profile_id.eq.${id},party_profile_id.eq.${id}`)
+        .eq("user_id", this.userId);
+      await this.supabase.from("liability_asset_links").delete()
+        .or(`liability_profile_id.eq.${id},asset_profile_id.eq.${id}`)
+        .eq("user_id", this.userId);
+    } catch (e) { errors.push("ownership_links"); }
+
     if (errors.length > 0) {
       console.warn(`[deleteProfile] Cascade delete partial failures for profile ${id}: ${errors.join(", ")}`);
     }
