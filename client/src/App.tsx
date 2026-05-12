@@ -431,6 +431,11 @@ function AppRouter() {
         <Route path="/terms" component={TermsPage} />
         <Route path="/artifacts" component={ArtifactsPage} />
         <Route path="/dashboard/documents" component={ArtifactsPage} />
+        {/* Legacy alias: QuickCreateFab + trackers page navigate to /dashboard/artifacts. */}
+        <Route path="/dashboard/artifacts" component={ArtifactsPage} />
+        {/* Legacy singular alias: anywhere /profile/:id was bookmarked, route it to the
+            real /profiles/:id detail page so we never 404 on a real profile UUID. */}
+        <Route path="/profile/:id" component={ProfileDetailPage} />
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />

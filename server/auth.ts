@@ -93,6 +93,33 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   return next();
 }
 
+// ── Token verification cache ────────────────────────────────────────────────
+// supabase.auth.getUser(token) is a network round-trip to GoTrue (~50-300ms).
+// On a single page load React Query fires 5-10 parallel API calls, each
+// repeating this same lookup for the exact same JWT. We cache (token → user)
+// for 60 seconds to coalesce those bursts. Revocation still kicks in within
+// 60s, and the cache is automatically dropped on any verification error.
+type CachedUser = { userId: string; email: string | undefined; expiresAt: number };
+const tokenUserCache = new Map<string, CachedUser>();
+const TOKEN_CACHE_TTL_MS = 60_000;
+const TOKEN_CACHE_MAX = 5000;
+function getCachedUser(token: string): CachedUser | null {
+  const hit = tokenUserCache.get(token);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) { tokenUserCache.delete(token); return null; }
+  return hit;
+}
+function cacheUser(token: string, userId: string, email: string | undefined): void {
+  // Bounded LRU — evict oldest insertion-order entries first.
+  while (tokenUserCache.size >= TOKEN_CACHE_MAX) {
+    const oldest = tokenUserCache.keys().next().value;
+    if (oldest === undefined) break;
+    tokenUserCache.delete(oldest);
+  }
+  tokenUserCache.set(token, { userId, email, expiresAt: Date.now() + TOKEN_CACHE_TTL_MS });
+}
+export function clearTokenCache(): void { tokenUserCache.clear(); }
+
 /**
  * Auth middleware — extracts user from Supabase JWT in Authorization header.
  * If Supabase is not configured, allows all requests (local dev mode).
@@ -138,14 +165,29 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   }
 
   try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
-      return res.status(401).json({ error: "Invalid or expired token", code: "AUTH_INVALID" });
+    // Fast path: serve from the 60s token cache when present. Coalesces the
+    // burst of parallel API calls on every page navigation into a single auth
+    // round-trip per minute per token.
+    const cached = getCachedUser(token);
+    let userId: string;
+    let userEmail: string | undefined;
+    if (cached) {
+      userId = cached.userId;
+      userEmail = cached.email;
+    } else {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (error || !user) {
+        return res.status(401).json({ error: "Invalid or expired token", code: "AUTH_INVALID" });
+      }
+      userId = user.id;
+      userEmail = user.email;
+      cacheUser(token, userId, userEmail);
     }
 
     // Set user info on request
-    req.userId = user.id;
-    req.userEmail = user.email;
+    req.userId = userId;
+    req.userEmail = userEmail;
+    const user = { id: userId, email: userEmail } as { id: string; email: string | undefined };
 
     // Create a per-request storage instance scoped to this user's ID.
     // This eliminates the global singleton race condition (C-1 security fix).
