@@ -16,14 +16,104 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus, AlertCircle, Trash2, Pencil } from "lucide-react";
+import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, ArrowLeft, Plus, AlertCircle, Trash2, Pencil, Receipt, Pill, Wrench, CalendarClock, Activity, FileWarning, CheckSquare, SkipForward, RotateCcw } from "lucide-react";
 import { Link } from "wouter";
 import type { Obligation } from "@shared/schema";
+import { OBLIGATION_KIND_META, type ObligationKind } from "@shared/schema";
+
+const KIND_ICON: Record<ObligationKind, any> = {
+  bill: Receipt, subscription: Repeat, loan_payment: CreditCard,
+  medication: Pill, maintenance: Wrench, appointment: CalendarClock,
+  habit: Activity, doc_expiration: FileWarning, task: CheckSquare,
+};
 
 const CATEGORY_ICONS: Record<string, any> = {
   housing: Building2, loan: CreditCard, insurance: AlertTriangle,
   health: CheckCircle, investment: DollarSign,
 };
+
+// Per-occurrence row used by the new "Due today / Overdue / Upcoming" panel.
+function OccurrenceRow({ occ }: { occ: any }) {
+  const { toast } = useToast();
+  const kind = (occ.obligation?.kind || "bill") as ObligationKind;
+  const meta = OBLIGATION_KIND_META[kind];
+  const Icon = KIND_ICON[kind] || Receipt;
+  const due = new Date(occ.due_at + "T00:00:00");
+  const today = new Date(); today.setHours(0,0,0,0);
+  const daysOff = Math.round((due.getTime() - today.getTime()) / 86400000);
+  const isOverdue = occ.status === "late" || (occ.status === "pending" && daysOff < 0);
+  const isDone = occ.status === "done";
+  const isSkipped = occ.status === "skipped";
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+  };
+  const setStatus = useMutation({
+    mutationFn: (status: string) => apiRequest("POST", `/api/obligation-occurrences/${occ.id}/status`, { status }),
+    onSuccess: (_d, status) => { invalidate(); toast({ title: status === "done" ? "Marked done" : status === "skipped" ? "Skipped" : "Updated" }); },
+    onError: (err: Error) => toast({ title: "Update failed", description: formatApiError(err), variant: "destructive" }),
+  });
+  const reschedule = useMutation({
+    mutationFn: (newDueAt: string) => apiRequest("POST", `/api/obligation-occurrences/${occ.id}/reschedule`, { newDueAt }),
+    onSuccess: () => { invalidate(); toast({ title: "Rescheduled" }); },
+    onError: (err: Error) => toast({ title: "Reschedule failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const dateLabel = isOverdue ? `${Math.abs(daysOff)}d overdue`
+    : daysOff === 0 ? "Today"
+    : daysOff === 1 ? "Tomorrow"
+    : daysOff > 0 ? `In ${daysOff}d`
+    : due.toLocaleDateString();
+
+  return (
+    <div data-testid={`occurrence-row-${occ.id}`} className={`flex items-center gap-3 rounded-md border px-3 py-2 ${isOverdue ? "border-red-500/40 bg-red-500/5" : isDone ? "opacity-60" : isSkipped ? "opacity-50" : "border-border"}`}>
+      <span className="shrink-0 inline-flex items-center justify-center rounded-md" style={{ width: 32, height: 32, background: `${meta.color}22`, color: meta.color }}>
+        <Icon className="h-4 w-4" />
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <p className={`text-sm font-medium truncate ${isDone ? "line-through" : ""}`}>{occ.obligation?.name || "Untitled"}</p>
+          <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4" style={{ borderColor: meta.color, color: meta.color }}>{meta.label}</Badge>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {occ.obligation?.amount > 0 && <>${Number(occ.obligation.amount).toFixed(2)} · </>}
+          <span className={isOverdue ? "text-red-600 font-medium" : ""}>{dateLabel}</span>
+          {occ.obligation?.autopay && <> · Autopay</>}
+        </p>
+      </div>
+      {!isDone && !isSkipped && (
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="outline" className="h-7 px-2" disabled={setStatus.isPending}
+            onClick={() => setStatus.mutate("done")} data-testid={`button-mark-done-${occ.id}`}>
+            <CheckCircle className="h-3.5 w-3.5 mr-1" /> Done
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2" disabled={setStatus.isPending}
+            onClick={() => setStatus.mutate("skipped")} data-testid={`button-skip-${occ.id}`} aria-label="Skip">
+            <SkipForward className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2" disabled={reschedule.isPending}
+            onClick={() => {
+              const next = prompt("Reschedule to (YYYY-MM-DD):", occ.due_at);
+              if (next && /^\d{4}-\d{2}-\d{2}$/.test(next)) reschedule.mutate(next);
+            }} data-testid={`button-reschedule-${occ.id}`} aria-label="Reschedule">
+            <Clock className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
+      {(isDone || isSkipped) && (
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={setStatus.isPending}
+          onClick={() => setStatus.mutate("pending")} data-testid={`button-undo-${occ.id}`}>
+          <RotateCcw className="h-3.5 w-3.5 mr-1" /> Undo
+        </Button>
+      )}
+    </div>
+  );
+}
 
 function ObligationCard({ ob }: { ob: Obligation }) {
   const { toast } = useToast();
@@ -282,6 +372,85 @@ function ObligationCard({ ob }: { ob: Obligation }) {
   );
 }
 
+// Wave 16 — live panel that shows materialized occurrences split into
+// Overdue / Due today / Next 14 days, each row inline-actionable.
+function ObligationOccurrencePanel() {
+  const today = new Date().toLocaleDateString("en-CA");
+  const end = new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-CA");
+  // Look back 60d so overdue stuff shows up even if it slipped
+  const start = new Date(Date.now() - 60 * 86400000).toLocaleDateString("en-CA");
+  const { data: occurrences = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/obligation-occurrences", start, end],
+    queryFn: () => apiRequest("GET", `/api/obligation-occurrences?start=${start}&end=${end}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
+
+  const { overdue, todayOcc, upcoming } = useMemo(() => {
+    const overdue: any[] = [], todayOcc: any[] = [], upcoming: any[] = [];
+    for (const o of occurrences) {
+      if (o.status === "done" || o.status === "skipped") continue;
+      if (o.due_at < today) overdue.push(o);
+      else if (o.due_at === today) todayOcc.push(o);
+      else upcoming.push(o);
+    }
+    return { overdue, todayOcc, upcoming };
+  }, [occurrences, today]);
+
+  if (isLoading) {
+    return <div className="h-24 rounded skeleton-shimmer" />;
+  }
+  if (overdue.length === 0 && todayOcc.length === 0 && upcoming.length === 0) {
+    return null; // Nothing to show — don't clutter the page.
+  }
+
+  return (
+    <div className="space-y-3">
+      {overdue.length > 0 && (
+        <Card className="border-red-500/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-red-500" /> Overdue
+              <Badge variant="destructive" className="ml-auto">{overdue.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            {overdue.map(o => <OccurrenceRow key={o.id} occ={o} />)}
+          </CardContent>
+        </Card>
+      )}
+      {todayOcc.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <CalendarClock className="h-4 w-4" /> Due today
+              <Badge className="ml-auto">{todayOcc.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            {todayOcc.map(o => <OccurrenceRow key={o.id} occ={o} />)}
+          </CardContent>
+        </Card>
+      )}
+      {upcoming.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Clock className="h-4 w-4" /> Next 14 days
+              <Badge variant="secondary" className="ml-auto">{upcoming.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            {upcoming.slice(0, 8).map(o => <OccurrenceRow key={o.id} occ={o} />)}
+            {upcoming.length > 8 && (
+              <p className="text-xs text-muted-foreground text-center pt-1">+{upcoming.length - 8} more in the next 14 days</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 export default function ObligationsPage() {
   useEffect(() => { document.title = "Bills — Portol"; }, []);
   const { toast } = useToast();
@@ -290,6 +459,7 @@ export default function ObligationsPage() {
   const [newAmount, setNewAmount] = useState("");
   const [newFrequency, setNewFrequency] = useState("monthly");
   const [newCategory, setNewCategory] = useState("housing");
+  const [newKind, setNewKind] = useState<ObligationKind>("bill");
   // Start empty so the user must explicitly choose a due date.
   // Previously this defaulted to today, which silently created a bill
   // that appeared overdue or due immediately if the user forgot to set it.
@@ -380,6 +550,17 @@ export default function ObligationsPage() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
+              <Label className="text-xs">Type</Label>
+              <Select value={newKind} onValueChange={v => setNewKind(v as ObligationKind)}>
+                <SelectTrigger data-testid="select-obligation-kind"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(OBLIGATION_KIND_META) as ObligationKind[]).map(k => (
+                    <SelectItem key={k} value={k}>{OBLIGATION_KIND_META[k].label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs">Name <span className="text-destructive">*</span></Label>
               <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Rent, Netflix, Car Payment" data-testid="input-obligation-name" />
             </div>
@@ -441,6 +622,9 @@ export default function ObligationsPage() {
                 createMutation.mutate({
                   name: newName.trim(), amount: parseFloat(newAmount), frequency: newFrequency,
                   category: newCategory, nextDueDate: newDueDate, autopay: false,
+                  kind: newKind,
+                  leadTimeDays: OBLIGATION_KIND_META[newKind].defaultLeadDays,
+                  autoLogExpense: newKind === "subscription" || newKind === "bill",
                 });
               }} data-testid="button-save-obligation">
               {createMutation.isPending ? "Creating..." : "Create"}
@@ -448,6 +632,9 @@ export default function ObligationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Wave 16 — Due / Overdue / Upcoming live panel */}
+      <ObligationOccurrencePanel />
 
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-3">

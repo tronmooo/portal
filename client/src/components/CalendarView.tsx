@@ -33,7 +33,7 @@ import {
   Calendar as CalendarIcon, CalendarDays, ChevronLeft, ChevronRight, Plus,
   Clock, MapPin, Repeat, Trash2, Pencil, X,
   ListTodo, Flame, CreditCard, Users, FileText,
-  CheckSquare, ChevronDown, RefreshCw,
+  CheckSquare, ChevronDown, RefreshCw, CheckCircle2,
 } from "lucide-react";
 import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
@@ -624,13 +624,29 @@ function EventDetailDialog({
             </div>
           )}
 
-          {/* Obligation info */}
+          {/* Obligation info — Wave 16 shows status when occurrence is materialized */}
           {item.type === "obligation" && (
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-sm flex-wrap">
               <CreditCard className="h-3.5 w-3.5 text-muted-foreground" />
               <span>${item.meta?.amount} \u2014 {item.meta?.frequency}</span>
               {item.meta?.autopay && (
                 <Badge variant="outline" className="text-xs h-5 text-green-600 border-green-600">autopay</Badge>
+              )}
+              {item.meta?.kind && (
+                <Badge variant="outline" className="text-xs h-5">{item.meta.kind}</Badge>
+              )}
+              {item.meta?.status && item.meta.status !== "pending" && (
+                <Badge
+                  variant="outline"
+                  className={`text-xs h-5 ${
+                    item.meta.status === "done" ? "text-green-600 border-green-600"
+                    : item.meta.status === "late" ? "text-red-600 border-red-600"
+                    : item.meta.status === "skipped" ? "text-muted-foreground"
+                    : ""
+                  }`}
+                >
+                  {item.meta.status}
+                </Badge>
               )}
             </div>
           )}
@@ -649,6 +665,41 @@ function EventDetailDialog({
         </div>
 
         <DialogFooter className="gap-2">
+          {/* Wave 16: Done/Skip on obligation occurrences directly from calendar */}
+          {item.type === "obligation" && item.meta?.occurrenceId && item.meta?.status === "pending" && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await apiRequest("POST", `/api/obligation-occurrences/${item.meta!.occurrenceId}/status`, { status: "done" });
+                    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                    onClose();
+                  } catch (e) { console.error(e); }
+                }}
+                data-testid="btn-occ-done"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Mark done
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await apiRequest("POST", `/api/obligation-occurrences/${item.meta!.occurrenceId}/status`, { status: "skipped" });
+                    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
+                    onClose();
+                  } catch (e) { console.error(e); }
+                }}
+                data-testid="btn-occ-skip"
+              >Skip</Button>
+            </>
+          )}
           {(item.type === "event" || item.type === "task" || item.type === "obligation") && (
             <Button
               variant="outline"
