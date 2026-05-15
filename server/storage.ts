@@ -1376,7 +1376,28 @@ export class MemStorage implements IStorage {
   async getObligations() { return Array.from(this.obligations.values()); }
   async getObligation(id: string) { return this.obligations.get(id); }
   async createObligation(data: InsertObligation): Promise<Obligation> {
-    const obligation: Obligation = { id: randomUUID(), ...data, category: data.category || "general", frequency: data.frequency || "monthly", autopay: data.autopay ?? false, status: "active", linkedProfiles: data.linkedProfiles || [], payments: [], createdAt: new Date().toISOString() };
+    const d: any = data;
+    const obligation: Obligation = {
+      id: randomUUID(),
+      name: d.name, amount: d.amount, nextDueDate: d.nextDueDate,
+      notes: d.notes,
+      category: d.category || "general",
+      frequency: d.frequency || "monthly",
+      autopay: d.autopay ?? false,
+      status: "active",
+      kind: d.kind || "bill",
+      leadTimeDays: d.leadTimeDays ?? 3,
+      autoLogExpense: d.autoLogExpense ?? false,
+      currency: d.currency || "USD",
+      linkedProfiles: d.linkedProfiles || [],
+      linkedAssetId: d.linkedAssetId || undefined,
+      linkedLiabilityId: d.linkedLiabilityId || undefined,
+      linkedDocumentId: d.linkedDocumentId || undefined,
+      recurrenceEnd: d.recurrenceEnd || undefined,
+      icon: d.icon || undefined,
+      payments: [],
+      createdAt: new Date().toISOString(),
+    };
     this.obligations.set(obligation.id, obligation);
     this.logActivity("obligation", `Created obligation: ${obligation.name} ($${obligation.amount}/${obligation.frequency})`);
     return obligation;

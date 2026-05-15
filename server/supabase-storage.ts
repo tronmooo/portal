@@ -447,6 +447,16 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, amount: Number(r.amount) || 0, frequency: r.frequency,
       category: r.category, nextDueDate: r.next_due_date, autopay: r.autopay || false,
       status: r.status || "active",
+      // Wave 16 — new fields. Default sensibly so legacy rows still hydrate.
+      kind: (r.kind as any) || "bill",
+      leadTimeDays: typeof r.lead_time_days === "number" ? r.lead_time_days : 3,
+      autoLogExpense: r.auto_log_expense === true,
+      linkedAssetId: r.linked_asset_id || undefined,
+      linkedLiabilityId: r.linked_liability_id || undefined,
+      linkedDocumentId: r.linked_document_id || undefined,
+      recurrenceEnd: r.recurrence_end || undefined,
+      currency: r.currency || "USD",
+      icon: r.icon || undefined,
       linkedProfiles: r.linked_profiles || [], payments,
       notes: r.notes || undefined, createdAt: r.created_at, updatedAt: r.updated_at,
     };
@@ -1906,28 +1916,80 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
+    // Wave 16 — prefer persisted obligation_occurrences when they exist.
+    // Falls back to virtual generation only for obligations that haven't been
+    // materialized yet (legacy data). Occurrences carry per-instance status
+    // so the calendar can visually distinguish done / skipped / late.
+    const { data: occRows } = await this.supabase
+      .from("obligation_occurrences")
+      .select("id,obligation_id,due_at,original_due_at,status,actual_amount")
+      .eq("user_id", this.userId)
+      .gte("due_at", startDate)
+      .lte("due_at", endDate);
+    const occByOb = new Map<string, any[]>();
+    for (const r of (occRows || [])) {
+      const arr = occByOb.get(r.obligation_id) || [];
+      arr.push(r);
+      occByOb.set(r.obligation_id, arr);
+    }
+    const KIND_COLORS: Record<string, string> = {
+      bill: "#BB653B", subscription: "#5591C7", loan_payment: "#A13544",
+      medication: "#6DAA45", maintenance: "#797876", appointment: "#A86FDF",
+      habit: "#20808D", doc_expiration: "#D19900", task: "#4F98A3",
+    };
+    const STATUS_TINT: Record<string, string> = {
+      done: "#6DAA45", skipped: "#797876", late: "#A13544", pending: "", rescheduled: "#A86FDF",
+    };
+
     for (const ob of obligations) {
-      // Show the next due date
-      const baseDate = ob.nextDueDate.slice(0, 10);
-      if (baseDate >= startDate && baseDate <= endDate) {
-        items.push({ id: `obligation-${ob.id}-${baseDate}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: baseDate, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
+      const kind = (ob as any).kind || "bill";
+      const baseColor = KIND_COLORS[kind] || "#BB653B";
+      const occs = occByOb.get(ob.id) || [];
+      const matchedDates = new Set<string>();
+
+      // Emit a calendar item for every persisted occurrence.
+      for (const occ of occs) {
+        matchedDates.add(occ.original_due_at);
+        const color = STATUS_TINT[occ.status] || baseColor;
+        items.push({
+          id: `obligation-${ob.id}-${occ.due_at}`,
+          type: "obligation", title: `${ob.name} — $${ob.amount}`,
+          date: occ.due_at, allDay: true, color, category: ob.category,
+          description: occ.status === "done" ? "Paid"
+            : occ.status === "skipped" ? "Skipped"
+            : occ.status === "rescheduled" ? "Rescheduled"
+            : occ.status === "late" ? `OVERDUE — $${ob.amount}`
+            : ob.autopay ? "Autopay enabled" : `$${ob.amount} due`,
+          completed: occ.status === "done",
+          linkedProfiles: ob.linkedProfiles, sourceId: ob.id,
+          meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay, kind, occurrenceId: occ.id, status: occ.status }
+        });
       }
-      // Generate future occurrences based on frequency
-      if (ob.frequency !== "once") {
-        const base = parseLocalDate(ob.nextDueDate.slice(0, 10));
-        for (let i = 1; i <= 24; i++) {
-          const next = new Date(base);
-          switch (ob.frequency) {
-            case "weekly": next.setDate(next.getDate() + i * 7); break;
-            case "biweekly": next.setDate(next.getDate() + i * 14); break;
-            case "monthly": next.setMonth(next.getMonth() + i); break;
-            case "quarterly": next.setMonth(next.getMonth() + i * 3); break;
-            case "yearly": next.setFullYear(next.getFullYear() + i); break;
-          }
-          const nextStr = next.toLocaleDateString('en-CA');
-          if (nextStr > endDate) break;
-          if (nextStr >= startDate) {
-            items.push({ id: `obligation-${ob.id}-${nextStr}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: nextStr, allDay: true, color: "#BB653B", category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay } });
+
+      // Fallback virtual generation for obligations without materialized rows.
+      // Keeps the calendar populated for legacy data until the next mutation
+      // triggers materialization.
+      if (occs.length === 0) {
+        const baseDate = ob.nextDueDate.slice(0, 10);
+        if (baseDate >= startDate && baseDate <= endDate) {
+          items.push({ id: `obligation-${ob.id}-${baseDate}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: baseDate, allDay: true, color: baseColor, category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay, kind } });
+        }
+        if (ob.frequency !== "once") {
+          const base = parseLocalDate(ob.nextDueDate.slice(0, 10));
+          for (let i = 1; i <= 24; i++) {
+            const next = new Date(base);
+            switch (ob.frequency) {
+              case "weekly": next.setDate(next.getDate() + i * 7); break;
+              case "biweekly": next.setDate(next.getDate() + i * 14); break;
+              case "monthly": next.setMonth(next.getMonth() + i); break;
+              case "quarterly": next.setMonth(next.getMonth() + i * 3); break;
+              case "yearly": next.setFullYear(next.getFullYear() + i); break;
+            }
+            const nextStr = next.toLocaleDateString('en-CA');
+            if (nextStr > endDate) break;
+            if (nextStr >= startDate) {
+              items.push({ id: `obligation-${ob.id}-${nextStr}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: nextStr, allDay: true, color: baseColor, category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay, kind } });
+            }
           }
         }
       }
@@ -2601,10 +2663,20 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
+    const kind = (data as any).kind || "bill";
     const { error } = await this.supabase.from("obligations").insert({
       id, user_id: this.userId, name: data.name, amount: data.amount,
       frequency: data.frequency || "monthly", category: data.category || "general",
+      kind,
       next_due_date: data.nextDueDate, autopay: data.autopay || false,
+      lead_time_days: (data as any).leadTimeDays ?? null,
+      auto_log_expense: (data as any).autoLogExpense ?? false,
+      linked_asset_id: (data as any).linkedAssetId || null,
+      linked_liability_id: (data as any).linkedLiabilityId || null,
+      linked_document_id: (data as any).linkedDocumentId || null,
+      recurrence_end: (data as any).recurrenceEnd || null,
+      currency: (data as any).currency || "USD",
+      icon: (data as any).icon || null,
       linked_profiles: linkedProfiles, notes: data.notes || null, created_at: now,
     });
     if (error) throw error;
@@ -2612,6 +2684,15 @@ export class SupabaseStorage implements IStorage {
       await this.linkProfileTo(pId, "obligation", id);
     }
     this.logActivity("obligation", `Created obligation: ${data.name}`);
+
+    // Wave 16 — materialize the next 90 days of occurrences so the calendar /
+    // dashboard / reminder feeds all read from one source of truth.
+    try {
+      const { materializeOccurrences } = await import("./obligation-engine");
+      await materializeOccurrences(this.supabase, this.userId, id, 90);
+    } catch (e: any) {
+      console.error("[obligations] materialize failed (non-fatal):", e?.message || e);
+    }
 
     // NOTE: Calendar events for obligations are generated dynamically by
     // getCalendarTimeline() — no need to create a stored event here.
@@ -2626,11 +2707,31 @@ export class SupabaseStorage implements IStorage {
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("obligations").update({
       name: merged.name, amount: merged.amount, frequency: merged.frequency,
-      category: merged.category, next_due_date: merged.nextDueDate,
+      category: merged.category,
+      kind: merged.kind,
+      next_due_date: merged.nextDueDate,
       autopay: merged.autopay, linked_profiles: merged.linkedProfiles,
+      lead_time_days: merged.leadTimeDays,
+      auto_log_expense: merged.autoLogExpense,
+      linked_asset_id: merged.linkedAssetId || null,
+      linked_liability_id: merged.linkedLiabilityId || null,
+      linked_document_id: merged.linkedDocumentId || null,
+      recurrence_end: merged.recurrenceEnd || null,
+      currency: merged.currency || "USD",
+      icon: merged.icon || null,
       notes: merged.notes || null,
+      updated_at: new Date().toISOString(),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // Re-materialize when cadence or due date changes — keeps calendar correct.
+    if (data.frequency !== undefined || data.nextDueDate !== undefined || data.recurrenceEnd !== undefined) {
+      try {
+        const { materializeOccurrences } = await import("./obligation-engine");
+        await materializeOccurrences(this.supabase, this.userId, id, 90);
+      } catch (e: any) {
+        console.error("[obligations] re-materialize failed (non-fatal):", e?.message || e);
+      }
+    }
     return this.getObligation(id);
   }
 

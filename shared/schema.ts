@@ -380,19 +380,70 @@ export type ObligationFrequency = "weekly" | "biweekly" | "monthly" | "quarterly
 
 export type ObligationStatus = "active" | "paused" | "cancelled";
 
+// Wave 16: kind classifies the *real-life shape* of the commitment so the UI,
+// icons, side-effects, and dashboard cards can specialize per type. Backward
+// compatible — defaults to 'bill' for any legacy row that doesn't have it.
+export type ObligationKind =
+  | "bill"
+  | "subscription"
+  | "loan_payment"
+  | "medication"
+  | "maintenance"
+  | "appointment"
+  | "habit"
+  | "doc_expiration"
+  | "task";
+
+export const OBLIGATION_KIND_META: Record<ObligationKind, { label: string; icon: string; color: string; defaultLeadDays: number; }> = {
+  bill:            { label: "Bill",            icon: "Receipt",     color: "#BB653B", defaultLeadDays: 3 },
+  subscription:    { label: "Subscription",    icon: "Repeat",      color: "#5591C7", defaultLeadDays: 2 },
+  loan_payment:    { label: "Loan payment",    icon: "CreditCard",  color: "#A13544", defaultLeadDays: 5 },
+  medication:      { label: "Medication",      icon: "Pill",        color: "#6DAA45", defaultLeadDays: 0 },
+  maintenance:     { label: "Maintenance",     icon: "Wrench",      color: "#797876", defaultLeadDays: 7 },
+  appointment:     { label: "Appointment",     icon: "CalendarClock", color: "#A86FDF", defaultLeadDays: 1 },
+  habit:           { label: "Habit",           icon: "Activity",    color: "#20808D", defaultLeadDays: 0 },
+  doc_expiration:  { label: "Document expires",icon: "FileWarning", color: "#D19900", defaultLeadDays: 30 },
+  task:            { label: "Task",            icon: "CheckSquare", color: "#4F98A3", defaultLeadDays: 0 },
+};
+
+export type OccurrenceStatus = "pending" | "done" | "skipped" | "late" | "rescheduled";
+
+export interface ObligationOccurrence {
+  id: string;
+  obligationId: string;
+  dueAt: string;            // YYYY-MM-DD (current, may be rescheduled)
+  originalDueAt: string;    // YYYY-MM-DD (the canonical slot it represents)
+  status: OccurrenceStatus;
+  completedAt?: string;
+  actualAmount?: number;
+  notes?: string;
+  paymentId?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface Obligation {
   id: string;
   name: string;
   amount: number;
   frequency: ObligationFrequency;
   category: string; // rent, utilities, insurance, subscription, loan, etc.
+  kind: ObligationKind;          // Wave 16 — life-shape classifier
   nextDueDate: string;
   autopay: boolean;
   status: ObligationStatus;
+  leadTimeDays: number;          // Wave 16 — how many days in advance to remind
+  autoLogExpense: boolean;       // Wave 16 — when done, also create an expense row
   linkedProfiles: string[];
+  linkedAssetId?: string;
+  linkedLiabilityId?: string;
+  linkedDocumentId?: string;
+  recurrenceEnd?: string;        // YYYY-MM-DD — stop generating occurrences after this date
+  currency: string;
+  icon?: string;
   payments: ObligationPayment[];
   notes?: string;
-  fields?: Record<string, any>; // Additional structured fields (remainingBalance, totalAmount, etc.)
+  fields?: Record<string, any>;
   createdAt: string;
   updatedAt?: string;
 }
@@ -408,13 +459,22 @@ export interface ObligationPayment {
 
 export const insertObligationSchema = z.object({
   name: z.string().min(1),
-  amount: z.number().positive("Amount must be positive"),
+  amount: z.number().nonnegative("Amount must be 0 or positive"),
   frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
   category: z.string().default("general"),
+  kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
   nextDueDate: z.string(),
   autopay: z.boolean().default(false),
   notes: z.string().optional(),
+  leadTimeDays: z.number().int().min(0).max(365).optional(),
+  autoLogExpense: z.boolean().optional(),
   linkedProfiles: z.array(z.string()).optional().default([]),
+  linkedAssetId: z.string().uuid().optional().nullable(),
+  linkedLiabilityId: z.string().uuid().optional().nullable(),
+  linkedDocumentId: z.string().uuid().optional().nullable(),
+  recurrenceEnd: z.string().optional(),
+  currency: z.string().optional(),
+  icon: z.string().optional(),
 });
 
 export type InsertObligation = z.input<typeof insertObligationSchema>;

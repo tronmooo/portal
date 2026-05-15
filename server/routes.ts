@@ -3026,6 +3026,71 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ success: true });
   }));
 
+  // ─── Obligation Occurrences (Wave 16) ────────────────────────────────────
+  // Per-instance status tracking so a single recurring obligation can have
+  // some occurrences marked done, some skipped, some rescheduled, etc.
+  // These power the new dashboard "Due today / Overdue / Upcoming" cards
+  // and the calendar chips.
+  app.get("/api/obligation-occurrences", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const tz = getTimezone(req);
+    const today = getUserToday(tz);
+    const start = (req.query.start as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.start as string)
+      ? (req.query.start as string)
+      : today;
+    const end = (req.query.end as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.end as string)
+      ? (req.query.end as string)
+      : toLocalDateStr(new Date(Date.now() + 90 * 86400000), tz);
+    const { listOccurrences, backfillLateStatuses } = await import("./obligation-engine");
+    const supabase = (storage as any).supabase;
+    // Cheap maintenance pass — keeps 'pending' rows from looking on-time when
+    // they're already past due. Bounded by index on (user_id,status,due_at).
+    await backfillLateStatuses(supabase, uid);
+    const items = await listOccurrences(supabase, uid, start, end);
+    res.json(items);
+  }));
+
+  app.post("/api/obligations/:id/materialize", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const days = Math.min(365, Math.max(7, Number(req.body?.days) || 90));
+    const { materializeOccurrences } = await import("./obligation-engine");
+    const supabase = (storage as any).supabase;
+    const result = await materializeOccurrences(supabase, uid, req.params.id, days);
+    bustCache(`calendar:${uid}`); bustCache(`enhanced:`);
+    res.json(result);
+  }));
+
+  app.post("/api/obligation-occurrences/:occId/status", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const { status, actualAmount, method, notes } = req.body || {};
+    const allowed = ["done", "skipped", "pending", "late"];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: `status must be one of ${allowed.join(", ")}` });
+    }
+    if (actualAmount !== undefined && (typeof actualAmount !== "number" || actualAmount < 0)) {
+      return res.status(400).json({ error: "actualAmount must be a non-negative number" });
+    }
+    const { markOccurrence } = await import("./obligation-engine");
+    const supabase = (storage as any).supabase;
+    const result = await markOccurrence(supabase, uid, req.params.occId, status, { actualAmount, method, notes });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`);
+    bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`);
+    bustCache(`notifications:${uid}`); bustCache(`profile-detail:${uid}:`);
+    res.json(result.occurrence);
+  }));
+
+  app.post("/api/obligation-occurrences/:occId/reschedule", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const { newDueAt } = req.body || {};
+    const { rescheduleOccurrence } = await import("./obligation-engine");
+    const supabase = (storage as any).supabase;
+    const result = await rescheduleOccurrence(supabase, uid, req.params.occId, newDueAt);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    bustCache(`calendar:${uid}`); bustCache(`enhanced:`); bustCache(`notifications:${uid}`);
+    res.json(result.occurrence);
+  }));
+
   // ---- Artifacts ----
   app.get("/api/artifacts", asyncHandler(async (req, res) => {
     let items = await storage.getArtifacts();
