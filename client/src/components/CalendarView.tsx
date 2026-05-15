@@ -33,8 +33,9 @@ import {
   Calendar as CalendarIcon, CalendarDays, ChevronLeft, ChevronRight, Plus,
   Clock, MapPin, Repeat, Trash2, Pencil, X,
   ListTodo, Flame, CreditCard, Users, FileText,
-  CheckSquare, ChevronDown, RefreshCw, CheckCircle2,
+  CheckSquare, ChevronDown, RefreshCw, CheckCircle2, Settings2,
 } from "lucide-react";
+import CalendarManagerPanel from "@/components/CalendarManagerPanel";
 import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
 } from "@shared/schema";
@@ -821,6 +822,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const today = new Date();
   const todayStr = toLocalDateStr(today);
   const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
+  const [managerOpen, setManagerOpen] = useState(false);
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewDate, setViewDate] = useState(today); // for week/day navigation
@@ -1015,6 +1017,18 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               </button>
             ))}
           </div>
+          {/* Calendar Manager — sits directly next to Agenda */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setManagerOpen(true)}
+            className="h-6 text-xs px-2 gap-1"
+            data-testid="btn-calendar-manager"
+            title="Open Calendar Manager — create and manage recurring events, bills, tasks, and reminders"
+          >
+            <Settings2 className="h-3 w-3" />
+            <span className="hidden sm:inline">Manager</span>
+          </Button>
         </div>
         <div className="flex items-center gap-1.5">
           <Button
@@ -1491,6 +1505,9 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           onEdit={handleEditFromDetail}
         />
       )}
+
+      {/* Calendar Manager — full management panel for every time-based item */}
+      <CalendarManagerPanel open={managerOpen} onOpenChange={setManagerOpen} />
     </div>
   );
 }
