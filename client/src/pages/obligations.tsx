@@ -18,7 +18,7 @@ export default function ObligationsPage() {
           <span>Calendar</span>
         </Link>
         <MultiProfileFilter compact onChange={() => {}} />
-        <Link href="/calendar#obligations" className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors" data-testid="link-go-to-calendar-tab">
+        <Link href="/calendar?tab=obligations" className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors" data-testid="link-go-to-calendar-tab">
           Manage on Calendar →
         </Link>
       </div>

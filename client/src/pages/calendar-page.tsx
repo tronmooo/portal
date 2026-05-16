@@ -4,15 +4,33 @@ import ObligationsManager from "@/components/ObligationsManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type TabKey = "calendar" | "obligations";
 
+// The app uses wouter's hash router, so window.location.hash holds the
+// ROUTE (e.g. "#/calendar"). We piggy-back the active tab onto a query param
+// (`?tab=obligations`) instead of fighting the hash router for the same slot.
 function readInitialTab(): TabKey {
   if (typeof window === "undefined") return "calendar";
-  const hash = window.location.hash.replace("#", "");
-  if (hash === "obligations" || hash === "calendar") return hash;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("tab");
+    if (t === "obligations" || t === "calendar") return t;
+  } catch {}
+  // Backwards-compat: older links like /calendar#obligations encoded the
+  // tab in the route hash. With the hash router enabled the hash now looks
+  // like "#/calendar" or "#/calendar?tab=obligations", but external deep
+  // links may still arrive without the leading "/". Best-effort parse:
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  // raw might be: "calendar", "calendar?tab=obligations", "obligations", ""
+  const [path, query] = raw.split("?");
+  if (query) {
+    const t = new URLSearchParams(query).get("tab");
+    if (t === "obligations" || t === "calendar") return t;
+  }
+  if (path === "obligations") return "obligations";
   return "calendar";
 }
 
@@ -21,23 +39,22 @@ export default function CalendarPage() {
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const [tab, setTab] = useState<TabKey>(readInitialTab);
-  const [, setLocation] = useLocation();
 
-  // Keep ?tab= and #hash in sync so deep-links like /calendar#obligations and
-  // /obligations both land on the right tab. /obligations is preserved as a
-  // standalone page for backward compat (renders the same component).
+  // Keep ?tab= synced WITHOUT touching window.location.hash, because the
+  // hash holds the wouter route. Touching it would knock the router back
+  // to "/" (Chat). We mutate URLSearchParams only.
   useEffect(() => {
-    const next = tab === "calendar" ? "" : `#${tab}`;
-    if (window.location.hash !== next) {
-      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${next}`);
-    }
+    try {
+      const url = new URL(window.location.href);
+      const current = url.searchParams.get("tab");
+      const desired = tab === "calendar" ? null : tab;
+      if (current !== desired) {
+        if (desired) url.searchParams.set("tab", desired);
+        else url.searchParams.delete("tab");
+        window.history.replaceState(null, "", url.toString());
+      }
+    } catch {}
   }, [tab]);
-
-  useEffect(() => {
-    const onHashChange = () => setTab(readInitialTab());
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
 
   return (
     <div className="h-full overflow-y-auto pb-24 px-2 py-2 md:px-4 md:py-3" data-testid="calendar-page">
