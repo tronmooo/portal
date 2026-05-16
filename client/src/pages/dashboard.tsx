@@ -524,7 +524,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
       {/* NET WORTH */}
       <button
         type="button"
-        onClick={() => navigate('/assets')}
+        onClick={() => navigate('/linked')}
         className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
         style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.16) 0%, hsl(155 60% 44% / 0.04) 60%, transparent 100%)' }}
         data-testid="hero-kpi-net-worth"
@@ -551,7 +551,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
       {/* BUDGET */}
       <button
         type="button"
-        onClick={() => navigate('/finance#budget')}
+        onClick={() => navigate('/dashboard/finance')}
         className="relative flex flex-col p-4 rounded-2xl border overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
         style={{
           background: budgetBreached
@@ -591,7 +591,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
       {/* CASH FLOW */}
       <button
         type="button"
-        onClick={() => navigate('/finance')}
+        onClick={() => navigate('/dashboard/finance')}
         className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
         style={{
           background: cashFlow >= 0
