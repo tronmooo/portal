@@ -5,6 +5,7 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
+import { SmartFillDialog } from "@/components/SmartFillDialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -878,6 +879,7 @@ interface AttachmentPanelProps {
   onNoteChange: (v: string) => void;
   onSend: () => void;
   isSending: boolean;
+  onSmartFill?: () => void;
 }
 
 function AttachmentPanel({
@@ -891,8 +893,10 @@ function AttachmentPanel({
   onNoteChange,
   onSend,
   isSending,
+  onSmartFill,
 }: AttachmentPanelProps) {
   const isImage = attachment.mimeType.startsWith("image/");
+  const isPdf = attachment.mimeType === "application/pdf";
 
   return (
     <div
@@ -992,16 +996,31 @@ function AttachmentPanel({
             />
           </div>
 
-          {/* Send button */}
-          <Button
-            onClick={onSend}
-            disabled={isSending}
-            className="w-full rounded-xl"
-            data-testid="button-send-attachment"
-          >
-            <Send className="h-4 w-4 mr-2" />
-            {isSending ? "Sending…" : "Send"}
-          </Button>
+          {/* Action buttons */}
+          <div className="flex flex-col gap-2">
+            <Button
+              onClick={onSend}
+              disabled={isSending}
+              className="w-full rounded-xl"
+              data-testid="button-send-attachment"
+            >
+              <Send className="h-4 w-4 mr-2" />
+              {isSending ? "Sending…" : "Send"}
+            </Button>
+            {isPdf && onSmartFill && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onSmartFill}
+                disabled={isSending}
+                className="w-full rounded-xl"
+                data-testid="button-smart-fill-pdf"
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                Smart Fill PDF
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -1022,6 +1041,7 @@ interface BatchAttachmentPanelProps {
   onSend: () => void;
   isSending: boolean;
   processedCount: number;
+  onSmartFill?: (index: number) => void;
 }
 
 function BatchAttachmentPanel({
@@ -1037,6 +1057,7 @@ function BatchAttachmentPanel({
   onSend,
   isSending,
   processedCount,
+  onSmartFill,
 }: BatchAttachmentPanelProps) {
   return (
     <div className="px-4 pb-3" data-testid="batch-attachment-panel">
@@ -1133,10 +1154,22 @@ function BatchAttachmentPanel({
                     />
                   ) : (
                     <div
-                      className="w-full aspect-square rounded-lg bg-muted flex items-center justify-center"
+                      className="w-full aspect-square rounded-lg bg-muted flex flex-col items-center justify-center gap-1.5 relative"
                       data-testid={`batch-pdf-icon-${idx}`}
                     >
-                      <FileText className="h-8 w-8 text-muted-foreground" />
+                      <FileText className="h-7 w-7 text-muted-foreground" />
+                      {att.mimeType === "application/pdf" && onSmartFill && (
+                        <button
+                          type="button"
+                          onClick={() => onSmartFill(idx)}
+                          disabled={isSending}
+                          className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-center gap-1 text-[10px] font-medium px-1.5 py-1 rounded-md bg-primary/10 hover:bg-primary/20 text-primary disabled:opacity-50 transition-colors"
+                          data-testid={`batch-smart-fill-${idx}`}
+                        >
+                          <Sparkles className="h-3 w-3" />
+                          Smart Fill
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -1534,6 +1567,9 @@ export default function ChatPage() {
   // Attachments: array supports both single and batch
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("none");
+
+  // Smart Fill PDF — staged PDF that will be passed to the dialog
+  const [smartFillFile, setSmartFillFile] = useState<{ name: string; mimeType: string; base64: string } | null>(null);
 
   // Track batch processing progress
   const [batchProcessedCount, setBatchProcessedCount] = useState(0);
@@ -2550,6 +2586,12 @@ export default function ChatPage() {
           onNoteChange={setInput}
           onSend={handleAttachmentSend}
           isSending={uploadMutation.isPending}
+          onSmartFill={() => {
+            const a = attachments[0];
+            if (!a) return;
+            const stripped = a.data.includes(",") ? a.data.split(",").pop() || a.data : a.data;
+            setSmartFillFile({ name: a.name, mimeType: a.mimeType, base64: stripped });
+          }}
         />
       )}
 
@@ -2568,8 +2610,21 @@ export default function ChatPage() {
           onSend={handleBatchSend}
           isSending={batchUploadMutation.isPending}
           processedCount={batchProcessedCount}
+          onSmartFill={(idx) => {
+            const a = attachments[idx];
+            if (!a) return;
+            const stripped = a.data.includes(",") ? a.data.split(",").pop() || a.data : a.data;
+            setSmartFillFile({ name: a.name, mimeType: a.mimeType, base64: stripped });
+          }}
         />
       )}
+
+      {/* Smart Fill PDF dialog */}
+      <SmartFillDialog
+        open={!!smartFillFile}
+        onOpenChange={(o) => { if (!o) setSmartFillFile(null); }}
+        file={smartFillFile}
+      />
 
       {/* Text input area (only shown when no attachment pending) */}
       {!hasAttachments && (

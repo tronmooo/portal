@@ -36,7 +36,7 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const timeoutMs = (url.includes('/api/chat') || url.includes('/api/upload')) ? CHAT_TIMEOUT_MS
+  const timeoutMs = (url.includes('/api/chat') || url.includes('/api/upload') || url.includes('/api/smart-fill')) ? CHAT_TIMEOUT_MS
     : (url.includes('/api/documents/')) ? DOC_TIMEOUT_MS
     : DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();

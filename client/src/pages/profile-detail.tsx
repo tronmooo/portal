@@ -5,6 +5,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -2876,16 +2877,23 @@ function InfoTab({
 function DocumentsTab({
   documents,
   profileId,
+  profileName,
   childProfiles,
   profileType,
   onUploaded,
 }: {
   documents: ProfileDetail["relatedDocuments"];
   profileId: string;
+  profileName: string;
   childProfiles?: Profile[];
   profileType?: string;
   onUploaded: () => void;
 }) {
+  // Smart Fill: pre-select this profile/asset/liability as a source so AI uses its fields
+  const smartFillKind: "profile" | "asset" | "liability" =
+    profileType === "asset" || profileType === "vehicle" || profileType === "property" ? "asset"
+    : profileType === "liability" || profileType === "loan" ? "liability"
+    : "profile";
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
@@ -3068,6 +3076,12 @@ function DocumentsTab({
             <Upload className="h-3.5 w-3.5" />
             {uploadMutation.isPending ? "Uploading..." : "Upload Document"}
           </Button>
+          <SmartFillTrigger
+            preselectedSources={[{ id: profileId, kind: smartFillKind, name: profileName }]}
+            label="Smart Fill PDF"
+            testId="profile-doc-smart-fill"
+            className="gap-1.5 text-xs h-8"
+          />
         </div>
       </div>
 
@@ -10654,6 +10668,7 @@ export default function ProfileDetailPage() {
                   <DocumentsTab
                     documents={profile.relatedDocuments}
                     profileId={profile.id}
+                    profileName={profile.name}
                     childProfiles={profile.childProfiles}
                     profileType={profile.type}
                     onUploaded={handleSaved}

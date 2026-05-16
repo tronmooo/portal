@@ -122,6 +122,7 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
   }
 }
 import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
+import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
 import Anthropic from "@anthropic-ai/sdk";
@@ -846,6 +847,129 @@ export async function registerRoutes(
     } catch (err: any) {
       log.error("[BatchUpload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process batch upload" });
+    }
+  }));
+
+  // ============================================================
+  // SMART FILL PDF — read a PDF, match fields to user's data,
+  // render a filled overlay. Safety: never overwrites original,
+  // never auto-submits, never fills signature fields.
+  // ============================================================
+  app.post("/api/smart-fill/analyze", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anonymous";
+    if (rateLimit(`smartfill:${uid}`, 10)) {
+      return res.status(429).json({ error: "Too many Smart Fill requests. Please wait." });
+    }
+    try {
+      const { fileName, fileData, sources } = req.body as { fileName: string; fileData: string; sources: SmartFillSource[] };
+      if (!fileName || !fileData) return res.status(400).json({ error: "fileName and fileData required" });
+      const MAX_FILE_SIZE = 10 * 1024 * 1024;
+      const sizeBytes = Math.ceil((fileData.length * 3) / 4);
+      if (sizeBytes > MAX_FILE_SIZE) return res.status(413).json({ error: "File too large (max 10MB)." });
+
+      const safeSources: SmartFillSource[] = Array.isArray(sources)
+        ? sources.filter((s) => s && typeof s.id === "string" && ["profile", "asset", "liability", "document"].includes(s.kind)).slice(0, 12)
+        : [];
+
+      const result = await analyzeSmartFill(fileName, fileData, safeSources);
+      res.json(result);
+    } catch (err: any) {
+      log.error("[SmartFill.analyze]", err?.message || "unknown error");
+      res.status(500).json({ error: "Smart Fill analysis failed. Try again." });
+    }
+  }));
+
+  app.post("/api/smart-fill/render", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anonymous";
+    if (rateLimit(`smartfill:${uid}`, 10)) {
+      return res.status(429).json({ error: "Too many Smart Fill requests. Please wait." });
+    }
+    try {
+      const {
+        fileName, fileData, fields, documentName,
+        linkedProfileIds, dates, sources,
+      } = req.body as {
+        fileName: string;
+        fileData: string;
+        fields: FillFieldInput[];
+        documentName?: string;
+        linkedProfileIds?: string[];
+        dates?: Array<{ pdfLabel: string; iso: string; kind: "expiration" | "renewal" | "due" | "appointment" }>;
+        sources?: SmartFillSource[];
+      };
+      if (!fileName || !fileData || !Array.isArray(fields)) return res.status(400).json({ error: "fileName, fileData, fields required" });
+      const safeFields = fields
+        .filter((f) => f && typeof f.pdfLabel === "string")
+        .slice(0, 200)
+        .map((f) => ({
+          pdfLabel: String(f.pdfLabel).slice(0, 120),
+          value: String(f.value ?? "").slice(0, 500),
+          fieldKind: f.fieldKind,
+          acroFormName: f.acroFormName,
+        }));
+
+      const filledBytes = await renderFilledPdf(fileData, safeFields);
+      const filledBase64 = Buffer.from(filledBytes).toString("base64");
+
+      // Save as a new Document — original is preserved (never overwritten).
+      const baseName = (documentName || fileName).replace(/\.[^.]+$/, "");
+      const newDoc = await storage.createDocument({
+        name: `${baseName} — Smart Filled`,
+        type: "smart_fill",
+        mimeType: "application/pdf",
+        fileData: filledBase64,
+        extractedData: {
+          smartFill: {
+            originalName: fileName,
+            filledAt: new Date().toISOString(),
+            fieldCount: safeFields.length,
+            sources: Array.isArray(sources) ? sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })) : [],
+          },
+        },
+        linkedProfiles: Array.isArray(linkedProfileIds) ? linkedProfileIds.filter((id) => typeof id === "string") : [],
+        tags: ["smart-fill"],
+      });
+
+      // Auto-create an Obligation for any expiration / renewal / due date we extracted.
+      const createdObligations: Array<{ id: string; name: string; nextDueDate: string; kind: string }> = [];
+      if (Array.isArray(dates)) {
+        for (const d of dates) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(d?.iso || "")) continue;
+          const kind: "doc_expiration" | "bill" | "appointment" =
+            d.kind === "expiration" || d.kind === "renewal" ? "doc_expiration"
+            : d.kind === "appointment" ? "appointment"
+            : "bill";
+          try {
+            const ob = await storage.createObligation({
+              name: `${baseName} — ${d.pdfLabel || d.kind}`,
+              kind,
+              amount: 0,
+              frequency: "yearly",
+              category: "document",
+              nextDueDate: d.iso,
+              linkedDocumentId: newDoc.id,
+              linkedProfiles: Array.isArray(linkedProfileIds) ? linkedProfileIds.filter((id) => typeof id === "string") : [],
+              status: "active",
+              autopay: false,
+              autoLogExpense: false,
+              leadTimeDays: 30,
+            } as any);
+            createdObligations.push({ id: ob.id, name: ob.name, nextDueDate: ob.nextDueDate, kind: ob.kind });
+          } catch (e) {
+            log.error("[SmartFill.render] obligation create failed", (e as any)?.message || e);
+          }
+        }
+      }
+
+      res.json({
+        documentId: newDoc.id,
+        documentName: newDoc.name,
+        fileBase64: filledBase64,
+        createdObligations,
+      });
+    } catch (err: any) {
+      log.error("[SmartFill.render]", err?.message || "unknown error");
+      res.status(500).json({ error: "Failed to fill PDF. Try again." });
     }
   }));
 

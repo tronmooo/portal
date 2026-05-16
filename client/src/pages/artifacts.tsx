@@ -3,8 +3,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/EmptyState";
+import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import {
   Dialog, DialogContent, DialogTitle,
 } from "@/components/ui/dialog";
@@ -13,7 +15,7 @@ import { getProfileFilter } from "@/lib/profileFilter";
 import {
   Archive, FileText, BookOpen, Brain, Camera, File, Heart,
   Shield, CreditCard, Scale, Folder, Search, X, Copy, Check as CheckIcon,
-  Pin, PinOff, Tag, Trash2,
+  Pin, PinOff, Tag, Trash2, Sparkles,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -710,10 +712,13 @@ export default function ArtifactsPage() {
             {profileFiltered.length} items · Documents, notes & AI reports in one place
           </p>
         </div>
-        <MultiProfileFilter
-          onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
-          compact
-        />
+        <div className="flex items-center gap-2">
+          <SmartFillTrigger />
+          <MultiProfileFilter
+            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            compact
+          />
+        </div>
       </div>
 
       {/* Search bar */}

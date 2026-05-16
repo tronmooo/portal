@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1292,7 +1293,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* DOCUMENTS */}
           <TabsContent value="documents" className="mt-4">
-            <LiabilityDocumentsCard liabilityId={profile.id} />
+            <LiabilityDocumentsCard liabilityId={profile.id} liabilityName={profile.name} />
           </TabsContent>
 
           {/* ACTIVITY */}
@@ -2504,7 +2505,7 @@ interface LiabilityDocument {
   extractedData?: any;
 }
 
-function LiabilityDocumentsCard({ liabilityId }: { liabilityId: string }) {
+function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: string; liabilityName: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2573,20 +2574,26 @@ function LiabilityDocumentsCard({ liabilityId }: { liabilityId: string }) {
         <CardTitle className="text-base flex items-center gap-2">
           <FileText className="w-4 h-4" /> Documents
         </CardTitle>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploadMutation.isPending}
-          data-testid="liability-doc-upload"
-        >
-          {uploadMutation.isPending ? (
-            <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-          ) : (
-            <Upload className="w-3.5 h-3.5 mr-1" />
-          )}
-          Upload
-        </Button>
+        <div className="flex items-center gap-2">
+          <SmartFillTrigger
+            preselectedSources={[{ id: liabilityId, kind: "liability", name: liabilityName }]}
+            testId="liability-doc-smart-fill"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadMutation.isPending}
+            data-testid="liability-doc-upload"
+          >
+            {uploadMutation.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+            ) : (
+              <Upload className="w-3.5 h-3.5 mr-1" />
+            )}
+            Upload
+          </Button>
+        </div>
         <input
           ref={fileInputRef}
           type="file"
