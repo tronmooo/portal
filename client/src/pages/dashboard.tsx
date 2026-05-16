@@ -42,6 +42,8 @@ import {
   EyeOff, GripVertical, Settings, RotateCcw, Target,
   Trash2, Pencil, FileText, CheckCircle2, X,
   ChevronLeft, ChevronRight, Plus, ShieldCheck,
+  Wallet, PieChart as PieChartIcon, Settings2, AlertCircle, Bell, BellOff,
+  Scale, Activity as ActivityIcon, Moon,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -425,29 +427,30 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   const expiredCount = (docs || []).filter(d => normalizeFilter(d.status) === normalizeFilter('expired')).length;
   const mostOverdue = (docs || []).filter(d => d.daysUntil < 0).sort((a,b) => a.daysUntil - b.daysUntil)[0];
   const isUrgent = expiredCount > 0;
+  // Color discipline: red ONLY for genuinely overdue documents. The ambient
+  // tile color stays amber to keep visual weight balanced — the popup is where
+  // the user takes action (snooze / open), so this tile no longer screams.
   const accent = isUrgent ? '0 72% 52%' : '25 80% 54%';
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
       data-testid="stat-card-expiring-docs">
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />
-      {isUrgent && <div className="absolute top-0 left-0 right-0 bottom-0 border border-red-500/20 rounded-xl pointer-events-none" />}
       <div className="flex items-start justify-between relative z-10">
         <div className="icon-badge" style={{ background: `hsl(${accent} / 0.15)` }}>
           <FileWarning className="h-3.5 w-3.5" style={{ color: `hsl(${accent})` }} />
         </div>
-        {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">EXPIRED</span>}
+        {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">{expiredCount} EXPIRED</span>}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
+        <span className="text-lg font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
       {mostOverdue && (
-        <p className="text-[9px] text-red-500 mt-0.5 relative z-10 truncate">
-          {Math.abs(mostOverdue.daysUntil)}d overdue
+        <p className="text-[9px] text-red-500 mt-0.5 relative z-10 truncate tabular-nums">
+          Tap to snooze · {Math.abs(mostOverdue.daysUntil)}d overdue
         </p>
       )}
-      {/* Urgency bar */}
       {isUrgent && (
         <div className="mt-1.5 relative z-10">
           <div className="h-1 rounded-full overflow-hidden" style={{ background: 'hsl(0 72% 52% / 0.2)' }}>
@@ -459,11 +462,206 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   );
 }
 
+// ─── Section: Hero KPIs (Net Worth / Budget / Cash Flow) ────────────────────
+// These are the three financial signals that matter most. Promoted to their
+// own row at the very top of the dashboard (under AI Summary). The smaller
+// KPISection below becomes a secondary chip row of habits/tasks/journal/docs.
+
+function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
+  enhanced: any;
+  stats: DashboardStats | undefined;
+  filterMode: string;
+  filterIds: string[];
+}) {
+  const [, navigate] = useLocation();
+  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const trailing = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
+  const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: budgetSummary } = useQuery<{ totalBudget: number; totalSpent: number; remaining: number }>({
+    queryKey: ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
+    queryFn: async () => {
+      const [budgetRes, expensesRes] = await Promise.all([
+        apiRequest("GET", `/api/budgets?month=${currentMonth}${trailing}`).then(r => r.json()),
+        apiRequest("GET", `/api/expenses${leading}`).then(r => r.json()),
+      ]);
+      const budgets = budgetRes.budgets || [];
+      const allExpenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.items || []);
+      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth));
+      const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);
+      const totalSpent = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
+      return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
+    },
+    staleTime: 30_000,
+  });
+
+  // Income query for cash flow
+  const { data: incomesRaw } = useQuery<any[]>({
+    queryKey: ["/api/incomes", filterMode, ...filterIds, "hero"],
+    queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw as any)?.items || [];
+
+  const totalAssetValue = enhanced?.financeSnapshot?.totalAssetValue ?? 0;
+  const totalLiabilities = enhanced?.financeSnapshot?.totalLiabilities ?? 0;
+  const netWorth = totalAssetValue - totalLiabilities;
+  const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
+  const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+  const cashFlow = monthlyIncome - monthlySpend;
+  const totalBudget = budgetSummary?.totalBudget ?? 0;
+  const totalSpent = budgetSummary?.totalSpent ?? 0;
+  const budgetPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+  const budgetBreached = budgetPct > 100;
+
+  const animatedNetWorth = useCountUp(Math.max(0, Math.round(netWorth)));
+  const animatedBudget = useCountUp(budgetPct);
+  const animatedCashFlow = useCountUp(Math.round(Math.abs(cashFlow)));
+
+  const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-2">
+      {/* NET WORTH */}
+      <button
+        type="button"
+        onClick={() => navigate('/assets')}
+        className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
+        style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.16) 0%, hsl(155 60% 44% / 0.04) 60%, transparent 100%)' }}
+        data-testid="hero-kpi-net-worth"
+      >
+        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <div className="icon-badge" style={{ background: 'hsl(155 60% 44% / 0.18)' }}>
+              <Wallet className="h-4 w-4" style={{ color: 'hsl(155 60% 44%)' }} />
+            </div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Net Worth</span>
+          </div>
+        </div>
+        <div className="flex items-baseline gap-1 tabular-nums">
+          <span className="text-3xl font-bold tracking-tight" style={{ color: 'hsl(155 60% 44%)' }}>${fmt(animatedNetWorth)}</span>
+        </div>
+        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground/80 tabular-nums">
+          <span>Assets ${fmt(Math.round(totalAssetValue))}</span>
+          <span>·</span>
+          <span>Liab ${fmt(Math.round(totalLiabilities))}</span>
+        </div>
+      </button>
+
+      {/* BUDGET */}
+      <button
+        type="button"
+        onClick={() => navigate('/finance#budget')}
+        className="relative flex flex-col p-4 rounded-2xl border overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
+        style={{
+          background: budgetBreached
+            ? 'linear-gradient(135deg, hsl(0 72% 52% / 0.18) 0%, hsl(0 72% 52% / 0.04) 60%, transparent 100%)'
+            : 'linear-gradient(135deg, hsl(43 85% 52% / 0.16) 0%, hsl(43 85% 52% / 0.04) 60%, transparent 100%)',
+          borderColor: budgetBreached ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.5)',
+        }}
+        data-testid="hero-kpi-budget"
+      >
+        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: budgetBreached ? 'linear-gradient(90deg, hsl(0 72% 52%), transparent)' : 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <div className="icon-badge" style={{ background: budgetBreached ? 'hsl(0 72% 52% / 0.18)' : 'hsl(43 85% 52% / 0.18)' }}>
+              <PieChartIcon className="h-4 w-4" style={{ color: budgetBreached ? 'hsl(0 72% 52%)' : 'hsl(43 85% 52%)' }} />
+            </div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Budget</span>
+          </div>
+          {budgetBreached && (
+            <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">OVER</span>
+          )}
+        </div>
+        <div className="flex items-baseline gap-1 tabular-nums">
+          <span className="text-3xl font-bold tracking-tight" style={{ color: budgetBreached ? 'hsl(0 72% 52%)' : 'hsl(43 85% 52%)' }}>{animatedBudget}%</span>
+          <span className="text-xs text-muted-foreground/70">of ${fmt(totalBudget)}</span>
+        </div>
+        <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'hsl(var(--muted) / 0.6)' }}>
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{
+              width: `${Math.min(100, budgetPct)}%`,
+              background: budgetBreached ? 'hsl(0 72% 52%)' : budgetPct >= 80 ? 'hsl(43 85% 52%)' : 'hsl(155 60% 44%)',
+            }}
+          />
+        </div>
+      </button>
+
+      {/* CASH FLOW */}
+      <button
+        type="button"
+        onClick={() => navigate('/finance')}
+        className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
+        style={{
+          background: cashFlow >= 0
+            ? 'linear-gradient(135deg, hsl(200 70% 55% / 0.16) 0%, hsl(200 70% 55% / 0.04) 60%, transparent 100%)'
+            : 'linear-gradient(135deg, hsl(43 85% 52% / 0.16) 0%, hsl(43 85% 52% / 0.04) 60%, transparent 100%)',
+        }}
+        data-testid="hero-kpi-cash-flow"
+      >
+        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: cashFlow >= 0 ? 'linear-gradient(90deg, hsl(200 70% 55%), transparent)' : 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <div className="icon-badge" style={{ background: cashFlow >= 0 ? 'hsl(200 70% 55% / 0.18)' : 'hsl(43 85% 52% / 0.18)' }}>
+              <TrendingUp className="h-4 w-4" style={{ color: cashFlow >= 0 ? 'hsl(200 70% 55%)' : 'hsl(43 85% 52%)' }} />
+            </div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Cash Flow</span>
+          </div>
+        </div>
+        <div className="flex items-baseline gap-1 tabular-nums">
+          <span className="text-3xl font-bold tracking-tight" style={{ color: cashFlow >= 0 ? 'hsl(200 70% 55%)' : 'hsl(43 85% 52%)' }}>
+            {cashFlow >= 0 ? '+' : '−'}${fmt(animatedCashFlow)}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground/80 tabular-nums">
+          <span>In ${fmt(Math.round(monthlyIncome))}</span>
+          <span>·</span>
+          <span>Out ${fmt(Math.round(monthlySpend))}</span>
+        </div>
+      </button>
+    </div>
+  );
+}
+
 // ─── Section: KPI Stats ──────────────────────────────────────────────────────
+
+// localStorage helpers for per-document 30-day snooze. Keeps the implementation
+// client-side so we don't need a new schema field. Values are { docId: expiry-ms }
+// and entries that have passed their expiry are dropped on read.
+const DOC_SNOOZE_LS_KEY = "portol_doc_snooze_v1";
+function loadDocSnoozeMap(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(DOC_SNOOZE_LS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, number>;
+    const now = Date.now();
+    let dirty = false;
+    for (const k of Object.keys(parsed)) {
+      if (parsed[k] <= now) { delete parsed[k]; dirty = true; }
+    }
+    if (dirty) localStorage.setItem(DOC_SNOOZE_LS_KEY, JSON.stringify(parsed));
+    return parsed;
+  } catch { return {}; }
+}
+function saveDocSnoozeMap(m: Record<string, number>) {
+  try { localStorage.setItem(DOC_SNOOZE_LS_KEY, JSON.stringify(m)); } catch {}
+}
 
 function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
   const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | "habits" | null>(null);
+  const [docSnoozeMap, setDocSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
+  const snoozeDoc = (docId: string) => {
+    const next = { ...docSnoozeMap, [docId]: Date.now() + 30 * 86400000 };
+    setDocSnoozeMap(next);
+    saveDocSnoozeMap(next);
+    toast({ title: "Document snoozed", description: "Hidden from alerts for 30 days" });
+  };
+  const visibleDocs: any[] = useMemo(() => {
+    return (enhanced?.expiringDocuments || []).filter((d: any) => !docSnoozeMap[d.documentId]);
+  }, [enhanced, docSnoozeMap]);
 
   if (!stats) return null;
 
@@ -490,7 +688,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
             value={enhanced?.financeSnapshot?.upcomingBills?.length ?? stats.upcomingObligations}
             sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
-          <KPIDocsCard docs={enhanced?.expiringDocuments || []} onClick={() => setPopup("docs")} />
+          <KPIDocsCard docs={visibleDocs} onClick={() => setPopup("docs")} />
         </div>
       </div>
 
@@ -598,37 +796,52 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
             <DialogTitle className="text-sm flex items-center gap-2">
               <FileWarning className="h-4 w-4 text-amber-500" />
               Expiring Documents
-              <Badge variant="secondary" className="ml-1">{enhanced?.expiringDocuments?.length || 0}</Badge>
+              <Badge variant="secondary" className="ml-1 tabular-nums">{visibleDocs.length}</Badge>
             </DialogTitle>
-            <DialogDescription className="text-xs">Documents with upcoming or past expiration dates</DialogDescription>
+            <DialogDescription className="text-xs">Documents with upcoming or past expiration dates. Snooze to hide for 30 days.</DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '60vh' }}>
             <div className="space-y-1.5 py-2 pr-2">
-              {(enhanced?.expiringDocuments || []).slice().sort((a: any, b: any) => (a.documentName || '').localeCompare(b.documentName || '')).map((doc: any, i: number) => {
+              {visibleDocs.slice().sort((a: any, b: any) => (a.documentName || '').localeCompare(b.documentName || '')).map((doc: any, i: number) => {
                 const expired = normalizeFilter(doc.status) === normalizeFilter("expired");
                 const expiringSoon = normalizeFilter(doc.status) === normalizeFilter("expiring_soon");
                 return (
                   <div key={`${doc.documentId}-${i}`}
-                    onClick={() => { setPopup(null); navigate(`/documents/${doc.documentId}`); }}
-                    className={`flex items-center gap-2.5 p-2.5 rounded-lg cursor-pointer hover:bg-muted/60 transition-colors border ${
+                    className={`flex items-center gap-2.5 p-2.5 rounded-lg transition-colors border ${
                       expired ? "border-red-500/30 bg-red-500/5" : expiringSoon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"
                     }`}>
-                    <FileText className={`h-3.5 w-3.5 shrink-0 ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{doc.documentName}</p>
-                      <p className={`text-xs ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>
-                        {doc.fieldName}: {fmtDate(doc.expirationDate)} ({daysUntilStr(doc.daysUntil)})
-                      </p>
-                    </div>
-                    <Badge variant="outline" className={`shrink-0 text-xs-tight px-1.5 py-0 h-4 ${
-                      expired ? "border-red-500/40 text-red-500" : expiringSoon ? "border-amber-500/40 text-amber-500" : ""
-                    }`}>
-                      {expired ? "Expired" : expiringSoon ? "Soon" : "Upcoming"}
-                    </Badge>
+                    <button
+                      type="button"
+                      onClick={() => { setPopup(null); navigate(`/documents/${doc.documentId}`); }}
+                      className="flex items-center gap-2.5 flex-1 min-w-0 text-left hover:opacity-80"
+                    >
+                      <FileText className={`h-3.5 w-3.5 shrink-0 ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{doc.documentName}</p>
+                        <p className={`text-xs tabular-nums ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>
+                          {doc.fieldName}: {fmtDate(doc.expirationDate)} ({daysUntilStr(doc.daysUntil)})
+                        </p>
+                      </div>
+                      <Badge variant="outline" className={`shrink-0 text-xs-tight px-1.5 py-0 h-4 ${
+                        expired ? "border-red-500/40 text-red-500" : expiringSoon ? "border-amber-500/40 text-amber-500" : ""
+                      }`}>
+                        {expired ? "Expired" : expiringSoon ? "Soon" : "Upcoming"}
+                      </Badge>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); snoozeDoc(doc.documentId); }}
+                      title="Hide for 30 days"
+                      className="h-6 px-1.5 rounded text-[10px] font-semibold flex items-center gap-0.5 bg-muted/60 hover:bg-muted text-muted-foreground shrink-0"
+                      data-testid={`btn-snooze-doc-${doc.documentId}`}
+                    >
+                      <BellOff className="h-3 w-3" />
+                      Snooze
+                    </button>
                   </div>
                 );
               })}
-              {(!enhanced?.expiringDocuments || enhanced.expiringDocuments.length === 0) && (
+              {visibleDocs.length === 0 && (
                 <div className="text-center py-6">
                   <FileText className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
                   <p className="text-xs text-muted-foreground">No expiring documents</p>
@@ -1330,6 +1543,42 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     }
   };
 
+  // Bill pay — hits the obligations engine so the bill is recorded as paid
+  // and the next cycle is rolled forward. Fires for both upcoming and overdue
+  // bills surfaced in the Action Required list.
+  const handleBillPay = async (billId: string) => {
+    const bill = allItems.find(i => i.id === billId);
+    try {
+      await apiRequest("POST", `/api/obligations/${billId}/pay`, {});
+      // Invalidate every cache that surfaces bills/obligations
+      ["/api/obligations", "/api/obligation-occurrences", "/api/dashboard-enhanced", "/api/stats", "/api/cashflow", "/api/calendar/timeline"].forEach(k =>
+        queryClient.invalidateQueries({ queryKey: [k] })
+      );
+      toast({ title: `"${bill?.title || "Bill"}" marked paid` });
+    } catch {
+      toast({ title: `Failed to pay "${bill?.title || "bill"}"`, variant: "destructive" });
+    }
+  };
+
+  // Bill snooze — push the next due date out by 7d. Uses the obligation's
+  // nextDueDate field. Server PATCH at /api/obligations/:id.
+  const handleBillSnooze = async (billId: string) => {
+    const bill = allItems.find(i => i.id === billId);
+    try {
+      const newDate = new Date();
+      newDate.setDate(newDate.getDate() + 7);
+      await apiRequest("PATCH", `/api/obligations/${billId}`, {
+        nextDueDate: newDate.toISOString().slice(0, 10),
+      });
+      ["/api/obligations", "/api/obligation-occurrences", "/api/dashboard-enhanced", "/api/stats", "/api/cashflow", "/api/calendar/timeline"].forEach(k =>
+        queryClient.invalidateQueries({ queryKey: [k] })
+      );
+      toast({ title: `"${bill?.title || "Bill"}" snoozed`, description: `Moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
+    } catch {
+      toast({ title: `Failed to snooze "${bill?.title || "bill"}"`, variant: "destructive" });
+    }
+  };
+
   const dismiss = (key: string) => setDismissedIds(prev => {
     const next = new Set([...prev, key]);
     saveDismissed(next);
@@ -1412,8 +1661,29 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
                 className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
                 <Check className="h-2.5 w-2.5" />
               </button>
-              <button onClick={() => handleSnooze(id)} title="Snooze"
+              <button onClick={() => handleSnooze(id)} title="Snooze 7d"
                 className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
+                <Clock className="h-2.5 w-2.5" />
+              </button>
+            </>
+          )}
+          {sourceType === "bill" && (
+            <>
+              <button
+                onClick={() => handleBillPay(id)}
+                title="Mark paid"
+                className="h-5 px-1.5 rounded flex items-center gap-0.5 hover:bg-green-500/20 text-green-600 text-[10px] font-semibold"
+                data-testid={`btn-pay-bill-${id}`}
+              >
+                <DollarSign className="h-2.5 w-2.5" />
+                Pay
+              </button>
+              <button
+                onClick={() => handleBillSnooze(id)}
+                title="Snooze 7d"
+                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600"
+                data-testid={`btn-snooze-bill-${id}`}
+              >
                 <Clock className="h-2.5 w-2.5" />
               </button>
             </>
@@ -1568,10 +1838,41 @@ function HealthSection({ data }: { data: any[] }) {
 
   if (!data || data.length === 0) return (
     <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" testId="section-health">
-      <div className="rounded-lg border border-dashed border-border/50 p-4 text-center">
-        <Heart className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground mb-1">No health data yet</p>
-        <p className="text-xs text-muted-foreground/70">Tell the AI: "Log my blood pressure" or "I weigh 180 lbs"</p>
+      <div className="rounded-lg border border-dashed border-border/50 p-3">
+        <div className="flex items-center gap-2 mb-3">
+          <Heart className="h-5 w-5 text-muted-foreground/40" />
+          <p className="text-xs text-muted-foreground">No health data yet — quick log:</p>
+        </div>
+        <div className="grid grid-cols-3 gap-2" data-testid="health-quicklog">
+          <button
+            type="button"
+            onClick={() => navigate('/trackers?new=weight')}
+            className="flex flex-col items-center gap-1 rounded-lg border border-border/50 bg-muted/30 hover:bg-muted/60 hover:border-primary/40 transition-all p-2"
+            data-testid="quicklog-weight"
+          >
+            <Scale className="h-4 w-4 text-primary" />
+            <span className="text-[10px] font-medium">Weight</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/trackers?new=blood-pressure')}
+            className="flex flex-col items-center gap-1 rounded-lg border border-border/50 bg-muted/30 hover:bg-muted/60 hover:border-primary/40 transition-all p-2"
+            data-testid="quicklog-bp"
+          >
+            <ActivityIcon className="h-4 w-4 text-primary" />
+            <span className="text-[10px] font-medium">BP</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/trackers?new=sleep')}
+            className="flex flex-col items-center gap-1 rounded-lg border border-border/50 bg-muted/30 hover:bg-muted/60 hover:border-primary/40 transition-all p-2"
+            data-testid="quicklog-sleep"
+          >
+            <Moon className="h-4 w-4 text-primary" />
+            <span className="text-[10px] font-medium">Sleep</span>
+          </button>
+        </div>
+        <p className="text-[10px] text-muted-foreground/60 text-center mt-2">Or ask the AI: "I weigh 180 lbs"</p>
       </div>
     </CollapsibleSection>
   );
@@ -1982,25 +2283,34 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
               <Target className="h-3 w-3 mr-1" /> Set a Goal
             </Button>
           </div>
-        ) : (
-          <div className="space-y-1">
-            {activeGoals.slice().sort((a, b) => a.title.localeCompare(b.title)).map(g => {
+        ) : (() => {
+            // Decorate active goals with computed state, then split into Overdue (action needed)
+            // vs Active (on-track / at-risk / hit-100%). Status==='completed' wins celebration;
+            // pct>=100 without explicit completion is treated as 'ready to mark complete', not
+            // celebration — to avoid contradictory signals (e.g. "6d late 🎉 100%").
+            const decorated = activeGoals.map(g => {
               const goalCurrent = g.current || g.startValue || 0;
               const pct = g.target > 0 ? Math.min(100, Math.round((goalCurrent / g.target) * 100)) : 0;
               const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
-              const isAtRisk = daysLeft !== null && daysLeft <= 30 && pct < 50 && daysLeft > 0;
               const isOverdue = daysLeft !== null && daysLeft < 0;
-              const isCompleted = pct >= 100;
+              const isAtRisk = !isOverdue && daysLeft !== null && daysLeft <= 30 && pct < 50 && daysLeft > 0;
+              const explicitlyCompleted = normalizeFilter(g.status) === normalizeFilter("completed");
+              const isReadyToComplete = pct >= 100 && !isOverdue && !explicitlyCompleted;
+              return { g, goalCurrent, pct, daysLeft, isOverdue, isAtRisk, explicitlyCompleted, isReadyToComplete };
+            });
+            const overdueRows = decorated.filter(d => d.isOverdue).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0));
+            const activeRows = decorated.filter(d => !d.isOverdue).sort((a, b) => a.g.title.localeCompare(b.g.title));
+            const renderRow = (d: typeof decorated[number]) => {
+              const { g, pct, daysLeft, isOverdue, isAtRisk, isReadyToComplete } = d;
               return (
                 <div key={g.id}
                   className={`flex items-center gap-2 py-1.5 px-1.5 rounded-lg group transition-colors ${
                     isOverdue ? 'bg-red-500/5 border border-red-500/20' :
                     isAtRisk ? 'bg-amber-500/5 border border-amber-500/20' :
-                    isCompleted ? 'bg-green-500/5 border border-green-500/20 goal-celebrate' :
+                    isReadyToComplete ? 'bg-emerald-500/5 border border-emerald-500/30' :
                     'border border-transparent'
                   }`}
                   data-testid={`goal-card-${g.id}`}>
-                  {/* Tap to mark complete */}
                   <button
                     className="h-5 w-5 rounded-full border-2 border-primary/40 flex items-center justify-center shrink-0 hover:bg-green-500/20 hover:border-green-500 active:scale-90 transition-all disabled:opacity-50 disabled:pointer-events-none"
                     onClick={() => updateMutation.mutate({ id: g.id, status: "completed" })}
@@ -2013,13 +2323,13 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
                       <Check className="h-2.5 w-2.5 text-transparent group-hover:text-green-500" />
                     )}
                   </button>
-                  {/* Goal info — tap to open actions */}
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActionGoal(g)}>
                     <div className="flex items-center justify-between">
-                      <span className="text-xs-loose font-medium truncate">{g.title}{isCompleted && <span className="text-base ml-1" title="Goal complete!">🎉</span>}</span>
+                      <span className="text-xs-loose font-medium truncate">{g.title}</span>
                       <div className="flex items-center gap-1 ml-2 shrink-0">
                         {isOverdue && <span className="text-[9px] font-bold text-red-500">OVERDUE</span>}
-                        {isAtRisk && <span className="text-[9px] font-bold text-amber-500">AT RISK</span>}
+                        {!isOverdue && isAtRisk && <span className="text-[9px] font-bold text-amber-500">AT RISK</span>}
+                        {isReadyToComplete && <span className="text-[9px] font-bold text-emerald-500">DONE — MARK COMPLETE</span>}
                         <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
                       </div>
                     </div>
@@ -2028,34 +2338,59 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
                         <div className="h-full rounded-full transition-all duration-700"
                           style={{
                             width: `${pct}%`,
-                            background: isCompleted ? 'linear-gradient(90deg,#10b981,#34d399)' :
-                              isAtRisk || isOverdue ? 'linear-gradient(90deg,#f59e0b,#ef4444)' :
+                            background: isOverdue ? 'linear-gradient(90deg,#ef4444,#dc2626)' :
+                              isAtRisk ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' :
+                              isReadyToComplete ? 'linear-gradient(90deg,#10b981,#34d399)' :
                               'linear-gradient(90deg,hsl(188 70% 48%),hsl(155 60% 44%))'
                           }} />
                       </div>
-                      {daysLeft !== null && daysLeft >= 0 && <span className={`text-xs-tight shrink-0 ${isAtRisk ? 'text-amber-500 font-medium' : 'text-muted-foreground'}`}>{daysLeft}d left</span>}
-                      {isOverdue && <span className="text-xs-tight text-red-500 font-medium shrink-0">{Math.abs(daysLeft!)}d late</span>}
+                      {daysLeft !== null && daysLeft >= 0 && <span className={`text-xs-tight shrink-0 tabular-nums ${isAtRisk ? 'text-amber-500 font-medium' : 'text-muted-foreground'}`}>{daysLeft}d left</span>}
+                      {isOverdue && <span className="text-xs-tight text-red-500 font-medium shrink-0 tabular-nums">{Math.abs(daysLeft!)}d late</span>}
                     </div>
                   </div>
                 </div>
               );
-            })}
-            {completedGoals.length > 0 && (
-              <div className="pt-1.5 mt-1 border-t border-border/30">
-                <p className="text-xs-tight text-muted-foreground mb-0.5">{completedGoals.length} completed</p>
-                {completedGoals.slice().sort((a, b) => a.title.localeCompare(b.title)).slice(0, 2).map(g => (
-                  <div key={g.id} className="flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground/60">
-                    <CheckCircle2 className="h-3 w-3 text-green-500/60 shrink-0" />
-                    <span className="line-through truncate">{g.title}</span>
+            };
+            return (
+              <div className="space-y-1">
+                {overdueRows.length > 0 && (
+                  <>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-red-500/80 mt-0.5 mb-0.5 px-1">
+                      Overdue — action needed ({overdueRows.length})
+                    </p>
+                    {overdueRows.map(renderRow)}
+                    {activeRows.length > 0 && <div className="h-px bg-border/30 my-1.5" />}
+                  </>
+                )}
+                {activeRows.length > 0 && (
+                  <>
+                    {overdueRows.length > 0 && (
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-0.5 px-1">
+                        In progress ({activeRows.length})
+                      </p>
+                    )}
+                    {activeRows.map(renderRow)}
+                  </>
+                )}
+                {completedGoals.length > 0 && (
+                  <div className="pt-1.5 mt-1 border-t border-border/30">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80 mb-0.5 px-1">
+                      Completed 🎉 ({completedGoals.length})
+                    </p>
+                    {completedGoals.slice().sort((a, b) => a.title.localeCompare(b.title)).slice(0, 3).map(g => (
+                      <div key={g.id} className="flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground/70">
+                        <CheckCircle2 className="h-3 w-3 text-emerald-500/70 shrink-0" />
+                        <span className="line-through truncate">{g.title}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+                <Button size="sm" variant="outline" className="w-full h-7 text-xs mt-1" onClick={openCreate} data-testid="btn-add-goal">
+                  <Target className="h-3 w-3 mr-1" /> Add Goal
+                </Button>
               </div>
-            )}
-            <Button size="sm" variant="outline" className="w-full h-7 text-xs mt-1" onClick={openCreate} data-testid="btn-add-goal">
-              <Target className="h-3 w-3 mr-1" /> Add Goal
-            </Button>
-          </div>
-        )}
+            );
+          })()}
       </CollapsibleSection>
 
       {/* Goal Quick Actions Sheet */}
@@ -2594,6 +2929,31 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
 
   return (
     <CollapsibleSection accent="43 85% 52%" icon={DollarSign} label="Finance" count={recentExpenses.length || undefined} testId="section-finance">
+      {/* Budget breach alert banner — promoted from the previously-buried thin pink
+          bar at the bottom of the right column. Renders above all Finance content
+          whenever spending exceeds budget, so it can't be missed. */}
+      {budgetData && budgetData.totalBudget > 0 && (() => {
+        const usedPct = Math.round((budgetData.totalSpent / budgetData.totalBudget) * 100);
+        if (usedPct <= 100) return null;
+        const overAmt = budgetData.totalSpent - budgetData.totalBudget;
+        return (
+          <button
+            type="button"
+            onClick={() => setDrill("budget")}
+            className="w-full flex items-center gap-2.5 mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-left hover:bg-red-500/15 transition-colors"
+            data-testid="budget-breach-banner"
+          >
+            <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-red-500 leading-tight">
+                Budget exceeded by ${overAmt.toLocaleString()} · <span className="tabular-nums">{usedPct}% of ${budgetData.totalBudget.toLocaleString()}</span>
+              </p>
+              <p className="text-[10px] text-red-500/80 leading-tight mt-0.5">Tap to review categories and adjust</p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-red-500/70 shrink-0" />
+          </button>
+        );
+      })()}
       {/* Two-column internal layout on desktop — no dead zones */}
       <div className="md:grid md:grid-cols-2 md:gap-4">
       {/* LEFT: KPIs + budget */}
@@ -2601,7 +2961,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         <div className="grid grid-cols-2 gap-2">
           <button onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-xs text-muted-foreground">Spending</p>
-            <p className="text-sm font-bold tabular-nums text-red-400">${monthlySpend.toLocaleString()}</p>
+            {/* Color discipline: spending = amber, never red. Red is reserved for
+                overdue/breach states only. */}
+            <p className="text-sm font-bold tabular-nums text-amber-500">${monthlySpend.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">{monthExpenses.length} this month</p>
           </button>
           <button onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
@@ -2611,7 +2973,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           </button>
           <button onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-xs text-muted-foreground">Cash Flow</p>
-            <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-red-500"}`}>
+            {/* Negative cash flow uses amber (warning), not red (overdue). */}
+            <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-amber-500"}`}>
               {cashFlow >= 0 ? "+" : ""}${cashFlow.toLocaleString()}
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
@@ -2667,7 +3030,11 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           const catData = Object.entries(byCategory)
             .sort(([,a],[,b]) => b-a).slice(0,8)
             .map(([name,value]) => ({name, value}));
-          const COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ef4444","#3b82f6","#f97316","#ec4899"];
+          // Color discipline: amber occupies the primary spending slot (since
+          // spending = amber). Red is intentionally omitted from the palette so
+          // the chart never accidentally signals "overdue".
+          const COLORS = ["#f59e0b","#06b6d4","#8b5cf6","#10b981","#3b82f6","#f97316","#ec4899","#84cc16"];
+          const total = catData.reduce((s, c) => s + c.value, 0);
           return (
             <div className="mb-3">
               <ResponsiveContainer width="100%" height={160}>
@@ -2677,31 +3044,22 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
                   </Pie>
                   <Tooltip
                     contentStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
-                    formatter={(v:any) => [`$${Number(v).toFixed(2)}`]}
+                    formatter={(v:any, name:any) => [`$${Number(v).toFixed(2)}`, name]}
                   />
                 </PieChart>
               </ResponsiveContainer>
-            </div>
-          );
-        })()}
-        {/* Budget overflow bar */}
-        {budgetData && budgetData.totalBudget > 0 && (() => {
-          const usedPct = Math.round((budgetData.totalSpent / budgetData.totalBudget) * 100);
-          return (
-            <div className="my-2">
-              <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
-                <span>Budget Used</span>
-                <span className={usedPct > 100 ? 'text-red-500 font-bold' : 'text-amber-500'}>{usedPct}%</span>
-              </div>
-              <div className="relative h-2 rounded-full overflow-visible" style={{background:'hsl(var(--muted))'}}>
-                <div className="h-full rounded-full" style={{
-                  width: `${Math.min(100, usedPct)}%`,
-                  background: usedPct > 100 ? '#ef4444' : usedPct > 75 ? '#f59e0b' : '#10b981'
-                }} />
-                {usedPct > 100 && (
-                  <div className="absolute right-0 top-0 h-full rounded-r-full animate-pulse"
-                    style={{width:'8px', background:'#ef4444', transform:'translateX(100%)'}} />
-                )}
+              {/* Custom legend with color swatches + tabular numerals so amounts align */}
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1 px-1">
+                {catData.map((c, i) => {
+                  const pct = total > 0 ? Math.round((c.value / total) * 100) : 0;
+                  return (
+                    <div key={c.name} className="flex items-center gap-1.5 min-w-0">
+                      <span className="h-2 w-2 rounded-full shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
+                      <span className="text-[10px] capitalize truncate flex-1">{c.name}</span>
+                      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -3176,26 +3534,31 @@ interface DashboardSection {
 }
 
 const DEFAULT_SECTIONS: DashboardSection[] = [
+  // 1) AI Summary at the very top — hero context-setter
+  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
+  // 2) Hero KPIs — Net Worth / Budget / Cash Flow (big tiles)
+  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: true, column: "full" },
+  // 3) Secondary KPI chip row (tasks, spend, habits, journal, docs)
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
-  // Left+Right columns: only short, snappy sections — no tall sections in either column
-  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
-  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
-  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "left" },
-  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "right" },
-  // Finance, Bills, Activity are full-width — they're too tall for a column and look better spanning full
+  // === 💰 Money swimlane ===
   { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "full" },
   { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
+  // === 📅 Today swimlane ===
+  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
+  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
+  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "full" },
+  // === ❤️ Health swimlane ===
+  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "full" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
-  // AI Summary intentionally sits LAST — the user wants to see their real
-  // data first (recent entries, bills, etc.) and then a synthesized AI
-  // recap at the bottom that auto-generates on every dashboard load.
-  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
 ];
-// Layout rule: LEFT = [Today, Health] RIGHT = [Action Required, Goals]
-// FULL = [Finance, Bills, Activity, AI Summary]
-// Uses CSS columns (masonry) layout — sections flow naturally and fill space without dead zones
+// Swimlane groups (id sets) — render small group header chips during layout
+const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
+  { key: "money",  label: "Money",  emoji: "💰", ids: ["finance", "obligations"] },
+  { key: "today",  label: "Today",  emoji: "📅", ids: ["today", "needs-attention", "goals"] },
+  { key: "health", label: "Health", emoji: "❤️", ids: ["health", "activity"] },
+];
 
-const LAYOUT_VERSION = 5; // Bump: AI Summary moved to bottom (after Recent Activity)
+const LAYOUT_VERSION = 6; // Bump: AI Summary → top hero; hero-kpis introduced; swimlane reorder
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -3483,6 +3846,9 @@ export default function DashboardPage() {
   function renderSection(id: string) {
     let content: React.ReactNode = null;
     switch (id) {
+      case "hero-kpis":
+        content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} />;
+        break;
       case "kpis":
         content = (showDashSkeleton && !stats) ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
           stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
@@ -3589,39 +3955,85 @@ export default function DashboardPage() {
       <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}
         sections={sections} onSave={(layout) => saveMutation.mutate(layout)} />
 
-      {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid */}
+      {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid.
+          Swimlane group headers (💰 Money / 📅 Today / ❤️ Health) are emitted before the first
+          section of each group, so the page visually segments into related clusters. */}
       {(() => {
-        // Split full-width into before-grid (kpis, ai-summary) and after-grid (activity, obligations)
         const afterGridIds = new Set(["activity"]);
         const beforeGrid = fullWidthSections.filter(s => !afterGridIds.has(s.id));
         const afterGrid = fullWidthSections.filter(s => afterGridIds.has(s.id));
+        // Track which swimlane group headers have been emitted across the whole page —
+        // a group's header should render exactly once, before the first section in that
+        // group, regardless of whether that section ends up in beforeGrid / grid / afterGrid.
+        const emitted = new Set<string>();
+        const groupOf = (id: string): typeof SWIMLANE_GROUPS[number] | null => {
+          for (const g of SWIMLANE_GROUPS) if (g.ids.includes(id)) return g;
+          return null;
+        };
+        const renderHeaderIfNeeded = (sectionId: string) => {
+          const g = groupOf(sectionId);
+          if (!g || emitted.has(g.key)) return null;
+          emitted.add(g.key);
+          return (
+            <div className="flex items-center gap-2 mt-3 mb-1 px-0.5" data-testid={`swimlane-${g.key}`}>
+              <span className="text-base leading-none" aria-hidden="true">{g.emoji}</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{g.label}</span>
+              <div className="flex-1 h-px bg-border/40" />
+            </div>
+          );
+        };
         return (
           <>
             {beforeGrid.map(s => (
-              <div key={s.id}>{renderSection(s.id)}</div>
+              <div key={s.id}>
+                {renderHeaderIfNeeded(s.id)}
+                {renderSection(s.id)}
+              </div>
             ))}
 
-            {(leftSections.length > 0 || rightSections.length > 0) && (
-              <div className="md:columns-2 md:gap-3 gap-3 mt-1">
-                {/* Interleave left and right sections for balanced masonry flow */}
-                {(() => {
-                  const interleaved: typeof leftSections = [];
-                  const maxLen = Math.max(leftSections.length, rightSections.length);
-                  for (let i = 0; i < maxLen; i++) {
-                    if (i < leftSections.length) interleaved.push(leftSections[i]);
-                    if (i < rightSections.length) interleaved.push(rightSections[i]);
-                  }
-                  return interleaved.map(s => (
-                    <div key={s.id} className="mb-3" style={{ breakInside: 'avoid' }}>
-                      {renderSection(s.id)}
+            {(leftSections.length > 0 || rightSections.length > 0) && (() => {
+              const interleaved: typeof leftSections = [];
+              const maxLen = Math.max(leftSections.length, rightSections.length);
+              for (let i = 0; i < maxLen; i++) {
+                if (i < leftSections.length) interleaved.push(leftSections[i]);
+                if (i < rightSections.length) interleaved.push(rightSections[i]);
+              }
+              // Emit any swimlane headers (e.g. "Today") that apply to the first
+              // interleaved sections before opening the columns wrapper, so they
+              // don't sit inside a masonry column where the divider line would break.
+              const headerNodes: React.ReactNode[] = [];
+              for (const s of interleaved) {
+                const g = groupOf(s.id);
+                if (g && !emitted.has(g.key)) {
+                  emitted.add(g.key);
+                  headerNodes.push(
+                    <div key={`header-${g.key}`} className="flex items-center gap-2 mt-3 mb-1 px-0.5" data-testid={`swimlane-${g.key}`}>
+                      <span className="text-base leading-none" aria-hidden="true">{g.emoji}</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{g.label}</span>
+                      <div className="flex-1 h-px bg-border/40" />
                     </div>
-                  ));
-                })()}
-              </div>
-            )}
+                  );
+                }
+              }
+              return (
+                <>
+                  {headerNodes}
+                  <div className="md:columns-2 md:gap-3 gap-3 mt-1">
+                    {interleaved.map(s => (
+                      <div key={s.id} className="mb-3" style={{ breakInside: 'avoid' }}>
+                        {renderSection(s.id)}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
 
             {afterGrid.map(s => (
-              <div key={s.id}>{renderSection(s.id)}</div>
+              <div key={s.id}>
+                {renderHeaderIfNeeded(s.id)}
+                {renderSection(s.id)}
+              </div>
             ))}
           </>
         );
