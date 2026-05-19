@@ -675,6 +675,76 @@ export async function registerRoutes(
   }));
 
   // ---- File Upload + AI Extraction ----
+  // ============================================================
+  // Save-only upload — user just wants the file stored as a Document
+  // linked to their profile(s). No AI extraction, no analysis, no
+  // tracker proposals. This is the fast path most uploads should use.
+  // ============================================================
+  app.post("/api/upload/save-only", asyncHandler(async (req, res) => {
+    const uploadUserId = (req as AuthenticatedRequest).userId || req.ip || "anonymous";
+    if (rateLimit(`upload:${uploadUserId}`, 20)) {
+      return res.status(429).json({ error: "Too many uploads. Please wait." });
+    }
+    try {
+      const { fileName, mimeType, fileData, profileIds, note } = req.body as {
+        fileName: string; mimeType: string; fileData: string;
+        profileIds?: string[]; note?: string;
+      };
+      if (!fileData || !fileName) return res.status(400).json({ error: "fileName and fileData required" });
+
+      const MAX_FILE_SIZE = 10 * 1024 * 1024;
+      const sizeBytes = Math.ceil((fileData.length * 3) / 4);
+      if (sizeBytes > MAX_FILE_SIZE) return res.status(413).json({ error: "File too large (max 10MB)." });
+
+      const ALLOWED_MIMES = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/heic", "application/pdf", "text/plain", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+      if (!ALLOWED_MIMES.includes(mimeType)) return res.status(415).json({ error: `Unsupported file type: ${mimeType}.` });
+
+      let clean = fileData;
+      if (clean.includes(",")) clean = clean.split(",").pop() || clean;
+      clean = clean.replace(/\s/g, "");
+
+      const safeProfileIds: string[] = Array.isArray(profileIds)
+        ? profileIds.filter((p) => typeof p === "string" && p && p !== "none")
+        : [];
+
+      const baseName = String(fileName).replace(/\.[^.]+$/, "");
+      const doc = await storage.createDocument({
+        name: baseName,
+        type: "saved",
+        mimeType,
+        fileData: clean,
+        extractedData: note ? { note: String(note).slice(0, 2000) } : undefined,
+        linkedProfiles: safeProfileIds,
+        tags: ["saved-only"],
+      } as any);
+
+      // Resolve profile names for confirmation message
+      let linkedProfilesResolved: Array<{ id: string; name: string }> = [];
+      if (safeProfileIds.length > 0) {
+        try {
+          const allProfiles = await storage.getProfiles();
+          const byId = new Map(allProfiles.map((p: any) => [p.id, p.name as string]));
+          linkedProfilesResolved = safeProfileIds.map((id) => ({
+            id,
+            name: byId.get(id) || "profile",
+          }));
+        } catch {
+          linkedProfilesResolved = safeProfileIds.map((id) => ({ id, name: "profile" }));
+        }
+      }
+
+      res.json({
+        documentId: doc.id,
+        documentName: doc.name,
+        linkedProfiles: linkedProfilesResolved,
+        savedAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      log.error("[Upload.saveOnly]", err?.message || "unknown error");
+      res.status(500).json({ error: "Failed to save file" });
+    }
+  }));
+
   app.post("/api/upload", asyncHandler(async (req, res) => {
     const uploadUserId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`upload:${uploadUserId}`, 10)) {

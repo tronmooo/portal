@@ -878,6 +878,7 @@ interface AttachmentPanelProps {
   note: string;
   onNoteChange: (v: string) => void;
   onSend: () => void;
+  onSaveOnly?: () => void;
   isSending: boolean;
   onSmartFill?: () => void;
 }
@@ -892,6 +893,7 @@ function AttachmentPanel({
   note,
   onNoteChange,
   onSend,
+  onSaveOnly,
   isSending,
   onSmartFill,
 }: AttachmentPanelProps) {
@@ -996,28 +998,72 @@ function AttachmentPanel({
             />
           </div>
 
-          {/* Action buttons */}
-          <div className="flex flex-col gap-2">
+          {/* Action buttons — three clear choices */}
+          <div className="space-y-2">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
+              What do you want to do with this file?
+            </p>
+
+            {/* 1. SAVE TO PROFILE — most common, primary action */}
+            {onSaveOnly && (
+              <Button
+                type="button"
+                onClick={onSaveOnly}
+                disabled={isSending}
+                className="w-full rounded-xl justify-start h-auto py-2.5"
+                data-testid="button-save-only"
+              >
+                <div className="flex items-center gap-2.5 w-full">
+                  <div className="h-8 w-8 rounded-lg bg-primary-foreground/15 flex items-center justify-center shrink-0">
+                    <FileText className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1 text-left min-w-0">
+                    <div className="text-sm font-semibold leading-tight">Save to Profile</div>
+                    <div className="text-[11px] opacity-80 leading-tight mt-0.5">Just store the file. No AI processing.</div>
+                  </div>
+                </div>
+              </Button>
+            )}
+
+            {/* 2. EXTRACT TEXT — the AI-extraction path (formerly "Send") */}
             <Button
+              type="button"
+              variant="outline"
               onClick={onSend}
               disabled={isSending}
-              className="w-full rounded-xl"
+              className="w-full rounded-xl justify-start h-auto py-2.5"
               data-testid="button-send-attachment"
             >
-              <Send className="h-4 w-4 mr-2" />
-              {isSending ? "Sending…" : "Send"}
+              <div className="flex items-center gap-2.5 w-full">
+                <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                </div>
+                <div className="flex-1 text-left min-w-0">
+                  <div className="text-sm font-semibold leading-tight">{isSending ? "Working…" : "Extract text & save"}</div>
+                  <div className="text-[11px] text-muted-foreground leading-tight mt-0.5">AI reads the file, pulls fields, you confirm.</div>
+                </div>
+              </div>
             </Button>
+
+            {/* 3. SMART FILL — only for forms (PDF/image) */}
             {(isPdf || isImage) && onSmartFill && (
               <Button
                 type="button"
                 variant="outline"
                 onClick={onSmartFill}
                 disabled={isSending}
-                className="w-full rounded-xl"
+                className="w-full rounded-xl justify-start h-auto py-2.5"
                 data-testid="button-smart-fill-pdf"
               >
-                <Sparkles className="h-4 w-4 mr-2" />
-                {isPdf ? "Smart Fill PDF" : "Smart Fill Form (image)"}
+                <div className="flex items-center gap-2.5 w-full">
+                  <div className="h-8 w-8 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0">
+                    <Sparkles className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  </div>
+                  <div className="flex-1 text-left min-w-0">
+                    <div className="text-sm font-semibold leading-tight">{isPdf ? "Fill this form (PDF)" : "Fill this form (image)"}</div>
+                    <div className="text-[11px] text-muted-foreground leading-tight mt-0.5">AI fills blanks from your saved data, you review.</div>
+                  </div>
+                </div>
               </Button>
             )}
           </div>
@@ -1673,6 +1719,49 @@ export default function ChatPage() {
     },
   });
 
+  // Save-only mutation (no AI extraction, just link file to profile)
+  const saveOnlyMutation = useMutation({
+    mutationFn: async (payload: {
+      fileName: string;
+      mimeType: string;
+      fileData: string;
+      profileIds: string[];
+      note?: string;
+    }) => {
+      const res = await apiRequest("POST", "/api/upload/save-only", payload);
+      return res.json();
+    },
+    onSuccess: (data: {
+      documentId: string;
+      documentName: string;
+      linkedProfiles: Array<{ id: string; name: string }>;
+      savedAt: string;
+    }) => {
+      const profileNames = (data.linkedProfiles || []).map((p) => p.name).filter(Boolean);
+      const profileStr =
+        profileNames.length > 0 ? ` linked to ${profileNames.join(", ")}` : "";
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `Saved **${data.documentName}**${profileStr}. No AI processing applied — you can find it in your Documents anytime.`,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+      invalidateAll();
+    },
+    onError: (err: Error) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Failed to save the file: ${err.message || "Network error"}. Please try again.`,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    },
+  });
+
   // Batch upload mutation
   const batchUploadMutation = useMutation({
     mutationFn: async (payload: {
@@ -1823,7 +1912,7 @@ export default function ChatPage() {
       top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages, chatMutation.isPending, uploadMutation.isPending, batchUploadMutation.isPending]);
+  }, [messages, chatMutation.isPending, uploadMutation.isPending, batchUploadMutation.isPending, saveOnlyMutation.isPending]);
 
   // Process image: correct EXIF orientation + resize/compress to fit upload limits
   // ALWAYS runs through canvas to ensure images stay under ~3MB base64 (Vercel body limit safety)
@@ -2021,6 +2110,47 @@ export default function ChatPage() {
     setInput("");
   };
 
+  // Save-only handler: store file linked to profile(s) with no AI processing
+  const handleSaveOnly = () => {
+    if (attachments.length !== 1 || saveOnlyMutation.isPending) return;
+    const att = attachments[0];
+    const note = input.trim();
+
+    // Resolve profile IDs from per-attachment selection or global selection
+    const rawProfileSel = att.profileId !== "none" ? att.profileId : selectedProfileId;
+    const profileIds = (rawProfileSel || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((id) => id !== "none");
+
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: note || `Save to profile: ${att.name}`,
+      timestamp: new Date().toISOString(),
+      attachment: {
+        name: att.name,
+        mimeType: att.mimeType,
+        data: att.data,
+        previewUrl: att.previewUrl,
+      },
+    };
+    setMessages((prev) => [...prev, userMsg]);
+
+    saveOnlyMutation.mutate({
+      fileName: att.name,
+      mimeType: att.mimeType,
+      fileData: att.data,
+      profileIds,
+      note: note || undefined,
+    });
+
+    setAttachments([]);
+    setSelectedProfileId("none");
+    setInput("");
+  };
+
   // Batch upload: send using batch endpoint
   const handleBatchSend = () => {
     if (attachments.length < 2 || batchUploadMutation.isPending) return;
@@ -2088,7 +2218,7 @@ export default function ChatPage() {
 
   const handleSend = () => {
     const msg = input.trim();
-    const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending;
+    const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
     if (isPending) return;
     if (!msg) return;
 
@@ -2167,7 +2297,7 @@ export default function ChatPage() {
     });
   };
 
-  const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending;
+  const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
   const hasAttachments = attachments.length > 0;
   const isBatch = attachments.length > 1;
 
@@ -2687,7 +2817,8 @@ export default function ChatPage() {
           note={input}
           onNoteChange={setInput}
           onSend={handleAttachmentSend}
-          isSending={uploadMutation.isPending}
+          onSaveOnly={handleSaveOnly}
+          isSending={uploadMutation.isPending || saveOnlyMutation.isPending}
           onSmartFill={() => {
             const a = attachments[0];
             if (!a) return;
