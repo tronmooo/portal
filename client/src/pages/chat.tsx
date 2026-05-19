@@ -857,9 +857,10 @@ function ExtractionConfirmation({
 interface StagedAttachment {
   name: string;
   mimeType: string;
-  data: string; // base64
+  data: string; // base64 — empty string while processing
   previewUrl: string;
   profileId: string; // "none" | profileId
+  processing?: boolean; // true while image is being EXIF-corrected/compressed
 }
 
 // ── Single-file Attachment staging panel (shown before send) ─────────────────
@@ -869,6 +870,7 @@ interface AttachmentPanelProps {
     mimeType: string;
     data: string;
     previewUrl: string;
+    processing?: boolean;
   };
   profiles: Profile[];
   profilesLoading: boolean;
@@ -899,6 +901,8 @@ function AttachmentPanel({
 }: AttachmentPanelProps) {
   const isImage = attachment.mimeType.startsWith("image/");
   const isPdf = attachment.mimeType === "application/pdf";
+  const isProcessing = !!attachment.processing;
+  const actionsDisabled = isSending || isProcessing;
 
   return (
     <div
@@ -1001,7 +1005,7 @@ function AttachmentPanel({
           {/* Action buttons — three clear choices */}
           <div className="space-y-2">
             <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
-              What do you want to do with this file?
+              {isProcessing ? "Preparing photo…" : "What do you want to do with this file?"}
             </p>
 
             {/* 1. SAVE TO PROFILE — most common, primary action */}
@@ -1009,7 +1013,7 @@ function AttachmentPanel({
               <Button
                 type="button"
                 onClick={onSaveOnly}
-                disabled={isSending}
+                disabled={actionsDisabled}
                 className="w-full rounded-xl justify-start h-auto py-2.5"
                 data-testid="button-save-only"
               >
@@ -1018,7 +1022,7 @@ function AttachmentPanel({
                     <FileText className="h-4 w-4" />
                   </div>
                   <div className="flex-1 text-left min-w-0">
-                    <div className="text-sm font-semibold leading-tight">Save to Profile</div>
+                    <div className="text-sm font-semibold leading-tight">{isProcessing ? "Preparing…" : "Save to Profile"}</div>
                     <div className="text-[11px] opacity-80 leading-tight mt-0.5">Just store the file. No AI processing.</div>
                   </div>
                 </div>
@@ -1030,7 +1034,7 @@ function AttachmentPanel({
               type="button"
               variant="outline"
               onClick={onSend}
-              disabled={isSending}
+              disabled={actionsDisabled}
               className="w-full rounded-xl justify-start h-auto py-2.5"
               data-testid="button-send-attachment"
             >
@@ -1051,7 +1055,7 @@ function AttachmentPanel({
                 type="button"
                 variant="outline"
                 onClick={onSmartFill}
-                disabled={isSending}
+                disabled={actionsDisabled}
                 className="w-full rounded-xl justify-start h-auto py-2.5"
                 data-testid="button-smart-fill-pdf"
               >
@@ -2012,31 +2016,53 @@ export default function ChatPage() {
         continue;
       }
 
-      try {
-        let base64: string;
-        if (file.type.startsWith('image/')) {
-          // Correct orientation for images (handles rotated iPhone photos)
-          base64 = await correctImageOrientation(file);
-        } else {
-          // Non-images: read as-is
-          base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve((reader.result as string).split(",")[1]);
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
+      // IMMEDIATELY add a placeholder attachment so the 3-button panel shows up
+      // right away with the preview. Heavy EXIF/canvas work happens after.
+      const previewUrl = URL.createObjectURL(file);
+      const isImage = file.type.startsWith('image/');
+      const placeholderName = file.name;
+      const placeholder: StagedAttachment = {
+        name: placeholderName,
+        mimeType: isImage ? 'image/jpeg' : file.type,
+        data: "",
+        previewUrl,
+        profileId: "none",
+        processing: true,
+      };
+      setAttachments((prev) => [...prev, placeholder]);
+
+      // Process the file (async) and swap the data in when ready
+      (async () => {
+        try {
+          let base64: string;
+          if (isImage) {
+            base64 = await correctImageOrientation(file);
+          } else {
+            base64 = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve((reader.result as string).split(",")[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+            });
+          }
+          setAttachments((prev) =>
+            prev.map((att) =>
+              att.previewUrl === previewUrl && att.processing
+                ? { ...att, data: base64, processing: false }
+                : att
+            )
+          );
+        } catch (err) {
+          console.error(`[upload] Failed to process "${placeholderName}":`, err);
+          toast({
+            title: `Failed to read "${placeholderName}"`,
+            description: "Could not process this image. Try a different photo.",
+            variant: "destructive",
           });
+          // Remove the failed placeholder so the user can try again
+          setAttachments((prev) => prev.filter((att) => att.previewUrl !== previewUrl));
         }
-        const newAttachment: StagedAttachment = {
-          name: file.name,
-          mimeType: file.type.startsWith('image/') ? 'image/jpeg' : file.type, // Corrected images are always JPEG
-          data: base64,
-          previewUrl: URL.createObjectURL(file),
-          profileId: "none",
-        };
-        setAttachments((prev) => [...prev, newAttachment]);
-      } catch {
-        toast({ title: `Failed to read "${file.name}"`, variant: "destructive" });
-      }
+      })();
     }
 
     // Reset so same file can be selected again
@@ -2047,6 +2073,10 @@ export default function ChatPage() {
   const handleAttachmentSend = () => {
     if (attachments.length !== 1 || uploadMutation.isPending) return;
     const att = attachments[0];
+    if (att.processing || !att.data) {
+      toast({ title: "Still preparing the photo… try again in a moment." });
+      return;
+    }
     const note = input.trim();
 
     // ✨ If user wrote a Smart Fill intent in the note AND attached a form file,
@@ -2114,6 +2144,10 @@ export default function ChatPage() {
   const handleSaveOnly = () => {
     if (attachments.length !== 1 || saveOnlyMutation.isPending) return;
     const att = attachments[0];
+    if (att.processing || !att.data) {
+      toast({ title: "Still preparing the photo… try again in a moment." });
+      return;
+    }
     const note = input.trim();
 
     // Resolve profile IDs from per-attachment selection or global selection
@@ -2822,6 +2856,10 @@ export default function ChatPage() {
           onSmartFill={() => {
             const a = attachments[0];
             if (!a) return;
+            if (a.processing || !a.data) {
+              toast({ title: "Still preparing the photo… try again in a moment." });
+              return;
+            }
             const stripped = a.data.includes(",") ? a.data.split(",").pop() || a.data : a.data;
             setSmartFillFile({ name: a.name, mimeType: a.mimeType, base64: stripped });
           }}
