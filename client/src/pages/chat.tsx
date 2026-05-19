@@ -1007,7 +1007,7 @@ function AttachmentPanel({
               <Send className="h-4 w-4 mr-2" />
               {isSending ? "Sending…" : "Send"}
             </Button>
-            {isPdf && onSmartFill && (
+            {(isPdf || isImage) && onSmartFill && (
               <Button
                 type="button"
                 variant="outline"
@@ -1017,7 +1017,7 @@ function AttachmentPanel({
                 data-testid="button-smart-fill-pdf"
               >
                 <Sparkles className="h-4 w-4 mr-2" />
-                Smart Fill PDF
+                {isPdf ? "Smart Fill PDF" : "Smart Fill Form (image)"}
               </Button>
             )}
           </div>
@@ -1958,6 +1958,39 @@ export default function ChatPage() {
   const handleAttachmentSend = () => {
     if (attachments.length !== 1 || uploadMutation.isPending) return;
     const att = attachments[0];
+    const note = input.trim();
+
+    // ✨ If user wrote a Smart Fill intent in the note AND attached a form file,
+    // skip the normal upload and open Smart Fill directly. Still post the user
+    // message + an assistant chip so there is in-thread context.
+    if (note && SMART_FILL_INTENT_RE.test(note) && isFormFile(att.mimeType)) {
+      const stripped = att.data.includes(",") ? att.data.split(",").pop() || att.data : att.data;
+      const userMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: note,
+        timestamp: new Date().toISOString(),
+        attachment: { name: att.name, mimeType: att.mimeType, data: att.data, previewUrl: att.previewUrl },
+      };
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `On it — reading **${att.name}** and matching fields to your saved data. Review every value before saving.`,
+        timestamp: new Date().toISOString(),
+        smartFillSuggestion: {
+          fileName: att.name,
+          mimeType: att.mimeType,
+          base64: stripped,
+          label: att.mimeType.startsWith("image/") ? "Open Smart Fill (image form)" : "Open Smart Fill",
+        },
+      };
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setSmartFillFile({ name: att.name, mimeType: att.mimeType, base64: stripped });
+      setAttachments([]);
+      setSelectedProfileId("none");
+      setInput("");
+      return;
+    }
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
@@ -2034,6 +2067,25 @@ export default function ChatPage() {
     setInput("");
   };
 
+  // ── Smart Fill intent detection ────────────────────────────────────────────
+  // If the user types something like "fill this out" / "smart fill this" /
+  // "complete this form for me" and we have a recent PDF or image-of-form
+  // attached in the last few user messages, intercept and surface a Smart
+  // Fill chip instead of routing to the normal chat call.
+  const SMART_FILL_INTENT_RE =
+    /(\bsmart\s*fill\b|\bfill\s+(this|that|it|out|in|the\s+form|the\s+pdf)|\bfill\s+for\s+me\b|\bcomplete\s+(this|that|the)\s+(form|pdf)|\bauto[- ]?fill\b|\bcan you fill\b)/i;
+  const isFormFile = (mt: string) =>
+    mt === "application/pdf" || mt.startsWith("image/");
+  const findRecentFormAttachment = () => {
+    for (let i = messages.length - 1; i >= 0 && i >= messages.length - 8; i--) {
+      const m = messages[i];
+      if (m.role === "user" && m.attachment && isFormFile(m.attachment.mimeType)) {
+        return m.attachment;
+      }
+    }
+    return null;
+  };
+
   const handleSend = () => {
     const msg = input.trim();
     const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending;
@@ -2046,6 +2098,35 @@ export default function ChatPage() {
       content: msg,
       timestamp: new Date().toISOString(),
     };
+
+    // ✨ Smart Fill in-thread: if intent + recent PDF/image attached, surface chip.
+    if (SMART_FILL_INTENT_RE.test(msg)) {
+      const recent = findRecentFormAttachment();
+      if (recent) {
+        const stripped = recent.data.includes(",") ? recent.data.split(",").pop() || recent.data : recent.data;
+        const isImg = recent.mimeType.startsWith("image/");
+        const assistantMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: isImg
+            ? `Got it — I'll read **${recent.name}**, match every field to your saved profile data, and show you a review before anything is saved.`
+            : `Got it — I'll read **${recent.name}**, match every field to your saved data, then show you a review before generating a filled copy.`,
+          timestamp: new Date().toISOString(),
+          smartFillSuggestion: {
+            fileName: recent.name,
+            mimeType: recent.mimeType,
+            base64: stripped,
+            label: isImg ? "Open Smart Fill (image form)" : "Open Smart Fill",
+          },
+        };
+        setMessages((prev) => [...prev, userMsg, assistantMsg]);
+        setInput("");
+        // Auto-open the dialog so the user can begin immediately.
+        setSmartFillFile({ name: recent.name, mimeType: recent.mimeType, base64: stripped });
+        return;
+      }
+    }
+
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     chatMutation.mutate(msg);
@@ -2240,6 +2321,27 @@ export default function ChatPage() {
                     onConfirm={handleConfirmExtraction}
                     onSkip={() => { if (msg.pendingExtraction?.extractionId) handleSkipExtraction(msg.pendingExtraction.extractionId); }}
                   />
+                )}
+
+                {/* Smart Fill chip — inline action on assistant message */}
+                {msg.smartFillSuggestion && (
+                  <button
+                    type="button"
+                    onClick={() => setSmartFillFile({
+                      name: msg.smartFillSuggestion!.fileName,
+                      mimeType: msg.smartFillSuggestion!.mimeType,
+                      base64: msg.smartFillSuggestion!.base64,
+                    })}
+                    className="mt-3 w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-primary/30 bg-primary/5 hover:bg-primary/10 transition text-left"
+                    data-testid="chip-smart-fill"
+                  >
+                    <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{msg.smartFillSuggestion.label || "Open Smart Fill"}</div>
+                      <div className="text-[11px] text-muted-foreground truncate">{msg.smartFillSuggestion.fileName}</div>
+                    </div>
+                    <span className="text-[11px] font-medium text-primary">Open →</span>
+                  </button>
                 )}
 
                 {/* Action badges */}

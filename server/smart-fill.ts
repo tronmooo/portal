@@ -110,10 +110,13 @@ async function buildSourcesContext(sources: SmartFillSource[]): Promise<Record<s
 /**
  * Call Claude with the PDF + sources context and return structured fields.
  */
+const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
+
 export async function analyzeSmartFill(
   fileName: string,
   pdfBase64: string,
   sources: SmartFillSource[],
+  mimeType: string = "application/pdf",
 ): Promise<AnalyzeResult> {
   const sourcesCtx = await buildSourcesContext(sources);
 
@@ -156,6 +159,13 @@ Return ONLY valid JSON in this exact shape (no markdown, no commentary):
   if (cleanBase64.includes(",")) cleanBase64 = cleanBase64.split(",").pop() || cleanBase64;
   cleanBase64 = cleanBase64.replace(/\s/g, "");
 
+  const isImage = IMAGE_MIMES.has(mimeType);
+  // For images, normalize jpg → jpeg for Anthropic
+  const normalizedMime = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
+  const visionBlock = isImage
+    ? { type: "image", source: { type: "base64", media_type: normalizedMime, data: cleanBase64 } }
+    : { type: "document", source: { type: "base64", media_type: "application/pdf", data: cleanBase64 } };
+
   const response = await getClient().messages.create({
     model: "claude-sonnet-4-5-20250929",
     max_tokens: 4096,
@@ -163,10 +173,7 @@ Return ONLY valid JSON in this exact shape (no markdown, no commentary):
       {
         role: "user",
         content: [
-          {
-            type: "document",
-            source: { type: "base64", media_type: "application/pdf", data: cleanBase64 },
-          } as any,
+          visionBlock as any,
           { type: "text", text: prompt },
         ],
       },

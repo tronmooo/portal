@@ -83,6 +83,13 @@ export interface ChatMessage {
     mimeType: string;
     data: string;
   }>;
+  /** Inline Smart Fill suggestion chip — click to open SmartFillDialog with this file. */
+  smartFillSuggestion?: {
+    fileName: string;
+    mimeType: string;
+    base64: string;
+    label?: string;
+  };
   pendingExtraction?: {
     extractionId: string;
     fileName: string;

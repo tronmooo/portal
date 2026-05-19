@@ -136,6 +136,7 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
       const res = await apiRequest("POST", "/api/smart-fill/analyze", {
         fileName: file.name,
         fileData: file.base64,
+        mimeType: file.mimeType,
         sources,
       });
       return (await res.json()) as AnalyzeResult;
@@ -158,7 +159,7 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
       setStep("review");
     },
     onError: (e: any) => {
-      toast({ title: "Smart Fill couldn't read this PDF", description: e?.message || "Try again", variant: "destructive" });
+      toast({ title: "Smart Fill couldn't read this form", description: e?.message || "Try again", variant: "destructive" });
       setStep("sources");
     },
   });
@@ -193,6 +194,7 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
       const res = await apiRequest("POST", "/api/smart-fill/render", {
         fileName: file.name,
         fileData: file.base64,
+        mimeType: file.mimeType,
         fields,
         documentName: file.name.replace(/\.[^.]+$/, ""),
         linkedProfileIds,
@@ -223,13 +225,16 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
     renderMut.mutate();
   };
 
+  const isImageInput = !!file && file.mimeType.startsWith("image/");
+
   const openFilledPdf = () => {
     if (!fillResult) return;
     try {
       const bin = atob(fillResult.fileBase64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const blob = new Blob([bytes], { type: "application/pdf" });
+      const blobType = isImageInput ? (file?.mimeType || "image/png") : "application/pdf";
+      const blob = new Blob([bytes], { type: blobType });
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank", "noopener,noreferrer");
     } catch {
@@ -252,17 +257,19 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
         <DialogHeader className="px-5 pt-5 pb-3 border-b border-border">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4 text-primary" />
-            Smart Fill PDF
+            Smart Fill
             {file && (
               <span className="text-xs font-normal text-muted-foreground ml-1 truncate">· {file.name}</span>
             )}
           </DialogTitle>
           <DialogDescription className="text-xs">
             {step === "sources" && "Pick whose data to draw from. You can choose more than one."}
-            {step === "analyzing" && "Reading the PDF and matching fields to your data…"}
+            {step === "analyzing" && "Reading the form and matching fields to your data…"}
             {step === "review" && "Review every field. Nothing is filled until you approve."}
-            {step === "filling" && "Filling the PDF…"}
-            {step === "done" && "Done. The original is untouched — a new filled copy was saved."}
+            {step === "filling" && (isImageInput ? "Saving filled fields…" : "Filling the PDF…")}
+            {step === "done" && (isImageInput
+              ? "Done. The image is saved with structured filled fields — ready to copy onto the real form."
+              : "Done. The original is untouched — a new filled copy was saved.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -471,7 +478,7 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
               )}
               <div className="flex flex-col gap-2">
                 <Button onClick={openFilledPdf} className="w-full" data-testid="button-open-filled-pdf">
-                  <ExternalLink className="h-4 w-4 mr-2" /> Open filled PDF
+                  <ExternalLink className="h-4 w-4 mr-2" /> {isImageInput ? "Open filled form" : "Open filled PDF"}
                 </Button>
               </div>
             </div>

@@ -861,7 +861,7 @@ export async function registerRoutes(
       return res.status(429).json({ error: "Too many Smart Fill requests. Please wait." });
     }
     try {
-      const { fileName, fileData, sources } = req.body as { fileName: string; fileData: string; sources: SmartFillSource[] };
+      const { fileName, fileData, sources, mimeType } = req.body as { fileName: string; fileData: string; sources: SmartFillSource[]; mimeType?: string };
       if (!fileName || !fileData) return res.status(400).json({ error: "fileName and fileData required" });
       const MAX_FILE_SIZE = 10 * 1024 * 1024;
       const sizeBytes = Math.ceil((fileData.length * 3) / 4);
@@ -871,7 +871,7 @@ export async function registerRoutes(
         ? sources.filter((s) => s && typeof s.id === "string" && ["profile", "asset", "liability", "document"].includes(s.kind)).slice(0, 12)
         : [];
 
-      const result = await analyzeSmartFill(fileName, fileData, safeSources);
+      const result = await analyzeSmartFill(fileName, fileData, safeSources, mimeType || "application/pdf");
       res.json(result);
     } catch (err: any) {
       log.error("[SmartFill.analyze]", err?.message || "unknown error");
@@ -887,7 +887,7 @@ export async function registerRoutes(
     try {
       const {
         fileName, fileData, fields, documentName,
-        linkedProfileIds, dates, sources,
+        linkedProfileIds, dates, sources, mimeType,
       } = req.body as {
         fileName: string;
         fileData: string;
@@ -896,6 +896,7 @@ export async function registerRoutes(
         linkedProfileIds?: string[];
         dates?: Array<{ pdfLabel: string; iso: string; kind: "expiration" | "renewal" | "due" | "appointment" }>;
         sources?: SmartFillSource[];
+        mimeType?: string;
       };
       if (!fileName || !fileData || !Array.isArray(fields)) return res.status(400).json({ error: "fileName, fileData, fields required" });
       const safeFields = fields
@@ -908,22 +909,38 @@ export async function registerRoutes(
           acroFormName: f.acroFormName,
         }));
 
-      const filledBytes = await renderFilledPdf(fileData, safeFields);
-      const filledBase64 = Buffer.from(filledBytes).toString("base64");
+      // For image-of-form uploads, skip PDF rendering and save the original image
+      // with the filled fields as structured extractedData (no PDF overlay possible).
+      const isImage = (mimeType || "").startsWith("image/");
+      let filledBase64: string;
+      let outMime: string;
+      if (isImage) {
+        let cleanInput = fileData;
+        if (cleanInput.includes(",")) cleanInput = cleanInput.split(",").pop() || cleanInput;
+        filledBase64 = cleanInput.replace(/\s/g, "");
+        outMime = mimeType || "image/png";
+      } else {
+        const filledBytes = await renderFilledPdf(fileData, safeFields);
+        filledBase64 = Buffer.from(filledBytes).toString("base64");
+        outMime = "application/pdf";
+      }
 
       // Save as a new Document — original is preserved (never overwritten).
       const baseName = (documentName || fileName).replace(/\.[^.]+$/, "");
       const newDoc = await storage.createDocument({
         name: `${baseName} — Smart Filled`,
         type: "smart_fill",
-        mimeType: "application/pdf",
+        mimeType: outMime,
         fileData: filledBase64,
         extractedData: {
           smartFill: {
             originalName: fileName,
+            originalMimeType: mimeType || "application/pdf",
             filledAt: new Date().toISOString(),
             fieldCount: safeFields.length,
             sources: Array.isArray(sources) ? sources.map((s) => ({ id: s.id, kind: s.kind, name: s.name })) : [],
+            // For image forms, preserve the structured fields directly since we can’t overlay them.
+            fields: isImage ? safeFields : undefined,
           },
         },
         linkedProfiles: Array.isArray(linkedProfileIds) ? linkedProfileIds.filter((id) => typeof id === "string") : [],
