@@ -855,6 +855,90 @@ export async function registerRoutes(
   // render a filled overlay. Safety: never overwrites original,
   // never auto-submits, never fills signature fields.
   // ============================================================
+  // ============================================================
+  // AI Dashboard Summary — scoped to the current profile filter so
+  // "Everyone" gives a household briefing and "Selected: Sarah" gives
+  // a Sarah-only briefing. Calls Anthropic directly with prebuilt
+  // structured context (no tools, no side-effects).
+  // ============================================================
+  app.post("/api/ai/summary", asyncHandler(async (req, res) => {
+    const userId = (req as AuthenticatedRequest).userId || req.ip || "anonymous";
+    if (rateLimit(`aisummary:${userId}`, 30)) {
+      return res.status(429).json({ error: "Too many summary requests. Please wait." });
+    }
+    try {
+      const { filterMode, filterIds, scopeLabel } = req.body as {
+        filterMode?: "all" | "selected" | "everyone";
+        filterIds?: string[];
+        scopeLabel?: string;
+      };
+      const ids = Array.isArray(filterIds) ? filterIds.filter((s) => typeof s === "string") : [];
+      const useFilter = filterMode === "selected" && ids.length > 0;
+      const enhanced: any = await storage.getDashboardEnhanced(undefined, useFilter ? ids : undefined);
+
+      // Today bounds in user's TZ
+      const tz = getTimezone(req);
+      const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+      const inNextDays = (iso: string, days: number) => {
+        if (!iso) return false;
+        try {
+          const d = new Date(iso); const t = new Date(todayISO);
+          const diff = (d.getTime() - t.getTime()) / 86400000;
+          return diff >= -1 && diff <= days;
+        } catch { return false; }
+      };
+
+      const fin = enhanced?.financeSnapshot || {};
+      const tasksAll: any[] = Array.isArray(enhanced?.tasks) ? enhanced.tasks : [];
+      const obligationsAll: any[] = Array.isArray(enhanced?.upcomingObligations) ? enhanced.upcomingObligations : (Array.isArray(fin?.upcomingBills) ? fin.upcomingBills : []);
+      const habitsAll: any[] = Array.isArray(enhanced?.habits) ? enhanced.habits : [];
+      const eventsAll: any[] = Array.isArray(enhanced?.events) ? enhanced.events : [];
+
+      const tasksDueToday = tasksAll.filter((t) => t?.dueDate?.startsWith(todayISO) && !t.completed).length;
+      const tasksOverdue = tasksAll.filter((t) => t?.dueDate && t.dueDate < todayISO && !t.completed).length;
+      const billsThisWeek = obligationsAll.filter((b) => inNextDays(b?.nextDueDate || b?.dueDate, 7)).length;
+      const eventsToday = eventsAll.filter((e) => (e?.startDate || e?.date || "").startsWith(todayISO)).length;
+      const habitsToday = habitsAll.length;
+
+      const ctx = {
+        scope: useFilter ? (scopeLabel || `Selected (${ids.length})`) : "Everyone",
+        finance: {
+          netWorth: Math.round((fin.totalAssetValue || 0) - (fin.totalLiabilities || 0)),
+          totalAssets: Math.round(fin.totalAssetValue || 0),
+          totalLiabilities: Math.round(fin.totalLiabilities || 0),
+          monthlySpend: Math.round(fin.totalMonthlySpend || 0),
+          topSpendCategories: Array.isArray(fin.spendByCategory) ? fin.spendByCategory.slice(0, 3) : [],
+        },
+        today: { tasksDueToday, tasksOverdue, billsThisWeek, eventsToday, habitsTracked: habitsToday },
+      };
+
+      const prompt = `You are a personal-life dashboard briefing.
+Produce a focused, useful 3-4 sentence daily briefing for THIS scope: "${ctx.scope}".
+Be specific with numbers. Mention only what actually has values. Skip empty signals.
+Never fabricate data not provided. End with one concrete suggestion.
+
+CONTEXT JSON:
+${JSON.stringify(ctx, null, 2)}`;
+
+      const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const resp = await anthropicClient.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 400,
+        messages: [{ role: "user", content: prompt }],
+      });
+      const text = resp.content[0]?.type === "text" ? (resp.content[0] as any).text.trim() : "";
+      res.json({
+        summary: text || "No summary available.",
+        scope: ctx.scope,
+        scopedIds: useFilter ? ids : null,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      log.error("[AISummary]", err?.message || "unknown");
+      res.status(500).json({ error: "Couldn't generate summary right now." });
+    }
+  }));
+
   app.post("/api/smart-fill/analyze", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || req.ip || "anonymous";
     if (rateLimit(`smartfill:${uid}`, 10)) {

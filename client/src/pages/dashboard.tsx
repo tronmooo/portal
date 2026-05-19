@@ -3397,29 +3397,37 @@ function RenderMarkdown({ text }: { text: string }) {
   );
 }
 
-function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefined; enhanced: any }) {
+function AISummaryWidget({
+  stats, enhanced, filterMode = "everyone", filterIds = [], scopeLabel,
+}: {
+  stats: DashboardStats | undefined;
+  enhanced: any;
+  filterMode?: string;
+  filterIds?: string[];
+  scopeLabel?: string;
+}) {
   const [summary, setSummary] = useState<string | null>(null);
+  const [scope, setScope] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
   // Guard so we don't kick off the same fetch twice (StrictMode double-mount
-  // in dev, or the component re-mounting from layout changes). Once a summary
-  // has been requested for this dashboard visit we won't re-request unless
-  // the user explicitly hits Refresh.
-  const autoStarted = useRef(false);
+  // in dev, or the component re-mounting from layout changes). Re-key on filter
+  // change so swapping filter regenerates the briefing.
+  const lastKey = useRef<string>("");
+  const filterKey = `${filterMode}:${filterIds.join(",")}`;
 
   const generateSummary = async () => {
     setLoading(true);
-    // Audit fix: dashboard summary used to hang on "Generating…" forever when
-    // the chat endpoint returned an empty/malformed body. apiRequest already
-    // owns its own timeout (CHAT_TIMEOUT_MS), so we just need to be defensive
-    // about the response shape and ALWAYS show feedback.
     try {
-      const resp = await apiRequest("POST", "/api/chat", {
-        message: "Give me a brief daily summary of my current status. Include: tasks due today, habits completion, upcoming events, and any health or finance highlights. Keep it under 4 sentences. Be direct and specific with numbers.",
+      const resp = await apiRequest("POST", "/api/ai/summary", {
+        filterMode,
+        filterIds,
+        scopeLabel,
       });
       const data = await resp.json().catch(() => ({} as any));
-      const text = (data?.reply || "").toString().trim();
+      const text = (data?.summary || "").toString().trim();
       setSummary(text || "I couldn't generate a summary right now — try again in a moment.");
+      setScope(data?.scope || null);
       setLastGenerated(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
     } catch (err: any) {
       const msg = (err?.message || "").toString();
@@ -3433,21 +3441,24 @@ function AISummaryWidget({ stats, enhanced }: { stats: DashboardStats | undefine
     }
   };
 
-  // Auto-generate on mount. The user explicitly asked for the summary to
-  // "automatically generate a report every time I go onto the dashboard"
-  // instead of having to click a button. We wait until the dashboard's
-  // stats payload has arrived so the AI has fresh context to draw from.
+  // Auto-regenerate when filter changes (or on first mount once stats arrive).
   useEffect(() => {
-    if (autoStarted.current) return;
-    if (!stats) return; // wait until dashboard data is loaded
-    autoStarted.current = true;
+    if (!stats) return;
+    if (lastKey.current === filterKey) return;
+    lastKey.current = filterKey;
     generateSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stats]);
+  }, [stats, filterKey]);
 
   return (
     <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
       <div className="space-y-2">
+        {scope && (
+          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80" data-testid="ai-summary-scope">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary/70" />
+            Scope: {scope}
+          </div>
+        )}
         {summary ? (
           <RenderMarkdown text={summary} />
         ) : loading ? (
@@ -3900,7 +3911,12 @@ export default function DashboardPage() {
         );
         break;
       case "ai-summary":
-        content = <AISummaryWidget stats={stats} enhanced={enhanced} />;
+        content = (() => {
+          const scopeLabel = filterMode === "selected" && filterIds.length > 0
+            ? allProfiles.filter((p: any) => filterIds.includes(p.id)).map((p: any) => p.name).join(", ") || `Selected (${filterIds.length})`
+            : "Everyone";
+          return <AISummaryWidget stats={stats} enhanced={enhanced} filterMode={filterMode} filterIds={filterIds} scopeLabel={scopeLabel} />;
+        })();
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
