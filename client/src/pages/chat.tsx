@@ -457,39 +457,55 @@ function ArtifactPreview({ data }: { data: any }) {
 }
 
 // ── Inline document previews in chat messages ─────────────────────────────────
-function LazyDocumentPreview({ id, name, mimeType, data }: { id: string; name: string; mimeType: string; data: string }) {
-  const [imageData, setImageData] = useState<string>(data === "__LAZY_LOAD__" ? "" : data);
-  const [loading, setLoading] = useState(data === "__LAZY_LOAD__");
-
-  useEffect(() => {
-    if (data === "__LAZY_LOAD__" && !imageData) {
-      apiRequest("GET", `/api/documents/${id}`)
-        .then(res => res.json())
-        .then(doc => {
-          if (doc.fileData) setImageData(doc.fileData);
-          setLoading(false);
-        })
-        .catch(() => setLoading(false));
-    }
-  }, [id, data]);
-
-  if (loading) {
-    return (
-      <div className="mt-3 rounded-xl border border-border bg-muted/10 p-8 flex items-center justify-center">
-        <div className="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
-        <span className="ml-2 text-xs text-muted-foreground">Loading {name}...</span>
-      </div>
-    );
-  }
-
-  if (!imageData) return null;
-
-  // Inline viewer uses h-full — give it an explicit height so the preview
-  // (image or PDF) actually renders instead of collapsing to header-only.
+function LazyDocumentPreview({
+  id, name, mimeType, data, extractedData,
+}: {
+  id: string; name: string; mimeType: string; data: string;
+  extractedData?: Record<string, any>;
+}) {
   const isPdf = mimeType === "application/pdf";
+  // DocumentViewer (inline mode) already knows how to handle data==="__LAZY_LOAD__":
+  // it fetches the binary via GET /api/documents/:id/file as a blob URL. We just
+  // need to give it a parent with a real height so its h-full doesn't collapse.
+  const fields = extractedData
+    ? Object.entries(extractedData).filter(([k, v]) => {
+        if (!v && v !== 0) return false;
+        if (k.startsWith("_")) return false;
+        // Skip nested objects like { value, confidence }
+        const val = (v && typeof v === "object" && "value" in (v as any)) ? (v as any).value : v;
+        return val !== null && val !== undefined && String(val).trim().length > 0;
+      })
+    : [];
+
+  const formatKey = (k: string) =>
+    k.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim().replace(/\b\w/g, c => c.toUpperCase());
+  const formatVal = (v: any) => {
+    const val = (v && typeof v === "object" && "value" in (v as any)) ? (v as any).value : v;
+    return String(val);
+  };
+
   return (
-    <div className="mt-2" style={{ height: isPdf ? 480 : 360 }}>
-      <DocumentViewer id={id} name={name} mimeType={mimeType} data={imageData} inline />
+    <div className="mt-2 space-y-2">
+      <div style={{ height: isPdf ? 480 : 360 }}>
+        <DocumentViewer id={id} name={name} mimeType={mimeType} data={data} inline />
+      </div>
+      {fields.length > 0 && (
+        <div className="rounded-xl border border-border bg-muted/10 overflow-hidden">
+          <div className="px-3 py-2 border-b border-border bg-muted/20">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Extracted data · {fields.length} field{fields.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 py-2.5">
+            {fields.map(([k, v]) => (
+              <div key={k} className="min-w-0">
+                <p className="text-[10px] text-muted-foreground">{formatKey(k)}</p>
+                <p className="text-xs font-medium truncate" title={formatVal(v)}>{formatVal(v)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -501,18 +517,18 @@ function ChatDocumentPreviews({
   documentPreview?: ChatMessage["documentPreview"];
   documentPreviews?: ChatMessage["documentPreviews"];
 }) {
-  const allPreviews: Array<{ id: string; name: string; mimeType: string; data: string }> = [];
+  const allPreviews: Array<{ id: string; name: string; mimeType: string; data: string; extractedData?: Record<string, any> }> = [];
   const seen = new Set<string>();
 
   if (documentPreviews && documentPreviews.length > 0) {
     for (const p of documentPreviews) {
       if (!seen.has(p.id)) {
         seen.add(p.id);
-        allPreviews.push(p);
+        allPreviews.push(p as any);
       }
     }
   } else if (documentPreview) {
-    allPreviews.push(documentPreview);
+    allPreviews.push(documentPreview as any);
   }
 
   if (allPreviews.length === 0) return null;
@@ -520,7 +536,14 @@ function ChatDocumentPreviews({
   return (
     <div className="space-y-2">
       {allPreviews.map((doc) => (
-        <LazyDocumentPreview key={doc.id} id={doc.id} name={doc.name} mimeType={doc.mimeType} data={doc.data} />
+        <LazyDocumentPreview
+          key={doc.id}
+          id={doc.id}
+          name={doc.name}
+          mimeType={doc.mimeType}
+          data={doc.data}
+          extractedData={doc.extractedData}
+        />
       ))}
     </div>
   );

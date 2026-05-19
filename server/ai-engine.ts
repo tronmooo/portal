@@ -7240,16 +7240,23 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         full: String(p.name || "").toLowerCase().trim(),
       })).filter(p => p.first.length >= 2);
 
-      // Look for possessive ("bob's", "bobs") or bare first-name token in the ORIGINAL search term
-      const possessiveMatch = searchTerm.match(/\b([a-z]{2,})['’]s\b/i);
-      let nameTokenLC = possessiveMatch ? possessiveMatch[1].toLowerCase() : "";
+      // Look for possessive ("bob's", "bobs", "bob’s", "bobʼs") in the ORIGINAL search term.
+      // Accepts straight quote, curly, modifier-letter apostrophe, or none.
+      let nameTokenLC = "";
+      const possessiveMatch = searchTerm.match(/\b([a-z]{2,})['’ʼʹ′]?s\b/i);
+      if (possessiveMatch) {
+        const candidate = possessiveMatch[1].toLowerCase();
+        // Only treat as a name if it actually matches a known profile first name
+        if (profileNames.some(p => p.first === candidate)) nameTokenLC = candidate;
+      }
       if (!nameTokenLC) {
-        // Bare first name match against any profile
+        // Bare first name match against any profile (e.g., "bob drivers license")
         const tokens = searchTerm.toLowerCase().split(/[^a-z]+/).filter(Boolean);
         for (const t of tokens) {
           if (profileNames.some(p => p.first === t)) { nameTokenLC = t; break; }
         }
       }
+      console.log(`[doc-open] search="${searchTerm}" nameToken="${nameTokenLC}" targetProfiles=${Array.from(new Set(profileNames.filter(p=>p.first===nameTokenLC).map(p=>p.id))).join(",")}`);
       // Resolve which profile IDs match this name (could be multiple Bobs)
       const targetProfileIds = new Set<string>();
       if (nameTokenLC) {
@@ -7379,11 +7386,21 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         }
         if (multiMatches.length > 1) {
           const names = multiMatches.map(m => m.doc.name);
-          const previews = multiMatches.map(m => ({ id: m.doc.id, name: m.doc.name, mimeType: m.doc.mimeType, data: "__LAZY_LOAD__" }));
+          const previews = await Promise.all(multiMatches.map(async (m) => {
+            let ed: any = undefined;
+            try {
+              const full = await storage.getDocument(m.doc.id);
+              ed = (full as any)?.extractedData || (full as any)?.extracted_data;
+            } catch { /* ignore */ }
+            return {
+              id: m.doc.id, name: m.doc.name, mimeType: m.doc.mimeType,
+              data: "__LAZY_LOAD__", extractedData: ed, type: m.doc.type,
+            } as any;
+          }));
           return {
             reply: `Here are your ${multiMatches.length} documents: ${names.join(", ")}.`,
             actions: multiMatches.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.doc.id } })),
-            results: multiMatches.map(m => ({ id: m.doc.id, name: m.doc.name, type: m.doc.type, mimeType: m.doc.mimeType })),
+            results: [], // Avoid duplicate ConfirmationCards
             documentPreview: previews[0],
             documentPreviews: previews,
           };
@@ -7417,11 +7434,22 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         } else if (matches.length > 1) {
           suffix = ` (${matches.length} matches — showing the most recent.)`;
         }
+        // Fetch full doc to include extractedData in the preview
+        let fullDoc: any = chosen;
+        try { fullDoc = await storage.getDocument(chosen.id) || chosen; } catch { /* keep list version */ }
+        const preview: any = {
+          id: chosen.id,
+          name: chosen.name,
+          mimeType: chosen.mimeType,
+          data: "__LAZY_LOAD__",
+          extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
+          type: chosen.type,
+        };
         return {
           reply: `Here's your ${chosen.name}.${suffix}`,
           actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
-          results: [{ id: chosen.id, name: chosen.name, type: chosen.type, mimeType: chosen.mimeType }],
-          documentPreview: { id: chosen.id, name: chosen.name, mimeType: chosen.mimeType, data: "__LAZY_LOAD__" },
+          results: [], // Do NOT render a duplicate ConfirmationCard — the documentPreview already shows the doc
+          documentPreview: preview,
         };
       }
       // No match found — fall through to AI to try harder

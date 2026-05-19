@@ -76,12 +76,16 @@ export interface ChatMessage {
     name: string;
     mimeType: string;
     data: string; // base64 for inline display
+    extractedData?: Record<string, any>;
+    type?: string;
   };
   documentPreviews?: Array<{
     id: string;
     name: string;
     mimeType: string;
     data: string;
+    extractedData?: Record<string, any>;
+    type?: string;
   }>;
   /** Inline Smart Fill suggestion chip — click to open SmartFillDialog with this file. */
   smartFillSuggestion?: {
