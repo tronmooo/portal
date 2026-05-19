@@ -484,7 +484,14 @@ function LazyDocumentPreview({ id, name, mimeType, data }: { id: string; name: s
 
   if (!imageData) return null;
 
-  return <DocumentViewer id={id} name={name} mimeType={mimeType} data={imageData} inline />;
+  // Inline viewer uses h-full — give it an explicit height so the preview
+  // (image or PDF) actually renders instead of collapsing to header-only.
+  const isPdf = mimeType === "application/pdf";
+  return (
+    <div className="mt-2" style={{ height: isPdf ? 480 : 360 }}>
+      <DocumentViewer id={id} name={name} mimeType={mimeType} data={imageData} inline />
+    </div>
+  );
 }
 
 function ChatDocumentPreviews({

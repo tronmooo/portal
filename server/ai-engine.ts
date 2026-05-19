@@ -7227,6 +7227,45 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       // Simple stem: strip trailing s/ing/ed/tion for prefix matching
       const stem = (w: string) => w.replace(/(ing|tion|ed|s)$/i, "");
 
+      // ── Person-name disambiguation ────────────────────────────────────
+      // If the user said "Bob's drivers license" or "open Jane's passport",
+      // pull the person name and use it as a HARD filter on linked_profiles.
+      // Without this, all 3 drivers licenses (Bob, Jane, another Bob) match
+      // equally because they all contain "license" + "driver".
+      let allProfiles: any[] = [];
+      try { allProfiles = await storage.getProfiles(); } catch { allProfiles = []; }
+      const profileNames = allProfiles.map((p: any) => ({
+        id: String(p.id),
+        first: String(p.name || "").trim().split(/\s+/)[0].toLowerCase(),
+        full: String(p.name || "").toLowerCase().trim(),
+      })).filter(p => p.first.length >= 2);
+
+      // Look for possessive ("bob's", "bobs") or bare first-name token in the ORIGINAL search term
+      const possessiveMatch = searchTerm.match(/\b([a-z]{2,})['’]s\b/i);
+      let nameTokenLC = possessiveMatch ? possessiveMatch[1].toLowerCase() : "";
+      if (!nameTokenLC) {
+        // Bare first name match against any profile
+        const tokens = searchTerm.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+        for (const t of tokens) {
+          if (profileNames.some(p => p.first === t)) { nameTokenLC = t; break; }
+        }
+      }
+      // Resolve which profile IDs match this name (could be multiple Bobs)
+      const targetProfileIds = new Set<string>();
+      if (nameTokenLC) {
+        for (const p of profileNames) {
+          if (p.first === nameTokenLC || p.full.startsWith(nameTokenLC + " ") || p.full === nameTokenLC) {
+            targetProfileIds.add(p.id);
+          }
+        }
+      }
+      // Also collect ALL profile first names so we can penalize wrong-person matches
+      const otherProfileIdsByFirstName = new Map<string, Set<string>>();
+      for (const p of profileNames) {
+        if (!otherProfileIdsByFirstName.has(p.first)) otherProfileIdsByFirstName.set(p.first, new Set());
+        otherProfileIdsByFirstName.get(p.first)!.add(p.id);
+      }
+
       // Fuzzy match: search in document name, type, and extracted data
       const scored = allDocs.map(d => {
         const nameLC = d.name.toLowerCase();
@@ -7236,12 +7275,16 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         const searchable = `${nameNorm} ${typeLC}`;
         let score = 0;
         // Check each search variant (original + synonym-expanded)
+        // Person-name tokens are EXCLUDED from generic word scoring — they're
+        // handled by the profile-id filter below to avoid false positives.
         for (const variant of searchVariants) {
           const vNorm = variant.replace(/[''\-_]/g, "").replace(/s\s/g, " ");
           if (searchable.includes(vNorm)) score += 10;
           // Check individual words — exact match or prefix/stem match
           const vWords = vNorm.split(/\s+/).filter(w => w.length >= 2);
           for (const w of vWords) {
+            // Skip person-name tokens — they're scored via linked_profiles below
+            if (otherProfileIdsByFirstName.has(w)) continue;
             if (searchable.includes(w)) {
               score += 2;
             } else {
@@ -7259,12 +7302,47 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         }).join(" ");
         const cleanWords = cleanSearch.split(/\s+/).filter(w => w.length >= 2);
         for (const w of cleanWords) {
+          if (otherProfileIdsByFirstName.has(w)) continue; // skip name tokens
           if (edText.includes(w)) score += 1;
           else {
             const ws = stem(w);
             if (ws.length >= 3 && edText.includes(ws)) score += 0.5;
           }
         }
+
+        // ── Person filter (HARD-ish) ──────────────────────────────────
+        // If the user named a person, dramatically boost docs linked to that
+        // person and disqualify docs linked to a DIFFERENT named profile.
+        if (nameTokenLC && targetProfileIds.size > 0) {
+          const docLinked: string[] = Array.isArray((d as any).linkedProfiles)
+            ? (d as any).linkedProfiles.map(String)
+            : Array.isArray((d as any).linked_profiles)
+              ? (d as any).linked_profiles.map(String)
+              : [];
+          const linkedToTarget = docLinked.some(pid => targetProfileIds.has(pid));
+          if (linkedToTarget) {
+            score += 25; // strong boost
+          } else {
+            // Check if doc name itself mentions the requested person
+            const nameMentionsTarget = searchable.includes(nameTokenLC);
+            if (nameMentionsTarget) {
+              score += 15;
+            } else {
+              // Doc isn't linked to the named person AND name doesn't mention them.
+              // If it IS linked to a different profile whose first name we know,
+              // disqualify it entirely.
+              const linkedToOtherKnown = docLinked.some(pid =>
+                profileNames.some(p => p.id === pid && p.first !== nameTokenLC)
+              );
+              const nameMentionsOther = Array.from(otherProfileIdsByFirstName.keys())
+                .some(other => other !== nameTokenLC && searchable.includes(other));
+              if (linkedToOtherKnown || nameMentionsOther) {
+                score = -1; // disqualified — wrong person
+              }
+            }
+          }
+        }
+
         return { doc: d, score };
       }).filter(s => s.score >= 4).sort((a, b) => b.score - a.score);
       const matches = scored.map(s => s.doc);
@@ -7314,12 +7392,36 @@ export async function processMessage(userMessage: string, conversationHistory?: 
 
       // Single document match
       if (matches.length > 0) {
-        const doc = matches[0];
+        // If multiple matches share the same doc type AND same linked person,
+        // they're likely versions of the same thing (e.g., old + new license).
+        // Show the most recent one and tell the user older versions are available.
+        let chosen = matches[0];
+        let olderCount = 0;
+        if (matches.length > 1) {
+          const sameTypeGroup = matches.filter(m => m.type === chosen.type);
+          if (sameTypeGroup.length > 1) {
+            // Sort by createdAt descending — newest first
+            const byDate = [...sameTypeGroup].sort((a, b) => {
+              const ta = new Date((a as any).createdAt || (a as any).created_at || 0).getTime();
+              const tb = new Date((b as any).createdAt || (b as any).created_at || 0).getTime();
+              return tb - ta;
+            });
+            chosen = byDate[0];
+            olderCount = sameTypeGroup.length - 1;
+          }
+        }
+        const otherDistinct = matches.filter(m => m.id !== chosen.id && m.type !== chosen.type).length;
+        let suffix = "";
+        if (olderCount > 0 && otherDistinct === 0) {
+          suffix = ` (${olderCount} older version${olderCount > 1 ? "s" : ""} also on file.)`;
+        } else if (matches.length > 1) {
+          suffix = ` (${matches.length} matches — showing the most recent.)`;
+        }
         return {
-          reply: `Here's your ${doc.name}.${matches.length > 1 ? ` (Found ${matches.length} matches — showing the first one.)` : ""}`,
-          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],
-          results: [{ id: doc.id, name: doc.name, type: doc.type, mimeType: doc.mimeType }],
-          documentPreview: { id: doc.id, name: doc.name, mimeType: doc.mimeType, data: "__LAZY_LOAD__" },
+          reply: `Here's your ${chosen.name}.${suffix}`,
+          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
+          results: [{ id: chosen.id, name: chosen.name, type: chosen.type, mimeType: chosen.mimeType }],
+          documentPreview: { id: chosen.id, name: chosen.name, mimeType: chosen.mimeType, data: "__LAZY_LOAD__" },
         };
       }
       // No match found — fall through to AI to try harder
