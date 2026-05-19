@@ -50,6 +50,7 @@ import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -474,6 +475,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
   filterIds: string[];
 }) {
   const [, navigate] = useLocation();
+  const [heroPopup, setHeroPopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
   const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const trailing = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -524,7 +526,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
       {/* NET WORTH */}
       <button
         type="button"
-        onClick={() => navigate('/linked')}
+        onClick={() => setHeroPopup("networth")}
         className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
         style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.16) 0%, hsl(155 60% 44% / 0.04) 60%, transparent 100%)' }}
         data-testid="hero-kpi-net-worth"
@@ -551,7 +553,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
       {/* BUDGET */}
       <button
         type="button"
-        onClick={() => navigate('/dashboard/finance')}
+        onClick={() => setHeroPopup("budget")}
         className="relative flex flex-col p-4 rounded-2xl border overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
         style={{
           background: budgetBreached
@@ -591,7 +593,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
       {/* CASH FLOW */}
       <button
         type="button"
-        onClick={() => navigate('/dashboard/finance')}
+        onClick={() => setHeroPopup("cashflow")}
         className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
         style={{
           background: cashFlow >= 0
@@ -620,6 +622,27 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
           <span>Out ${fmt(Math.round(monthlySpend))}</span>
         </div>
       </button>
+
+      {/* Hero KPI Popups */}
+      <NetWorthPopup
+        open={heroPopup === "networth"}
+        onOpenChange={(o) => setHeroPopup(o ? "networth" : null)}
+        filterMode={(filterMode as "all" | "selected" | "everyone")}
+        filterIds={filterIds}
+      />
+      <CashFlowPopup
+        open={heroPopup === "cashflow"}
+        onOpenChange={(o) => setHeroPopup(o ? "cashflow" : null)}
+        filterMode={(filterMode as "all" | "selected" | "everyone")}
+        filterIds={filterIds}
+      />
+      <BudgetPopup
+        open={heroPopup === "budget"}
+        onOpenChange={(o) => setHeroPopup(o ? "budget" : null)}
+        filterMode={(filterMode as "all" | "selected" | "everyone")}
+        filterIds={filterIds}
+        monthlyIncome={monthlyIncome}
+      />
     </div>
   );
 }
