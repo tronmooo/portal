@@ -570,10 +570,19 @@ export function BudgetPopup({
   const totalSpent = budgets.reduce((s, b) => s + (spendByCategory[b.category] || 0), 0);
   const overallPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
 
+  // Invalidate every queryKey that derives from budgets.
+  // Note: TanStack Query does prefix-match by array elements, so
+  // ["/api/budgets"] does NOT match ["/api/budgets/summary", ...]. We need to
+  // invalidate each prefix explicitly so the Dashboard Hero KPI and the
+  // Finance page Budget banner re-render after an add / edit / delete.
+  // (Fixes QA bugs BUG-004 "Dashboard Budget card stale" + BUG-008 "Finance
+  // budget banner stale".)
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["/api/budgets"] });
+    qc.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
     qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     qc.invalidateQueries({ queryKey: ["/api/stats"] });
+    qc.invalidateQueries({ queryKey: ["/api/expenses"] });
   };
 
   const addMut = useMutation({
@@ -748,14 +757,23 @@ export function BudgetPopup({
           <Button size="sm" variant="outline" className="w-full text-xs h-8" onClick={() => setShowAdd(true)} data-testid="budget-show-add">
             <Plus className="h-3.5 w-3.5 mr-1.5" /> Add category
           </Button>
-        ) : (
+        ) : (() => {
+          // QA BUG-007 — disable submit until required fields filled,
+          // highlight invalid inputs in red, and never let the button flash
+          // "Saving…" on an empty submit.
+          const catOk = newCategory.trim().length > 0;
+          const amtNum = Number(newAmount);
+          const amtOk = newAmount !== "" && Number.isFinite(amtNum) && amtNum > 0;
+          const canSubmit = catOk && amtOk && !addMut.isPending;
+          return (
           <div className="rounded-lg border border-primary/30 bg-primary/5 p-2 space-y-1.5">
             <Input
               placeholder="Category (e.g. groceries, rent)"
               value={newCategory}
               onChange={(e) => setNewCategory(e.target.value)}
-              className="h-8 text-xs"
+              className={`h-8 text-xs ${!catOk && newCategory.length > 0 ? "border-destructive focus-visible:ring-destructive" : ""}`}
               autoFocus
+              aria-invalid={!catOk && newCategory.length > 0}
             />
             <div className="flex items-center gap-1.5">
               <div className="inline-flex rounded-md border border-border overflow-hidden text-[10px]">
@@ -777,9 +795,10 @@ export function BudgetPopup({
                 placeholder={newMode === "percent" ? "% of income" : "$ amount"}
                 value={newAmount}
                 onChange={(e) => setNewAmount(e.target.value)}
-                className="h-8 text-xs flex-1"
+                className={`h-8 text-xs flex-1 ${!amtOk && newAmount.length > 0 ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                aria-invalid={!amtOk && newAmount.length > 0}
               />
-              <Button size="sm" className="h-8 text-xs px-2" onClick={() => addMut.mutate()} disabled={addMut.isPending} data-testid="budget-add-submit">
+              <Button size="sm" className="h-8 text-xs px-2" onClick={() => addMut.mutate()} disabled={!canSubmit} data-testid="budget-add-submit">
                 {addMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
               </Button>
               <Button size="sm" variant="ghost" className="h-8 text-xs px-2" onClick={() => { setShowAdd(false); setNewCategory(""); setNewAmount(""); }}>
@@ -792,7 +811,8 @@ export function BudgetPopup({
               </p>
             )}
           </div>
-        )}
+          );
+        })()}
       </div>
     </MetricPopupShell>
   );

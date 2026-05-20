@@ -302,12 +302,24 @@ export function HistoryTab({ profileId }: { profileId: string }) {
     );
   }
 
+  // The server returns the ownership_history timestamp as `changedAt`
+  // (camelCase, see rowToOwnershipHistory in supabase-storage.ts). The original
+  // code read `createdAt`, which is undefined → `new Date(undefined)` → 'Invalid
+  // Date' showing up in the asset / liability History tab. Read `changedAt`
+  // first, fall back to legacy fields for safety, and skip rows with no
+  // parseable timestamp instead of rendering 'Invalid Date'.
+  const tsOf = (e: any): number => {
+    const raw = e?.changedAt ?? e?.changed_at ?? e?.createdAt ?? e?.created_at;
+    if (!raw) return 0;
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
   const grouped = new Map<string, any[]>();
-  const sorted = [...entries].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  const sorted = [...entries].sort((a, b) => tsOf(b) - tsOf(a));
   for (const e of sorted) {
-    const day = new Date(e.createdAt).toLocaleDateString("en-US", {
+    const t = tsOf(e);
+    if (!t) continue; // skip rows without a usable timestamp
+    const day = new Date(t).toLocaleDateString("en-US", {
       month: "long",
       day: "numeric",
       year: "numeric",
@@ -328,11 +340,12 @@ export function HistoryTab({ profileId }: { profileId: string }) {
           </p>
           <div className="space-y-2">
             {dayEntries.map((e: any) => {
-              const time = new Date(e.createdAt).toLocaleTimeString("en-US", {
+              const tms = tsOf(e);
+              const time = new Date(tms).toLocaleTimeString("en-US", {
                 hour: "numeric",
                 minute: "2-digit",
               });
-              const canUndo = now - new Date(e.createdAt).getTime() < ONE_DAY;
+              const canUndo = now - tms < ONE_DAY;
               const changedByBadge =
                 (e.changedBy || "user") === "ai" ? "AI" : "user";
 

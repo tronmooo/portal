@@ -342,6 +342,55 @@ function ScrollToTop() {
   return null;
 }
 
+// Sets the browser tab title immediately on every route change, BEFORE the
+// lazy-loaded page mounts and runs its own useEffect. This kills the QA bug
+// where landing on /dashboard/habits briefly (or persistently) shows the
+// previous page's title — e.g. "Page not found — Portol" — because the Suspense
+// fallback paints first and the previous title hangs on. (QA BUG-001.)
+function RouteTitle() {
+  const [location] = useLocation();
+  useEffect(() => {
+    const path = location.split("?")[0].replace(/\/$/, "") || "/";
+    const map: Record<string, string> = {
+      "/": "Portol — Your Life, Organized",
+      "/dashboard": "Dashboard — Portol",
+      "/dashboard/finance": "Finance — Portol",
+      "/dashboard/habits": "Habits — Portol",
+      "/dashboard/journal": "Journal — Portol",
+      "/dashboard/obligations": "Bills — Portol",
+      "/dashboard/tasks": "Tasks — Portol",
+      "/dashboard/documents": "Documents — Portol",
+      "/dashboard/artifacts": "Artifacts — Portol",
+      "/dashboard/health": "Health — Portol",
+      "/health": "Health — Portol",
+      "/trackers": "Trackers — Portol",
+      "/linked": "Linked — Portol",
+      "/profiles": "Profiles — Portol",
+      "/calendar": "Calendar — Portol",
+      "/settings": "Settings — Portol",
+      "/artifacts": "Artifacts — Portol",
+      "/insights": "Insights — Portol",
+      "/tasks": "Tasks — Portol",
+      "/finance": "Finance — Portol",
+      "/obligations": "Bills — Portol",
+      "/bills": "Bills — Portol",
+      "/journal": "Journal — Portol",
+      "/habits": "Habits — Portol",
+      "/privacy": "Privacy — Portol",
+      "/terms": "Terms — Portol",
+    };
+    let title = map[path];
+    if (!title) {
+      if (path.startsWith("/profiles/") || path.startsWith("/profile/")) title = "Profile — Portol";
+      else if (path.startsWith("/documents/")) title = "Document — Portol";
+      else if (path.startsWith("/editor/")) title = "Editor — Portol";
+      else if (path.startsWith("/share/")) title = "Shared — Portol";
+    }
+    if (title) document.title = title;
+  }, [location]);
+  return null;
+}
+
 // Keep the Vercel serverless function warm so there's never a cold-start delay.
 // Ping every 90 seconds — Vercel keeps functions alive for ~5 min after last request.
 function KeepAlive() {
@@ -455,6 +504,11 @@ function AppRouter() {
         <Route path="/journal" component={JournalPage} />
         <Route path="/habits" component={HabitsPage} />
         <Route path="/bills" component={ObligationsPage} />
+        {/* Health dashboard alias: the dashboard has a Health section but no dedicated
+            sub-route existed. Route /dashboard/health and /health to TrackersPage,
+            which is where health trackers (weight, BP, etc.) live. */}
+        <Route path="/dashboard/health" component={TrackersPage} />
+        <Route path="/health" component={TrackersPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -486,6 +540,7 @@ function App() {
           <ErrorBoundary>
           <Router hook={useHashLocation}>
             <ScrollToTop />
+            <RouteTitle />
             <KeepAlive />
             <DataPrefetch />
             <SwipeNav />
