@@ -10,7 +10,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -404,11 +404,32 @@ function ObligationOccurrencePanel() {
   const today = new Date().toLocaleDateString("en-CA");
   const end = new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-CA");
   const start = new Date(Date.now() - 60 * 86400000).toLocaleDateString("en-CA");
-  const { data: occurrences = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/obligation-occurrences", start, end],
-    queryFn: () => apiRequest("GET", `/api/obligation-occurrences?start=${start}&end=${end}`).then(r => r.json()),
+  // Subscribe to global profile filter so this panel updates when the user
+  // changes profiles from the header chip (was showing other profiles' bills).
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  useEffect(() => {
+    const unsub = subscribeProfileFilter(state => {
+      setFilterMode(state.mode);
+      setFilterIds([...state.selectedIds]);
+    });
+    return unsub;
+  }, []);
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
+  const { data: rawOccurrences = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/obligation-occurrences", start, end, filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/obligation-occurrences?start=${start}&end=${end}${profileParam}`).then(r => r.json()),
     staleTime: 60_000,
   });
+  // Defense-in-depth client filter — if the server is on an older deploy
+  // that ignores profileIds, still hide other profiles' occurrences.
+  const occurrences = useMemo(() => {
+    if (filterMode !== "selected" || filterIds.length === 0) return rawOccurrences;
+    return rawOccurrences.filter((occ: any) => {
+      const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
+      return lp.some((pid: string) => filterIds.includes(pid));
+    });
+  }, [rawOccurrences, filterMode, filterIds]);
 
   const { overdue, todayOcc, upcoming } = useMemo(() => {
     const overdue: any[] = [], todayOcc: any[] = [], upcoming: any[] = [];
@@ -707,13 +728,18 @@ export default function ObligationsManager({ showHeader = true, compact = false 
   const [drawerOb, setDrawerOb] = useState<Obligation | null>(null);
 
   useEffect(() => {
+    const unsub = subscribeProfileFilter(state => {
+      setFilterMode(state.mode);
+      setFilterIds([...state.selectedIds]);
+    });
+    // Window-focus fallback for cases where the filter changed in another tab.
     const handleFocus = () => {
       const { mode, selectedIds } = getProfileFilter();
       setFilterMode(mode);
       setFilterIds(selectedIds);
     };
     window.addEventListener("focus", handleFocus);
-    return () => window.removeEventListener("focus", handleFocus);
+    return () => { unsub(); window.removeEventListener("focus", handleFocus); };
   }, []);
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
