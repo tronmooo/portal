@@ -7273,6 +7273,46 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         otherProfileIdsByFirstName.get(p.first)!.add(p.id);
       }
 
+      // ── Doc-type term detection ─────────────────────────────────────────
+      // If the user named a doc-type term (e.g. "license", "passport",
+      // "registration"), we REQUIRE the doc to actually match that type —
+      // otherwise a utility bill linked to the named person would beat a
+      // license simply because the person filter awards +25.
+      const DOC_TYPE_TERMS = new Set([
+        "license", "licence", "dl",
+        "registration", "reg",
+        "passport",
+        "insurance", "policy",
+        "title",
+        "deed",
+        "bill", "utility",
+        "statement",
+        "receipt",
+        "contract", "agreement", "lease",
+        "birth", "certificate",
+        "id", "identification",
+        "citation", "ticket", "toll",
+      ]);
+      // Find which doc-type terms appear in the user's query (after stripping the
+      // possessive person name) — these become MANDATORY for a doc to qualify.
+      const queryWordsForType: string[] = cleanSearch.split(/\s+/)
+        .filter(w => w.length >= 2)
+        .filter(w => !otherProfileIdsByFirstName.has(w)) // skip person names
+        .map(w => w.toLowerCase());
+      const requiredDocTypeTerms = queryWordsForType.filter(w => {
+        if (DOC_TYPE_TERMS.has(w)) return true;
+        const s = stem(w);
+        return s.length >= 3 && DOC_TYPE_TERMS.has(s);
+      });
+      // Expand required terms with synonyms so "license" also matches "licence" / "dl"
+      const expandedRequiredTerms = new Set<string>();
+      for (const t of requiredDocTypeTerms) {
+        expandedRequiredTerms.add(t);
+        const syns = synonymMap[t] || [];
+        for (const s of syns) expandedRequiredTerms.add(s);
+      }
+      console.log(`[doc-open] requiredDocTypeTerms=${Array.from(expandedRequiredTerms).join(",")}`);
+
       // Fuzzy match: search in document name, type, and extracted data
       const scored = allDocs.map(d => {
         const nameLC = d.name.toLowerCase();
@@ -7280,6 +7320,18 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         // Normalize: remove punctuation and collapse whitespace
         const nameNorm = nameLC.replace(/[''\-_–—]/g, " ").replace(/\s+/g, " ");
         const searchable = `${nameNorm} ${typeLC}`;
+
+        // HARD GATE: if user named a doc-type term, the doc MUST contain at
+        // least one of those terms (or their synonyms) in its name or type.
+        if (expandedRequiredTerms.size > 0) {
+          const hasRequired = Array.from(expandedRequiredTerms).some(t => {
+            if (searchable.includes(t)) return true;
+            const ts = stem(t);
+            return ts.length >= 3 && searchable.includes(ts);
+          });
+          if (!hasRequired) return { doc: d, score: -1 }; // disqualify
+        }
+
         let score = 0;
         // Check each search variant (original + synonym-expanded)
         // Person-name tokens are EXCLUDED from generic word scoring — they're
