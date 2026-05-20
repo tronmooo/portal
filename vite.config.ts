@@ -34,22 +34,18 @@ export default defineConfig({
     // them in parallel and cache them across deploys.
     rollupOptions: {
       output: {
+        // Only split the genuinely huge deps that are imported dynamically
+        // by a single route. Splitting radix / react across chunks caused a
+        // load-order bug where radix tried to use React.forwardRef before
+        // React was loaded — leaving the page blank. Anything that touches
+        // React stays in the default vendor split so Rollup can order it
+        // correctly.
         manualChunks(id: string): string | undefined {
           if (!id.includes("node_modules")) return undefined;
-          // Univer is enormous (5.4MB) and only used on the editor route
           if (id.includes("@univerjs") || id.includes("opentype.js")) return "univer";
-          // ExcelJS — only used on the editor for spreadsheet export/import
           if (id.includes("exceljs")) return "exceljs";
-          // Recharts is large and only used on a few dashboard widgets
-          if (id.includes("recharts") || id.includes("d3-")) return "charts";
-          // PDF.js used only when opening a document
           if (id.includes("pdfjs-dist")) return "pdfjs";
-          // Radix UI is sprinkled everywhere but compresses well as one chunk
-          if (id.includes("@radix-ui")) return "radix";
-          // React core stays in vendor
-          if (id.includes("react-dom") || id.includes("react/") || id.includes("scheduler")) return "react-core";
-          // Everything else stays in the default vendor split
-          return "vendor";
+          return undefined;
         },
       },
     },
