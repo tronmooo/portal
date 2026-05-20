@@ -1133,7 +1133,15 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                   } ${isSelected && !isToday ? "bg-primary/5 ring-1 ring-inset ring-primary/30" : !isSelected && !isToday ? "hover:bg-muted/30" : ""} ${
                     isToday ? "bg-primary/15 ring-2 ring-inset ring-primary/30" : ""
                   }`}
-                  onClick={() => setSelectedDate(day.date)}
+                  onClick={() => {
+                    // If already selected, drill into day view; otherwise just select
+                    if (selectedDate === day.date) {
+                      setViewMode("day");
+                      setViewDate(new Date(day.date + "T00:00:00"));
+                    } else {
+                      setSelectedDate(day.date);
+                    }
+                  }}
                   onDoubleClick={() => { setQuickAddDate(day.date); setAddOpen(true); }}
                   data-testid={`day-cell-${day.date}`}
                 >

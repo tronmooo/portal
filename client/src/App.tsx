@@ -445,6 +445,16 @@ function AppRouter() {
         <Route path="/dashboard/journal" component={JournalPage} />
         <Route path="/dashboard/obligations" component={ObligationsPage} />
         <Route path="/dashboard/tasks" component={TasksPage} />
+        {/* Top-level aliases so the AI assistant's confirmation phrases
+            ("added to Tasks page", "saved to Finance page") and any external
+            deeplinks resolve instead of 404'ing. Each aliases the canonical
+            /dashboard/* route above. */}
+        <Route path="/tasks" component={TasksPage} />
+        <Route path="/finance" component={FinancePage} />
+        <Route path="/obligations" component={ObligationsPage} />
+        <Route path="/journal" component={JournalPage} />
+        <Route path="/habits" component={HabitsPage} />
+        <Route path="/bills" component={ObligationsPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>

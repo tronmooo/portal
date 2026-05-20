@@ -98,9 +98,26 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
   
   function renderChart() {
     if (spec.type==="pie") {
+      // Pie label heuristic:
+      //  - outerRadius lowered to 62% so the surrounding label text stays
+      //    inside the chart frame (was 75%, which clipped long category
+      //    names like "general" → "gene" on narrow containers).
+      //  - drop labels for slices under 9% to prevent neighbouring labels
+      //    overlapping (the slice still appears in the legend below).
+      //  - render category name + percent with a hair-space separator so
+      //    it doesn't break mid-word when the slice arc is short.
       return (
-        <PieChart>
-          <Pie data={spec.data} dataKey={spec.valueKey||"amount"} nameKey={spec.nameKey||"category"} cx="50%" cy="50%" outerRadius="75%" label={({name,percent}:{name:string;percent:number})=>percent>0.04?`${name} ${(percent*100).toFixed(0)}%`:""} labelLine={false}>
+        <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+          <Pie
+            data={spec.data}
+            dataKey={spec.valueKey||"amount"}
+            nameKey={spec.nameKey||"category"}
+            cx="50%"
+            cy="50%"
+            outerRadius="62%"
+            label={({name,percent}:{name:string;percent:number})=>percent>=0.09?`${name} · ${(percent*100).toFixed(0)}%`:""}
+            labelLine={false}
+          >
             {spec.data.map((e,i)=><Cell key={i} fill={e.fill||CHART_PALETTE[i%CHART_PALETTE.length]}/>)}
           </Pie>
           <Tooltip contentStyle={tts} formatter={(v:any)=>[typeof v==="number"?`$${Number(v).toFixed(2)}`:v,""]}/>
@@ -2962,9 +2979,19 @@ export default function ChatPage() {
                       both as a chat preview card and on the Artifacts page. */}
                   <NewDocSheetButton disabled={isPending} />
                   <button
-                    className="h-8 w-8 rounded-lg md:hidden flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                    onClick={() => document.getElementById('camera-capture')?.click()}
+                    className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                    onClick={() => {
+                      // On mobile, opens camera. On desktop where `capture` is
+                      // ignored, this falls through to a normal image picker.
+                      const camera = document.getElementById('camera-capture') as HTMLInputElement | null;
+                      if (camera) {
+                        // Reset value so re-selecting the same photo re-fires onChange
+                        camera.value = '';
+                        camera.click();
+                      }
+                    }}
                     disabled={isPending}
+                    title="Take photo / pick image"
                     data-testid="button-camera"
                   >
                     <Camera className="h-4 w-4" />

@@ -656,15 +656,17 @@ export default function DocumentDetailPage() {
         )}
       </div>
 
-      {/* Main two-column layout */}
-      <div className="flex flex-1 overflow-hidden gap-4 p-4">
-        {/* Left: document preview (60%) */}
-        <div className="flex-[3] min-w-0 overflow-hidden">
+      {/* Main two-column layout — stacks vertically below md so the metadata
+          panel never gets squeezed into a sliver. On md+ split 55/45 so the
+          right column has room for label + value pairs without truncation. */}
+      <div className="flex flex-col md:flex-row flex-1 overflow-hidden gap-4 p-4">
+        {/* Left: document preview */}
+        <div className="flex-1 md:flex-[11] min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
           <PreviewPanel doc={doc} />
         </div>
 
-        {/* Right: editable data panel (40%) */}
-        <div className="flex-[2] min-w-0 overflow-hidden">
+        {/* Right: editable data panel */}
+        <div className="flex-1 md:flex-[9] min-w-0 md:min-w-[320px] overflow-hidden">
           <DataPanel
             doc={doc}
             onUpdate={(patch) => mutation.mutate(patch)}

@@ -637,6 +637,16 @@ function StandardDetailChart({
     date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
     value: typeof e.values[primaryField] === "number" ? (e.values[primaryField] as number) : null,
   }));
+  // Append a "today" sentinel point with a null value so the X-axis extends
+  // to the current date even when the most recent entry is days/weeks old.
+  // Without this the axis terminates at the last entry date and the user is
+  // shown a stale-looking range (e.g. "Apr 29 → May 5" when today is May 20).
+  (() => {
+    const todayLabel = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (chartData.length === 0 || chartData[chartData.length - 1].date !== todayLabel) {
+      chartData.push({ date: todayLabel, value: null });
+    }
+  })();
 
   return (
     <ResponsiveContainer width="100%" height={200}>
@@ -697,6 +707,15 @@ function WeightDetailChart({
     weight: typeof e.values[primaryField] === "number" ? (e.values[primaryField] as number) : null,
     bmi: e.computed?.bmi ?? null,
   }));
+  // Append a "today" sentinel point so the X-axis extends to the current date
+  // even when the most recent entry is days/weeks old. Without this the axis
+  // terminates at the last entry date and the trend looks stale.
+  (() => {
+    const todayLabel = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (chartData.length === 0 || chartData[chartData.length - 1].date !== todayLabel) {
+      chartData.push({ date: todayLabel, weight: null, bmi: null });
+    }
+  })();
 
   return (
     <div className="space-y-3">
@@ -3515,17 +3534,14 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
 
 export default function TrackersPage() {
   // Title reflects the actual route the user landed on. Both /trackers and
-  // /linked render this same component, but the previous hard-coded "Linked"
-  // showed the wrong title in the browser tab when navigating to /trackers.
+  // /linked render this same component. The app uses wouter path-based routing,
+  // so we read window.location.pathname (NOT hash, which is always empty here).
+  const [pageLoc] = useLocation();
   useEffect(() => {
-    const setTitle = () => {
-      const isLinkedRoute = window.location.hash.includes('/linked');
-      document.title = isLinkedRoute ? "Linked — Portol" : "Trackers — Portol";
-    };
-    setTitle();
-    window.addEventListener('hashchange', setTitle);
-    return () => window.removeEventListener('hashchange', setTitle);
-  }, []);
+    const path = pageLoc || window.location.pathname || '';
+    const isLinkedRoute = path.startsWith('/linked');
+    document.title = isLinkedRoute ? "Linked — Portol" : "Trackers — Portol";
+  }, [pageLoc]);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   // Always keep page-local filter state in lockstep with the global filter store,
@@ -4060,7 +4076,7 @@ export default function TrackersPage() {
           "All" tab intentionally has no chip row — it would be ambiguous which
           dataset it filters. */}
       {sectionFilter === "trackers" && allTrackerCats.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-trackers">
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-trackers">
           <button
             onClick={() => setTrackerCatFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${trackerCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -4088,7 +4104,7 @@ export default function TrackersPage() {
       )}
 
       {sectionFilter === "documents" && docTypes.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-documents">
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-documents">
           <button
             onClick={() => setDocTypeFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -4114,7 +4130,7 @@ export default function TrackersPage() {
       )}
 
       {sectionFilter === "profiles" && assetTypeOptions.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-assets">
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-assets">
           <button
             onClick={() => { setAssetTypeFilter("all"); setAssetNesting("all"); }}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" && assetNestingFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -4156,7 +4172,7 @@ export default function TrackersPage() {
       )}
 
       {sectionFilter === "liabilities" && liabilityCategoryOptions.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5" data-testid="category-filter-chips-liabilities">
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-liabilities">
           <button
             onClick={() => setSubCatFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${subCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}

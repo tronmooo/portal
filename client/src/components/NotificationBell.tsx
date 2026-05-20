@@ -215,7 +215,17 @@ export function NotificationBell() {
           }, 300);
           break;
         case "document_expiring":
-          setLocation("/linked");
+          // Deep-link directly to the owning entity so the user can update or
+          // renew the expiry date in-place. Documents → /documents/:id, profile
+          // field expiries → /profiles/:id. Falls back to /linked if entity is
+          // missing.
+          if (notification.entityType === "document" && notification.entityId) {
+            setLocation(`/documents/${notification.entityId}`);
+          } else if (notification.entityType === "profile" && notification.entityId) {
+            setLocation(`/profiles/${notification.entityId}`);
+          } else {
+            setLocation("/linked");
+          }
           break;
         default:
           setLocation("/dashboard");

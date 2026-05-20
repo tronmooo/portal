@@ -940,7 +940,10 @@ export default function EditorPage() {
     if (!tmp) return "";
     tmp.innerHTML = docHtml || "";
     const text = (tmp.textContent || "").trim();
-    const words = text ? text.split(/\s+/).length : 0;
+    // Split on any whitespace AND filter out empty tokens. Without the .filter,
+    // a stray leading/trailing whitespace (e.g. from a trailing <br>) or a
+    // zero-width character would inflate the count by one.
+    const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
     return `${words} word${words === 1 ? "" : "s"}`;
   }, [docHtml, type]);
   const sheetStats = useMemo(() => Object.keys(sheet.cells).length, [sheet]);

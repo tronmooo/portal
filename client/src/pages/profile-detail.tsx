@@ -10073,6 +10073,10 @@ export default function ProfileDetailPage() {
   const id = (params as { id?: string } | null)?.id || "";
   const { toast } = useToast();
 
+  // Document title is set dynamically below once the profile loads, so the
+  // browser tab reflects the actual entity (e.g. "Scrappy · Pet — Portol")
+  // instead of a generic "Profile — Portol". Falls back to the generic title
+  // while loading or if the fetch fails.
   useEffect(() => { document.title = "Profile — Portol"; }, []);
 
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -10123,6 +10127,18 @@ export default function ProfileDetailPage() {
     enabled: !!id,
     refetchOnMount: true,
   });
+
+  // Once the profile loads, refine the browser-tab title so it reflects the
+  // actual entity ("iPhone 15 · Asset — Portol", "Scrappy · Pet — Portol",
+  // "Bob Robertson — Portol"). Resets on unmount so other pages can claim
+  // their own title.
+  useEffect(() => {
+    if (!profile?.name) return;
+    const niceType = profile.type === "self" || profile.type === "person"
+      ? ""
+      : ` · ${profile.type.charAt(0).toUpperCase() + profile.type.slice(1)}`;
+    document.title = `${profile.name}${niceType} — Portol`;
+  }, [profile?.name, profile?.type]);
 
   const deleteMutation = useMutation({
     mutationFn: async () => {

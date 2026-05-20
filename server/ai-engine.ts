@@ -424,6 +424,29 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
+  // /help / "what can you do" fast-path. The AI was taking 15-25s to generate
+  // suggestions that just enumerate visible UI surfaces. Serve a static reply
+  // locally so the user sees an instant response with clickable routes.
+  if (lower === "/help" || lower === "help" || lower === "what can you do" || lower === "what can you do?" || lower === "how do i use this" || lower === "how do i use this?") {
+    return {
+      matched: true,
+      reply: [
+        "Here's what I can do \u2014 each command links to where it lands:",
+        "\u2022 Log expenses: \"$50 groceries\" \u2192 [/dashboard/finance](/dashboard/finance)",
+        "\u2022 Create tasks: \"remind me to call the dentist Friday\" \u2192 [/dashboard/tasks](/dashboard/tasks)",
+        "\u2022 Schedule events: \"Standup Friday 3pm\" \u2192 [/calendar](/calendar)",
+        "\u2022 Track health: \"weight 183\", \"bp 120/80\", \"slept 7.5 hours\" \u2192 [/trackers](/trackers)",
+        "\u2022 Add bills/subscriptions: \"$11 Netflix every month\" \u2192 [/dashboard/obligations](/dashboard/obligations)",
+        "\u2022 Manage people, pets, vehicles, assets \u2192 [/profiles](/profiles)",
+        "\u2022 Open documents: \"open my drivers license\" \u2192 [/linked](/linked)",
+        "\u2022 Journal entries: \"add a journal entry saying I had a great day\" \u2192 [/dashboard/journal](/dashboard/journal)",
+        "\u2022 Set goals: \"Save $5000 by December\" \u2192 Goals widget on [/dashboard](/dashboard)",
+      ].join("\n"),
+      actions: [],
+      results: [],
+    };
+  }
+
   // ┌─ JOURNAL FAST-PATH (runs BEFORE multi-intent guard) ─────────────────────┐
   // This bypasses the AI entirely for journal entries because the AI
   // persistently hallucinates that profiles "already have entries."
@@ -3178,14 +3201,27 @@ CHAT-FIRST PHILOSOPHY:
 You are the universal interface to ALL data in Portol. Every piece of data — documents, events, finances, health, profiles — is accessible through you. When users ask questions about their data, search proactively. When they mention documents, retrieve them. When they mention dates, route them to the calendar. You are the single point of intelligence for the user's entire life data.
 
 RESPONSE FORMAT:
-After completing actions, confirm EACH one with WHERE to find it:
-- Expense → "Saved to Finance page + [Profile]'s Expenses tab"
-- Task → "Added to Tasks page + Calendar on [date]"
-- Event → "Scheduled in Calendar on [date] at [time]"
-- Tracker entry → "Logged to [Tracker] in Trackers page + [Profile]'s Health tab"
-- Obligation → "Added to Bills — will show on Calendar every [frequency]"
-- Profile update → "Updated [Profile] → visible in Profiles page"
-This helps the user trust and verify the data.
+After completing actions, confirm EACH one with WHERE to find it. Use these EXACT route paths so the user can click through and verify:
+- Expense → "Saved to /dashboard/finance + [Profile]'s Expenses tab"
+- Task → "Added to /dashboard/tasks + Calendar on [date]"
+- Event → "Scheduled in /calendar on [date] at [time]"
+- Tracker entry → "Logged to [Tracker] in /trackers + [Profile]'s Health tab"
+- Obligation → "Added to /dashboard/obligations — will show on Calendar every [frequency]"
+- Profile update → "Updated [Profile] → visible in /profiles"
+NEVER invent route names like "Tasks page" or "Finance page" without the leading slash — the user needs a clickable path. NEVER claim a write succeeded without actually calling the tool — only confirm what the tool result returned.
+
+HELP / "WHAT CAN YOU DO" RESPONSES:
+When the user asks /help, "what can you do", "how do I use this", or similar, suggest ONLY features that have visible UI surfaces in Portol:
+- Logging expenses/income → /dashboard/finance
+- Creating tasks/reminders → /dashboard/tasks
+- Scheduling events → /calendar
+- Logging tracker entries (weight, BP, sleep, mood, workouts) → /trackers
+- Adding obligations/bills/subscriptions → /dashboard/obligations
+- Creating/updating profiles (people, pets, vehicles, assets) → /profiles
+- Journal entries → /journal
+- Uploading documents → /documents
+Do NOT suggest: "create a workout plan" or "workout routine" (no workout-plan page exists — only fitness trackers). Workouts are tracked via /trackers as fitness entries. Goals ARE visible — they live in the Goals widget on /dashboard.
+Keep help responses concise: 4-6 example commands max, each tied to a real route the user can click.
 
 Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).
 Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.
