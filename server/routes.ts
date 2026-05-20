@@ -1873,6 +1873,40 @@ If unsure, return "profile_fact".`,
     if (dup) {
       return res.status(409).json({ error: `A ${req.body.type} profile named "${dup.name}" already exists`, existingId: dup.id });
     }
+
+    // Wave 3 #7 — AI fuzzy duplicate detection. Catches near-dupes the exact
+    // check misses: "Netflix" vs "Netflix Premium", "Chase Visa" vs "Chase
+    // Credit Card", "State Farm Auto" vs "State Farm Insurance".
+    // Only fires when caller did NOT pass `skipDupCheck:true` so chat tool
+    // calls (which already intend to create) can bypass.
+    if (!req.body.skipDupCheck) {
+      const sameType = existing.filter(p => p.type === req.body.type && !p.deletedAt);
+      if (sameType.length > 0 && sameType.length < 100) {
+        try {
+          const decision = await aiPickIndex({
+            task: "profile-fuzzy-dup",
+            question: `Is "${req.body.name}" a duplicate or near-duplicate of any existing ${req.body.type} profile below? Pick its index. Pick -1 if all existing profiles are clearly distinct.`,
+            context: `New profile name: "${req.body.name}"\nNew profile type: ${req.body.type}`,
+            options: sameType.map(p => `${p.name}${p.fields?.lender ? ` (lender: ${p.fields.lender})` : ""}${p.fields?.last4 ? ` (…${p.fields.last4})` : ""}`),
+            timeoutMs: 2500,
+            minConfidence: 0.75,
+            fallback: () => -1,
+          });
+          if (decision.value.index >= 0 && sameType[decision.value.index]) {
+            const dupCandidate = sameType[decision.value.index];
+            return res.status(409).json({
+              error: `Possible duplicate of existing ${req.body.type} profile "${dupCandidate.name}". Set { skipDupCheck: true } to create anyway.`,
+              existingId: dupCandidate.id,
+              fuzzy: true,
+              reason: decision.value.reason,
+              confidence: decision.value.confidence,
+            });
+          }
+        } catch (e: any) {
+          console.error(`[profile-create] fuzzy-dup AI check failed silently: ${e?.message || e}`);
+        }
+      }
+    }
     // Auto-assign child-type profiles to self profile if no parent specified
     const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
     if (childTypes.has(req.body.type) && !req.body.parentProfileId) {
@@ -2463,6 +2497,78 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     } catch (err: any) {
       log.error("[LookupValue]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to look up current value" });
+    }
+  }));
+
+  // ── Wave 3 #9: Stale asset valuation detector ───────────────────────
+  // GET /api/assets/stale-valuations
+  // Returns assets that should have their value refreshed, ranked by AI based
+  // on type-specific staleness expectations (vehicles depreciate ~monthly,
+  // properties yearly, investments more often, etc) and the age of the last
+  // valuation. Cheap deterministic pre-filter → single AI ranking call.
+  app.get("/api/assets/stale-valuations", asyncHandler(async (req, res) => {
+    try {
+      const profiles = await storage.getProfiles();
+      const valuableTypes = new Set(["vehicle", "asset", "property", "investment"]);
+      const candidates = profiles
+        .filter((p: any) => valuableTypes.has(p.type) && !p.deletedAt)
+        .map((p: any) => {
+          const f = p.fields || {};
+          const lastValuedRaw = f.valuationDate || f.lastValuedAt;
+          const lastValued = lastValuedRaw ? new Date(lastValuedRaw) : null;
+          const ageDays = lastValued ? Math.floor((Date.now() - lastValued.getTime()) / 86400000) : 9999;
+          return {
+            id: p.id,
+            name: p.name,
+            type: p.type,
+            currentValue: Number(f.currentValue || f.purchasePrice || 0),
+            lastValuedAt: lastValuedRaw || null,
+            ageDays,
+          };
+        })
+        // Pre-filter: only show if never valued OR >30 days old (cheap path) —
+        // AI will further rank by type-specific staleness.
+        .filter((c: any) => c.ageDays >= 30 || !c.lastValuedAt);
+
+      if (candidates.length === 0) {
+        return res.json({ stale: [], reason: "No assets due for refresh." });
+      }
+      // Limit to top 50 candidates for the AI call so the prompt stays cheap.
+      const trimmed = candidates.slice(0, 50);
+
+      const decision = await aiDecide<{ rankedIndices: number[]; reasons: Record<string, string> }>({
+        task: "asset-stale-rank",
+        system: `You rank assets by URGENCY of valuation refresh based on type-specific staleness norms:
+- vehicle:    monthly       (high churn, market shifts)
+- investment: weekly to monthly
+- property:   yearly
+- asset:      every 6 months (default)
+Return ONLY JSON: {"rankedIndices":[<top 10 indices in order, most urgent first>],"reasons":{"<index>":"<short why>"}}
+Factors: ageDays since last valuation, type churn rate, currentValue magnitude (bigger = more impact if stale).`,
+        user: `Candidates:\n${JSON.stringify(trimmed.map((c: any, i: number) => ({ idx: i, ...c })))}\n\nReturn JSON only.`,
+        timeoutMs: 4000,
+        maxTokens: 500,
+        fallback: () => {
+          // Deterministic fallback: just sort by ageDays desc.
+          const sortedIdx = trimmed
+            .map((_: any, i: number) => i)
+            .sort((a, b) => trimmed[b].ageDays - trimmed[a].ageDays)
+            .slice(0, 10);
+          const reasons: Record<string, string> = {};
+          for (const i of sortedIdx) reasons[String(i)] = `${trimmed[i].ageDays}d since last valuation`;
+          return { rankedIndices: sortedIdx, reasons };
+        },
+        validate: (p: any) => p && Array.isArray(p.rankedIndices),
+      });
+
+      const stale = decision.value.rankedIndices
+        .map((i: number) => trimmed[i] ? { ...trimmed[i], reason: decision.value.reasons?.[String(i)] || "due" } : null)
+        .filter(Boolean)
+        .slice(0, 10);
+      res.json({ stale, source: decision.source, totalCandidates: candidates.length });
+    } catch (err: any) {
+      log.error("[StaleValuations]", err?.message || "unknown error");
+      res.status(500).json({ error: "Failed to compute stale valuations", stale: [] });
     }
   }));
 
@@ -4932,6 +5038,92 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     } catch (err: any) {
       console.error("AI Digest error:", err);
       res.status(500).json({ error: "Failed to generate AI digest" });
+    }
+  }));
+
+  // ── Wave 3 #8: Proactive AI suggestions for the dashboard ───────────────
+  // Returns 3-5 actionable suggestions based on a compact snapshot of the
+  // user's current state — missing data, duplicates, overdue items,
+  // categorization gaps, untracked recurring expenses, etc.
+  // Cached for 4 hours to keep cost negligible (~$0.01/user/day).
+  app.get("/api/dashboard/ai-suggestions", asyncHandler(async (req, res) => {
+    try {
+      const force = req.query.force === "true";
+      const CACHE_KEY = "ai_suggestions";
+      const TTL_MS = 4 * 3600 * 1000; // 4 hours
+
+      if (!force) {
+        const cached = await storage.getPreference(CACHE_KEY);
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            if (parsed.generatedAt && (Date.now() - new Date(parsed.generatedAt).getTime()) < TTL_MS) {
+              return res.json(parsed);
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      const [profiles, expenses, obligations, documents, trackers, goals] = await Promise.all([
+        storage.getProfiles(),
+        storage.getExpenses(),
+        storage.getObligations(),
+        storage.getDocuments(),
+        storage.getTrackers(),
+        storage.getGoals(),
+      ]);
+
+      // Build a TIGHT snapshot — just enough for AI to spot issues.
+      const snapshot: any = {
+        profileCounts: profiles.reduce((acc: Record<string, number>, p: any) => {
+          acc[p.type] = (acc[p.type] || 0) + 1; return acc;
+        }, {}),
+        recentExpenses: expenses.slice(-30).map((e: any) => ({ amount: e.amount, category: e.category, vendor: e.vendor || e.description?.slice(0, 40), date: e.date })),
+        obligationCount: obligations.length,
+        obligationsByCategory: obligations.reduce((acc: Record<string, number>, o: any) => {
+          acc[o.category || "other"] = (acc[o.category || "other"] || 0) + 1; return acc;
+        }, {}),
+        docCount: documents.length,
+        docsByType: documents.reduce((acc: Record<string, number>, d: any) => {
+          acc[d.type || "other"] = (acc[d.type || "other"] || 0) + 1; return acc;
+        }, {}),
+        unlinkedDocCount: documents.filter((d: any) => !d.linkedProfiles || d.linkedProfiles.length === 0).length,
+        otherCategoryExpenses: expenses.filter((e: any) => e.category === "other" || e.category === "general").length,
+        trackerCount: trackers.length,
+        emptyTrackerCount: trackers.filter((t: any) => !t.entries || t.entries.length === 0).length,
+        goalCount: goals.length,
+      };
+
+      const decision = await aiDecide<{ suggestions: Array<{ title: string; body: string; action: string; priority: "high" | "medium" | "low" }> }>({
+        task: "dashboard-ai-suggestions",
+        system: `You are a personal-finance coach surfacing 3 to 5 actionable improvements based on snapshot data.
+Return ONLY JSON: {"suggestions":[{"title":"<8 words max>","body":"<one short sentence>","action":"<short verb phrase>","priority":"high"|"medium"|"low"}]}
+Focus on:
+- expenses categorised as "other"/"general" → re-categorize
+- documents not linked to any profile → link them
+- recurring vendors in expenses with no matching obligation → add as subscription
+- empty trackers → archive or use
+- duplicate-looking profile types
+- missing essential profiles (self has no income/account)
+No emojis. No prose outside the JSON.`,
+        user: `Snapshot:\n${JSON.stringify(snapshot)}\n\nReturn JSON only.`,
+        timeoutMs: 8000,
+        model: "claude-haiku-4-5-20251001",
+        maxTokens: 700,
+        fallback: () => ({ suggestions: [] }),
+        validate: (p: any) => p && Array.isArray(p.suggestions),
+      });
+
+      const result = {
+        suggestions: decision.value.suggestions.slice(0, 5),
+        generatedAt: new Date().toISOString(),
+        source: decision.source,
+      };
+      try { await storage.setPreference(CACHE_KEY, JSON.stringify(result)); } catch { /* ignore */ }
+      res.json(result);
+    } catch (err: any) {
+      console.error("AI Suggestions error:", err);
+      res.status(500).json({ error: "Failed to generate AI suggestions", suggestions: [] });
     }
   }));
 
