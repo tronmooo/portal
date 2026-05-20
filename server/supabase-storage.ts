@@ -2685,11 +2685,13 @@ export class SupabaseStorage implements IStorage {
     }
     this.logActivity("obligation", `Created obligation: ${data.name}`);
 
-    // Wave 16 — materialize the next 90 days of occurrences so the calendar /
-    // dashboard / reminder feeds all read from one source of truth.
+    // Wave 17 — materialize the FULL series. With recurrence_end set, the
+    // engine expands every occurrence (e.g. 12 monthly for a 1-year housing
+    // bill). Without it, the engine uses its 2-year default horizon. Single
+    // source of truth for calendar / dashboard / reminder feeds.
     try {
       const { materializeOccurrences } = await import("./obligation-engine");
-      await materializeOccurrences(this.supabase, this.userId, id, 90);
+      await materializeOccurrences(this.supabase, this.userId, id);
     } catch (e: any) {
       console.error("[obligations] materialize failed (non-fatal):", e?.message || e);
     }
@@ -2727,7 +2729,7 @@ export class SupabaseStorage implements IStorage {
     if (data.frequency !== undefined || data.nextDueDate !== undefined || data.recurrenceEnd !== undefined) {
       try {
         const { materializeOccurrences } = await import("./obligation-engine");
-        await materializeOccurrences(this.supabase, this.userId, id, 90);
+        await materializeOccurrences(this.supabase, this.userId, id);
       } catch (e: any) {
         console.error("[obligations] re-materialize failed (non-fatal):", e?.message || e);
       }
@@ -2745,6 +2747,35 @@ export class SupabaseStorage implements IStorage {
       method: method || null, confirmation_number: confirmationNumber || null,
     });
     if (error) throw error;
+
+    // Wave 17 — ALSO mark the earliest pending/late occurrence as done so the
+    // user actually sees the late item disappear from their list. Previously
+    // we only advanced next_due_date which didn't touch obligation_occurrences,
+    // so the user saw "nothing happened" after marking paid. Find the earliest
+    // un-done occurrence (preferring late > pending, oldest first) and link the
+    // new payment to it.
+    try {
+      const { data: targetOcc } = await this.supabase
+        .from("obligation_occurrences")
+        .select("id")
+        .eq("user_id", this.userId)
+        .eq("obligation_id", obligationId)
+        .in("status", ["pending", "late"])
+        .order("due_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (targetOcc?.id) {
+        await this.supabase.from("obligation_occurrences").update({
+          status: "done",
+          completed_at: new Date().toISOString(),
+          actual_amount: amount,
+          payment_id: id,
+          updated_at: new Date().toISOString(),
+        }).eq("id", targetOcc.id).eq("user_id", this.userId);
+      }
+    } catch (e: any) {
+      console.error("[payObligation] occurrence mark failed (non-fatal):", e?.message || e);
+    }
     // Advance next due date. "once" obligations don't recur — leave them.
     // For everything else, advance from the LATER of (current next_due_date,
     // today). This keeps a stuck overdue bill from staying overdue forever

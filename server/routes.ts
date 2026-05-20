@@ -3811,10 +3811,15 @@ Rules:
 
   app.post("/api/obligations/:id/materialize", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || "anon";
-    const days = Math.min(365, Math.max(7, Number(req.body?.days) || 90));
+    // Wave 17: default horizon is the engine's default (2 years). When the caller
+    // explicitly passes `days`, clamp to [7, 1825] (5 years) so we still bound a
+    // pathological request but allow full-series materialization on demand.
     const { materializeOccurrences } = await import("./obligation-engine");
     const supabase = (storage as any).supabase;
-    const result = await materializeOccurrences(supabase, uid, req.params.id, days);
+    const requested = Number(req.body?.days);
+    const result = req.body?.days !== undefined && Number.isFinite(requested)
+      ? await materializeOccurrences(supabase, uid, req.params.id, Math.min(1825, Math.max(7, requested)))
+      : await materializeOccurrences(supabase, uid, req.params.id);
     bustCache(`calendar:${uid}`); bustCache(`enhanced:`);
     res.json(result);
   }));

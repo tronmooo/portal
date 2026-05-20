@@ -53,6 +53,48 @@ function nextOccurrencesFrom(startISO: string, freq: string, count = 3): string[
   } catch { return []; }
 }
 
+// Count + first/last occurrence summary for a [start..end] window. Mirrors the
+// server engine's expansion semantics. Returns null when inputs aren't sensible.
+function occurrenceSeries(
+  startISO: string,
+  endISO: string | null,
+  freq: string,
+): { count: number; first: string; last: string } | null {
+  if (!startISO) return null;
+  try {
+    const start = new Date(startISO + "T00:00:00");
+    if (isNaN(start.getTime())) return null;
+    if (freq === "once") {
+      const s = start.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      return { count: 1, first: s, last: s };
+    }
+    // Default to a 2-year horizon when no end date provided (matches server).
+    const end = endISO
+      ? new Date(endISO + "T00:00:00")
+      : new Date(start.getFullYear() + 2, start.getMonth(), start.getDate());
+    if (isNaN(end.getTime()) || end < start) return null;
+    let count = 0;
+    let lastDate = new Date(start);
+    const cur = new Date(start);
+    for (let i = 0; i < 500; i++) {
+      if (cur > end) break;
+      count++;
+      lastDate = new Date(cur);
+      switch (freq) {
+        case "weekly": cur.setDate(cur.getDate() + 7); break;
+        case "biweekly": cur.setDate(cur.getDate() + 14); break;
+        case "monthly": cur.setMonth(cur.getMonth() + 1); break;
+        case "quarterly": cur.setMonth(cur.getMonth() + 3); break;
+        case "yearly": cur.setFullYear(cur.getFullYear() + 1); break;
+        default: return null;
+      }
+    }
+    if (count === 0) return null;
+    const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return { count, first: fmt(start), last: fmt(lastDate) };
+  } catch { return null; }
+}
+
 // Map a kind to the page where its source object lives. Used by the detail
 // drawer's "View linked" deep-link.
 function linkedSourceRoute(ob: Obligation): { label: string; route: string } | null {
@@ -520,6 +562,7 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
   const isPaused = ob.status === "paused";
   const linked = linkedSourceRoute(ob);
   const nextThree = nextOccurrencesFrom(ob.nextDueDate, ob.frequency, 3);
+  const seriesSummary = occurrenceSeries(ob.nextDueDate, (ob as any).recurrenceEnd || null, ob.frequency);
 
   const payMut = useMutation({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
@@ -601,17 +644,32 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
           )}
         </div>
 
-        {/* Next 3 occurrences preview */}
-        {nextThree.length > 0 && ob.frequency !== "once" && (
-          <div className="border-t border-border/40 pt-3">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">Next 3 occurrences</p>
-            <div className="flex gap-1.5 flex-wrap">
-              {nextThree.map((d, i) => (
-                <Badge key={i} variant="outline" className="text-[10px] h-5">
-                  <CalIcon className="h-2.5 w-2.5 mr-1" /> {d}
-                </Badge>
-              ))}
+        {/* Schedule summary + next 3 occurrences */}
+        {ob.frequency !== "once" && (
+          <div className="border-t border-border/40 pt-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Schedule</p>
+              {seriesSummary && (
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {seriesSummary.count} occurrence{seriesSummary.count === 1 ? "" : "s"}
+                  {(ob as any).recurrenceEnd ? "" : " · ongoing (2y)"}
+                </span>
+              )}
             </div>
+            {seriesSummary && (
+              <p className="text-[11px] tabular-nums text-muted-foreground">
+                {seriesSummary.first} → {seriesSummary.last}
+              </p>
+            )}
+            {nextThree.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap">
+                {nextThree.map((d, i) => (
+                  <Badge key={i} variant="outline" className="text-[10px] h-5">
+                    <CalIcon className="h-2.5 w-2.5 mr-1" /> {d}
+                  </Badge>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -717,6 +775,7 @@ export default function ObligationsManager({ showHeader = true, compact = false 
   const [newCategory, setNewCategory] = useState("housing");
   const [newKind, setNewKind] = useState<ObligationKind>("bill");
   const [newDueDate, setNewDueDate] = useState("");
+  const [newRecurrenceEnd, setNewRecurrenceEnd] = useState("");
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [kindFilter, setKindFilter] = useState<"all" | ObligationKind>("all");
@@ -759,7 +818,7 @@ export default function ObligationsManager({ showHeader = true, compact = false 
       const savedName = newName;
       toast({ title: `"${savedName}" created`, description: `${OBLIGATION_KIND_META[newKind].label} · ${newFrequency} · $${newAmount}` });
       setAddOpen(false);
-      setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewKind("bill"); setNewDueDate("");
+      setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewKind("bill"); setNewDueDate(""); setNewRecurrenceEnd("");
     },
     onError: (err: Error) => toast({ title: "Failed to create", description: formatApiError(err), variant: "destructive" }),
   });
@@ -854,7 +913,7 @@ export default function ObligationsManager({ showHeader = true, compact = false 
       )}
 
       {/* Add Obligation Dialog */}
-      <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(""); setNewKind("bill"); } setAddOpen(v); }}>
+      <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(""); setNewRecurrenceEnd(""); setNewKind("bill"); } setAddOpen(v); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-sm">New Obligation</DialogTitle>
@@ -913,23 +972,41 @@ export default function ObligationsManager({ showHeader = true, compact = false 
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Next Due Date <span className="text-destructive">*</span></Label>
+                <Label className="text-xs">Start Date <span className="text-destructive">*</span></Label>
                 <Input type="date" value={newDueDate} onChange={e => setNewDueDate(e.target.value)} data-testid="input-obligation-due-date" />
               </div>
             </div>
-            {newDueDate && newFrequency !== "once" && (
-              <div className="rounded-md bg-muted/50 border border-border/50 px-3 py-2 space-y-1.5" data-testid="recurrence-preview">
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Repeat className="h-3 w-3" />
-                  <span>Next 3 occurrences</span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {nextOccurrencesFrom(newDueDate, newFrequency, 3).map((d, i) => (
-                    <Badge key={i} variant="secondary" className="text-[11px] font-normal tabular-nums">{d}</Badge>
-                  ))}
-                </div>
+            {newFrequency !== "once" && (
+              <div>
+                <Label className="text-xs">End Date <span className="text-muted-foreground font-normal">(optional — leave blank for ongoing)</span></Label>
+                <Input
+                  type="date"
+                  value={newRecurrenceEnd}
+                  min={newDueDate || undefined}
+                  onChange={e => setNewRecurrenceEnd(e.target.value)}
+                  data-testid="input-obligation-recurrence-end"
+                />
               </div>
             )}
+            {newDueDate && newFrequency !== "once" && (() => {
+              const series = occurrenceSeries(newDueDate, newRecurrenceEnd || null, newFrequency);
+              if (!series) return null;
+              return (
+                <div className="rounded-md bg-muted/50 border border-border/50 px-3 py-2 space-y-1" data-testid="recurrence-preview">
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Repeat className="h-3 w-3" />
+                    <span>
+                      {newRecurrenceEnd
+                        ? `${series.count} occurrence${series.count === 1 ? "" : "s"}`
+                        : `${series.count} occurrence${series.count === 1 ? "" : "s"} over 2 years (ongoing)`}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground tabular-nums">
+                    {series.first} → {series.last}
+                  </p>
+                </div>
+              );
+            })()}
             {newDueDate && newFrequency === "once" && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-md bg-muted/50 border border-border/50 px-3 py-2">
                 <CalIcon className="h-3 w-3" />
@@ -948,12 +1025,20 @@ export default function ObligationsManager({ showHeader = true, compact = false 
             <Button size="sm" disabled={!newName.trim() || !newAmount || parseFloat(newAmount) <= 0 || !newDueDate || createMutation.isPending}
               onClick={() => {
                 if (!newDueDate) { toast({ title: "Please pick a due date", variant: "destructive" }); return; }
+                // Ownership defaults from the active profile filter:
+                //   filter = everyone  → omit linkedProfiles, server auto-links to self
+                //   filter = selected  → use the selected profile IDs as owners
+                const ownerIds = filterMode === "selected" && filterIds.length > 0
+                  ? [...filterIds]
+                  : undefined;
                 createMutation.mutate({
                   name: newName.trim(), amount: parseFloat(newAmount), frequency: newFrequency,
                   category: newCategory, nextDueDate: newDueDate, autopay: false,
                   kind: newKind,
                   leadTimeDays: OBLIGATION_KIND_META[newKind].defaultLeadDays,
                   autoLogExpense: newKind === "subscription" || newKind === "bill",
+                  ...(ownerIds ? { linkedProfiles: ownerIds } : {}),
+                  ...(newRecurrenceEnd && newFrequency !== "once" ? { recurrenceEnd: newRecurrenceEnd } : {}),
                 });
               }} data-testid="button-save-obligation">
               {createMutation.isPending ? "Creating..." : "Create"}

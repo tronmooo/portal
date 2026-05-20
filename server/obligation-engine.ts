@@ -49,7 +49,7 @@ export async function materializeOccurrences(
   supabase: any,
   userId: string,
   obligationId: string,
-  horizonDays: number = 90,
+  horizonDays: number = 730,
 ): Promise<{ inserted: number; skipped: number }> {
   const { data: ob, error: obErr } = await supabase
     .from("obligations").select("*")
@@ -58,8 +58,14 @@ export async function materializeOccurrences(
   if (ob.status === "cancelled" || ob.status === "paused") return { inserted: 0, skipped: 0 };
 
   const today = new Date();
-  const horizonEnd = new Date(today.getTime() + horizonDays * 86400000);
   const recEnd = ob.recurrence_end ? parseLocalDate(ob.recurrence_end) : null;
+  // If a recurrence_end is set, EXPAND THE FULL SERIES (capped at 500 below).
+  // The user explicitly wants 12 occurrences for a 1-year monthly bill, etc.
+  // No recurrence_end → use the supplied horizon (default 2 years) so the
+  // calendar shows roughly 24 months of upcoming bills without unbounded growth.
+  const horizonEnd = recEnd
+    ? new Date(Math.max(recEnd.getTime(), today.getTime() + horizonDays * 86400000))
+    : new Date(today.getTime() + horizonDays * 86400000);
 
   // Start from the earlier of (next_due_date, today) so we don't lose past-due
   // occurrences. If next_due is in the future, start there.
