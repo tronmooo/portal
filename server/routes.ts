@@ -124,6 +124,75 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
 import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
 import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
 import { aiDecide, aiPickIndex } from "./ai-decide";
+
+// ── Wave 2 #6: AI-suggested obligation auto-sync for subscriptions/insurance ──
+// Mirrors syncLiabilityObligation but for non-liability recurring-bill profiles.
+// Uses AI to decide if the profile's fields warrant a recurring obligation
+// (e.g. monthly subscription with a price) so we don't create junk obligations
+// for one-off purchases or already-paid items.
+async function syncAiSuggestedObligation(profileId: string): Promise<void> {
+  try {
+    const p: any = await storage.getProfile(profileId);
+    if (!p) return;
+    // Only target recurring-bill candidate types. Liabilities use syncLiabilityObligation.
+    const candidateTypes = new Set(["subscription", "insurance", "account", "utility"]);
+    if (!candidateTypes.has(p.type)) return;
+    if (p.linkedObligationId) return; // already has one
+    const fields = p.fields || {};
+    // Cheap pre-check: must mention some price-like number to be worth an AI call.
+    const fieldsJson = JSON.stringify(fields).toLowerCase();
+    const hasPriceCue = /price|cost|amount|monthly|annual|fee|premium|rate|payment|\$\d|\d+\.\d{2}/.test(fieldsJson);
+    if (!hasPriceCue) return;
+
+    const decision = await aiDecide<{
+      shouldCreate: boolean;
+      amount: number | null;
+      frequency: "weekly" | "monthly" | "quarterly" | "yearly" | null;
+      category: string | null;
+      nextDueDate: string | null;
+      reason: string;
+    }>({
+      task: "obligation-auto-suggest",
+      system: `You decide if a newly created ${p.type} profile should have a recurring obligation (bill) automatically created.
+Return ONLY JSON: {"shouldCreate": boolean, "amount": number|null, "frequency": "weekly"|"monthly"|"quarterly"|"yearly"|null, "category": string|null, "nextDueDate": "YYYY-MM-DD"|null, "reason": "<short>"}
+Rules:
+- Only shouldCreate:true if the fields clearly indicate a RECURRING price + cadence (e.g. "$9.99/mo", monthlyPayment:42).
+- Skip one-off purchases, free trials with no price, or items already marked cancelled.
+- Pick the most specific recurring amount; convert annual→monthly only if no monthly is given (then frequency:"yearly" with the annual amount).
+- nextDueDate: today + 30 days if monthly and no explicit date; null otherwise.
+- category: "subscription", "insurance", "utility", or another short label.`,
+      user: `Profile name: ${p.name}\nType: ${p.type}\nFields: ${JSON.stringify(fields).slice(0, 2000)}\n\nReturn JSON only.`,
+      timeoutMs: 3500,
+      maxTokens: 250,
+      fallback: () => ({ shouldCreate: false, amount: null, frequency: null, category: null, nextDueDate: null, reason: "AI unavailable" }),
+      validate: (x: any) => x && typeof x === "object" && typeof x.shouldCreate === "boolean",
+    });
+
+    if (!decision.value.shouldCreate || !decision.value.amount || decision.value.amount <= 0 || !decision.value.frequency) {
+      return;
+    }
+
+    const obl = await storage.createObligation({
+      name: p.name || `${p.type} payment`,
+      amount: decision.value.amount,
+      frequency: decision.value.frequency,
+      category: decision.value.category || p.type,
+      nextDueDate: decision.value.nextDueDate || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+      autopay: false,
+      linkedProfiles: [p.id],
+      notes: `Auto-suggested by AI: ${decision.value.reason}`,
+    } as any).catch((e: any) => { console.warn("[syncAiSuggestedObligation] create failed:", e?.message || e); return null; });
+
+    if (obl?.id) {
+      await storage.updateProfile(p.id, { linkedObligationId: obl.id } as any).catch((e: any) => {
+        console.warn("[syncAiSuggestedObligation] link-back failed:", e?.message || e);
+      });
+      console.log(`[syncAiSuggestedObligation] created obligation ${obl.id} ($${decision.value.amount}/${decision.value.frequency}) for ${p.type} "${p.name}" via ${decision.source}`);
+    }
+  } catch (err: any) {
+    console.warn("[syncAiSuggestedObligation] hook error:", err?.message || err);
+  }
+}
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
 import Anthropic from "@anthropic-ai/sdk";
@@ -1169,14 +1238,46 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       log.info(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
 
-      // If no profile was selected, auto-use the self profile for personal documents
+      // If no profile was selected, AI-pick the best profile from extracted fields.
+      // Falls back to self profile (legacy behaviour) if AI can't decide.
       let resolvedProfileId = targetProfileId;
+      let resolvedProfileSource: "caller" | "ai" | "self-default" | "none" = targetProfileId ? "caller" : "none";
       if (!resolvedProfileId && confirmedFields && confirmedFields.length > 0) {
         const profiles = await storage.getProfiles();
-        const selfProfile = profiles.find((p: any) => p.type === 'self');
-        if (selfProfile) {
-          resolvedProfileId = selfProfile.id;
-          log.info(`[confirm-extraction] Auto-selected self profile: ${selfProfile.name} (${selfProfile.id})`);
+        if (profiles.length > 0) {
+          // Wave 2 #4 — AI picks the best profile from extracted name-ish fields.
+          try {
+            const nameish = confirmedFields
+              .filter((f: any) => /name|holder|owner|insured|patient|recipient|licensee|driver|policyhold/i.test(f.key))
+              .map((f: any) => `${f.key}: ${unwrap(f.value)}`)
+              .join("\n");
+            if (nameish) {
+              const decision = await aiPickIndex({
+                task: "confirm-extraction-profile",
+                question: "Which profile do these extracted fields belong to? Pick -1 only if no profile matches.",
+                context: nameish,
+                options: profiles.map((p: any) => `${p.name}${p.relationship ? ` (${p.relationship})` : ""}${p.dateOfBirth ? ` DOB ${p.dateOfBirth}` : ""}`),
+                timeoutMs: 3000,
+                minConfidence: 0.6,
+                fallback: () => -1,
+              });
+              if (decision.value.index >= 0 && profiles[decision.value.index]) {
+                resolvedProfileId = profiles[decision.value.index].id;
+                resolvedProfileSource = "ai";
+                log.info(`[confirm-extraction] AI-picked profile: ${profiles[decision.value.index].name} (${resolvedProfileId}) reason="${decision.value.reason}"`);
+              }
+            }
+          } catch (e: any) {
+            console.error(`[confirm-extraction] AI profile-pick failed silently: ${e?.message || e}`);
+          }
+        }
+        if (!resolvedProfileId) {
+          const selfProfile = profiles.find((p: any) => p.type === 'self');
+          if (selfProfile) {
+            resolvedProfileId = selfProfile.id;
+            resolvedProfileSource = "self-default";
+            log.info(`[confirm-extraction] Fell back to self profile: ${selfProfile.name} (${selfProfile.id})`);
+          }
         }
       }
 
@@ -1216,6 +1317,44 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Document-metadata fields that should NOT be saved to profiles
         const DOC_ONLY_FIELDS = new Set(['fileName', 'barcode', 'signatureType', 'documentTitle', 'reportTitle', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'facilityAddress']);
 
+        // Wave 2 #5 — AI extra classification for fields NOT already in DOC_ONLY_FIELDS.
+        // For each unfamiliar field, AI returns one of: "profile_fact" (default),
+        // "doc_only" (extra DOC_ONLY treatment), or "skip" (junk). Single batched call.
+        // Result is a Map<fieldKey, classification>; profile_fact preserves current behaviour.
+        const aiFieldClassification = new Map<string, "profile_fact" | "doc_only" | "skip">();
+        try {
+          const unknownFields = confirmedFields
+            .map((f: any) => f.key)
+            .filter((k: string) => !DOC_ONLY_FIELDS.has(k));
+          if (unknownFields.length > 0) {
+            const dec = await aiDecide<Record<string, string>>({
+              task: "field-destination-route",
+              system: `You decide where each extracted field should live in a personal-finance / life-management app.
+Return ONLY a JSON object mapping each field key (string) to one of these classifications:
+  - "profile_fact"  — a stable attribute of the person/entity (name, DOB, address, license #, blood type, employer, etc.)
+  - "doc_only"      — metadata that only makes sense on the document itself (barcode, page count, signature image ID, file checksum, etc.)
+  - "skip"          — obvious junk / unparseable / placeholder values ("N/A", empty form labels, OCR noise)
+If unsure, return "profile_fact".`,
+              user: `Classify these field keys:\n${JSON.stringify(unknownFields)}\n\nReturn JSON only.`,
+              timeoutMs: 3000,
+              maxTokens: Math.min(800, 30 + unknownFields.length * 18),
+              fallback: () => {
+                const out: Record<string, string> = {};
+                for (const k of unknownFields) out[k] = "profile_fact";
+                return out;
+              },
+              validate: (p: any) => p && typeof p === "object" && !Array.isArray(p),
+            });
+            for (const [k, v] of Object.entries(dec.value)) {
+              const c = (v === "profile_fact" || v === "doc_only" || v === "skip") ? v : "profile_fact";
+              aiFieldClassification.set(k, c as any);
+            }
+            log.info(`[confirm-extraction] AI classified ${aiFieldClassification.size} fields via ${dec.source} in ${dec.durationMs}ms`);
+          }
+        } catch (e: any) {
+          console.error(`[confirm-extraction] AI field classification failed silently: ${e?.message || e}`);
+        }
+
         const profileFields: Record<string, any> = {};
 
         // Smart type coercion: convert string values to appropriate JS types
@@ -1249,6 +1388,9 @@ ${JSON.stringify(ctx, null, 2)}`;
 
           // Skip document-metadata fields — they belong on the document, not the profile
           if (DOC_ONLY_FIELDS.has(key)) continue;
+          // Wave 2 #5: respect AI classification — skip junk + doc-only without altering profile.
+          const aiClass = aiFieldClassification.get(key);
+          if (aiClass === "doc_only" || aiClass === "skip") continue;
 
           // Normalize keys: dateOfBirth/dob → save as both dateOfBirth AND birthday
           if (key === 'dateOfBirth' || key === 'dob') {
@@ -1805,6 +1947,20 @@ ${JSON.stringify(ctx, null, 2)}`;
     if (created.type === "liability" || created.type === "loan") {
       await syncLiabilityObligation(created.id);
       bustCache(`profile-detail:${uid_p1}:`);
+    }
+
+    // Wave 2 #6 — AI-suggested obligation for recurring-bill candidates
+    // (subscriptions, insurance, accounts, utilities). Fire-and-forget so it
+    // never blocks the create response — the cache bust on completion will
+    // surface the new obligation on next dashboard fetch.
+    {
+      const obligationCandidates = new Set(["subscription", "insurance", "account", "utility"]);
+      if (obligationCandidates.has(created.type)) {
+        (async () => {
+          await syncAiSuggestedObligation(created.id);
+          bustCache(`obligations:${uid_p1}`); bustCache(`profile-detail:${uid_p1}:`); bustCache(`enhanced:`);
+        })();
+      }
     }
 
     // ---- Location auto-attach hook ----
