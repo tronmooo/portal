@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
+import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 
 interface Notification {
   id: string;
@@ -145,8 +146,22 @@ export function NotificationBell() {
     });
   }, []);
 
+  // Subscribe to global profile filter so the bell shows only the selected
+  // profile's alerts (was returning everyone's notifications).
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  useEffect(() => {
+    const unsub = subscribeProfileFilter(state => {
+      setFilterMode(state.mode);
+      setFilterIds([...state.selectedIds]);
+    });
+    return unsub;
+  }, []);
+  const notifProfileParam = filterMode === "selected" && filterIds.length > 0
+    ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
-    queryKey: ["/api/notifications"],
+    queryKey: ["/api/notifications", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/notifications${notifProfileParam}`).then(r => r.json()),
     refetchInterval: 60000,
   });
 
