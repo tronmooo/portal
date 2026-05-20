@@ -5041,6 +5041,109 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
     }
   }));
 
+  // ── Wave 4: Cross-entity AI semantic search ───────────────────────
+  // POST /api/search/ai
+  // Body: { query: string, types?: string[], limit?: number }
+  // No vector DB needed — AI picks the best matches from a compact catalogue
+  // of all user entities. Drop-in upgrade path to pgvector later.
+  app.post("/api/search/ai", asyncHandler(async (req, res) => {
+    try {
+      const query = typeof req.body?.query === "string" ? req.body.query.trim() : "";
+      if (!query) return res.status(400).json({ error: "query is required" });
+      if (query.length > 200) return res.status(400).json({ error: "query too long (max 200 chars)" });
+      const limit = Math.min(Math.max(Number(req.body?.limit) || 10, 1), 25);
+      const typesParam: string[] | undefined = Array.isArray(req.body?.types) ? req.body.types.filter((t: any) => typeof t === "string") : undefined;
+
+      // Build a compact catalogue — cheaper than full snapshots.
+      const [profiles, expenses, obligations, documents, trackers, goals, events] = await Promise.all([
+        storage.getProfiles(),
+        storage.getExpenses(),
+        storage.getObligations(),
+        storage.getDocuments(),
+        storage.getTrackers(),
+        storage.getGoals(),
+        storage.getEvents(),
+      ]);
+
+      type CatalogueItem = { idx: number; entity: "profile" | "expense" | "obligation" | "document" | "tracker" | "goal" | "event"; id: string; label: string };
+      const catalogue: CatalogueItem[] = [];
+      const idGen = () => catalogue.length;
+      const want = (t: string) => !typesParam || typesParam.includes(t);
+
+      if (want("profile")) for (const p of profiles as any[]) {
+        const rel = p.relationship || p.role || "";
+        const label = `${p.name} [${p.type}]${rel ? ` (${rel})` : ""}`;
+        catalogue.push({ idx: idGen(), entity: "profile", id: p.id, label });
+      }
+      if (want("expense")) for (const e of expenses.slice(-200)) {
+        const label = `${e.vendor || e.description?.slice(0, 60) || "expense"} — $${e.amount} [${e.category}] ${e.date}`;
+        catalogue.push({ idx: idGen(), entity: "expense", id: e.id, label });
+      }
+      if (want("obligation")) for (const o of obligations) {
+        const label = `${o.name} — $${o.amount}/${o.frequency} [${o.category || "other"}]`;
+        catalogue.push({ idx: idGen(), entity: "obligation", id: o.id, label });
+      }
+      if (want("document")) for (const d of documents) {
+        const label = `${d.name} [${d.type}]${d.expirationDate ? ` exp ${d.expirationDate}` : ""}`;
+        catalogue.push({ idx: idGen(), entity: "document", id: d.id, label });
+      }
+      if (want("tracker")) for (const t of trackers) {
+        const label = `${t.name} [${t.category || "general"}]${t.unit ? ` (${t.unit})` : ""}`;
+        catalogue.push({ idx: idGen(), entity: "tracker", id: t.id, label });
+      }
+      if (want("goal")) for (const g of goals) {
+        catalogue.push({ idx: idGen(), entity: "goal", id: g.id, label: `${g.title}` });
+      }
+      if (want("event")) for (const e of events.slice(-100)) {
+        catalogue.push({ idx: idGen(), entity: "event", id: e.id, label: `${e.title} — ${e.date}` });
+      }
+
+      if (catalogue.length === 0) return res.json({ results: [], reason: "No entities to search." });
+
+      // If catalogue is huge, chunk in a future iteration. For now cap at 800 items.
+      const trimmed = catalogue.slice(0, 800);
+
+      const decision = await aiDecide<{ matches: Array<{ idx: number; score: number; reason: string }> }>({
+        task: "semantic-search",
+        system: `You are a semantic search engine across a personal-data catalogue.
+Return ONLY JSON: {"matches":[{"idx":<number>,"score":<0..1>,"reason":"<one short sentence>"}]}
+Rank up to ${limit} most-relevant items. Be strict: only include items genuinely relevant. Empty array is fine.
+Match on meaning, not just substring — "car bill" should match an auto-loan obligation; "pet vet visit" should match a dog profile's medical event.`,
+        user: `Query: "${query}"\n\nCatalogue (idx, entity, label):\n${trimmed.map(c => `${c.idx} ${c.entity}: ${c.label}`).join("\n")}\n\nReturn JSON only.`,
+        timeoutMs: 7000,
+        maxTokens: 800,
+        maxPromptChars: 60000,
+        fallback: () => {
+          // Deterministic substring fallback so the endpoint still answers.
+          const q = query.toLowerCase();
+          const matches = trimmed
+            .filter(c => c.label.toLowerCase().includes(q))
+            .slice(0, limit)
+            .map(c => ({ idx: c.idx, score: 0.5, reason: "substring match" }));
+          return { matches };
+        },
+        validate: (p: any) => p && Array.isArray(p.matches),
+      });
+
+      const results = decision.value.matches
+        .filter(m => m && typeof m.idx === "number" && trimmed[m.idx])
+        .map(m => ({
+          entity: trimmed[m.idx].entity,
+          id: trimmed[m.idx].id,
+          label: trimmed[m.idx].label,
+          score: typeof m.score === "number" ? m.score : 0,
+          reason: m.reason || "",
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      res.json({ results, source: decision.source, totalScanned: trimmed.length });
+    } catch (err: any) {
+      log.error("[SemanticSearch]", err?.message || "unknown error");
+      res.status(500).json({ error: "Semantic search failed", results: [] });
+    }
+  }));
+
   // ── Wave 3 #8: Proactive AI suggestions for the dashboard ───────────────
   // Returns 3-5 actionable suggestions based on a compact snapshot of the
   // user's current state — missing data, duplicates, overdue items,
