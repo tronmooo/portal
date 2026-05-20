@@ -139,6 +139,24 @@ body {
   font-feature-settings: "cv11", "ss01";
   letter-spacing: -0.01em;
 }
+
+/* Reserve scrollbar gutter so centered (max-w-[90rem] mx-auto) layout
+   does NOT horizontally shift when navigating between pages with vs.
+   without a vertical scrollbar (e.g. opening the chat page from dashboard),
+   or when a Radix Dialog opens and adds body padding-right.
+   stable both-edges keeps the layout symmetrically centered even when
+   the page is short enough to not need a scrollbar. */
+html, body {
+  scrollbar-gutter: stable both-edges;
+}
+/* Neutralise Radix's body-scroll-lock padding compensation. With h-dvh +
+   scrollbar-gutter above, the body never actually scrolls and never needs
+   compensation — forcing 0 keeps the centered shell from jumping right
+   when a Dialog opens (chat search, AI confirmation, etc.). */
+body[data-scroll-locked] {
+  padding-right: 0 !important;
+  margin-right: 0 !important;
+}
 h1, h2, h3, .text-xl, .text-2xl {
   letter-spacing: -0.03em;
   font-weight: 700;

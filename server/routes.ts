@@ -123,6 +123,7 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
 }
 import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
 import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
+import { aiDecide, aiPickIndex } from "./ai-decide";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
 import Anthropic from "@anthropic-ai/sdk";
@@ -2512,6 +2513,78 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     res.json({ migrated: count });
   }));
 
+  // ── Wave 1 #3: Smart tracker entry routing ───────────────────────────
+  // User types free-form text ("weighed 178 today", "slept 7h", "ran 5k in 28 min")
+  // and AI picks the right tracker + parses the numeric value(s). Returns the
+  // logged entry. Falls back to 400 if no tracker matches confidently.
+  app.post("/api/trackers/smart-entry", asyncHandler(async (req, res) => {
+    const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+    if (!text) return res.status(400).json({ error: "text is required" });
+    if (text.length > 500) return res.status(400).json({ error: "text too long (max 500 chars)" });
+
+    const trackers = await storage.getTrackers();
+    if (!trackers || trackers.length === 0) {
+      return res.status(404).json({ error: "No trackers exist. Create one first." });
+    }
+
+    // Build option list — include unit + field names so AI knows how to parse values.
+    const options = trackers.map((t: any) => {
+      const fields = Array.isArray(t.fields) && t.fields.length > 0
+        ? t.fields.map((f: any) => `${f.key}${f.unit ? `(${f.unit})` : ""}`).join(",")
+        : (t.unit ? `value(${t.unit})` : "value");
+      return `${t.name} [${t.category || "general"}] fields:${fields}`;
+    });
+
+    const decision = await aiDecide<{ trackerIndex: number; values: Record<string, number>; notes?: string; confidence: number; reason: string }>({
+      task: "tracker-smart-entry",
+      system: `You route free-form text into the correct tracker and extract numeric values.
+Return ONLY a JSON object: {"trackerIndex": <0..${trackers.length - 1} or -1>, "values": {fieldKey: number, ...}, "notes": "<optional>", "confidence": <0..1>, "reason": "<short>"}
+Rules:
+- Pick the SINGLE best tracker. Use -1 only if nothing fits.
+- Use the EXACT fieldKey strings shown in fields: parens are units, not part of the key.
+- Convert obvious units to the tracker's expected unit (e.g. kg → lbs if tracker uses lbs).
+- For multi-field trackers (e.g. blood pressure), parse all values you can find.
+- Put any non-numeric description in notes.`,
+      user: `Text: "${text}"\n\nAvailable trackers:\n${options.map((o, i) => `${i}. ${o}`).join("\n")}\n\nReturn JSON only.`,
+      timeoutMs: 4000,
+      maxTokens: 300,
+      fallback: () => ({ trackerIndex: -1, values: {}, confidence: 0, reason: "AI unavailable" }),
+      validate: (p: any) => p && typeof p === "object" && typeof p.trackerIndex === "number" && typeof p.values === "object" && typeof p.confidence === "number",
+    });
+
+    if (decision.value.trackerIndex < 0 || decision.value.confidence < 0.5 || !trackers[decision.value.trackerIndex]) {
+      return res.status(422).json({ error: "Could not confidently route entry to any tracker", reason: decision.value.reason, source: decision.source });
+    }
+
+    const tracker = trackers[decision.value.trackerIndex];
+    const cleanValues: Record<string, number> = {};
+    for (const [k, v] of Object.entries(decision.value.values)) {
+      if (typeof v === "number" && Number.isFinite(v)) cleanValues[k] = v;
+    }
+    if (Object.keys(cleanValues).length === 0) {
+      return res.status(422).json({ error: "AI could not extract any numeric values from text", reason: decision.value.reason });
+    }
+
+    const parsed = insertTrackerEntrySchema.safeParse({
+      trackerId: tracker.id,
+      values: cleanValues,
+      notes: decision.value.notes || text,
+      timestamp: new Date().toISOString(),
+    });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed" });
+
+    const entry = await storage.logEntry(parsed.data);
+    if (!entry) return res.status(500).json({ error: "Failed to log entry" });
+
+    const uid_se = (req as AuthenticatedRequest).userId || "anon";
+    bustCache(`trackers:`); bustCache(`stats:${uid_se}`); bustCache(`enhanced:`);
+    res.status(201).json({
+      entry,
+      tracker: { id: tracker.id, name: tracker.name },
+      ai: { source: decision.source, confidence: decision.value.confidence, reason: decision.value.reason },
+    });
+  }));
+
   // ---- Tasks ----
   app.get("/api/tasks", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || "anon";
@@ -2721,6 +2794,28 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
     req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
+
+    // Wave 1 #1 — AI categorize when caller didn't provide a meaningful category.
+    // Only fires for missing / "other" / "general" so we don't override deliberate picks.
+    if (!req.body.category || req.body.category === "other" || req.body.category === "general") {
+      try {
+        const decision = await aiPickIndex({
+          task: "expense-create-category",
+          question: "Which expense category does this transaction belong to?",
+          context: `Description: "${req.body.description}"${req.body.vendor ? `\nVendor: "${req.body.vendor}"` : ""}\nAmount: $${req.body.amount}`,
+          options: ALLOWED_EXPENSE_CATEGORIES,
+          timeoutMs: 3000,
+          minConfidence: 0.55,
+          fallback: () => -1,
+        });
+        if (decision.value.index >= 0) {
+          req.body.category = ALLOWED_EXPENSE_CATEGORIES[decision.value.index];
+        }
+      } catch (e: any) {
+        console.error(`[expense-create] AI categorize failed silently: ${e?.message || e}`);
+      }
+    }
+
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newExpense = await storage.createExpense(parsed.data);
@@ -2991,6 +3086,48 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       return res.status(400).json({ error: "Document type is required" });
     }
     try {
+      // Wave 1 #2 — AI auto-link to profile when caller didn't specify any.
+      // Reads the doc name + extracted fields and picks the best matching profile
+      // (e.g. "Sarah's drivers license.pdf" → Sarah's profile). Falls back to no
+      // linkage so behaviour is identical to before when AI is unavailable.
+      const linked = Array.isArray(req.body.linkedProfiles) ? req.body.linkedProfiles : [];
+      if (linked.length === 0) {
+        try {
+          const profiles = await storage.getProfiles();
+          if (profiles && profiles.length > 0) {
+            const extracted = req.body.extractedData || {};
+            const ctxLines = [
+              `Document name: ${req.body.name}`,
+              `Document type: ${req.body.type}`,
+            ];
+            // Surface any name-ish fields the extractor pulled out
+            for (const k of ["fullName", "name", "firstName", "lastName", "owner", "holder", "insured", "patient", "recipient", "licensee"]) {
+              if (typeof (extracted as any)[k] === "string") ctxLines.push(`${k}: ${(extracted as any)[k]}`);
+            }
+            const options = profiles.map((p: any) => {
+              const parts = [p.name];
+              if (p.relationship) parts.push(`(${p.relationship})`);
+              if (p.dateOfBirth) parts.push(`DOB ${p.dateOfBirth}`);
+              return parts.join(" ");
+            });
+            const decision = await aiPickIndex({
+              task: "doc-create-link-profile",
+              question: "Which profile does this document most likely belong to? Pick -1 only if no profile clearly matches.",
+              context: ctxLines.join("\n"),
+              options,
+              timeoutMs: 3500,
+              minConfidence: 0.6,
+              fallback: () => -1,
+            });
+            if (decision.value.index >= 0 && profiles[decision.value.index]) {
+              req.body.linkedProfiles = [profiles[decision.value.index].id];
+            }
+          }
+        } catch (e: any) {
+          console.error(`[doc-create] AI auto-link failed silently: ${e?.message || e}`);
+        }
+      }
+
       const doc = await storage.createDocument(req.body);
       const uid_d1 = (req as AuthenticatedRequest).userId || "anon";
       bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d1}:`); bustCache(`notifications:${uid_d1}`);
@@ -4261,19 +4398,27 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         return res.status(400).json({ error: "Could not detect an amount column in the CSV header" });
       }
 
-      // Auto-categorize based on keywords
+      // Canonical category set MUST match the POST /api/expenses allowlist.
+      const ALLOWED_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general", "education", "shopping", "insurance", "travel", "subscription", "utility", "other"];
+
+      // Deterministic fallback (used if AI is unavailable / times out).
       const CATEGORY_KEYWORDS: Record<string, string[]> = {
-        "food": ["grocery", "restaurant", "uber eats", "doordash", "grubhub", "mcdonald", "starbucks", "coffee", "cafe", "pizza", "chipotle", "subway", "diner", "bakery", "food"],
-        "transport": ["uber", "lyft", "gas", "fuel", "parking", "toll", "transit", "metro", "bus", "train", "airline", "flight"],
+        "food": ["grocery", "restaurant", "uber eats", "doordash", "grubhub", "mcdonald", "starbucks", "coffee", "cafe", "pizza", "chipotle", "subway", "diner", "bakery", "food", "whole foods", "trader joe"],
+        "transport": ["uber", "lyft", "gas", "fuel", "parking", "toll", "transit", "metro", "bus", "train"],
+        "travel": ["airline", "flight", "hotel", "airbnb", "booking.com", "expedia"],
         "shopping": ["amazon", "walmart", "target", "costco", "best buy", "ebay", "shop", "store", "mall", "retail"],
         "entertainment": ["netflix", "spotify", "hulu", "disney", "movie", "theater", "concert", "game", "steam"],
         "health": ["pharmacy", "cvs", "walgreens", "doctor", "hospital", "medical", "dental", "gym", "fitness"],
-        "utilities": ["electric", "water", "gas", "internet", "phone", "mobile", "comcast", "verizon", "att"],
-        "housing": ["rent", "mortgage", "insurance", "hoa"],
-        "subscriptions": ["subscription", "membership", "annual", "monthly", "recurring"],
+        "utilities": ["electric", "water", "internet", "phone", "mobile", "comcast", "verizon", "att", "xfinity"],
+        "housing": ["rent", "mortgage", "hoa"],
+        "insurance": ["insurance", "geico", "progressive", "allstate", "state farm"],
+        "subscription": ["subscription", "membership", "annual fee", "monthly fee"],
+        "vehicle": ["auto", "mechanic", "oil change", "tire", "car wash", "dmv"],
+        "pet": ["petco", "petsmart", "vet", "chewy"],
+        "education": ["tuition", "udemy", "coursera", "school", "university", "books"],
       };
 
-      const autoCategory = (desc: string): string => {
+      const keywordCategory = (desc: string): string => {
         const lower = desc.toLowerCase();
         for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
           if (keywords.some(k => lower.includes(k))) return cat;
@@ -4300,6 +4445,48 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       let skipped = 0;
       const errors: string[] = [];
 
+      // ── AI BATCH CATEGORIZATION ──────────────────────────────────────────
+      // Wave 1 #1: replace per-row keyword matching with a single AI call that
+      // categorises ALL rows at once. Falls back to keywordCategory on timeout
+      // / error so imports never block. Cheap: ~$0.001 per 50-row CSV.
+      const aiCategoryByDesc = new Map<string, string>();
+      try {
+        const uniqueDescs: string[] = [];
+        const seen = new Set<string>();
+        for (let i = 1; i < lines.length; i++) {
+          const fields = parseRow(lines[i]);
+          const d = (fields[colMap.description ?? colMap.amount] || `Row ${i}`).trim().slice(0, 120);
+          if (!seen.has(d)) { seen.add(d); uniqueDescs.push(d); }
+          if (uniqueDescs.length >= 200) break; // cap so prompt stays cheap
+        }
+        if (uniqueDescs.length > 0) {
+          const decision = await aiDecide<Record<string, string>>({
+            task: "bank-csv-categorize",
+            system: `You categorize bank transactions. Pick the BEST category for each description from this exact set: ${ALLOWED_CATEGORIES.join(", ")}.
+Return ONLY a JSON object mapping each input description (string) to one category (string). No prose, no markdown.
+Example: {"WHOLE FOODS 12345":"food","SHELL OIL 9876":"transport"}
+If unsure, use "other". Use "subscription" for recurring services; "vehicle" for car maintenance; "transport" for fuel/rideshare.`,
+            user: `Categorize these ${uniqueDescs.length} descriptions:\n${JSON.stringify(uniqueDescs)}`,
+            timeoutMs: 8000,
+            maxTokens: Math.min(2000, 40 + uniqueDescs.length * 25),
+            maxPromptChars: 24000,
+            fallback: () => {
+              const out: Record<string, string> = {};
+              for (const d of uniqueDescs) out[d] = keywordCategory(d);
+              return out;
+            },
+            validate: (p: any) => p && typeof p === "object" && !Array.isArray(p),
+          });
+          for (const [k, v] of Object.entries(decision.value)) {
+            const cat = (typeof v === "string" && ALLOWED_CATEGORIES.includes(v)) ? v : "other";
+            aiCategoryByDesc.set(k, cat);
+          }
+          console.log(`[bank-csv-import] AI categorised ${aiCategoryByDesc.size}/${uniqueDescs.length} descs via ${decision.source} in ${decision.durationMs}ms`);
+        }
+      } catch (e: any) {
+        console.error(`[bank-csv-import] AI batch categorise failed, using keyword fallback for all rows: ${e?.message || e}`);
+      }
+
       for (let i = 1; i < lines.length; i++) {
         try {
           const fields = parseRow(lines[i]);
@@ -4313,7 +4500,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
           const description = fields[colMap.description ?? colMap.amount] || `Row ${i}`;
           const date = colMap.date !== undefined ? fields[colMap.date] : getUserToday(getTimezone(req));
           const csvCategory = colMap.category !== undefined ? fields[colMap.category] : undefined;
-          const category = csvCategory || autoCategory(description);
+          // Priority: explicit CSV column → AI batch decision → keyword fallback.
+          const aiCat = aiCategoryByDesc.get(description.trim().slice(0, 120));
+          let category = csvCategory || aiCat || keywordCategory(description);
+          if (!ALLOWED_CATEGORIES.includes(category)) category = "other";
 
           // Normalize date to YYYY-MM-DD if possible
           let normalizedDate = date;
