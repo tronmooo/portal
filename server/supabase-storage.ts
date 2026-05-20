@@ -2745,16 +2745,51 @@ export class SupabaseStorage implements IStorage {
       method: method || null, confirmation_number: confirmationNumber || null,
     });
     if (error) throw error;
-    // Advance next due date
-    const nextDue = new Date(ob.nextDueDate);
-    switch (ob.frequency) {
-      case "weekly": nextDue.setDate(nextDue.getDate() + 7); break;
-      case "biweekly": nextDue.setDate(nextDue.getDate() + 14); break;
-      case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
-      case "quarterly": nextDue.setMonth(nextDue.getMonth() + 3); break;
-      case "yearly": nextDue.setFullYear(nextDue.getFullYear() + 1); break;
+    // Advance next due date. "once" obligations don't recur — leave them.
+    // For everything else, advance from the LATER of (current next_due_date,
+    // today). This keeps a stuck overdue bill from staying overdue forever
+    // when the user marks it paid: we jump to the next future cycle.
+    if (ob.frequency && ob.frequency !== "once") {
+      const todayLocal = new Date();
+      todayLocal.setHours(0, 0, 0, 0);
+      // parseLocalDate-style: avoid UTC drift by constructing in local TZ.
+      const [y, mo, d] = String(ob.nextDueDate).slice(0, 10).split("-").map(Number);
+      let nextDue = new Date(y || 1970, (mo || 1) - 1, d || 1, 0, 0, 0, 0);
+      // Advance the cycle at least once; keep advancing until strictly after today.
+      for (let i = 0; i < 600; i++) {
+        switch (ob.frequency) {
+          case "weekly": nextDue.setDate(nextDue.getDate() + 7); break;
+          case "biweekly": nextDue.setDate(nextDue.getDate() + 14); break;
+          case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
+          case "quarterly": nextDue.setMonth(nextDue.getMonth() + 3); break;
+          case "yearly": nextDue.setFullYear(nextDue.getFullYear() + 1); break;
+          default: nextDue.setMonth(nextDue.getMonth() + 1); break;
+        }
+        if (nextDue > todayLocal) break;
+      }
+      // Format as YYYY-MM-DD in local time — not UTC — so a date computed
+      // in PT doesn't get pushed back a day when toISOString() converts to UTC.
+      const yy = nextDue.getFullYear();
+      const mm = String(nextDue.getMonth() + 1).padStart(2, "0");
+      const dd = String(nextDue.getDate()).padStart(2, "0");
+      const newDateStr = `${yy}-${mm}-${dd}`;
+      // Use .select() so we can VERIFY the update actually ran. The previous
+      // version silently ignored update errors — the user paid 3 times in a
+      // row because next_due_date never advanced and the bill kept showing as
+      // overdue. Log loudly if the update failed.
+      const { data: updated, error: upErr } = await this.supabase
+        .from("obligations")
+        .update({ next_due_date: newDateStr, updated_at: new Date().toISOString() })
+        .eq("id", obligationId)
+        .eq("user_id", this.userId)
+        .select("id, next_due_date")
+        .single();
+      if (upErr) {
+        console.error("[payObligation] failed to advance next_due_date:", { obligationId, newDateStr, error: upErr.message });
+      } else if (!updated || updated.next_due_date !== newDateStr) {
+        console.error("[payObligation] next_due_date update returned unexpected result:", { obligationId, newDateStr, updated });
+      }
     }
-    await this.supabase.from("obligations").update({ next_due_date: nextDue.toISOString().slice(0, 10) }).eq("id", obligationId).eq("user_id", this.userId);
     this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);
     return { id, amount, date: today, method, confirmationNumber };
   }

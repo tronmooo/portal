@@ -139,25 +139,32 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
-      /* IDLE-FREEZE FIX (2026-05-10):
+      /* IDLE-FREEZE FIX (2026-05-10) + SKELETON FIX (2026-05-19):
          The previous combination (refetchOnWindowFocus: true + 30s staleTime
          + ~25 active queries on the dashboard) caused the tab to lock up when
          the user returned after >2 min — every query refetched in parallel
          and the UI froze waiting for the storm to settle.
 
+         The user's complaint "when I come back to the website, it's always
+         loading in this skeleton" is from refetchOnMount + a cleared cache
+         (full reload, not just tab switch). Combined with a 60s refetch
+         storm on focus, the UI shows skeletons even when nothing changed.
+
          New strategy:
-         - 5 min staleTime → coming back after a short break uses cached data
+         - 15 min staleTime → returning after a short break uses cached data
            instantly, no refetch.
-         - refetchOnWindowFocus: "always" only kicks in when query IS stale
-           (>5 min). Combined with React Query's built-in dedupe, this stops
-           the storm.
+         - refetchOnMount: "always" was the skeleton culprit. Set to false so
+           cached data renders instantly; window-focus refetch still keeps
+           data fresh if user comes back after staleTime elapsed.
+         - Cache is persisted to localStorage (see persistCache below) so a
+           full reload restores instantly instead of showing skeletons.
          - networkMode: "always" → queries continue even on flaky network
            instead of leaving in-flight requests hanging forever. */
       refetchOnWindowFocus: true,
       refetchOnReconnect: "always",
-      refetchOnMount: true,
-      staleTime: 5 * 60_000,             // 5 minutes
-      gcTime: 30 * 60_000,               // Keep unused data for 30 min
+      refetchOnMount: false,             // Use cached data on mount; revalidate via window focus only when stale
+      staleTime: 15 * 60_000,            // 15 minutes — less aggressive refetching
+      gcTime: 60 * 60_000,               // Keep unused data for 60 min
       networkMode: "always",             // Don't hang on flaky network
       retry: (failureCount, error) => {
         if (error instanceof Error) {
@@ -194,3 +201,83 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+/* ---------------------------------------------------------------------------
+   Lightweight query cache persistence — mirrors what @tanstack/query-sync-storage-persister
+   does, but without the extra dep. Survives full page reloads so the user
+   doesn't see a skeleton flash when they come back to the website.
+
+   Strategy:
+   - On every successful query, we snapshot the cache to localStorage (throttled).
+   - On boot, we hydrate the cache from localStorage BEFORE React mounts.
+   - Entries older than MAX_AGE are skipped on hydrate (avoid stale-by-days).
+   - Auth-sensitive keys are excluded so logout doesn't leak a stale session.
+--------------------------------------------------------------------------- */
+const STORAGE_KEY = "portol-query-cache-v1";
+const MAX_AGE_MS = 24 * 60 * 60_000; // 24h — anything older is re-fetched
+
+function isSafeToPersist(queryKey: any): boolean {
+  const first = String(queryKey?.[0] || "");
+  // Don't persist anything that's user-identity-bound at the URL level; React
+  // Query's queryKey already segments by filter/profile so general /api/*
+  // entries are safe.
+  if (!first.startsWith("/api/")) return false;
+  // Skip auth/session
+  if (first.includes("/auth") || first.includes("/session")) return false;
+  return true;
+}
+
+function snapshotCache(): void {
+  try {
+    const all = queryClient.getQueryCache().getAll();
+    const out: Array<{ k: any; d: any; t: number }> = [];
+    for (const q of all) {
+      if (!q.state.data) continue;
+      if (q.state.status !== "success") continue;
+      if (!isSafeToPersist(q.queryKey)) continue;
+      out.push({ k: q.queryKey, d: q.state.data, t: q.state.dataUpdatedAt });
+    }
+    // Cap size to avoid blowing localStorage (~5MB browser quota)
+    const json = JSON.stringify(out);
+    if (json.length > 2_500_000) return; // ~2.5MB cap
+    localStorage.setItem(STORAGE_KEY, json);
+  } catch { /* localStorage may be unavailable (private browsing) */ }
+}
+
+let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSnapshot(): void {
+  if (snapshotTimer) return;
+  snapshotTimer = setTimeout(() => {
+    snapshotTimer = null;
+    snapshotCache();
+  }, 1500); // throttle to once per 1.5s
+}
+
+export function hydrateQueryCache(): void {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const arr = JSON.parse(raw) as Array<{ k: any; d: any; t: number }>;
+    if (!Array.isArray(arr)) return;
+    const cutoff = Date.now() - MAX_AGE_MS;
+    for (const entry of arr) {
+      if (!entry || !entry.k || entry.t < cutoff) continue;
+      // Only seed if no fresh data exists
+      const existing = queryClient.getQueryData(entry.k);
+      if (existing !== undefined) continue;
+      queryClient.setQueryData(entry.k, entry.d, { updatedAt: entry.t });
+    }
+  } catch { /* corrupt cache — ignore */ }
+}
+
+// Wire up the snapshot loop. queryCache.subscribe fires on every cache event;
+// we throttle to once per 1.5s so a refetch storm doesn't write to localStorage
+// 25 times in a row.
+if (typeof window !== "undefined") {
+  queryClient.getQueryCache().subscribe(() => scheduleSnapshot());
+  // Also snapshot on tab hide — catches the case where user switches away.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") snapshotCache();
+  });
+}
+

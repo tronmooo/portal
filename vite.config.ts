@@ -27,6 +27,32 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // First-load perf: pre-segment heavy vendor chunks so the initial bundle
+    // (the chat page) stays small. Without this, every dependency lands in
+    // one giant index-*.js. The user reported "when I first open the website,
+    // it needs to be faster" — splitting these out lets the browser fetch
+    // them in parallel and cache them across deploys.
+    rollupOptions: {
+      output: {
+        manualChunks(id: string): string | undefined {
+          if (!id.includes("node_modules")) return undefined;
+          // Univer is enormous (5.4MB) and only used on the editor route
+          if (id.includes("@univerjs") || id.includes("opentype.js")) return "univer";
+          // ExcelJS — only used on the editor for spreadsheet export/import
+          if (id.includes("exceljs")) return "exceljs";
+          // Recharts is large and only used on a few dashboard widgets
+          if (id.includes("recharts") || id.includes("d3-")) return "charts";
+          // PDF.js used only when opening a document
+          if (id.includes("pdfjs-dist")) return "pdfjs";
+          // Radix UI is sprinkled everywhere but compresses well as one chunk
+          if (id.includes("@radix-ui")) return "radix";
+          // React core stays in vendor
+          if (id.includes("react-dom") || id.includes("react/") || id.includes("scheduler")) return "react-core";
+          // Everything else stays in the default vendor split
+          return "vendor";
+        },
+      },
+    },
   },
   server: {
     fs: {

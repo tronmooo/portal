@@ -2,6 +2,12 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { hashNavigate } from "./lib/hashNavigate";
+import { hydrateQueryCache } from "./lib/queryClient";
+
+// Restore the React Query cache from localStorage BEFORE React mounts so the
+// dashboard renders with cached data instantly instead of flashing a skeleton.
+// hydrate is a no-op if nothing was persisted, or if data is older than 24h.
+hydrateQueryCache();
 
 // Hash-router URL normalization.
 // The app uses wouter's useHashLocation, so the canonical URL shape is

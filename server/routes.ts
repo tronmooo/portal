@@ -267,14 +267,23 @@ setInterval(() => {
 }, 300000);
 
 // ── Server-side response cache ────────────────────────────────────────────────
+// IMPORTANT: This is an in-memory Map. On serverless platforms (Vercel),
+// each function instance has its own memory — a write that busts the cache
+// on instance A does NOT bust it on instance B. The result is users see
+// stale data after mutations (toast says "marked paid" but the bill is still
+// listed). Workaround: disable the cache entirely on Vercel. Local dev keeps
+// it on for perf since a single Node process handles everything.
+const CACHE_ENABLED = !process.env.VERCEL && !process.env.VERCEL_ENV;
 const responseCache = new Map<string, { data: any; expiresAt: number }>();
 function getCached(key: string): any | null {
+  if (!CACHE_ENABLED) return null;
   const entry = responseCache.get(key);
   if (entry && Date.now() < entry.expiresAt) return entry.data;
   responseCache.delete(key);
   return null;
 }
 function setCache(key: string, data: any, ttlMs: number = 10000): void {
+  if (!CACHE_ENABLED) return;
   responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
 // Clear ALL cached responses — call after any data mutation
@@ -3709,6 +3718,11 @@ Rules:
     bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`); bustCache(`notifications:${uid_o2}`);
     res.json(updated);
   }));
+  // In-memory dedupe to absorb rapid double/triple-click of the "Mark Paid"
+  // button on flaky connections (the previous implementation let users create
+  // 3 duplicate payments by tapping when the UI didn't update fast enough).
+  // Key = userId:obligationId; cleared after 8s.
+  const recentPayments = new Map<string, number>();
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
     let { amount, method, confirmationNumber, date } = req.body;
     if (amount !== undefined && (typeof amount !== "number" || amount <= 0)) {
@@ -3719,14 +3733,26 @@ Rules:
       return res.status(400).json({ error: "Date must be YYYY-MM-DD format" });
     }
     // Default to obligation's own amount if none provided
+    const uid_o3 = (req as AuthenticatedRequest).userId || "anon";
     if (amount === undefined || amount === null) {
       const ob = await storage.getObligation(req.params.id);
       if (!ob) return res.status(404).json({ error: "Obligation not found" });
       amount = ob.amount;
     }
+    // Idempotency window: ignore identical pay request within 8s
+    const dedupeKey = `${uid_o3}:${req.params.id}`;
+    const lastAt = recentPayments.get(dedupeKey) || 0;
+    if (Date.now() - lastAt < 8000) {
+      return res.status(200).json({ ok: true, deduped: true });
+    }
+    recentPayments.set(dedupeKey, Date.now());
+    // Clean old entries occasionally to bound memory
+    if (recentPayments.size > 500) {
+      const cutoff = Date.now() - 30000;
+      for (const [k, t] of recentPayments) if (t < cutoff) recentPayments.delete(k);
+    }
     const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
-    const uid_o3 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
   }));
