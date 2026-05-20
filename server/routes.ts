@@ -3323,7 +3323,26 @@ Rules:
   }));
 
   // ---- Documents ----
-  app.get("/api/documents", asyncHandler(async (req, res) => { const items = await storage.getDocuments(); res.json(paginate(items, req, res)); }));
+  app.get("/api/documents", asyncHandler(async (req, res) => {
+    let items = await storage.getDocuments();
+    // Profile filter (parity with /api/obligations, /api/tasks, etc.)
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      if (ids.length > 0) {
+        items = items.filter((d: any) => (d.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
+      }
+    } else if (fp) {
+      const allProfiles = await storage.getProfiles();
+      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      items = items.filter((d: any) => {
+        const lp = d.linkedProfiles || [];
+        return lp.includes(fp) || (isSelf && lp.length === 0);
+      });
+    }
+    res.json(paginate(items, req, res));
+  }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     const doc = await storage.getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
@@ -3740,7 +3759,27 @@ Rules:
     // Cheap maintenance pass — keeps 'pending' rows from looking on-time when
     // they're already past due. Bounded by index on (user_id,status,due_at).
     await backfillLateStatuses(supabase, uid);
-    const items = await listOccurrences(supabase, uid, start, end);
+    let items = await listOccurrences(supabase, uid, start, end);
+    // Profile filter — each occurrence carries its parent obligation with
+    // linked_profiles. Match parity with /api/obligations.
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      if (ids.length > 0) {
+        items = items.filter((occ: any) => {
+          const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
+          return lp.some((pid: string) => ids.includes(pid));
+        });
+      }
+    } else if (fp) {
+      const allProfiles = await storage.getProfiles();
+      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
+      items = items.filter((occ: any) => {
+        const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
+        return lp.includes(fp) || (isSelf && lp.length === 0);
+      });
+    }
     res.json(items);
   }));
 
@@ -3974,8 +4013,23 @@ Rules:
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getJournalEntries>> = hit || await dedupe(ck, () => storage.getJournalEntries());
     if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
-    if (fp) {
+    if (profileIdsParam) {
+      const ids = profileIdsParam.split(",").filter(Boolean);
+      if (ids.length > 0) {
+        // Filter by linkedProfiles; entries with no linked profiles only show
+        // when the selection includes a self-type profile (treat them as the user's own).
+        const allProfiles = await storage.getProfiles();
+        const selfIds = new Set(allProfiles.filter(p => p.type === "self").map(p => p.id));
+        const includesSelf = ids.some(id => selfIds.has(id));
+        items = items.filter((j: any) => {
+          const lp: string[] = j.linkedProfiles || [];
+          if (lp.length === 0) return includesSelf;
+          return lp.some(pid => ids.includes(pid));
+        });
+      }
+    } else if (fp) {
       const allProfiles = await storage.getProfiles();
       const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
       // Journal entries are personal — only show for self profile
@@ -4079,7 +4133,11 @@ Rules:
     try {
       const userId = (req as AuthenticatedRequest).userId || "anon";
       const notifCacheKey = `notifications:${userId}`;
-      const notifCached = getCached(notifCacheKey);
+      // Make profile filter part of the cache key so two different filters
+      // don't share the same cached payload (was returning unfiltered list).
+      const _pIdsForKey = (req.query.profileIds as string | undefined) || (req.query.profileId as string | undefined) || "";
+      const fullKey = _pIdsForKey ? `${notifCacheKey}:${_pIdsForKey}` : notifCacheKey;
+      const notifCached = getCached(fullKey);
       if (notifCached) return res.json(notifCached);
 
       interface Notification {
@@ -4373,7 +4431,37 @@ Rules:
       // Sort: critical first, then warning, then info
       deduped.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
-      setCache(notifCacheKey, deduped, 2 * 60 * 1000); // 2-minute cache
+      // Profile filter — trim to notifications whose source entity is linked
+      // to the selected profile(s). Note: this is NOT cached so the same user
+      // can switch profiles and see immediate results.
+      const profileIdsParam = req.query.profileIds as string | undefined;
+      const fp = req.query.profileId as string | undefined;
+      const ids = profileIdsParam
+        ? profileIdsParam.split(",").filter(Boolean)
+        : (fp ? [fp] : []);
+      if (ids.length > 0) {
+        const [allDocs, allTasks, allObs, allHabits] = await Promise.all([
+          storage.getDocuments(), storage.getTasks(), storage.getObligations(), storage.getHabits(),
+        ]);
+        const matchesProfile = (entityType: string | undefined, entityId: string | undefined): boolean => {
+          if (!entityType || !entityId) return false;
+          if (entityType === "profile") return ids.includes(entityId);
+          const collection: any[] =
+            entityType === "document" ? allDocs :
+            entityType === "task" ? allTasks :
+            entityType === "obligation" ? allObs :
+            entityType === "habit" ? allHabits : [];
+          const ent = collection.find((x: any) => x.id === entityId);
+          if (!ent) return false;
+          const lp: string[] = ent.linkedProfiles || [];
+          return lp.some((pid: string) => ids.includes(pid));
+        };
+        const filtered = deduped.filter(n => matchesProfile(n.entityType, n.entityId));
+        setCache(fullKey, filtered, 2 * 60 * 1000);
+        return res.json(filtered);
+      }
+
+      setCache(fullKey, deduped, 2 * 60 * 1000); // 2-minute cache
       res.json(deduped);
     } catch (err: any) {
       log.error("[Notifications]", err?.message || "unknown error");
@@ -4385,7 +4473,23 @@ Rules:
   app.get("/api/search", asyncHandler(async (req, res) => {
     const q = (req.query.q as string) || "";
     try {
-      res.json(await storage.search(q));
+      let results = await storage.search(q);
+      // Honor the active profile filter so global search reflects what the
+      // user is currently focused on. Profiles themselves are filtered by id;
+      // other entities are filtered by linkedProfiles.
+      const profileIdsParam = req.query.profileIds as string | undefined;
+      const fp = req.query.profileId as string | undefined;
+      const ids = profileIdsParam
+        ? profileIdsParam.split(",").filter(Boolean)
+        : (fp ? [fp] : []);
+      if (ids.length > 0) {
+        results = results.filter((r: any) => {
+          if (r._type === "profile") return ids.includes(r.id);
+          const lp: string[] = r.linkedProfiles || [];
+          return lp.some((pid: string) => ids.includes(pid));
+        });
+      }
+      res.json(results);
     } catch (err: any) {
       res.status(500).json({ error: "Search failed" });
     }
@@ -5053,9 +5157,13 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
       if (query.length > 200) return res.status(400).json({ error: "query too long (max 200 chars)" });
       const limit = Math.min(Math.max(Number(req.body?.limit) || 10, 1), 25);
       const typesParam: string[] | undefined = Array.isArray(req.body?.types) ? req.body.types.filter((t: any) => typeof t === "string") : undefined;
+      // Optional profile filter from request body OR query (clients can pass either).
+      const _pIds: string[] = Array.isArray(req.body?.profileIds)
+        ? req.body.profileIds.filter((p: any) => typeof p === "string")
+        : ((req.query.profileIds as string | undefined)?.split(",").filter(Boolean) || []);
 
       // Build a compact catalogue — cheaper than full snapshots.
-      const [profiles, expenses, obligations, documents, trackers, goals, events] = await Promise.all([
+      let [profiles, expenses, obligations, documents, trackers, goals, events] = await Promise.all([
         storage.getProfiles(),
         storage.getExpenses(),
         storage.getObligations(),
@@ -5064,6 +5172,16 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
         storage.getGoals(),
         storage.getEvents(),
       ]);
+      if (_pIds.length > 0) {
+        const inProfile = (lp: string[] | undefined | null) => (lp || []).some(id => _pIds.includes(id));
+        profiles = profiles.filter((p: any) => _pIds.includes(p.id));
+        expenses = expenses.filter((e: any) => inProfile(e.linkedProfiles || (e.linkedProfileId ? [e.linkedProfileId] : [])));
+        obligations = obligations.filter((o: any) => inProfile(o.linkedProfiles));
+        documents = documents.filter((d: any) => inProfile(d.linkedProfiles));
+        trackers = trackers.filter((t: any) => inProfile(t.linkedProfiles));
+        goals = goals.filter((g: any) => inProfile(g.linkedProfiles));
+        events = events.filter((ev: any) => inProfile(ev.linkedProfiles));
+      }
 
       type CatalogueItem = { idx: number; entity: "profile" | "expense" | "obligation" | "document" | "tracker" | "goal" | "event"; id: string; label: string };
       const catalogue: CatalogueItem[] = [];
@@ -5152,7 +5270,11 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
   app.get("/api/dashboard/ai-suggestions", asyncHandler(async (req, res) => {
     try {
       const force = req.query.force === "true";
-      const CACHE_KEY = "ai_suggestions";
+      // Make the active profile filter part of the cache key so suggestions
+      // are scoped to the user's current view (Bob's suggestions != global).
+      const _profileIdsParam = (req.query.profileIds as string | undefined) || (req.query.profileId as string | undefined) || "";
+      const filterIds: string[] = _profileIdsParam ? _profileIdsParam.split(",").filter(Boolean) : [];
+      const CACHE_KEY = filterIds.length > 0 ? `ai_suggestions:${filterIds.sort().join(",")}` : "ai_suggestions";
       const TTL_MS = 4 * 3600 * 1000; // 4 hours
 
       if (!force) {
@@ -5167,7 +5289,7 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
         }
       }
 
-      const [profiles, expenses, obligations, documents, trackers, goals] = await Promise.all([
+      let [profiles, expenses, obligations, documents, trackers, goals] = await Promise.all([
         storage.getProfiles(),
         storage.getExpenses(),
         storage.getObligations(),
@@ -5175,6 +5297,21 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
         storage.getTrackers(),
         storage.getGoals(),
       ]);
+
+      // Scope the snapshot to the active profile filter so AI advice is relevant.
+      if (filterIds.length > 0) {
+        const inProfile = (lp: string[] | undefined | null) => (lp || []).some(id => filterIds.includes(id));
+        const inExpense = (e: any) => {
+          const lp = e.linkedProfiles || (e.linkedProfileId ? [e.linkedProfileId] : []);
+          return inProfile(lp);
+        };
+        expenses = expenses.filter(inExpense);
+        obligations = obligations.filter((o: any) => inProfile(o.linkedProfiles));
+        documents = documents.filter((d: any) => inProfile(d.linkedProfiles));
+        trackers = trackers.filter((t: any) => inProfile(t.linkedProfiles));
+        goals = goals.filter((g: any) => inProfile(g.linkedProfiles));
+        profiles = profiles.filter((p: any) => filterIds.includes(p.id));
+      }
 
       // Build a TIGHT snapshot — just enough for AI to spot issues.
       const snapshot: any = {
