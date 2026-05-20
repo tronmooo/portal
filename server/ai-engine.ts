@@ -7407,49 +7407,51 @@ export async function processMessage(userMessage: string, conversationHistory?: 
         }
       }
 
-      // Single document match
+      // Document match(es) found
       if (matches.length > 0) {
-        // If multiple matches share the same doc type AND same linked person,
-        // they're likely versions of the same thing (e.g., old + new license).
-        // Show the most recent one and tell the user older versions are available.
-        let chosen = matches[0];
-        let olderCount = 0;
-        if (matches.length > 1) {
-          const sameTypeGroup = matches.filter(m => m.type === chosen.type);
-          if (sameTypeGroup.length > 1) {
-            // Sort by createdAt descending — newest first
-            const byDate = [...sameTypeGroup].sort((a, b) => {
-              const ta = new Date((a as any).createdAt || (a as any).created_at || 0).getTime();
-              const tb = new Date((b as any).createdAt || (b as any).created_at || 0).getTime();
-              return tb - ta;
-            });
-            chosen = byDate[0];
-            olderCount = sameTypeGroup.length - 1;
-          }
+        // Sort by createdAt descending so the newest is first in the previews
+        const sorted = [...matches].sort((a, b) => {
+          const ta = new Date((a as any).createdAt || (a as any).created_at || 0).getTime();
+          const tb = new Date((b as any).createdAt || (b as any).created_at || 0).getTime();
+          return tb - ta;
+        });
+
+        // Single match — just render it
+        if (sorted.length === 1) {
+          const chosen = sorted[0];
+          let fullDoc: any = chosen;
+          try { fullDoc = await storage.getDocument(chosen.id) || chosen; } catch { /* keep list version */ }
+          return {
+            reply: `Here's your ${chosen.name}.`,
+            actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
+            results: [],
+            documentPreview: {
+              id: chosen.id, name: chosen.name, mimeType: chosen.mimeType,
+              data: "__LAZY_LOAD__",
+              extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
+              type: chosen.type,
+            } as any,
+          };
         }
-        const otherDistinct = matches.filter(m => m.id !== chosen.id && m.type !== chosen.type).length;
-        let suffix = "";
-        if (olderCount > 0 && otherDistinct === 0) {
-          suffix = ` (${olderCount} older version${olderCount > 1 ? "s" : ""} also on file.)`;
-        } else if (matches.length > 1) {
-          suffix = ` (${matches.length} matches — showing the most recent.)`;
-        }
-        // Fetch full doc to include extractedData in the preview
-        let fullDoc: any = chosen;
-        try { fullDoc = await storage.getDocument(chosen.id) || chosen; } catch { /* keep list version */ }
-        const preview: any = {
-          id: chosen.id,
-          name: chosen.name,
-          mimeType: chosen.mimeType,
-          data: "__LAZY_LOAD__",
-          extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
-          type: chosen.type,
-        };
+
+        // Multiple matches — show ALL of them inline, newest first
+        const previews = await Promise.all(sorted.map(async (m) => {
+          let ed: any = undefined;
+          try {
+            const full = await storage.getDocument(m.id);
+            ed = (full as any)?.extractedData || (full as any)?.extracted_data;
+          } catch { /* ignore */ }
+          return {
+            id: m.id, name: m.name, mimeType: m.mimeType,
+            data: "__LAZY_LOAD__", extractedData: ed, type: m.type,
+          } as any;
+        }));
         return {
-          reply: `Here's your ${chosen.name}.${suffix}`,
-          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
-          results: [], // Do NOT render a duplicate ConfirmationCard — the documentPreview already shows the doc
-          documentPreview: preview,
+          reply: `Found ${sorted.length} matching documents — showing all.`,
+          actions: sorted.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.id } })),
+          results: [],
+          documentPreview: previews[0],
+          documentPreviews: previews,
         };
       }
       // No match found — fall through to AI to try harder

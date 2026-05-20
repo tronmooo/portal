@@ -137,23 +137,39 @@ export interface FilterContext {
 export function NetWorthPopup({
   open, onOpenChange, filterMode, filterIds,
 }: { open: boolean; onOpenChange: (o: boolean) => void } & FilterContext) {
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const [, navigate] = useLocation();
 
-  const { data: profiles = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/profiles", filterMode, ...filterIds, "net-worth"],
+  // NOTE: /api/profiles ignores ?profileIds — fetch ALL and filter on the client
+  // using the same semantics as trackers/dashboard (selected id OR child of selected parent).
+  const { data: allProfiles = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/profiles", "net-worth"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/profiles${profileParam}`);
+      const res = await apiRequest("GET", `/api/profiles`);
       const json = await res.json();
       return Array.isArray(json) ? json : (json?.data ?? []);
     },
     enabled: open,
   });
 
+  const isInScope = (p: any): boolean => {
+    if (filterMode !== "selected" || filterIds.length === 0) return true; // "everyone" / "all"
+    if (filterIds.includes(p.id)) return true;
+    const parentId = p.fields?._parentProfileId || p.parentProfileId;
+    if (parentId && filterIds.includes(parentId)) return true;
+    // Check owners array (multi-owner support) — fields.owners or fields.ownerIds
+    const ownerIds: string[] = Array.isArray(p.fields?.owners) ? p.fields.owners.map((o: any) => o?.profileId || o?.id || o).filter(Boolean)
+      : Array.isArray(p.fields?.ownerIds) ? p.fields.ownerIds
+      : Array.isArray(p.fields?.linkedProfileIds) ? p.fields.linkedProfileIds
+      : [];
+    if (ownerIds.some((id) => filterIds.includes(id))) return true;
+    return false;
+  };
+
   const { assets, liabilities, totalA, totalL } = useMemo(() => {
     const assets: any[] = [];
     const liabilities: any[] = [];
-    for (const p of profiles) {
+    for (const p of allProfiles) {
+      if (!isInScope(p)) continue;
       if (ASSET_TYPES.has(p.type)) {
         const v = resolveAssetValue(p);
         if (v > 0) assets.push({ ...p, _value: v });
@@ -168,7 +184,8 @@ export function NetWorthPopup({
     const totalA = assets.reduce((s, p) => s + p._value, 0);
     const totalL = liabilities.reduce((s, p) => s + p._value, 0);
     return { assets, liabilities, totalA, totalL };
-  }, [profiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allProfiles, filterMode, filterIds.join(",")]);
 
   const netWorth = totalA - totalL;
 
@@ -309,8 +326,8 @@ export function CashFlowPopup({
   });
 
   const { data: enhancedRes } = useQuery<any>({
-    queryKey: ["/api/dashboard/enhanced", filterMode, ...filterIds, "cashflow"],
-    queryFn: async () => (await apiRequest("GET", `/api/dashboard/enhanced${param}`)).json(),
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds, "cashflow"],
+    queryFn: async () => (await apiRequest("GET", `/api/dashboard-enhanced${param}`)).json(),
     enabled: open,
   });
 
@@ -533,8 +550,8 @@ export function BudgetPopup({
   const budgets: BudgetRow[] = budgetsResp?.budgets ?? [];
 
   const { data: enhancedRes } = useQuery<any>({
-    queryKey: ["/api/dashboard/enhanced", filterMode, ...filterIds, "budget"],
-    queryFn: async () => (await apiRequest("GET", `/api/dashboard/enhanced${param}`)).json(),
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds, "budget"],
+    queryFn: async () => (await apiRequest("GET", `/api/dashboard-enhanced${param}`)).json(),
     enabled: open,
   });
 
@@ -555,7 +572,7 @@ export function BudgetPopup({
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["/api/budgets"] });
-    qc.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+    qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     qc.invalidateQueries({ queryKey: ["/api/stats"] });
   };
 
