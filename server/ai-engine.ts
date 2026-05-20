@@ -7188,6 +7188,135 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
     try {
       const allDocs = await storage.getDocuments(); // Note: fileData is excluded from list queries for performance
+
+      // ══ AI-FIRST RESOLVER ═════════════════════════════════════════════════
+      // Send a compact doc index to Haiku and let it pick which docs the user wants.
+      // Handles arbitrary phrasing ("pull up the Bob DL", "Jane utility bill",
+      // "my mortgage statement from March") without brittle regex rules.
+      // Falls through to the deterministic matcher if AI fails or times out.
+      try {
+        const profilesForAI = await storage.getProfiles();
+        const profileById = new Map(profilesForAI.map((p: any) => [String(p.id), String(p.name || "")]));
+        // Build compact doc index. Cap at 200 docs to keep tokens bounded — if a
+        // user has more, the deterministic matcher takes over.
+        if (allDocs.length <= 200) {
+          const index = allDocs.map((d: any, i: number) => {
+            const linkedIds: string[] = Array.isArray(d.linkedProfiles) ? d.linkedProfiles
+              : Array.isArray(d.linked_profiles) ? d.linked_profiles : [];
+            const linkedNames = linkedIds.map(id => profileById.get(String(id))).filter(Boolean).join(", ");
+            const created = (d.createdAt || d.created_at || "").slice(0, 10);
+            return `${i}\t${d.name}\ttype=${d.type || "?"}\tlinked=[${linkedNames}]\tcreated=${created}`;
+          }).join("\n");
+          const systemPrompt = `You are a strict document picker. The user wants to open one or more documents. Given the user's request and a list of documents, return ONLY the indices of the documents that match.
+
+Rules:
+- If the user names a PERSON (e.g. "Jane's license"), every returned doc MUST be linked to that person.
+- If the user names a DOC TYPE (license, passport, registration, insurance, bill, statement, receipt, etc.), every returned doc MUST be that type. A utility bill is NOT a license.
+- If multiple docs match equally (e.g. user has 2 licenses for the same person), return ALL of them.
+- If the user is vague (e.g. just a person name with no doc type), return the empty list — we'll ask for clarification.
+- If nothing matches, return the empty list.
+- Never invent indices. Only return indices that appear in the list.
+
+Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, no markdown.`;
+          const userPrompt = `User request: ${searchTerm.trim()}\n\nDocuments (index<TAB>name<TAB>type<TAB>linked profiles<TAB>created):\n${index}`;
+          const client = getClient();
+          // Race against a 4s timeout so chat never feels slow on a stuck call.
+          const aiPromise = client.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 200,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }],
+          });
+          const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000));
+          const aiResp: any = await Promise.race([aiPromise, timeoutPromise]);
+          if (aiResp && Array.isArray(aiResp.content)) {
+            const text = aiResp.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              try {
+                const parsed = JSON.parse(jsonMatch[0]);
+                const indices: number[] = Array.isArray(parsed.indices) ? parsed.indices.filter((n: any) => Number.isInteger(n) && n >= 0 && n < allDocs.length) : [];
+                console.log(`[doc-open AI] search="${searchTerm}" picked=${indices.length} reason="${parsed.reason || ""}"`);
+                if (indices.length > 0) {
+                  const chosen = indices.map(i => allDocs[i]);
+                  // Sort newest first
+                  chosen.sort((a: any, b: any) => {
+                    const ta = new Date(a.createdAt || a.created_at || 0).getTime();
+                    const tb = new Date(b.createdAt || b.created_at || 0).getTime();
+                    return tb - ta;
+                  });
+                  if (chosen.length === 1) {
+                    const d = chosen[0];
+                    let fullDoc: any = d;
+                    try { fullDoc = await storage.getDocument(d.id) || d; } catch { /* ignore */ }
+                    return {
+                      reply: `Here's your ${d.name}.`,
+                      actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: d.id } }],
+                      results: [],
+                      documentPreview: {
+                        id: d.id, name: d.name, mimeType: d.mimeType,
+                        data: "__LAZY_LOAD__",
+                        extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
+                        type: d.type,
+                      } as any,
+                    };
+                  }
+                  // Multiple matches — show all
+                  const previews = await Promise.all(chosen.map(async (m: any) => {
+                    let ed: any = undefined;
+                    try {
+                      const full = await storage.getDocument(m.id);
+                      ed = (full as any)?.extractedData || (full as any)?.extracted_data;
+                    } catch { /* ignore */ }
+                    return {
+                      id: m.id, name: m.name, mimeType: m.mimeType,
+                      data: "__LAZY_LOAD__", extractedData: ed, type: m.type,
+                    } as any;
+                  }));
+                  return {
+                    reply: `Found ${chosen.length} matching documents — showing all.`,
+                    actions: chosen.map((m: any) => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.id } })),
+                    results: [],
+                    documentPreview: previews[0],
+                    documentPreviews: previews,
+                  };
+                }
+                // AI returned no indices = ambiguous. Ask for clarification with options.
+                // Show the top candidates (linked to any named person if detectable).
+                if (parsed.reason) {
+                  // Build a short list of likely candidates: any doc linked to a profile
+                  // whose name appears in the query, capped at 6.
+                  const queryLower = searchTerm.toLowerCase();
+                  const matchedProfiles = profilesForAI.filter((p: any) => {
+                    const first = String(p.name || "").trim().split(/\s+/)[0].toLowerCase();
+                    return first && first.length >= 2 && queryLower.includes(first);
+                  });
+                  if (matchedProfiles.length > 0) {
+                    const matchedIds = new Set(matchedProfiles.map((p: any) => String(p.id)));
+                    const candidates = allDocs.filter((d: any) => {
+                      const lp: string[] = Array.isArray(d.linkedProfiles) ? d.linkedProfiles : Array.isArray((d as any).linked_profiles) ? (d as any).linked_profiles : [];
+                      return lp.some(id => matchedIds.has(String(id)));
+                    }).slice(0, 6);
+                    if (candidates.length > 0) {
+                      const list = candidates.map((d: any, i: number) => `${i + 1}. ${d.name}`).join("\n");
+                      return {
+                        reply: `Which one did you mean?\n${list}`,
+                        actions: [],
+                        results: [],
+                      };
+                    }
+                  }
+                }
+              } catch (e) {
+                console.log(`[doc-open AI] JSON parse failed: ${e instanceof Error ? e.message : e}`);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[doc-open AI] AI resolver failed, falling through: ${e instanceof Error ? e.message : e}`);
+      }
+      // ══ END AI RESOLVER (falls through to deterministic matcher below) ══════
       // Bidirectional synonym groups — every word in a group maps to all others
       const synonymGroups: string[][] = [
         ["car", "vehicle", "auto", "automobile"],
