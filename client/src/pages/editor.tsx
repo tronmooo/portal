@@ -18,6 +18,7 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Underline from "@tiptap/extension-underline";
+import { AllSelection } from "prosemirror-state";
 import Spreadsheet, { createFormulaParser as defaultCreateFormulaParser } from "react-spreadsheet";
 import { useSheetSnapshot, buildSheetFunctions } from "@/lib/sheet-functions";
 import { SLASH_ITEMS, filterSlashItems, type SlashItem } from "@/lib/editor-slash-commands";
@@ -33,7 +34,7 @@ import {
   Share2, Printer, Check, BarChart3, LineChart as LineChartIcon, AreaChart as AreaChartIcon, PieChart as PieChartIcon,
   Link2, User as UserIcon, Activity, FileText, ListChecks, CheckCircle2, BookOpen, Receipt, ExternalLink, PanelRightOpen, PanelRightClose,
   DollarSign, Percent, Hash, AlignLeft, AlignCenter, AlignRight,
-  Calendar as CalendarIcon, Eraser, ChevronDown,
+  Calendar as CalendarIcon, Eraser, ChevronDown, Pencil as PencilIcon,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
@@ -335,7 +336,21 @@ export default function EditorPage() {
       });
     },
     editorProps: {
-      handleKeyDown: (_view, event) => {
+      handleKeyDown: (view, event) => {
+        // BUG-RTE01: Cmd+A / Ctrl+A inside the editor must select the document
+        // body, not the entire app shell. Browsers were bubbling the keydown up
+        // to the window when the editor's contenteditable was focused but the
+        // selection wasn't yet inside its content, so the default browser
+        // "select everything" action ran and highlighted the toolbar/sidebar
+        // too. Intercept it here, run ProseMirror's selectAll, and stop
+        // propagation so the browser never sees the shortcut.
+        if ((event.metaKey || event.ctrlKey) && (event.key === "a" || event.key === "A")) {
+          event.preventDefault();
+          event.stopPropagation();
+          view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)));
+          view.focus();
+          return true;
+        }
         if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
           // Defer to next tick so the "/" character is inserted before we measure caret.
           setTimeout(() => {
@@ -1073,13 +1088,22 @@ export default function EditorPage() {
         }} aria-label="Back" data-testid="button-editor-back">
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <Input
-          value={title}
-          onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
-          placeholder={type === "doc" ? "Untitled doc" : "Untitled sheet"}
-          className="h-9 max-w-md font-medium"
-          data-testid="input-editor-title"
-        />
+        {/* BUG-RTE03: make the title obviously editable. The previous default
+            Input looked like a static label until hovered; users didn't realise
+            they could click into it and rename their doc. Give it a hover/focus
+            outline and a pencil hint so the affordance is unambiguous. */}
+        <div className="relative group max-w-md">
+          <Input
+            value={title}
+            onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
+            placeholder={type === "doc" ? "Untitled doc — click to rename" : "Untitled sheet — click to rename"}
+            className="h-9 font-semibold text-base border border-transparent hover:border-border focus:border-primary/60 focus:bg-background bg-transparent pr-7 transition-colors"
+            data-testid="input-editor-title"
+            aria-label="Document title (click to edit)"
+            title="Click to rename"
+          />
+          <PencilIcon className="h-3.5 w-3.5 text-muted-foreground/40 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-muted-foreground transition-colors" />
+        </div>
         <span className="text-xs text-muted-foreground ml-2" data-testid="text-editor-status">
           {type === "doc" ? "Doc" : "Sheet"}
           {saveMut.isPending ? " · Saving…" : (dirty ? " · Unsaved" : (lastSavedAt ? ` · Saved ${formatRelative(lastSavedAt, nowTick)}` : ""))}

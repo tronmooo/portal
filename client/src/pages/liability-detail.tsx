@@ -1190,8 +1190,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <Row label="Current balance" value={fmtUSD(terms.currentBalance)} />
                   <Row label="Annual interest rate" value={fmtPct(terms.annualRate)} />
                   <Row label="Monthly payment" value={fmtUSD(terms.monthlyPayment || summary.monthlyPayment)} />
-                  <Row label="Remaining term"
-                    value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : `${summary.remainingMonths} mo`} />
+                  {/* BUG-L01: split the single "Remaining term" row into two
+                      labelled values so the user can tell which is the contract
+                      term they entered vs which is the calculated payoff. The
+                      old single row showed "50 mo" while the header KPI showed
+                      "58 mo" with no explanation. */}
+                  <Row label="Original term (contract)"
+                    value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : "—"} />
+                  <Row label="Projected payoff (calculated)"
+                    value={summary.remainingMonths ? `${summary.remainingMonths} mo` : "—"} />
                   <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
                   <Row label="Due day of month"
                     value={terms.dueDay ? `Day ${terms.dueDay}` : "—"} />

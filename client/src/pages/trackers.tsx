@@ -988,9 +988,11 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
       notes: `Dose taken at ${new Date().toLocaleTimeString()}`
     }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['/api/trackers'] });
-      qc.invalidateQueries({ queryKey: ['/api/stats'] });
-      qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
+      // BUG-T05/UI01: refetchType:"all" so the count badge updates even when
+      // the page-level trackers query is technically inactive at the moment.
+      qc.invalidateQueries({ queryKey: ['/api/trackers'], refetchType: "all" });
+      qc.invalidateQueries({ queryKey: ['/api/stats'], refetchType: "all" });
+      qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'], refetchType: "all" });
       toast({ title: `${drugName} logged`, description: `${dosage} taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
     },
     onError: () => toast({ title: 'Failed to log dose', variant: 'destructive' }),
@@ -1260,9 +1262,15 @@ function AddEntryDialog({
       toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // BUG-T05/UI01: force a network refetch so the entry count badge (which
+      // reads tracker.entries.length straight from the cached list) updates
+      // immediately after a log. The default invalidate only marks queries as
+      // stale — inactive list queries on the trackers page wouldn't refetch
+      // until the user re-focused the page, leaving "3 entries" stuck while the
+      // newest entry was already on the server.
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
     },
   });
 
@@ -1928,7 +1936,19 @@ function CreateTrackerDialog({
       toast({ title: "Tracker created" });
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to create tracker", description: formatApiError(err), variant: "destructive" });
+      // BUG-CRUD01: surface a clearer, more actionable toast when the server
+      // says the tracker name already exists (409) so the user knows their
+      // click did register but was deduplicated, instead of seeing a silent
+      // failure or a generic "Failed" message.
+      const msg = formatApiError(err);
+      const isDup = /already exists/i.test(msg);
+      toast({
+        title: isDup ? "Tracker already exists" : "Failed to create tracker",
+        description: isDup
+          ? `A tracker with this name already exists for the selected profile. Open the existing one or rename this one.`
+          : msg,
+        variant: "destructive",
+      });
     },
   });
 
@@ -3655,16 +3675,41 @@ export default function TrackersPage() {
   // Phase 8 Liabilities: "subscriptions" filter renamed to "liabilities". The
   // legacy stored value is silently migrated so users with stale sessionStorage
   // don't land on a filter that no longer exists.
-  const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "liabilities" | "documents" | "trackers">(() => {
+  // BUG-LT01/LT02/LT03/LT04/UI02: derive a default section from the active
+  // route + query string. Route changes always reset the section so direct
+  // links to /trackers or /dashboard/health behave predictably and
+  // navigating away/back to /linked returns the user to a clean "All" view.
+  const getRouteDefaultSection = (path: string): "all" | "profiles" | "liabilities" | "documents" | "trackers" => {
+    const p = (path || "").toLowerCase();
+    if (p.startsWith("/trackers") || p.startsWith("/dashboard/health") || p.startsWith("/health")) return "trackers";
+    return "all";
+  };
+  const getQuerySection = (): "all" | "profiles" | "liabilities" | "documents" | "trackers" | null => {
     try {
-      const raw = sessionStorage.getItem("portol_linked_filter");
-      if (raw === "subscriptions") return "liabilities";
-      return (raw as any) || "all";
-    } catch { return "all"; }
+      const hash = window.location.hash || "";
+      const q = hash.includes("?") ? hash.split("?")[1] : (window.location.search || "").replace(/^\?/, "");
+      if (!q) return null;
+      const tab = new URLSearchParams(q).get("tab");
+      if (tab === "assets") return "profiles";
+      if (tab && ["all", "trackers", "documents", "liabilities", "profiles"].includes(tab)) return tab as any;
+    } catch {}
+    return null;
+  };
+  const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "liabilities" | "documents" | "trackers">(() => {
+    return getQuerySection() || getRouteDefaultSection(pageLoc || (typeof window !== "undefined" ? window.location.pathname : ""));
   });
+  // BUG-LT01/LT02/LT03/LT04/UI02: reset section whenever the route changes
+  // so /trackers, /dashboard/health, and /linked never reuse a stale tab.
+  useEffect(() => {
+    const qSection = getQuerySection();
+    if (qSection) {
+      setSectionFilterRaw(qSection);
+      return;
+    }
+    setSectionFilterRaw(getRouteDefaultSection(pageLoc || (typeof window !== "undefined" ? window.location.pathname : "")));
+  }, [pageLoc]);
   const setSectionFilter = (val: "all" | "profiles" | "liabilities" | "documents" | "trackers") => {
     setSectionFilterRaw(val);
-    try { sessionStorage.setItem("portol_linked_filter", val); } catch {}
   };
   // Document type filter
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
@@ -4030,15 +4075,33 @@ export default function TrackersPage() {
             // Compute filtered asset/subscription counts using the SAME filter logic as the sections
             const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
             const isShowAllForCounts = filterMode === "everyone";
+            // BUG-A02: the chip count must use IDENTICAL filtering to the rendered
+            // asset list — otherwise the user sees e.g. "Assets (3)" in the chip but
+            // 5 cards below (or vice versa) depending on the nesting filter selected
+            // on the Assets tab. Mirror the list's filter logic exactly, including
+            // the assetNestingFilter modes.
+            const labelForTypeCount = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
             const filteredAssetCount = (profiles || []).filter(p => {
               if (!childTypeSet.has(p.type)) return false;
-              // Hide assets nested under another asset — they show inside the parent's detail page
               const pParent = p.fields?._parentProfileId || p.parentProfileId;
               const parentProfile = pParent ? (profiles || []).find(x => x.id === pParent) : null;
-              if (parentProfile && childTypeSet.has(parentProfile.type)) return false;
-              if (isShowAllForCounts) return true;
-              if (pParent && filterIds.includes(pParent)) return true;
-              return false;
+              const parentIsAsset = !!parentProfile && childTypeSet.has(parentProfile.type);
+              // Profile-filter scope
+              const inScope = isShowAllForCounts || (pParent && filterIds.includes(pParent as string));
+              if (!inScope) return false;
+              // Asset type chip filter — only applies on the Assets tab
+              if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForTypeCount(p.type) !== assetTypeFilter) return false;
+              // Nesting filter — must match the list view exactly
+              const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
+              if (nestingFilter === "all" || nestingFilter === "topLevel") {
+                if (parentIsAsset) return false;
+              } else if (nestingFilter === "hasChildren") {
+                const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
+                if (!hasAssetChild) return false;
+              } else if (nestingFilter === "nested") {
+                if (!parentIsAsset) return false;
+              }
+              return true;
             }).length;
             // Liabilities count — includes "liability" (canonical), legacy "loan",
             // AND "subscription" (recurring bills are liabilities too — Netflix,
@@ -4768,11 +4831,23 @@ export default function TrackersPage() {
                   const original = toNumLiab(fields.originalBalance ?? fin.originalBalance);
                   const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
                   return (
+                    // BUG-LT05: navigation goes through wouter's <Link> only.
+                    // Earlier QA reported the global profile filter flipping
+                    // from "Everyone" → the liability owner on card click — we
+                    // could not reproduce a listener that does this in the
+                    // current code, but the symptom is consistent with stale
+                    // localStorage filter state lingering after navigation.
+                    // The route-aware filter reset in BUG-LT03 now clears any
+                    // such carryover on each route change.
                     <Link key={liab.id} href={`/profiles/${liab.id}`} className="block">
-                      <div className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`liab-card-${liab.id}`}>
+                      <div
+                        className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col"
+                        style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }}
+                        data-testid={`liab-card-${liab.id}`}
+                      >
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                           <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><TrendingDown className="h-3.5 w-3.5" /></div>
-                          <p className="text-[10px] font-bold text-foreground truncate">{liab.name}</p>
+                          <p className="text-[10px] font-bold text-foreground truncate" title={liab.name}>{liab.name}</p>
                         </div>
                         <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
                           {balance != null && balance > 0 ? (

@@ -750,6 +750,7 @@ export function CreateProfileDialog({
   onClose,
   initialCategoryFilter,
   titleOverride,
+  onCreated,
 }: {
   open: boolean;
   onClose: () => void;
@@ -757,6 +758,8 @@ export function CreateProfileDialog({
   initialCategoryFilter?: string | string[];
   /** Optional override for the step-1 dialog title. */
   titleOverride?: string;
+  /** Fired after a profile is successfully created — used to clear stale search etc. */
+  onCreated?: (created: { id: string; name: string; type: string }) => void;
 }) {
   const { toast } = useToast();
   // Step 1: pick a type; Step 2: fill details
@@ -786,10 +789,11 @@ export function CreateProfileDialog({
       const res = await apiRequest("POST", "/api/profiles", rest);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (created: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: `"${name}" profile created`, description: selectedTypeDef?.label || selectedTypeKey });
+      try { onCreated?.({ id: created?.id, name: created?.name || name, type: created?.type || "" }); } catch {}
       handleClose();
     },
     onError: (err: Error) => {
@@ -1010,6 +1014,50 @@ export function CreateProfileDialog({
 // ─── Profile Card ────────────────────────────────────────────────────────────
 
 const HIDDEN_FIELDS = ["class", "donor", "provider", "patientId", "property", "_parentProfileId", "ownerProfileId", "ownerName"];
+
+// BUG-P05/MISC01: Pretty labels for profile field group keys and common abbreviations.
+const FIELD_LABELS: Record<string, string> = {
+  pets: "Pet info",
+  personal: "Personal",
+  iden: "Identity",
+  identity: "Identity",
+  health: "Health",
+  fin: "Finance",
+  finance: "Finance",
+  other: "Notes",
+  emergency: "Emergency",
+  vehicle: "Vehicle",
+  contact: "Contact",
+  insurance: "Insurance",
+  medical: "Medical",
+  preferences: "Preferences",
+};
+const prettyFieldLabel = (key: string): string => {
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  return key.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim().replace(/\b\w/g, c => c.toUpperCase());
+};
+
+// BUG-P05/MISC01: Flatten nested field objects (e.g. fields.pets = {breed, species})
+// into top-level entries so the card never shows "pets: breed: ...".
+const flattenProfileFields = (fields: Record<string, any>): Array<[string, any]> => {
+  const out: Array<[string, any]> = [];
+  for (const [k, v] of Object.entries(fields || {})) {
+    if (v === null || v === undefined || v === "") continue;
+    if (typeof v === "object" && !Array.isArray(v)) {
+      // Promote each inner primitive entry one level up
+      const innerEntries = Object.entries(v).filter(([_, iv]) => iv !== null && iv !== undefined && iv !== "");
+      if (innerEntries.length === 0) continue;
+      // If the inner value is primitive-ish, keep its own key. Group key becomes section context only.
+      for (const [ik, iv] of innerEntries) {
+        if (typeof iv === "object") continue; // skip deeper nesting
+        out.push([ik, iv]);
+      }
+    } else {
+      out.push([k, v]);
+    }
+  }
+  return out;
+};
 // Vehicle/asset-specific fields that should not appear on person/pet profile cards
 const VEHICLE_SPECIFIC_FIELDS = ["make", "model", "year", "vin", "mileage", "color_ext", "color_int", "trim", "transmission", "fuelType", "engineSize", "licenseplate", "odo"];
 
@@ -1089,7 +1137,8 @@ function getProfileBanner(type: string): string {
 
 function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: string) => void }) {
   const isPersonType = ["self", "person", "pet"].includes(profile.type);
-  const fields = Object.entries(profile.fields).filter(
+  // BUG-P05/MISC01: flatten nested groups so the card shows real field names, not group keys.
+  const fields = flattenProfileFields(profile.fields || {}).filter(
     ([key, v]) => v !== null && v !== undefined && v !== "" &&
       !HIDDEN_FIELDS.includes(key) &&
       !(isPersonType && VEHICLE_SPECIFIC_FIELDS.includes(key))
@@ -1136,7 +1185,7 @@ function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: s
             .slice(0, 5)
             .map(([key, val]) => (
               <div key={key} className="flex items-center justify-between gap-1">
-                <span className="text-[9px] text-muted-foreground truncate">{key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim()}</span>
+                <span className="text-[9px] text-muted-foreground truncate">{prettyFieldLabel(key)}</span>
                 <span className="text-[9px] font-bold tabular-nums text-foreground shrink-0">{val.slice(0, 20)}</span>
               </div>
             ))}
@@ -1278,11 +1327,24 @@ export default function ProfilesPage() {
   );
 
   const TYPE_GROUP_ICONS: Record<string, string> = { self: '\u{1F464}', person: '\u{1F465}', pet: '\u{1F43E}', vehicle: '\u{1F697}', asset: '\u2B50', loan: '\u{1F4B3}', subscription: '\u{1F504}', investment: '\u{1F4C8}', property: '\u{1F3E0}', medical: '\u{1FA7A}' };
+  // BUG-P01: 'Self' is its own plural; people => People; everything else gets a normal 's'.
+  const TYPE_GROUP_PLURAL: Record<string, string> = {
+    self: "Self",
+    person: "People",
+    pet: "Pets",
+    vehicle: "Vehicles",
+    asset: "Assets",
+    loan: "Loans",
+    subscription: "Subscriptions",
+    investment: "Investments",
+    property: "Properties",
+    account: "Accounts",
+    medical: "Medical Providers",
+  };
   const typeGroupLabel = (type: string) => {
     const icon = TYPE_GROUP_ICONS[type] || '\u{1F4CB}';
-    if (type === "medical") return `${icon} Medical Providers`;
-    const label = TYPE_LABELS[type] || type;
-    return `${icon} ${label}s`;
+    const plural = TYPE_GROUP_PLURAL[type] || (TYPE_LABELS[type] || type) + "s";
+    return `${icon} ${plural}`;
   };
 
   const profileToDelete = deleteId ? (profiles || []).find((p) => p.id === deleteId) : null;
@@ -1293,9 +1355,22 @@ export default function ProfilesPage() {
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-3 mb-2">
-            <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back to Dashboard">
+            {/* BUG-P02: use history.back() so the button mirrors browser back behavior. */}
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== "undefined" && window.history.length > 1) {
+                  window.history.back();
+                } else {
+                  window.location.hash = "#/dashboard";
+                }
+              }}
+              className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors"
+              data-testid="button-back"
+              aria-label="Back"
+            >
               <ArrowLeft className="w-4 h-4" />
-            </Link>
+            </button>
           </div>
           <p className="text-sm text-muted-foreground">
             {(profiles || []).length === 0
@@ -1361,7 +1436,14 @@ export default function ProfilesPage() {
       )}
 
       {/* Create Dialog */}
-      <CreateProfileDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <CreateProfileDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={() => {
+          // BUG-P03: clear any stale search so the newly created profile is visible.
+          setSearchQuery("");
+        }}
+      />
 
       {/* Delete AlertDialog */}
       <AlertDialog

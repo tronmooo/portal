@@ -1876,11 +1876,15 @@ If unsure, return "profile_fact".`,
         return res.status(400).json({ error: "Blood type must be A+, A-, B+, B-, AB+, AB-, O+, or O-" });
       }
     }
-    // Duplicate detection: warn if a profile with the same name and type exists
+    // Duplicate detection: warn if a profile with the same name and type exists.
+    // BUG-P04 (Round 8): Honor skipDupCheck so the client's "Create Anyway"
+    // flow can actually create a second profile with the same name+type.
     const existing = await storage.getProfiles();
-    const dup = existing.find(p => p.name.toLowerCase() === req.body.name.toLowerCase() && p.type === req.body.type);
-    if (dup) {
-      return res.status(409).json({ error: `A ${req.body.type} profile named "${dup.name}" already exists`, existingId: dup.id });
+    if (!req.body.skipDupCheck) {
+      const dup = existing.find(p => p.name.toLowerCase() === req.body.name.toLowerCase() && p.type === req.body.type);
+      if (dup) {
+        return res.status(409).json({ error: `A ${req.body.type} profile named "${dup.name}" already exists`, existingId: dup.id });
+      }
     }
 
     // Wave 3 #7 — AI fuzzy duplicate detection. Catches near-dupes the exact
@@ -1924,7 +1928,9 @@ If unsure, return "profile_fact".`,
         req.body.parentProfileId = selfProfile.id;
       }
     }
-    const parsed = insertProfileSchema.safeParse(req.body);
+    // Strip skipDupCheck flag before schema validation (it's a control flag, not stored data).
+    const { skipDupCheck: _skip, ...profileBody } = req.body;
+    const parsed = insertProfileSchema.safeParse(profileBody);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const created = await storage.createProfile(parsed.data);
     bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
@@ -2609,13 +2615,24 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       return res.status(400).json({ error: "Tracker name is required" });
     }
     req.body.name = sanitize(req.body.name);
-    // Duplicate tracker name detection — only block if same name AND same profile
+    // BUG-T01/CRUD01: Allow client to bypass dup check ("Create Anyway" flow)
+    const skipDupCheck = !!req.body.skipDupCheck;
+    if ("skipDupCheck" in req.body) delete req.body.skipDupCheck;
+    // Duplicate tracker name detection — only block if same name AND same profile.
+    // BUG-T01: previously, when linkedProfiles was empty on both sides we returned
+    // a global dup, which made quick-add fail with 409 on a brand-new profile that
+    // happens to share a tracker name ("Weight", "Steps") with an existing one.
+    // Now an empty linkedProfiles array on the new tracker means "scope to whichever
+    // profile the UI later attaches" — only dup if both old and new have NO profile
+    // attribution AND identical name.
     const requestedProfiles = req.body.linkedProfiles || [];
     const existing = await storage.getTrackers();
-    const dup = existing.find(t => {
+    const dup = skipDupCheck ? null : existing.find(t => {
       if (t.name.toLowerCase() !== req.body.name.toLowerCase()) return false;
-      if (requestedProfiles.length === 0) return true; // no profile = global dup
-      return requestedProfiles.some((pid: string) => (t.linkedProfiles || []).includes(pid));
+      const existingProfiles = t.linkedProfiles || [];
+      if (requestedProfiles.length === 0 && existingProfiles.length === 0) return true;
+      if (requestedProfiles.length === 0 || existingProfiles.length === 0) return false;
+      return requestedProfiles.some((pid: string) => existingProfiles.includes(pid));
     });
     if (dup) {
       return res.status(409).json({ error: `A tracker named "${dup.name}" already exists for this profile`, existingId: dup.id });
@@ -2657,6 +2674,46 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     const { values } = req.body;
     if (!values || typeof values !== "object") {
       return res.status(400).json({ error: "Values required" });
+    }
+    // BUG-T02/T03/T04: Coerce values against the tracker's field schema BEFORE
+    // running the meaningful-value / numeric checks. The AI engine (and any chat
+    // path) was logging strings like "Chicken Sandwich" or "running" into
+    // numeric fields; those values would be stored as strings and then crash
+    // any chart/aggregation that called toFixed() on them.
+    {
+      const tracker = await storage.getTracker(req.params.id);
+      if (tracker && Array.isArray(tracker.fields)) {
+        const numericFieldNames = new Set(
+          tracker.fields
+            .filter((f: any) => f && (f.type === "number" || f.type === "integer" || f.type === "decimal"))
+            .map((f: any) => f.name)
+        );
+        for (const k of Object.keys(values)) {
+          if (k === "_notes" || k === "notes" || k === "timestamp") continue;
+          if (!numericFieldNames.has(k)) continue;
+          const raw = (values as any)[k];
+          if (raw == null || raw === "") continue;
+          if (typeof raw === "number") {
+            if (!isFinite(raw)) {
+              return res.status(400).json({ error: `"${k}" must be a number (got ${raw}).` });
+            }
+            continue;
+          }
+          // Strings: try to coerce, but reject if the string isn't numeric.
+          const s = String(raw).trim();
+          // Strip currency, units like "lbs", "mi", but reject if no digit at all.
+          const stripped = s.replace(/[$,\s]/g, "").replace(/[a-zA-Z\/%]+$/g, "");
+          const n = parseFloat(stripped);
+          if (!isFinite(n) || stripped === "" || !/\d/.test(stripped)) {
+            return res.status(400).json({
+              error: `"${k}" expects a number. Received "${s}" — use a numeric value (e.g. 12.5).`,
+              field: k,
+              received: s,
+            });
+          }
+          (values as any)[k] = n;
+        }
+      }
     }
     // Reject entries where all meaningful values are empty/null/undefined
     const meaningfulKeys = Object.keys(values).filter(k => k !== '_notes' && k !== 'notes' && k !== 'timestamp');

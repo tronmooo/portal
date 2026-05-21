@@ -196,7 +196,17 @@ function PreviewPanel({ doc }: { doc: Document }) {
     handleMouseDown, handleMouseMove, handleMouseUp,
   } = useViewerControls();
 
-  const dataUrl = `data:${doc.mimeType};base64,${doc.fileData}`;
+  // BUG-D02: the server strips fileData from /api/documents/:id (only the binary
+  // endpoint /file returns it), so building `data:...;base64,${doc.fileData}` made
+  // an `image/jpeg;base64,undefined` URL that the browser silently dropped.
+  // Point both <img> and <object> at the streaming endpoint instead — it
+  // handles base64 docs AND Supabase-Storage docs transparently.
+  const dataUrl = `/api/documents/${doc.id}/file`;
+  // For docs uploaded in the current session the legacy base64 path still works,
+  // so prefer it when available (lets us preview before the server round-trip).
+  const previewUrl = (doc as any).fileData
+    ? `data:${doc.mimeType};base64,${(doc as any).fileData}`
+    : dataUrl;
 
   return (
     <div className="flex flex-col h-full rounded-xl border border-border bg-card overflow-hidden">
@@ -251,7 +261,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
             data-testid="preview-image"
           >
             <img
-              src={dataUrl}
+              src={previewUrl}
               alt={doc.name}
               className="w-full h-full object-contain transition-transform duration-150"
               style={{
@@ -273,7 +283,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
               }}
             >
               <object
-                data={dataUrl}
+                data={previewUrl}
                 type="application/pdf"
                 className="w-full"
                 style={{ height: "calc(100vh - 250px)", minHeight: "400px" }}
@@ -622,9 +632,12 @@ export default function DocumentDetailPage() {
       <div className="h-full flex flex-col items-center justify-center gap-3" data-testid="page-document-detail-error">
         <FileText className="h-12 w-12 text-muted-foreground" />
         <p className="text-sm font-medium">Document not found</p>
-        <Button variant="outline" size="sm" onClick={() => navigate("/dashboard")} data-testid="btn-back-error">
+        <Button variant="outline" size="sm" onClick={() => {
+          if (window.history.length > 1) window.history.back();
+          else navigate("/dashboard");
+        }} data-testid="btn-back-error">
           <ArrowLeft className="h-3.5 w-3.5 mr-1.5" />
-          Back to Dashboard
+          Back
         </Button>
       </div>
     );
@@ -634,15 +647,22 @@ export default function DocumentDetailPage() {
     <div className="flex flex-col h-full overflow-hidden" data-testid="page-document-detail">
       {/* Header bar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-background/80 backdrop-blur-sm shrink-0">
+        {/* BUG-D01: use history.back() so the back button returns to wherever
+            the user came from (Documents tab, Linked page, Trackers, etc.),
+            not always hardcoded to the Dashboard. Falls back to Dashboard if
+            there is no history entry to pop. */}
         <Button
           variant="ghost"
           size="sm"
           className="gap-1.5 h-8 px-2 text-xs"
-          onClick={() => navigate("/dashboard")}
+          onClick={() => {
+            if (window.history.length > 1) window.history.back();
+            else navigate("/dashboard");
+          }}
           data-testid="btn-back-to-dashboard"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          Dashboard
+          Back
         </Button>
         <div className="flex items-center gap-2 min-w-0">
           <FileText className="h-4 w-4 text-muted-foreground shrink-0" />

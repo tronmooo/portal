@@ -9261,27 +9261,63 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
     };
   });
 
+  // BUG-P06: For Person/Self profiles, surface a "+ Link Asset" action so users
+  // can attach assets directly from the Belongings tab, matching the Liabilities UX.
+  const showLinkButton = isPerson;
+  const handleLinkAsset = () => {
+    // Open the Linked page filtered to Assets for this profile so the user can pick.
+    try {
+      window.location.hash = `#/linked?tab=assets&profile=${encodeURIComponent(profileId)}`;
+    } catch {}
+  };
+
   if (items.length === 0) {
     return (
-      <div className="text-center py-10">
+      <div className="text-center py-10" data-testid="linked-assets-empty">
         <Package className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
         <p className="text-sm text-muted-foreground">No linked assets</p>
+        {showLinkButton && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs mt-3"
+            onClick={handleLinkAsset}
+            data-testid="button-link-asset-empty"
+          >
+            <Plus className="h-3 w-3 mr-1" /> Link Asset
+          </Button>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {items.map((item: any, i: number) => (
-        <RelAssetCard
-          key={item.id || i}
-          id={item.id}
-          name={item.name}
-          typeKey={item.typeKey}
-          sharePct={item.sharePct}
-          currentValue={item.currentValue}
-        />
-      ))}
+    <div className="space-y-3">
+      {showLinkButton && (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            onClick={handleLinkAsset}
+            data-testid="button-link-asset"
+          >
+            <Plus className="h-3 w-3 mr-1" /> Link Asset
+          </Button>
+        </div>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {items.map((item: any, i: number) => (
+          <RelAssetCard
+            key={item.id || i}
+            id={item.id}
+            name={item.name}
+            typeKey={item.typeKey}
+            sharePct={item.sharePct}
+            currentValue={item.currentValue}
+          />
+        ))}
+      </div>
     </div>
   );
 }
