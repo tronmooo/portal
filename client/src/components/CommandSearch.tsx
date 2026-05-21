@@ -139,7 +139,7 @@ const CREATE_ACTIONS = [
   { label: "Log an expense",  icon: Wallet,     path: "/finance?new=expense", color: "text-emerald-500" },
   { label: "New task",        icon: ListTodo,   path: "/tasks?new=1",      color: "text-orange-500" },
   { label: "New habit",       icon: Flame,      path: "/habits?new=1",     color: "text-red-500" },
-  { label: "New tracker",     icon: BarChart2,  path: "/trackers?new=1",   color: "text-cyan-500" },
+  // Tracker creation is chat-only — shortcut removed 2026-05-21.
   { label: "Scan receipt",    icon: Sparkles,   path: "/insights",        color: "text-pink-500" },
   { label: "Generate weekly review", icon: Sparkles, path: "/insights",   color: "text-indigo-500" },
 ];

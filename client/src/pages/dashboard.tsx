@@ -1953,40 +1953,15 @@ function HealthSection({ data }: { data: any[] }) {
   if (!data || data.length === 0) return (
     <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" testId="section-health">
       <div className="rounded-lg border border-dashed border-border/50 p-3">
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-2 mb-2">
           <Heart className="h-5 w-5 text-muted-foreground/40" />
-          <p className="text-xs text-muted-foreground">No health data yet — quick log:</p>
+          <p className="text-xs text-muted-foreground">No health data yet.</p>
         </div>
-        <div className="grid grid-cols-3 gap-2" data-testid="health-quicklog">
-          <button
-            type="button"
-            onClick={() => navigate('/trackers?new=weight')}
-            className="flex flex-col items-center gap-1 rounded-lg border border-border/50 bg-muted/30 hover:bg-muted/60 hover:border-primary/40 transition-all p-2"
-            data-testid="quicklog-weight"
-          >
-            <Scale className="h-4 w-4 text-primary" />
-            <span className="text-[10px] font-medium">Weight</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/trackers?new=blood-pressure')}
-            className="flex flex-col items-center gap-1 rounded-lg border border-border/50 bg-muted/30 hover:bg-muted/60 hover:border-primary/40 transition-all p-2"
-            data-testid="quicklog-bp"
-          >
-            <ActivityIcon className="h-4 w-4 text-primary" />
-            <span className="text-[10px] font-medium">BP</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/trackers?new=sleep')}
-            className="flex flex-col items-center gap-1 rounded-lg border border-border/50 bg-muted/30 hover:bg-muted/60 hover:border-primary/40 transition-all p-2"
-            data-testid="quicklog-sleep"
-          >
-            <Moon className="h-4 w-4 text-primary" />
-            <span className="text-[10px] font-medium">Sleep</span>
-          </button>
-        </div>
-        <p className="text-[10px] text-muted-foreground/60 text-center mt-2">Or ask the AI: "I weigh 180 lbs"</p>
+        {/* Quick-log tracker buttons removed 2026-05-21 — trackers can only
+            be created through the chat. The AI prompt below explains how. */}
+        <p className="text-[11px] text-muted-foreground/80 text-center">
+          Ask Portol in chat: <span className="font-medium text-foreground">“I weigh 180 lbs”</span> or <span className="font-medium text-foreground">“track my sleep”</span>.
+        </p>
       </div>
     </CollapsibleSection>
   );

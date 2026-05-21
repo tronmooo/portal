@@ -4911,16 +4911,15 @@ function TrackersTab({
 
   return (
     <div className="space-y-3">
-      {/* Action buttons */}
+      {/* Action buttons — "+ New Tracker" removed 2026-05-21 (chat-only).
+          "Link Existing" stays because it only attaches an already-created
+          tracker to this profile (no creation happens). */}
       <div className="flex gap-2 justify-end">
         {unlinkableTrackers.length > 0 && (
           <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setShowLinkTracker(true)} data-testid="button-link-tracker">
             <Link2 className="h-3.5 w-3.5" /> Link Existing
           </Button>
         )}
-        <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setShowCreateTracker(true)} data-testid="button-create-tracker">
-          <Plus className="h-3.5 w-3.5" /> New Tracker
-        </Button>
       </div>
 
       {trackers.length === 0 ? (
@@ -4928,7 +4927,7 @@ function TrackersTab({
           <CardContent className="py-12 text-center">
             <Activity className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
             <p className="text-sm font-medium text-muted-foreground">No linked trackers</p>
-            <p className="text-xs text-muted-foreground mt-1">Create or link a tracker above</p>
+            <p className="text-xs text-muted-foreground mt-1">Ask Portol in chat to create one, then link it here.</p>
           </CardContent>
         </Card>
       ) : (
@@ -8549,6 +8548,84 @@ function LinkLiabilityDialog({ open, onOpenChange, search, setSearch, candidates
   );
 }
 
+// ── Link-existing-asset dialog (mirrors LinkLiabilityDialog) ──────────
+// Used on a person/self profile to attach an existing asset (vehicle,
+// property, investment, etc.) with an ownership share. POSTs to
+// /api/asset-party-links — the same endpoint the asset-side owner picker
+// already uses, so both directions write the same junction row.
+function LinkAssetDialog({ open, onOpenChange, search, setSearch, candidates, pendingId, setPendingId, pct, setPct, onSubmit, submitting }: {
+  open: boolean; onOpenChange: (b: boolean) => void;
+  search: string; setSearch: (s: string) => void;
+  candidates: any[]; pendingId: string | null; setPendingId: (id: string | null) => void;
+  pct: string; setPct: (s: string) => void;
+  onSubmit: () => void; submitting: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md max-h-[85vh] flex flex-col" data-testid="dialog-link-asset">
+        <DialogHeader>
+          <DialogTitle>Link Asset</DialogTitle>
+          <DialogDescription>Connect an existing asset to this person and set their ownership share.</DialogDescription>
+        </DialogHeader>
+        <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
+          <Input
+            placeholder="Search assets…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 text-xs"
+            data-testid="input-link-asset-search"
+          />
+          <div className="flex-1 overflow-y-auto space-y-1 pr-1" data-testid="list-link-asset-candidates">
+            {candidates.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-6">No assets available to link.</p>
+            ) : candidates.map((p: any) => {
+              const value = p.currentValue ?? p.fields?.currentValue ?? p.fields?.value ?? p.fields?.marketValue;
+              return (
+                <button
+                  key={p.id}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs hover:bg-muted transition-colors flex items-center gap-2 ${
+                    p.id === pendingId ? "bg-primary/10 text-primary font-semibold" : ""
+                  }`}
+                  onClick={() => setPendingId(p.id)}
+                  data-testid={`option-link-asset-${p.id}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="truncate font-medium">{p.name}</p>
+                    <p className="text-muted-foreground text-[10px]">
+                      {p.type || p.fields?.assetSubtype || "asset"}
+                      {value != null && !isNaN(Number(value)) ? ` · ${formatCurrency(Number(value))}` : ""}
+                    </p>
+                  </div>
+                  {p.id === pendingId && <Check className="h-3.5 w-3.5 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-2 border-t pt-2">
+            <span className="text-xs text-muted-foreground">Ownership</span>
+            <Input
+              type="number"
+              value={pct}
+              onChange={(e) => setPct(e.target.value)}
+              className="h-8 w-20 text-xs text-right"
+              min={0}
+              max={100}
+              data-testid="input-link-asset-pct"
+            />
+            <span className="text-xs text-muted-foreground">%</span>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button size="sm" onClick={onSubmit} disabled={!pendingId || submitting} data-testid="button-confirm-link-asset">
+            Link
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
   const { toast } = useToast();
   const f = profile.fields || {};
@@ -9269,6 +9346,13 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
   const isPerson = profileType === "person" || profileType === "self";
   const isAsset = ["asset","vehicle","property"].includes(profileType);
 
+  // Picker state (person/self profiles can attach an existing asset and
+  // set their ownership share — mirrors the liability picker pattern).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerPendingId, setPickerPendingId] = useState<string | null>(null);
+  const [pickerPct, setPickerPct] = useState("100");
+
   // Live profiles list is used to (a) filter out orphan links pointing at
   // deleted profiles — clicking those used to land the user on a "Profile
   // not found" screen — and (b) recover the canonical name when the link
@@ -9287,10 +9371,12 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
       } else if (isPerson) {
         // Server now enriches each row with `asset: { id, name, type, currentValue }`
         // and drops orphan rows whose asset profile was deleted. We pass through
-        // the share % so cards can render "50% owner" chips.
+        // the share % so cards can render "50% owner" chips, and surface the
+        // link row id so the unlink (×) button on each card can DELETE it.
         const rows = await apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json());
         return (rows || []).filter((a: any) => a?.asset?.id).map((a: any) => ({
           id: a.asset.id,
+          linkId: a.id, // asset_party_links.id — needed for DELETE
           name: a.asset.name || "",
           typeKey: a.asset.type || "asset",
           sharePct: Number(a.ownershipPercentage ?? 100),
@@ -9331,6 +9417,7 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
     const liveValue = live?.currentValue ?? live?.fields?.currentValue ?? live?.fields?.value ?? null;
     return {
       id: it.id,
+      linkId: it.linkId,
       name: (live?.name || it.name || "").trim(),
       typeKey: live?.type || it.typeKey || "asset",
       sharePct: it.sharePct,
@@ -9338,42 +9425,116 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
     };
   });
 
-  // NOTE: This panel previously rendered a "+ Link Asset" button that
-  // navigated to `#/linked?tab=assets&profile=...`. That route does not
-  // exist (404) and the only correct way to link an asset to a person
-  // is from inside the asset's profile (owner picker). Button removed
-  // per user feedback on 2026-05-21 — do not re-add without first
-  // building a working link-picker dialog like the liability flow.
+  // Asset candidates for person picker: all asset-type profiles not
+  // already linked to this person. Pulls from /api/profiles (cached).
+  const linkedAssetIds = useMemo(() => new Set(items.map((i: any) => i.id).filter(Boolean)), [items]);
+  const assetCandidates = useMemo(() => {
+    return (liveProfiles || [])
+      .filter((p: any) => ["asset", "vehicle", "property"].includes(p.type))
+      .filter((p: any) => !linkedAssetIds.has(p.id))
+      .filter((p: any) => !pickerSearch.trim() || (p.name || "").toLowerCase().includes(pickerSearch.toLowerCase()))
+      .slice(0, 50);
+  }, [liveProfiles, linkedAssetIds, pickerSearch]);
 
-  if (items.length === 0) {
-    return (
-      <div className="text-center py-10" data-testid="linked-assets-empty">
-        <Package className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-sm text-muted-foreground">No linked assets</p>
-        {isPerson && (
-          <p className="text-xs text-muted-foreground/70 mt-1">
-            Link assets from the asset's profile.
-          </p>
-        )}
-      </div>
-    );
-  }
+  // Link mutation — POST /api/asset-party-links and invalidate every
+  // downstream cache so the new card shows up immediately on both sides.
+  const linkMut = useMutation({
+    mutationFn: async () => {
+      if (!pickerPendingId) throw new Error("No asset selected");
+      const pct = Math.max(0, Math.min(100, Number(pickerPct) || 100));
+      await apiRequest("POST", "/api/asset-party-links", {
+        assetProfileId: pickerPendingId,
+        partyProfileId: profileId,
+        ownershipPercentage: pct,
+        role: "owner",
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Asset linked" });
+      setPickerOpen(false);
+      setPickerPendingId(null);
+      setPickerPct("100");
+      setPickerSearch("");
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/parties", profileId, "assets"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to link", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const unlinkMut = useMutation({
+    mutationFn: async (linkId: string) => { await apiRequest("DELETE", `/api/asset-party-links/${linkId}`); },
+    onSuccess: () => {
+      toast({ title: "Unlinked" });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/parties", profileId, "assets"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to unlink", description: formatApiError(err), variant: "destructive" }),
+  });
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {items.map((item: any, i: number) => (
-          <RelAssetCard
-            key={item.id || i}
-            id={item.id}
-            name={item.name}
-            typeKey={item.typeKey}
-            sharePct={item.sharePct}
-            currentValue={item.currentValue}
-          />
-        ))}
-      </div>
-    </div>
+    <>
+      {isPerson && (
+        <div className="flex justify-end mb-2">
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setPickerOpen(true)} data-testid="button-link-asset">
+            <Plus className="h-3.5 w-3.5 mr-1" /> Link Asset
+          </Button>
+        </div>
+      )}
+      {items.length === 0 ? (
+        <div className="text-center py-10" data-testid="linked-assets-empty">
+          <Package className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No linked assets</p>
+          {isPerson && (
+            <p className="text-xs text-muted-foreground/70 mt-1">
+              Tap “Link Asset” above to attach an existing vehicle, property, or investment.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {items.map((item: any, i: number) => (
+            <div key={item.id || i} className="relative">
+              <RelAssetCard
+                id={item.id}
+                name={item.name}
+                typeKey={item.typeKey}
+                sharePct={item.sharePct}
+                currentValue={item.currentValue}
+              />
+              {isPerson && item.linkId && (
+                <button
+                  className="absolute top-1.5 right-1.5 h-6 w-6 rounded-md hover:bg-muted/70 inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
+                  onClick={() => { if (confirm("Unlink this asset from this person?")) unlinkMut.mutate(item.linkId); }}
+                  data-testid={`btn-unlink-asset-${item.id}`}
+                  aria-label="Unlink asset"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <LinkAssetDialog
+        open={pickerOpen}
+        onOpenChange={(b) => { setPickerOpen(b); if (!b) { setPickerPendingId(null); setPickerSearch(""); } }}
+        search={pickerSearch}
+        setSearch={setPickerSearch}
+        candidates={assetCandidates}
+        pendingId={pickerPendingId}
+        setPendingId={setPickerPendingId}
+        pct={pickerPct}
+        setPct={setPickerPct}
+        onSubmit={() => linkMut.mutate()}
+        submitting={linkMut.isPending}
+      />
+    </>
   );
 }
 

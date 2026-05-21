@@ -3601,13 +3601,18 @@ export default function TrackersPage() {
     queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
   });
 
+  // `createOpen` is retained only so the CreateTrackerDialog component
+  // (still mounted below) compiles. All UI affordances that opened it
+  // were removed 2026-05-21 — trackers can only be created via chat.
   const [createOpen, setCreateOpen] = useState(false);
-  // QA Bug 7: auto-open New Tracker dialog when arriving via command palette ?new=1
+  // The auto-open-on-?new=1 effect was removed at the same time; the
+  // command palette "New tracker" shortcut was deleted upstream, so the
+  // URL contract no longer exists.
   useEffect(() => {
     const hash = window.location.hash || "";
     const q = hash.includes("?") ? hash.split("?")[1] : "";
-    if (q && new URLSearchParams(q).get("new") === "1") {
-      setCreateOpen(true);
+    if (q && new URLSearchParams(q).get("new")) {
+      // Strip the query so the URL stays clean, but do NOT open the dialog.
       const cleaned = hash.split("?")[0];
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
     }
@@ -3999,7 +4004,6 @@ export default function TrackersPage() {
             // Liability create dialog should also offer subscription types
             // (Netflix, Spotify, rent, utilities, gym membership, etc.).
             const openLiabilityDialog = () => { setCreateProfileFilter(["liabilities", "subscriptions"]); setCreateProfileTitle("Add Liability"); setCreateProfileOpen(true); };
-            const openTrackerDialog = () => setCreateOpen(true);
             const openDocumentUpload = () => navigate("/dashboard/artifacts");
 
             // Direct routes for tab-specific filters
@@ -4018,11 +4022,11 @@ export default function TrackersPage() {
               );
             }
             if (sectionFilter === "trackers") {
-              return (
-                <Button onClick={openTrackerDialog} size="icon" className="h-7 w-7" data-testid="button-create-tracker" aria-label="Create Tracker">
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-              );
+              // Trackers can only be created through the chat (Portol AI).
+              // The manual "+ Tracker" button was removed per user request
+              // 2026-05-21 — do NOT re-add a UI affordance here. Server-side
+              // createTracker is still used by the AI tool path.
+              return null;
             }
             if (sectionFilter === "documents") {
               return (
@@ -4047,9 +4051,7 @@ export default function TrackersPage() {
                     <TrendingDown className="h-3.5 w-3.5 mr-2" /> Liability
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={openTrackerDialog} data-testid="menu-add-tracker">
-                    <BarChart2 className="h-3.5 w-3.5 mr-2" /> Custom Tracker
-                  </DropdownMenuItem>
+                  {/* Tracker creation is chat-only — button removed 2026-05-21. */}
                   <DropdownMenuItem onClick={openDocumentUpload} data-testid="menu-add-document">
                     <FileText className="h-3.5 w-3.5 mr-2" /> Document
                   </DropdownMenuItem>
@@ -5077,18 +5079,8 @@ export default function TrackersPage() {
           <Activity className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">No trackers yet.</p>
           <p className="text-xs text-muted-foreground mt-1">
-            Click "New Tracker" or ask Portol to create one.
+            Ask Portol in chat to create one — e.g. “track my weight”.
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={() => setCreateOpen(true)}
-            data-testid="button-create-tracker-empty"
-          >
-            <Plus className="h-4 w-4 mr-1.5" />
-            Create First Tracker
-          </Button>
         </div>
       ) : filteredTrackers.length === 0 ? (
         <div className="text-center py-12">

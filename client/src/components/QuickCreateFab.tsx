@@ -34,7 +34,8 @@ import { useToast } from "@/hooks/use-toast";
 
 type CreateKind =
   | "asset" | "subscription" | "loan" | "profile" | "document"
-  | "tracker" | "doc" | "sheet" | "task" | "bill";
+  | "doc" | "sheet" | "task" | "bill";
+// Note: "tracker" was removed 2026-05-21 — trackers can only be created via chat.
 
 type Tile = {
   key: CreateKind;
@@ -50,7 +51,7 @@ const TILES: Tile[] = [
   { key: "loan",         label: "Loan",         icon: Landmark,   tone: "bg-amber-500/15 text-amber-600" },
   { key: "profile",      label: "Profile",      icon: User,       tone: "bg-sky-500/15 text-sky-500" },
   { key: "document",     label: "Document",     icon: FileText,   tone: "bg-blue-500/15 text-blue-500" },
-  { key: "tracker",      label: "Tracker",      icon: BarChart3,  tone: "bg-emerald-500/15 text-emerald-500" },
+  // "Tracker" tile removed 2026-05-21 — trackers can only be created via chat.
   { key: "doc",          label: "Doc",          icon: FileEdit,   tone: "bg-indigo-500/15 text-indigo-500" },
   { key: "sheet",        label: "Sheet",        icon: SheetIcon,  tone: "bg-teal-500/15 text-teal-500" },
   { key: "task",         label: "Task",         icon: CheckSquare,tone: "bg-orange-500/15 text-orange-500" },
@@ -78,7 +79,8 @@ export function QuickCreateFab() {
   }>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [billOpen, setBillOpen] = useState(false);
-  const [trackerOpen, setTrackerOpen] = useState(false);
+  // Tracker quick-create removed 2026-05-21 — chat-only.
+
 
   // Hide on routes where it doesn't belong
   if (shouldHideOn(location)) return null;
@@ -101,9 +103,6 @@ export function QuickCreateFab() {
       case "document":
         // Documents are uploaded through the artifacts page (camera/upload buttons)
         navigate("/dashboard/artifacts");
-        return;
-      case "tracker":
-        setTrackerOpen(true);
         return;
       case "doc":
         navigate("/editor/new/doc");
@@ -184,7 +183,7 @@ export function QuickCreateFab() {
 
       <QuickTaskDialog open={taskOpen} onClose={() => setTaskOpen(false)} />
       <QuickBillDialog open={billOpen} onClose={() => setBillOpen(false)} />
-      <QuickTrackerDialog open={trackerOpen} onClose={() => setTrackerOpen(false)} />
+      {/* QuickTrackerDialog removed 2026-05-21 — tracker creation is chat-only. */}
     </>
   );
 }
