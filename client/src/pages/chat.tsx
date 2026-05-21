@@ -2383,9 +2383,9 @@ export default function ChatPage() {
   const isBatch = attachments.length > 1;
 
   return (
-    <div className="flex h-full overflow-x-hidden" data-testid="page-chat">
+    <div className="flex h-full overflow-x-hidden max-w-full" data-testid="page-chat">
       {/* Chat area */}
-      <div className={`flex-1 flex flex-col ${activeArtifact ? 'w-1/2' : 'w-full'} transition-all`}>
+      <div className={`flex-1 flex flex-col min-w-0 ${activeArtifact ? 'w-1/2' : 'w-full'} transition-all`}>
       {/* Hidden file inputs */}
       <input
         ref={fileInputRef}

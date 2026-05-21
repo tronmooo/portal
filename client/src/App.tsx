@@ -552,7 +552,7 @@ function App() {
                 {/* h-dvh (dynamic viewport) instead of h-screen so iOS Safari's URL bar
                     doesn't push content off-screen. Falls back to 100vh on browsers
                     that don't support dvh. */}
-                <div className="flex h-dvh w-full max-w-[90rem] mx-auto">
+                <div className="flex h-dvh w-full max-w-[90rem] mx-auto overflow-x-hidden">
                   {/* Sidebar hidden on mobile */}
                   <div className="hidden md:block">
                     <AppSidebar />
@@ -579,7 +579,7 @@ function App() {
                         <ProfileButton />
                       </div>
                     </header>
-                    <main id="main-content" className="flex-1 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0">
+                    <main id="main-content" className="flex-1 min-w-0 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0">
                       <div className="h-full">
                         <AppRouter />
                       </div>

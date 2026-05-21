@@ -140,14 +140,31 @@ body {
   letter-spacing: -0.01em;
 }
 
-/* Reserve scrollbar gutter so centered (max-w-[90rem] mx-auto) layout
-   does NOT horizontally shift when navigating between pages with vs.
-   without a vertical scrollbar (e.g. opening the chat page from dashboard),
-   or when a Radix Dialog opens and adds body padding-right.
-   stable both-edges keeps the layout symmetrically centered even when
-   the page is short enough to not need a scrollbar. */
-html, body {
-  scrollbar-gutter: stable both-edges;
+/* Round 9 fix: page kept drifting right on mobile (iOS Safari) when the
+   keyboard opened. Three things were colliding:
+     1. `scrollbar-gutter: stable both-edges` reserved phantom gutter columns
+        on a viewport that has no real scrollbar (iOS uses overlay scrollbars),
+        making the body 15–30px wider than 100vw.
+     2. Nothing was clamping horizontal overflow at the html/body/#root level,
+        so any single child wider than the visual viewport (long URL, image,
+        suggestion chip text, etc.) shifted the whole page right.
+     3. When the keyboard opened, iOS shrank the visual viewport without
+        shrinking the layout viewport — amplifying any existing horizontal
+        overflow into a visible offset on fixed elements (bottom nav, etc.).
+   Fix: keep scrollbar-gutter on desktop only (it solves the original Radix
+   dialog shift bug), and on mobile clamp the root chain to 100% width with
+   `overflow-x: hidden`. */
+@media (min-width: 768px) {
+  html, body {
+    scrollbar-gutter: stable both-edges;
+  }
+}
+html, body, #root {
+  max-width: 100%;
+  overflow-x: hidden;
+  /* Prevent iOS rubber-band from horizontally bouncing the page once
+     the keyboard nudges the visual viewport. */
+  overscroll-behavior-x: none;
 }
 /* Neutralise Radix's body-scroll-lock padding compensation. With h-dvh +
    scrollbar-gutter above, the body never actually scrolls and never needs
@@ -156,6 +173,18 @@ html, body {
 body[data-scroll-locked] {
   padding-right: 0 !important;
   margin-right: 0 !important;
+}
+/* iOS Safari: prevent input focus from auto-zooming the viewport (which is
+   what causes the visible "drift right" when typing). Requires font-size >=
+   16px on the focused input — Tailwind text-sm is 14px so we bump just
+   inputs/textareas/selects to 16px on small screens. The visual size is
+   kept identical via a downscale transform so design isn't affected. */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }
 h1, h2, h3, .text-xl, .text-2xl {
   letter-spacing: -0.03em;
