@@ -5261,17 +5261,9 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
           <CardContent className="py-10 text-center">
             <HeartPulse className="h-12 w-12 text-muted-foreground/25 mx-auto mb-3" />
             <p className="text-sm font-semibold text-muted-foreground">No health data yet</p>
-            <p className="text-xs text-muted-foreground mt-1.5 mb-5">Create a health tracker to start logging data</p>
-            <div className="flex flex-wrap gap-2 justify-center">
-              <QuickHealthButton profileId={profile.id} name="Weight" unit="lbs" field="weight" category="health" onCreated={onChanged} />
-              <QuickHealthButton profileId={profile.id} name="Blood Pressure" unit="mmHg" field="systolic" category="health" onCreated={onChanged} />
-              <QuickHealthButton profileId={profile.id} name="Sleep" unit="hrs" field="hours" category="sleep" onCreated={onChanged} />
-              <QuickHealthButton profileId={profile.id} name="Calories" unit="kcal" field="calories" category="nutrition" onCreated={onChanged} />
-              <QuickHealthButton profileId={profile.id} name="Water" unit="oz" field="oz" category="health" onCreated={onChanged} />
-              {profile.type === "pet" && (
-                <QuickHealthButton profileId={profile.id} name="Vaccination" unit="" field="vaccine" category="health" fieldType="text" onCreated={onChanged} />
-              )}
-            </div>
+            {/* Quick-create tracker tiles removed 2026-05-21 — trackers
+                are chat-only. Empty state now points users at Portol chat. */}
+            <p className="text-xs text-muted-foreground mt-1.5">Ask Portol in chat to start a health tracker — e.g. “track my weight” or “log vaccinations”.</p>
           </CardContent>
         </Card>
       </div>
@@ -6243,12 +6235,13 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
   ],
-  // Pet — health + care focused. No ownership-history tab (pets aren't
-  // financial assets — that tab would always be empty and add noise to the
-  // horizontal tab scroll on mobile).
+  // Pet — care focused. "Health & Vet" tab removed 2026-05-21: it contained
+  // quick-create tracker buttons (Weight/BP/Sleep/Calories/Water/Vaccination)
+  // which violated the chat-only tracker-creation rule. All pet trackers
+  // now live under the single Trackers tab (chat creates them, this tab
+  // shows them). No ownership-history tab (pets aren't financial assets).
   pet: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "health", label: "Health & Vet", testId: "tab-health" },
     { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
