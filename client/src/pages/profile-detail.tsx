@@ -2996,20 +2996,19 @@ function DocumentsTab({
         });
       const fileData = await toBase64(file);
       const targetProfileId = linkTarget === "profile" ? profileId : linkTarget;
-      const res = await apiRequest("POST", "/api/upload", {
+      // Use /api/upload/save-only — stores the file immediately and links it to
+      // the profile without running Claude vision extraction. AI extraction on
+      // a multi-MB image can easily exceed Vercel's 60s function timeout,
+      // leaving the UI stuck on "Uploading..." indefinitely. Users uploading
+      // from a profile's Documents tab want the file SAVED — they can run AI
+      // extraction explicitly from the chat / batch upload flow if needed.
+      const profileIds = linkTarget === "profile" ? [profileId] : [targetProfileId, profileId];
+      const res = await apiRequest("POST", "/api/upload/save-only", {
         fileName: file.name,
         mimeType: file.type,
         fileData,
-        profileId: targetProfileId,
+        profileIds,
       });
-      // Also link to parent profile if uploaded to a child
-      if (linkTarget !== "profile") {
-        try {
-          const doc = await res.json();
-          await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "document", entityId: doc.document?.id || doc.id });
-          return doc;
-        } catch { /* non-critical */ }
-      }
       return res.json();
     },
     onSuccess: () => {
@@ -5072,14 +5071,22 @@ function QuickHealthButton({ profileId, name, unit, field, category, fieldType =
   const { toast } = useToast();
   const mutation = useMutation({
     mutationFn: async () => {
+      // CRITICAL: Pass linkedProfiles in the POST body so the server attaches
+      // the new tracker to THIS profile (not to Self by default). Without this,
+      // createTracker() auto-links to Self when linkedProfiles is empty, then
+      // the subsequent /link call is silently REJECTED by the PROFILE_EXCLUSIVE
+      // isolation guard (trackers can only belong to one profile).
       const res = await apiRequest("POST", "/api/trackers", {
         name, unit: unit || undefined, category,
         fields: [{ name: field, type: fieldType, isPrimary: true }],
+        linkedProfiles: [profileId],
+        skipDupCheck: true, // quick-add buttons should always succeed for this profile
       });
       const tracker = await res.json();
+      // Belt-and-suspenders: also ensure junction row exists. (createTracker
+      // already loops and calls linkProfileTo, but this is harmless if it's a
+      // no-op.)
       await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "tracker", entityId: tracker.id });
-      // Also update tracker's linkedProfiles
-      await apiRequest("PATCH", `/api/trackers/${tracker.id}`, { linkedProfiles: [profileId] });
       return tracker;
     },
     onSuccess: (tracker) => {
@@ -6190,7 +6197,9 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
   ],
-  // Pet — health + care focused
+  // Pet — health + care focused. No ownership-history tab (pets aren't
+  // financial assets — that tab would always be empty and add noise to the
+  // horizontal tab scroll on mobile).
   pet: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "health", label: "Health & Vet", testId: "tab-health" },
@@ -6199,16 +6208,17 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "tasks", label: "Reminders", testId: "tab-tasks" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
-    { value: "history", label: "History", testId: "tab-history" },
   ],
   // Vehicle — maintenance + money focused. Loan + Costs collapsed into Money.
+  // Note: "history" (ownership) and "timeline" (activity) were previously BOTH
+  // labeled "History" — deduped by renaming timeline to "Activity".
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
   // Loan — payment focused. Loan + Payments collapsed into Money.
@@ -6216,7 +6226,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6225,7 +6235,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
@@ -6252,7 +6262,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
   ],
   // Asset (laptop, device, etc.) — Loan + Costs collapsed into Money.
@@ -6262,14 +6272,14 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
   ],
   // Account
   account: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
-    { value: "timeline", label: "History", testId: "tab-timeline" },
+    { value: "timeline", label: "Activity", testId: "tab-timeline" },
     { value: "history", label: "History", testId: "tab-history" },
   ],
 };
@@ -9924,7 +9934,10 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
       const toBase64 = (f: File): Promise<string> =>
         new Promise((res, rej) => { const reader = new FileReader(); reader.onload = () => res((reader.result as string).split(",")[1]); reader.onerror = rej; reader.readAsDataURL(f); });
       const fileData = await toBase64(file);
-      const res = await apiRequest("POST", "/api/upload", { fileName: file.name, mimeType: file.type, fileData, profileId });
+      // Switch to save-only — same Vercel-60s reasoning as the main Documents tab.
+      const res = await apiRequest("POST", "/api/upload/save-only", {
+        fileName: file.name, mimeType: file.type, fileData, profileIds: [profileId],
+      });
       return res.json();
     },
     onSuccess: () => {
