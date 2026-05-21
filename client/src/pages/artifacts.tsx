@@ -121,7 +121,53 @@ const MOOD_EMOJI: Record<string, string> = {
 };
 
 // ─── Artifact Renderers ──────────────────────────────────────
-function ArtifactRenderer({ artifact }: { artifact: any }) {
+// Round 9 fix: checklist checkboxes were `defaultChecked` with no `onChange`,
+// so toggling them never persisted. Now controlled + wired to a mutation.
+// `artifactId` is required for the items-array path (uses the server's
+// per-item toggle endpoint). For the legacy string-content path we PATCH
+// the full content with `[ ]`/`[x]` flipped on the matching line.
+function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any; artifactId?: string; isArtifact?: boolean }) {
+  const qc = useQueryClient();
+
+  // Per-item toggle (preferred path — uses structured items[])
+  const toggleItemMut = useMutation({
+    mutationFn: async ({ id, itemId }: { id: string; itemId: string }) => {
+      const res = await apiRequest("POST", `/api/artifacts/${id}/toggle/${itemId}`);
+      return res.json();
+    },
+    onMutate: async ({ id, itemId }) => {
+      await qc.cancelQueries({ queryKey: ["/api/artifacts"] });
+      const prev = qc.getQueryData<any[]>(["/api/artifacts"]);
+      qc.setQueryData<any[]>(["/api/artifacts"], (old) =>
+        (old || []).map(a => a.id === id ? {
+          ...a,
+          items: (a.items || []).map((it: any) => it.id === itemId ? { ...it, checked: !it.checked } : it),
+        } : a)
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(["/api/artifacts"], ctx.prev); },
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["/api/artifacts"] }); },
+  });
+
+  // Content-string PATCH (legacy `[ ]`/`[x]` checklist)
+  const patchContentMut = useMutation({
+    mutationFn: async ({ id, content }: { id: string; content: string }) => {
+      const res = await apiRequest("PATCH", `/api/artifacts/${id}`, { content });
+      return res.json();
+    },
+    onMutate: async ({ id, content }) => {
+      await qc.cancelQueries({ queryKey: ["/api/artifacts"] });
+      const prev = qc.getQueryData<any[]>(["/api/artifacts"]);
+      qc.setQueryData<any[]>(["/api/artifacts"], (old) =>
+        (old || []).map(a => a.id === id ? { ...a, content } : a)
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(["/api/artifacts"], ctx.prev); },
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["/api/artifacts"] }); },
+  });
+
   if (!artifact) return null;
   const { type, content, language, dataBindings, items } = artifact;
   const chartType = (artifact as any).chartType as "bar" | "line" | "area" | "pie" | undefined;
@@ -131,9 +177,19 @@ function ArtifactRenderer({ artifact }: { artifact: any }) {
     return (
       <div className="space-y-1">
         {items.map((item: any, i: number) => (
-          <label key={item.id || i} className="flex items-center gap-2 text-sm">
-            <input type="checkbox" className="rounded" defaultChecked={item.checked} />
-            <span>{item.text}</span>
+          <label key={item.id || i} className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              className="rounded"
+              checked={!!item.checked}
+              disabled={!artifactId || !isArtifact || !item.id}
+              onChange={() => {
+                if (artifactId && isArtifact && item.id) {
+                  toggleItemMut.mutate({ id: artifactId, itemId: item.id });
+                }
+              }}
+            />
+            <span className={item.checked ? "line-through text-muted-foreground" : ""}>{item.text}</span>
           </label>
         ))}
       </div>
@@ -173,17 +229,43 @@ function ArtifactRenderer({ artifact }: { artifact: any }) {
     case "chart":
       return <ChartRenderer content={content || ""} dataBindings={dataBindings} chartType={chartType} />;
 
-    case "checklist":
+    case "checklist": {
+      const lines = (content || "").split("\n").filter(Boolean);
       return (
         <div className="space-y-1">
-          {(content || "").split("\n").filter(Boolean).map((item: string, i: number) => (
-            <label key={i} className="flex items-center gap-2 text-sm">
-              <input type="checkbox" className="rounded" defaultChecked={item.startsWith("[x]")} />
-              <span>{item.replace(/^\[[ x]\]\s*/, "")}</span>
-            </label>
-          ))}
+          {lines.map((item: string, i: number) => {
+            const isChecked = item.startsWith("[x]") || item.startsWith("[X]");
+            return (
+              <label key={i} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="rounded"
+                  checked={isChecked}
+                  disabled={!artifactId || !isArtifact}
+                  onChange={() => {
+                    if (!artifactId || !isArtifact) return;
+                    const next = lines.map((ln: string, idx: number) => {
+                      if (idx !== i) return ln;
+                      if (/^\[[ xX]\]/.test(ln)) {
+                        return ln.startsWith("[x]") || ln.startsWith("[X]")
+                          ? ln.replace(/^\[[xX]\]/, "[ ]")
+                          : ln.replace(/^\[ \]/, "[x]");
+                      }
+                      // No checkbox prefix — add one (default to checked since user clicked)
+                      return `[x] ${ln}`;
+                    }).join("\n");
+                    patchContentMut.mutate({ id: artifactId, content: next });
+                  }}
+                />
+                <span className={isChecked ? "line-through text-muted-foreground" : ""}>
+                  {item.replace(/^\[[ xX]\]\s*/, "")}
+                </span>
+              </label>
+            );
+          })}
         </div>
       );
+    }
 
     default: // note
       return <div className="text-sm whitespace-pre-wrap">{content || ""}</div>;
@@ -881,24 +963,37 @@ export default function ArtifactsPage() {
         </div>
       )}
 
-      {/* Artifact detail dialog */}
-      <Dialog open={!!selectedArtifact} onOpenChange={() => setSelectedArtifact(null)}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-          <DialogTitle>{selectedArtifact?.title}</DialogTitle>
-          {selectedArtifact?.source && (
-            <div className="mt-2">
-              <div className="flex items-center gap-2 mb-4">
-                <Badge variant="outline" className="text-xs">{selectedArtifact.source.type}</Badge>
-                {selectedArtifact.profileName && (
-                  <Badge variant="secondary" className="text-xs">{selectedArtifact.profileName}</Badge>
-                )}
-                <span className="text-xs text-muted-foreground">{formatDate(selectedArtifact.date)}</span>
-              </div>
-              <ArtifactRenderer artifact={selectedArtifact.source} />
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Artifact detail dialog — re-derive from allItems so optimistic
+          cache updates (e.g. checklist toggles) reflect immediately in the
+          open dialog instead of being frozen at click time. */}
+      {(() => {
+        const liveSelected = selectedArtifact
+          ? (allItems.find(it => it.id === selectedArtifact.id) || selectedArtifact)
+          : null;
+        return (
+          <Dialog open={!!selectedArtifact} onOpenChange={() => setSelectedArtifact(null)}>
+            <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+              <DialogTitle>{liveSelected?.title}</DialogTitle>
+              {liveSelected?.source && (
+                <div className="mt-2">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Badge variant="outline" className="text-xs">{liveSelected.source.type}</Badge>
+                    {liveSelected.profileName && (
+                      <Badge variant="secondary" className="text-xs">{liveSelected.profileName}</Badge>
+                    )}
+                    <span className="text-xs text-muted-foreground">{formatDate(liveSelected.date)}</span>
+                  </div>
+                  <ArtifactRenderer
+                    artifact={liveSelected.source}
+                    artifactId={liveSelected.id}
+                    isArtifact={liveSelected.isArtifact}
+                  />
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
     </div>
   );
 }
