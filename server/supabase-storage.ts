@@ -72,6 +72,98 @@ export function mergeAndApplyDeletes<T extends Record<string, any>>(
 }
 
 /**
+ * Profile fields alias topology — MUST stay in lockstep with
+ * `KEY_ALIASES` and `NESTED_GROUPS` in client/src/pages/profile-detail.tsx.
+ *
+ * The UI synthesizes a flat "display" view of `profile.fields` by:
+ *   1. Promoting every key in a known nested group up to the top level
+ *      (so `personal.dateOfBirth` is displayed as if it were `dateOfBirth`).
+ *   2. Aliasing certain storage keys to a friendlier UI key
+ *      (so `dateOfBirth` → `birthday` in the UI).
+ *
+ * The synthesis is one-way: the UI never sees that the storage key is
+ * actually `dateOfBirth` nested under `personal`. So when a user clicks
+ * the trash icon on a UI row labeled "Birthday" and the client sends
+ * `{ fieldsToDelete: ["birthday"] }`, the storage layer that ONLY drops
+ * the top-level `birthday` key leaves `dateOfBirth` and
+ * `personal.dateOfBirth` in place — the value re-surfaces on the next
+ * read because the flatten step puts it right back.
+ *
+ * That's the bug behind the long-standing complaint:
+ *   "I deleted birthday on Bob, came back after refresh, still there."
+ *
+ * The shape below is the inverse of the client's KEY_ALIASES map:
+ *   uiKey  →  every storage key that flattens INTO that uiKey.
+ * `expandProfileFieldDeletions` uses this map to compute the FULL set of
+ * storage keys that must be removed when a user asks to delete a UI key,
+ * and `stripFromNestedGroups` removes every entry of that set from each
+ * known nested group object.
+ */
+const PROFILE_KEY_ALIAS_REVERSE: Record<string, string[]> = {
+  birthday: ["birthday", "dateOfBirth", "dob", "date_of_birth"],
+  license: ["license", "licenseNumber"],
+  licenseState: ["licenseState", "issuingAuthority"],
+  licenseExpiration: ["licenseExpiration", "expirationDate"],
+  name: ["name", "patientName"],
+  phone: ["phone", "primaryPhone", "homePhone", "cellPhone"],
+  address: ["address", "homeAddress", "serviceAddress"],
+};
+
+const PROFILE_NESTED_GROUPS = [
+  // financial / asset groups
+  "vehicles", "vehicle", "insurance", "housing", "other", "finance", "subscriptions", "utilities", "loan",
+  // person / self groups
+  "personal", "identity", "health", "contact", "contacts", "emergency",
+  // pet groups
+  "pets", "pet",
+];
+
+/**
+ * Expand a list of UI-facing field keys into the full set of storage-side
+ * keys that have to be removed to make the deletion actually stick across
+ * a refresh. Returns a de-duplicated string[].
+ *
+ * Example: ["birthday"] → ["birthday", "dateOfBirth", "dob", "date_of_birth"]
+ */
+export function expandProfileFieldDeletions(uiKeys: string[] | undefined | null): string[] {
+  if (!Array.isArray(uiKeys) || uiKeys.length === 0) return [];
+  const out = new Set<string>();
+  for (const k of uiKeys) {
+    if (typeof k !== "string" || !k) continue;
+    out.add(k);
+    const aliases = PROFILE_KEY_ALIAS_REVERSE[k];
+    if (aliases) for (const a of aliases) out.add(a);
+  }
+  return Array.from(out);
+}
+
+/**
+ * Walk every known nested-group object on `fields` and remove `keys` from
+ * each one. If a nested group ends up empty after stripping, drop the
+ * group key itself so the UI doesn't show an empty "Personal Details"
+ * section that re-promotes nothing.
+ *
+ * Operates in-place on `fields`. Safe to call when no nested groups exist.
+ */
+export function stripFromNestedGroups(fields: Record<string, any>, keys: string[]): void {
+  if (!fields || typeof fields !== "object" || keys.length === 0) return;
+  for (const group of PROFILE_NESTED_GROUPS) {
+    const nested = fields[group];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+    let touched = false;
+    for (const k of keys) {
+      if (k in nested) {
+        delete nested[k];
+        touched = true;
+      }
+    }
+    if (touched && Object.keys(nested).length === 0) {
+      delete fields[group];
+    }
+  }
+}
+
+/**
  * Parse a money-ish value into a number. Handles strings like "$25,000", "40k", "1.2m".
  * Number("$25,000") returns NaN — this is the root cause of asset values showing $0.
  */
@@ -902,16 +994,22 @@ export class SupabaseStorage implements IStorage {
   ): Promise<Profile | undefined> {
     const existing = await this.getProfile(id);
     if (!existing) return undefined;
-    // Merge `fields` JSONB AND honor deletion intents. The old `{ ...existing,
-    // ...data }` spread could only OVERWRITE keys — it could never DROP them,
-    // making profile-field delete (e.g., birthday) silently no-op on the server.
-    // mergeAndApplyDeletes accepts both `fieldsToDelete: ["key"]` and `null`
-    // sentinel values inside `data.fields`. See top of file for the helper.
+    // Universal-delete: expand UI keys into the full storage-side alias set,
+    // then ALSO strip those keys from every nested group. Without this step,
+    // deleting "birthday" on a person profile only removes the top-level
+    // `birthday` key while `dateOfBirth` (top-level) and `personal.dateOfBirth`
+    // (nested) survive — and flatten promotes them right back on the next read.
+    // See PROFILE_KEY_ALIAS_REVERSE + PROFILE_NESTED_GROUPS at the top of this
+    // file for the topology this depends on (kept in lockstep with the client).
+    const expandedDeletes = expandProfileFieldDeletions(data.fieldsToDelete);
     const mergedFields = mergeAndApplyDeletes(
       existing.fields || {},
       data.fields,
-      data.fieldsToDelete
+      expandedDeletes
     );
+    if (expandedDeletes.length > 0) {
+      stripFromNestedGroups(mergedFields as Record<string, any>, expandedDeletes);
+    }
     const merged = { ...existing, ...data, fields: mergedFields };
     const now = new Date().toISOString();
     const updateData: any = {
