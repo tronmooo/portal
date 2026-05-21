@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "test:e2e": "vitest run tests/api-e2e.test.ts --config vitest.config.ts",
     "lint": "tsc --noEmit",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

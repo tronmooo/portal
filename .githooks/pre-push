@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Pre-push hook: run TypeScript check so Vercel deploys can't silently break.
+# Skipped when SKIP_TSC=1 is set (use sparingly).
+set -e
+
+if [ "${SKIP_TSC:-0}" = "1" ]; then
+  echo "[pre-push] SKIP_TSC=1 set — skipping tsc --noEmit"
+  exit 0
+fi
+
+echo "[pre-push] Running tsc --noEmit (matches Vercel prebuild)..."
+if ! npx --no-install tsc --noEmit; then
+  echo ""
+  echo "[pre-push] ❌ TypeScript errors detected — push BLOCKED."
+  echo "[pre-push] Fix the errors above, or bypass with: SKIP_TSC=1 git push"
+  exit 1
+fi
+
+echo "[pre-push] ✅ tsc clean — push allowed."
+exit 0
