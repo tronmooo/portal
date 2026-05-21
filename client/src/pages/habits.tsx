@@ -45,15 +45,29 @@ function HabitCard({ habit }: { habit: Habit }) {
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      // BUG-HAB-001: Only bump the displayed streak when this checkin
+      // actually crosses into completion for today. Previously we always
+      // added +1 optimistically, then server replied with the unchanged
+      // value and the streak "reverted" on the next render.
+      const willCompleteToday = todayCheckins + 1 >= targetPerDay;
+      const wasCompleteAlready = todayCheckins >= targetPerDay;
+      const streakBump = willCompleteToday && !wasCompleteAlready ? 1 : 0;
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === habit.id
-          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'temp-' + Date.now() }], currentStreak: (h.currentStreak || 0) + 1 }
+          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'temp-' + Date.now() }], currentStreak: (h.currentStreak || 0) + streakBump }
           : h
         )
       );
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: (serverHabit: any) => {
+      // BUG-HAB-001: Reconcile with server-truth so the displayed streak
+      // doesn't pop down a second later when invalidate refetches.
+      if (serverHabit && typeof serverHabit === "object" && serverHabit.id) {
+        queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+          (old || []).map((h: any) => h.id === habit.id ? { ...h, ...serverHabit } : h)
+        );
+      }
       const newCount = todayCheckins + 1;
       if (newCount >= targetPerDay) {
         toast({ title: `✨ ${habit.name} complete!`, description: targetPerDay > 1 ? `All ${targetPerDay} done for today.` : "Keep the streak going!" });
@@ -80,9 +94,14 @@ function HabitCard({ habit }: { habit: Habit }) {
     onMutate: async (checkinId: string) => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      // BUG-HAB-001: Only drop the streak when this undo actually pulls us
+      // back below today's target.
+      const wasCompleteToday = todayCheckins >= targetPerDay;
+      const stillCompleteToday = todayCheckins - 1 >= targetPerDay;
+      const streakDrop = wasCompleteToday && !stillCompleteToday ? 1 : 0;
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === habit.id
-          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.id !== checkinId), currentStreak: Math.max(0, (h.currentStreak || 0) - 1) }
+          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.id !== checkinId), currentStreak: Math.max(0, (h.currentStreak || 0) - streakDrop) }
           : h
         )
       );
@@ -471,9 +490,11 @@ export default function HabitsPage() {
               </SelectContent>
             </Select>
             <Button
+              type="button"
               size="sm"
-              disabled={!newName.trim() || createMutation.isPending}
-              onClick={() => handleCreate()}
+              disabled={createMutation.isPending}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleCreate(); }}
+              onPointerDown={(e) => { e.stopPropagation(); }}
               data-testid="button-save-habit"
             >
               Add

@@ -17,6 +17,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -157,8 +160,11 @@ function OccurrenceRow({ occ }: { occ: any }) {
     onError: (err: Error) => toast({ title: "Reschedule failed", description: formatApiError(err), variant: "destructive" }),
   });
 
-  const dateLabel = isOverdue ? `${Math.abs(daysOff)}d overdue`
-    : daysOff === 0 ? "Today"
+  // BUG-OBL-003: "0d overdue" reads wrong on today's items; show "Due today" instead.
+  const dateLabel = daysOff === 0 && !isDone && !isSkipped
+    ? "Due today"
+    : isOverdue
+    ? `${Math.abs(daysOff)}d overdue`
     : daysOff === 1 ? "Tomorrow"
     : daysOff > 0 ? `In ${daysOff}d`
     : due.toLocaleDateString();
@@ -776,6 +782,18 @@ export default function ObligationsManager({ showHeader = true, compact = false 
   const [newKind, setNewKind] = useState<ObligationKind>("bill");
   const [newDueDate, setNewDueDate] = useState("");
   const [newRecurrenceEnd, setNewRecurrenceEnd] = useState("");
+  // BUG-OBL-004: New Obligation modal advanced fields.
+  const [newLinkedProfiles, setNewLinkedProfiles] = useState<string[]>([]);
+  const [newRemindDays, setNewRemindDays] = useState<string>("");
+  const [newAutopay, setNewAutopay] = useState(false);
+  const [newAutoLogExpense, setNewAutoLogExpense] = useState<"auto" | "on" | "off">("auto");
+  const [newNotes, setNewNotes] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const { data: profilesList = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    staleTime: 5 * 60_000,
+  });
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [kindFilter, setKindFilter] = useState<"all" | ObligationKind>("all");
@@ -811,6 +829,29 @@ export default function ObligationsManager({ showHeader = true, compact = false 
     ? allObligations.filter(o => o.linkedProfiles.some(id => filterIds.includes(id)))
     : allObligations, [allObligations, filterMode, filterIds]);
 
+  // BUG-OBL-001/002/PRF-003: Filter tab counts MUST agree with the live
+  // "Overdue / Due today / Upcoming" panel above. Both must source from
+  // occurrences (per-instance) — using obligation.nextDueDate diverges when
+  // a monthly bill has an overdue back-occurrence but its nextDueDate has
+  // already advanced to the future.
+  const occStartIso = useMemo(() => new Date(Date.now() - 60 * 86400000).toLocaleDateString("en-CA"), []);
+  const occEndIso = useMemo(() => new Date(Date.now() + 30 * 86400000).toLocaleDateString("en-CA"), []);
+  const occProfileParam = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
+  const { data: rawWindowOccurrences = [] } = useQuery<any[]>({
+    queryKey: ["/api/obligation-occurrences", "window", occStartIso, occEndIso, filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/obligation-occurrences?start=${occStartIso}&end=${occEndIso}${occProfileParam}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const windowOccurrences = useMemo(() => {
+    // Defense-in-depth client filter — match the panel's behavior so counts
+    // stay aligned even if the server ignores profileIds on an older deploy.
+    if (filterMode !== "selected" || filterIds.length === 0) return rawWindowOccurrences;
+    return rawWindowOccurrences.filter((occ: any) => {
+      const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
+      return lp.some((pid: string) => filterIds.includes(pid));
+    });
+  }, [rawWindowOccurrences, filterMode, filterIds]);
+
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/obligations", data),
     onSuccess: () => {
@@ -819,6 +860,7 @@ export default function ObligationsManager({ showHeader = true, compact = false 
       toast({ title: `"${savedName}" created`, description: `${OBLIGATION_KIND_META[newKind].label} · ${newFrequency} · $${newAmount}` });
       setAddOpen(false);
       setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewKind("bill"); setNewDueDate(""); setNewRecurrenceEnd("");
+      setNewLinkedProfiles([]); setNewRemindDays(""); setNewAutopay(false); setNewAutoLogExpense("auto"); setNewNotes(""); setShowAdvanced(false);
     },
     onError: (err: Error) => toast({ title: "Failed to create", description: formatApiError(err), variant: "destructive" }),
   });
@@ -826,18 +868,38 @@ export default function ObligationsManager({ showHeader = true, compact = false 
   // Apply kind filter, then time-window filter (overdue/today/week/month/all)
   const todayMs = useMemo(() => { const t = new Date(); t.setHours(0, 0, 0, 0); return t.getTime(); }, []);
   const filteredByKind = useMemo(() => kindFilter === "all" ? obligations : obligations.filter(o => (o.kind || "bill") === kindFilter), [obligations, kindFilter]);
+  // BUG-OBL-001/002: derive matching obligation IDs from occurrences for the
+  // selected window so the list mirrors the chip counts above.
   const filteredByWindow = useMemo(() => {
     if (windowFilter === "all") return filteredByKind;
+    const todayStr = new Date().toLocaleDateString("en-CA");
+    const weekEnd = new Date(Date.now() + 7 * 86400000).toLocaleDateString("en-CA");
+    const monthEnd = new Date(Date.now() + 30 * 86400000).toLocaleDateString("en-CA");
+    const matchIds = new Set<string>();
+    for (const occ of windowOccurrences) {
+      if (occ.status === "done" || occ.status === "skipped") continue;
+      const obId = occ.obligation?.id || occ.obligation_id;
+      if (!obId) continue;
+      const d: string = occ.due_at;
+      if (windowFilter === "overdue" && d < todayStr) matchIds.add(obId);
+      else if (windowFilter === "today" && d === todayStr) matchIds.add(obId);
+      else if (windowFilter === "week" && d >= todayStr && d <= weekEnd) matchIds.add(obId);
+      else if (windowFilter === "month" && d >= todayStr && d <= monthEnd) matchIds.add(obId);
+    }
+    // Fallback: include any obligation whose nextDueDate already falls in the
+    // window (handles brand-new obligations whose occurrences haven't been
+    // materialized yet on the server).
     return filteredByKind.filter(o => {
+      if (matchIds.has(o.id)) return true;
       const due = new Date(o.nextDueDate); due.setHours(0, 0, 0, 0);
       const days = Math.round((due.getTime() - todayMs) / 86400000);
       if (windowFilter === "overdue") return days < 0;
       if (windowFilter === "today") return days === 0;
       if (windowFilter === "week") return days >= 0 && days <= 7;
       if (windowFilter === "month") return days >= 0 && days <= 30;
-      return true;
+      return false;
     });
-  }, [filteredByKind, windowFilter, todayMs]);
+  }, [filteredByKind, windowFilter, todayMs, windowOccurrences]);
   // Sort by next-due ascending so the most urgent shows first.
   const sorted = useMemo(() => [...filteredByWindow].sort((a, b) => {
     const da = new Date(a.nextDueDate).getTime();
@@ -857,19 +919,45 @@ export default function ObligationsManager({ showHeader = true, compact = false 
     return Array.from(map.values()).sort((a, b) => a.meta.label.localeCompare(b.meta.label));
   }, [sorted, groupBySource]);
 
-  // Time-window counts for the chip row
+  // BUG-OBL-001/002/PRF-003: Source chip counts from occurrences (same data
+  // as the top "Overdue / Due today" panel), filtered by the active kind so
+  // "Bills" only counts Bills, etc. "All" still reflects the obligation
+  // count (one row per obligation, not per occurrence).
+  const todayIso = useMemo(() => new Date().toLocaleDateString("en-CA"), []);
   const windowCounts = useMemo(() => {
     const counts = { overdue: 0, today: 0, week: 0, month: 0, all: filteredByKind.length };
-    for (const o of filteredByKind) {
-      const due = new Date(o.nextDueDate); due.setHours(0, 0, 0, 0);
-      const days = Math.round((due.getTime() - todayMs) / 86400000);
-      if (days < 0) counts.overdue++;
-      if (days === 0) counts.today++;
-      if (days >= 0 && days <= 7) counts.week++;
-      if (days >= 0 && days <= 30) counts.month++;
+    // Build a set of obligation IDs that pass the active kind filter so chip
+    // counts respect both window AND kind.
+    const allowedIds = new Set(filteredByKind.map(o => o.id));
+    const seenObligationByWindow = {
+      overdue: new Set<string>(),
+      today: new Set<string>(),
+      week: new Set<string>(),
+      month: new Set<string>(),
+    };
+    const weekEnd = new Date(Date.now() + 7 * 86400000).toLocaleDateString("en-CA");
+    const monthEnd = new Date(Date.now() + 30 * 86400000).toLocaleDateString("en-CA");
+    for (const occ of windowOccurrences) {
+      if (occ.status === "done" || occ.status === "skipped") continue;
+      const obId = occ.obligation?.id || occ.obligation_id;
+      if (!obId || (kindFilter !== "all" && !allowedIds.has(obId))) continue;
+      const dueAt: string = occ.due_at;
+      // Dedupe so an obligation with multiple overdue occurrences only adds 1
+      // to the chip count, matching how the top panel renders rows.
+      if (dueAt < todayIso && !seenObligationByWindow.overdue.has(obId)) {
+        seenObligationByWindow.overdue.add(obId); counts.overdue++;
+      } else if (dueAt === todayIso && !seenObligationByWindow.today.has(obId)) {
+        seenObligationByWindow.today.add(obId); counts.today++;
+      }
+      if (dueAt >= todayIso && dueAt <= weekEnd && !seenObligationByWindow.week.has(obId)) {
+        seenObligationByWindow.week.add(obId); counts.week++;
+      }
+      if (dueAt >= todayIso && dueAt <= monthEnd && !seenObligationByWindow.month.has(obId)) {
+        seenObligationByWindow.month.add(obId); counts.month++;
+      }
     }
     return counts;
-  }, [filteredByKind, todayMs]);
+  }, [filteredByKind, windowOccurrences, kindFilter, todayIso]);
 
   const monthlyTotal = useMemo(() => obligations.reduce((s, o) => {
     switch (o.frequency) {
@@ -913,8 +1001,8 @@ export default function ObligationsManager({ showHeader = true, compact = false 
       )}
 
       {/* Add Obligation Dialog */}
-      <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(""); setNewRecurrenceEnd(""); setNewKind("bill"); } setAddOpen(v); }}>
-        <DialogContent className="max-w-sm">
+      <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(""); setNewRecurrenceEnd(""); setNewKind("bill"); setNewLinkedProfiles([]); setNewRemindDays(""); setNewAutopay(false); setNewAutoLogExpense("auto"); setNewNotes(""); setShowAdvanced(false); } setAddOpen(v); }}>
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm">New Obligation</DialogTitle>
             <DialogDescription className="text-xs">Add a recurring bill, subscription, payment, appointment, or reminder.</DialogDescription>
@@ -1013,6 +1101,80 @@ export default function ObligationsManager({ showHeader = true, compact = false 
                 <span>One-time — won't repeat after due</span>
               </div>
             )}
+
+            {/* BUG-OBL-004: Profile / Advanced fields */}
+            <div>
+              <Label className="text-xs">Profile <span className="text-muted-foreground font-normal">(who this belongs to)</span></Label>
+              {profilesList.length === 0 ? (
+                <p className="text-xs text-muted-foreground py-1">Will be linked to you by default.</p>
+              ) : (
+                <div className="mt-1 flex flex-wrap gap-1.5" data-testid="profile-chip-row">
+                  {profilesList.map((p: any) => {
+                    const id = p.id;
+                    const selected = newLinkedProfiles.includes(id);
+                    return (
+                      <button key={id} type="button" data-testid={`profile-chip-${id}`}
+                        onClick={() => setNewLinkedProfiles(prev => selected ? prev.filter(x => x !== id) : [...prev, id])}
+                        className={`text-xs px-2 py-1 rounded-md border transition-colors ${selected ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border hover:bg-muted"}`}>
+                        {p.name || p.firstName || "Profile"}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {newLinkedProfiles.length === 0
+                  ? (filterMode === "selected" && filterIds.length > 0 ? `Will use active filter (${filterIds.length} profile${filterIds.length === 1 ? "" : "s"}).` : "Defaults to you (100% owner).")
+                  : `${newLinkedProfiles.length} profile${newLinkedProfiles.length === 1 ? "" : "s"} selected.`}
+              </p>
+            </div>
+
+            <button type="button"
+              onClick={() => setShowAdvanced(s => !s)}
+              className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              data-testid="toggle-advanced">
+              <ChevronRight className={`h-3 w-3 transition-transform ${showAdvanced ? "rotate-90" : ""}`} />
+              Advanced options
+            </button>
+            {showAdvanced && (
+              <div className="space-y-3 rounded-md border border-border/50 bg-muted/30 p-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs">Remind (days before)</Label>
+                    <Input type="number" inputMode="numeric" min="0" step="1"
+                      value={newRemindDays}
+                      onChange={e => setNewRemindDays(e.target.value)}
+                      placeholder={String(OBLIGATION_KIND_META[newKind].defaultLeadDays)}
+                      data-testid="input-remind-days" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Auto-log expense</Label>
+                    <Select value={newAutoLogExpense} onValueChange={v => setNewAutoLogExpense(v as any)}>
+                      <SelectTrigger data-testid="select-auto-log"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Auto (kind default)</SelectItem>
+                        <SelectItem value="on">Always</SelectItem>
+                        <SelectItem value="off">Never</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-xs">Autopay</Label>
+                    <p className="text-[11px] text-muted-foreground">Marks paid automatically on the due date.</p>
+                  </div>
+                  <Switch checked={newAutopay} onCheckedChange={setNewAutopay} data-testid="switch-autopay" />
+                </div>
+                <div>
+                  <Label className="text-xs">Notes</Label>
+                  <Textarea value={newNotes} onChange={e => setNewNotes(e.target.value)}
+                    placeholder="Account number, login, anything to remember…"
+                    className="min-h-16 text-xs"
+                    data-testid="input-notes" />
+                </div>
+              </div>
+            )}
           </div>
           {newDueDate && new Date(newDueDate + "T00:00:00") < new Date(new Date().toLocaleDateString("en-CA") + "T00:00:00") && (
             <div className="flex items-center gap-2 rounded-md bg-yellow-500/10 border border-yellow-500/30 px-3 py-2">
@@ -1028,15 +1190,24 @@ export default function ObligationsManager({ showHeader = true, compact = false 
                 // Ownership defaults from the active profile filter:
                 //   filter = everyone  → omit linkedProfiles, server auto-links to self
                 //   filter = selected  → use the selected profile IDs as owners
-                const ownerIds = filterMode === "selected" && filterIds.length > 0
-                  ? [...filterIds]
-                  : undefined;
+                // Explicit profile picks win, otherwise fall back to active filter.
+                const ownerIds = newLinkedProfiles.length > 0
+                  ? [...newLinkedProfiles]
+                  : (filterMode === "selected" && filterIds.length > 0 ? [...filterIds] : undefined);
+                const leadDays = newRemindDays.trim() === ""
+                  ? OBLIGATION_KIND_META[newKind].defaultLeadDays
+                  : Math.max(0, parseInt(newRemindDays, 10) || 0);
+                const autoLog = newAutoLogExpense === "auto"
+                  ? (newKind === "subscription" || newKind === "bill")
+                  : newAutoLogExpense === "on";
                 createMutation.mutate({
                   name: newName.trim(), amount: parseFloat(newAmount), frequency: newFrequency,
-                  category: newCategory, nextDueDate: newDueDate, autopay: false,
+                  category: newCategory, nextDueDate: newDueDate,
+                  autopay: newAutopay,
                   kind: newKind,
-                  leadTimeDays: OBLIGATION_KIND_META[newKind].defaultLeadDays,
-                  autoLogExpense: newKind === "subscription" || newKind === "bill",
+                  leadTimeDays: leadDays,
+                  autoLogExpense: autoLog,
+                  ...(newNotes.trim() ? { notes: newNotes.trim() } : {}),
                   ...(ownerIds ? { linkedProfiles: ownerIds } : {}),
                   ...(newRecurrenceEnd && newFrequency !== "once" ? { recurrenceEnd: newRecurrenceEnd } : {}),
                 });

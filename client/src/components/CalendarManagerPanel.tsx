@@ -20,6 +20,7 @@
 //   GET /api/profiles, /api/documents (for link pickers)
 
 import { useState, useMemo } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { formatApiError } from "@/lib/formatError";
@@ -175,8 +176,16 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
         : preview.kind === "task" ? "/api/tasks" : "/api/events";
       return apiRequest("POST", path, preview.payload).then(r => r.json());
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       invalidateAll();
+      // BUG-REC-002/SYNC-002: Wait for the obligation queries to actually
+      // refetch before clearing the form, otherwise the user switches to
+      // the Bills filter and still sees the stale list (no row yet).
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["/api/obligations"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["/api/obligation-occurrences"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["/api/calendar/timeline"], type: "active" }),
+      ]).catch(() => {});
       toast({ title: "Added to calendar", description: text });
       setText(""); setPreview(null);
       onCreated();
@@ -695,8 +704,9 @@ type AnyItem =
   | { kind: "event"; id: string; title: string; subtitle: string; due: string; tint: string; raw: any }
   | { kind: "task"; id: string; title: string; subtitle: string; due: string; tint: string; raw: any };
 
-function ManageList({ filter }: { filter: string }) {
+function ManageList({ filter, onClose }: { filter: string; onClose: () => void }) {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const { data: obligations = [] } = useQuery<Obligation[]>({
     queryKey: ["/api/obligations"], queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
   });
@@ -792,6 +802,21 @@ function ManageList({ filter }: { filter: string }) {
           else if (it.kind === "event") deleteEvent.mutate(it.id);
           else deleteTask.mutate(it.id);
         };
+        // BUG-REC-003: Edit control on every Manage-tab row. Obligations and
+        // tasks open the dedicated edit page; events open the inline edit
+        // dialog via a window event the calendar listens to.
+        const onEdit = () => {
+          if (it.kind === "event") {
+            window.dispatchEvent(new CustomEvent("portol:edit-event", { detail: { id: it.id } }));
+            onClose();
+          } else if (it.kind === "obligation") {
+            setLocation(`/dashboard/obligations?edit=${it.id}`);
+            onClose();
+          } else {
+            setLocation(`/dashboard/tasks?edit=${it.id}`);
+            onClose();
+          }
+        };
         return (
           <div key={`${it.kind}-${it.id}`} className="flex items-center gap-3 rounded-md border border-border px-3 py-2"
             data-testid={`manage-row-${it.kind}-${it.id}`}>
@@ -803,6 +828,10 @@ function ManageList({ filter }: { filter: string }) {
               <p className="text-sm font-medium truncate">{it.title}</p>
               <p className="text-[11px] text-muted-foreground truncate">{it.subtitle} · {it.due}</p>
             </div>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onEdit} title="Edit"
+              data-testid={`manage-edit-${it.kind}-${it.id}`}>
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
             <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={onDelete} title="Delete">
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
@@ -885,7 +914,7 @@ export default function CalendarManagerPanel({ open, onOpenChange }: CalendarMan
               </div>
             </div>
             <ScrollArea className="h-full px-4 pb-6">
-              <ManageList filter={manageFilter} />
+              <ManageList filter={manageFilter} onClose={() => onOpenChange(false)} />
             </ScrollArea>
           </TabsContent>
         </Tabs>

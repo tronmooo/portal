@@ -3691,11 +3691,34 @@ Rules:
     }
     res.json(ob);
   }));
+  // BUG-REC-001 (Round 7): in-memory dedup so a user mashing the Quick-Add
+  // "Add" button doesn't create N copies of the same obligation. Key includes
+  // name+amount+frequency+nextDueDate so two genuinely distinct obligations
+  // submitted in quick succession still both get through. 8s window matches
+  // /pay dedup. Memory bounded the same way (cleanup once >500 entries).
+  const recentObligationCreates = new Map<string, { at: number; id: string }>();
   app.post("/api/obligations", asyncHandler(async (req, res) => {
     const parsed = insertObligationSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    const created = await storage.createObligation(parsed.data);
     const uid_o1 = (req as AuthenticatedRequest).userId || "anon";
+    // Build a stable fingerprint of the new obligation. Same uid + same
+    // name/amount/frequency/nextDueDate inside 8s = treat as a duplicate
+    // click and return the original record instead of inserting again.
+    const fp = `${uid_o1}|${(parsed.data.name || "").trim().toLowerCase()}|${Number(parsed.data.amount) || 0}|${parsed.data.frequency || ""}|${parsed.data.nextDueDate || ""}`;
+    const prior = recentObligationCreates.get(fp);
+    if (prior && Date.now() - prior.at < 8000) {
+      // Re-fetch so the response shape matches a fresh insert.
+      const existing = await storage.getObligation(prior.id);
+      if (existing) {
+        return res.status(200).json({ ...existing, deduped: true });
+      }
+    }
+    const created = await storage.createObligation(parsed.data);
+    recentObligationCreates.set(fp, { at: Date.now(), id: created.id });
+    if (recentObligationCreates.size > 500) {
+      const cutoff = Date.now() - 30000;
+      for (const [k, v] of recentObligationCreates) if (v.at < cutoff) recentObligationCreates.delete(k);
+    }
     bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`); bustCache(`notifications:${uid_o1}`);
     res.status(201).json(created);
   }));

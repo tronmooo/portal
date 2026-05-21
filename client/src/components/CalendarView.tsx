@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -376,22 +376,28 @@ function EventFormDialog({
           </div>
 
           {/* Recurrence */}
+          {/* BUG-CAL-004: Radix Select inside a Dialog occasionally swallowed
+              the very first onValueChange when pointerdown+up happened on the
+              same frame as the dialog opened. The fix is twofold: ensure the
+              underlying value is always present (so SelectValue resolves on
+              first paint) and expose stable test ids on each option so QA
+              automation can target them directly. */}
           <div className="space-y-1.5">
             <Label htmlFor="ev-recurrence">Repeat</Label>
             <Select
-              value={form.recurrence}
+              value={form.recurrence || "none"}
               onValueChange={v => setForm(f => ({ ...f, recurrence: v }))}
             >
               <SelectTrigger id="ev-recurrence" data-testid="select-event-recurrence">
-                <SelectValue />
+                <SelectValue placeholder="Does not repeat" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">Does not repeat</SelectItem>
-                <SelectItem value="biweekly">Bi-weekly</SelectItem>
-                <SelectItem value="daily">Daily</SelectItem>
-                <SelectItem value="monthly">Monthly</SelectItem>
-                <SelectItem value="weekly">Weekly</SelectItem>
-                <SelectItem value="yearly">Yearly</SelectItem>
+                <SelectItem value="none" data-testid="recurrence-option-none">Does not repeat</SelectItem>
+                <SelectItem value="daily" data-testid="recurrence-option-daily">Daily</SelectItem>
+                <SelectItem value="weekly" data-testid="recurrence-option-weekly">Weekly</SelectItem>
+                <SelectItem value="biweekly" data-testid="recurrence-option-biweekly">Bi-weekly</SelectItem>
+                <SelectItem value="monthly" data-testid="recurrence-option-monthly">Monthly</SelectItem>
+                <SelectItem value="yearly" data-testid="recurrence-option-yearly">Yearly</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -703,9 +709,14 @@ function EventDetailDialog({
           )}
           {(item.type === "event" || item.type === "task" || item.type === "obligation") && (
             <Button
+              type="button"
               variant="outline"
               size="sm"
-              onClick={onEdit}
+              // BUG-CAL-003: explicit handler — previously the click sometimes
+              // bubbled to the dialog overlay (interpreted as a close), making
+              // the Edit button look unresponsive. stopPropagation + preventDefault
+              // guarantees onEdit fires before any overlay close handler.
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onEdit(); }}
               data-testid="btn-edit-event-detail"
             >
               <Pencil className="h-3.5 w-3.5 mr-1" />Edit
@@ -837,6 +848,22 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const [quickAddDate, setQuickAddDate] = useState<string | null>(null);
   const { toast } = useToast();
 
+  // BUG-REC-003: Listen for edit requests from the Calendar Manager's Manage
+  // tab. The panel dispatches a window event with the event id; we fetch and
+  // pop the inline edit dialog.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent<{ id: string }>).detail?.id;
+      if (!id) return;
+      apiRequest("GET", `/api/events/${id}`)
+        .then(r => r.json())
+        .then((ev: CalendarEvent) => setEditEvent(ev))
+        .catch((err) => console.error("[CalendarView] failed to load event for edit:", err));
+    };
+    window.addEventListener("portol:edit-event", handler as EventListener);
+    return () => window.removeEventListener("portol:edit-event", handler as EventListener);
+  }, []);
+
   // Fetch profiles for the person/pet filter
   const { data: filterProfiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -849,6 +876,20 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const handleGcalSync = async () => {
     setSyncing(true);
     try {
+      // BUG-CAL-006/SYNC-001: Probe sync-status first so we can show a real
+      // "Connect Google Calendar" CTA instead of an opaque error. Settings
+      // page hosts the actual OAuth setup flow.
+      try {
+        const statusRes = await apiRequest("GET", "/api/calendar/sync-status");
+        const status = await statusRes.json();
+        if (!status?.connected) {
+          toast({
+            title: "Connect Google Calendar",
+            description: "Open Settings → Integrations to link your Google account, then try syncing again.",
+          });
+          return;
+        }
+      } catch { /* fall through and attempt sync; the error path covers it */ }
       const res = await apiRequest("POST", "/api/calendar/sync");
       const data = await res.json();
       toast({ title: "Calendar Synced", description: data.message });
@@ -858,7 +899,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setLastSynced(new Date());
     } catch {
-      toast({ title: "Sync Failed", description: "Could not connect to Google Calendar.", variant: "destructive" });
+      toast({
+        title: "Sync Failed",
+        description: "Could not connect to Google Calendar. Visit Settings → Integrations to set it up.",
+        variant: "destructive",
+      });
     } finally {
       setSyncing(false);
     }
@@ -895,6 +940,12 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     queryKey: ["/api/calendar/timeline", startDate, endDate, effectiveFilterMode, ...effectiveFilterIds],
     queryFn: () =>
       apiRequest("GET", timelineUrl).then(r => r.json()),
+    // BUG-CAL-001/002/PRF-002: Keep previous data visible while a new month
+    // (or profile filter) is loading so the calendar doesn't flash a giant
+    // skeleton for ~2s on every nav. staleTime suppresses redundant refetches
+    // when nothing changed.
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
   });
 
   // Group items by date (with type + profile filtering)
@@ -1451,13 +1502,16 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       })()}
 
       {/* Day detail — only shows when user explicitly clicks a day (selected != today never auto-opens) */}
-      {filteredAgenda.length === 0 && selectedDate && (
+      {/* BUG-CAL-005: Hide this summary block when the main view is already
+          a day-mode list, otherwise items are rendered twice (time grid above
+          + summary panel below). */}
+      {viewMode !== "day" && filteredAgenda.length === 0 && selectedDate && (
         <div className="rounded-lg border border-dashed border-border/40 bg-card/50 p-6 text-center" data-testid="section-day-agenda-empty">
           <CalendarIcon className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
           <p className="text-xs text-muted-foreground">No items on {fmtDateFull(selectedDate)}</p>
         </div>
       )}
-      {filteredAgenda.length > 0 && (
+      {viewMode !== "day" && filteredAgenda.length > 0 && (
         <div className="rounded-lg border border-border/40 bg-card/50" data-testid="section-day-agenda">
           <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">
             <div className="flex items-center gap-2">

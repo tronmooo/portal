@@ -4,7 +4,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, setFilterEveryone } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -337,7 +337,7 @@ function TaskItem({
             {task.description && (
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{task.description}</p>
             )}
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <div className="flex items-center gap-2 mt-2 flex-wrap min-w-0">
               <Badge variant="secondary" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
                 {task.priority === "high" && <AlertCircle className="h-3 w-3 mr-1" />}
                 {task.priority}
@@ -353,8 +353,17 @@ function TaskItem({
                   })()}
                 </span>
               )}
+              {/* BUG-TSK-002: tags must wrap and never truncate */}
               {task.tags?.map(tag => (
-                <Badge key={tag} variant="outline" className="text-xs h-5">{tag}</Badge>
+                <Badge
+                  key={tag}
+                  variant="outline"
+                  className="text-xs max-w-full whitespace-normal break-words leading-tight py-0.5"
+                  style={{ height: "auto" }}
+                  data-testid={`badge-task-tag-${task.id}-${tag}`}
+                >
+                  {tag}
+                </Badge>
               ))}
             </div>
           </div>
@@ -462,8 +471,15 @@ export default function TasksPage() {
     }
   }, []);
   const [editTask, setEditTask] = useState<Task | null>(null);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  // BUG-TSK-001/PRF-001: Tasks page should NOT inherit the global profile filter.
+  // Reset to "Everyone" on mount so the user always sees all tasks first.
+  const [filterIds, setFilterIds] = useState<string[]>([]);
+  const [filterMode, setFilterMode] = useState<"everyone" | "selected">("everyone");
+  useEffect(() => {
+    setFilterEveryone();
+    setFilterMode("everyone");
+    setFilterIds([]);
+  }, []);
   useEffect(() => {
     const handleFocus = () => {
       const { mode, selectedIds } = getProfileFilter();
