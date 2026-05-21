@@ -29,6 +29,33 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught:", error, errorInfo);
+    // Persist the full error so we can read it after a refresh wipes
+    // React's in-memory state. Helps diagnose mobile crashes where the
+    // user can't easily copy the stack.
+    try {
+      const payload = {
+        section: this.props.name || "unknown",
+        message: error?.message || String(error),
+        stack: error?.stack || "",
+        componentStack: errorInfo?.componentStack || "",
+        url: typeof window !== "undefined" ? window.location.href : "",
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+        ts: new Date().toISOString(),
+      };
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("portol:lastError", JSON.stringify(payload));
+      }
+      // Best-effort beacon to the server so we can see it in logs.
+      if (typeof fetch === "function") {
+        fetch("/api/client-errors", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          credentials: "include",
+          keepalive: true,
+        }).catch(() => { /* swallow */ });
+      }
+    } catch { /* ignore */ }
   }
 
   render() {
@@ -65,9 +92,19 @@ export class ErrorBoundary extends Component<Props, State> {
               Go to Dashboard
             </button>
           </div>
-          <details className="mt-4 max-w-md w-full">
+          <details className="mt-4 max-w-md w-full" open>
             <summary className="text-xs text-muted-foreground cursor-pointer">Error Details</summary>
-            <pre className="mt-2 text-xs bg-muted/50 p-3 rounded-lg overflow-x-auto whitespace-pre-wrap break-words">{this.state.error?.message || 'Unknown error'}{'\n'}{this.state.error?.stack?.slice(0, 500)}</pre>
+            <pre className="mt-2 text-xs bg-muted/50 p-3 rounded-lg overflow-x-auto whitespace-pre-wrap break-words max-h-64 overflow-y-auto">{this.state.error?.message || 'Unknown error'}{'\n\n'}{this.state.error?.stack || ''}</pre>
+            <button
+              type="button"
+              className="mt-2 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 hover:bg-muted text-xs"
+              onClick={async () => {
+                const text = `${this.state.error?.message || ''}\n\n${this.state.error?.stack || ''}`;
+                try { await navigator.clipboard.writeText(text); } catch { /* ignore */ }
+              }}
+            >
+              Copy stack
+            </button>
           </details>
         </div>
       );

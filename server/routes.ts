@@ -1,4 +1,4 @@
-import type { Express, Request } from "express";
+import express, { type Express, type Request } from "express";
 import { createServer, type Server } from "http";
 import { createClient } from "@supabase/supabase-js";
 import { execFile } from "child_process";
@@ -460,6 +460,29 @@ export async function registerRoutes(
   const BUILD_VERSION = Date.now().toString(36);
   app.get("/api/version", (req, res) => {
     res.json({ version: BUILD_VERSION });
+  });
+
+  // Client-side error beacon. Fired by ErrorBoundary when React catches a
+  // render exception. We just log to stdout — Vercel function logs capture
+  // it and we can pull stacks with `vercel logs`. No DB write, no auth
+  // required (errors must be reportable even when the user is mid-crash).
+  app.post("/api/client-errors", express.json({ limit: "64kb" }) as any, (req, res) => {
+    try {
+      const { section, message, stack, componentStack, url, userAgent, ts } = req.body || {};
+      const uid = (req as AuthenticatedRequest).userId || "anon";
+      // Keep this on a single console.error so Vercel groups it nicely.
+      console.error("[client-error]", JSON.stringify({
+        uid,
+        section,
+        message: (message || "").slice(0, 500),
+        url,
+        ts,
+        userAgent: (userAgent || "").slice(0, 200),
+        stack: (stack || "").slice(0, 4000),
+        componentStack: (componentStack || "").slice(0, 2000),
+      }));
+    } catch { /* swallow */ }
+    res.status(204).end();
   });
 
   // Keep-alive / pre-warm endpoint — called by client every 90s to prevent cold starts
