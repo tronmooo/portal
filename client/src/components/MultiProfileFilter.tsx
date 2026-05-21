@@ -9,7 +9,8 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
 import {
-  getProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile, getFilterLabel,
+  getProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile,
+  subscribeProfileFilter,
   type FilterMode,
 } from "@/lib/profileFilter";
 import { Filter, Users, User, Dog, Car, CreditCard, Package, Stethoscope, Building, Landmark, ChevronDown, X } from "lucide-react";
@@ -48,7 +49,17 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
   onChangeRef.current = onChange;
 
   useEffect(() => {
+    // Sync initial state
     setFilter(getProfileFilter());
+    // BUG-006/025: subscribe so the label/checks stay in sync when ANOTHER
+    // component on the page (or another tab via storage event) mutates the
+    // shared filter — the label used to be read via getFilterLabel() each
+    // render, which is non-reactive and could go stale.
+    const unsub = subscribeProfileFilter((next) => {
+      setFilter({ ...next });
+      onChangeRef.current({ mode: next.mode, selectedIds: next.selectedIds });
+    });
+    return unsub;
   }, []);
 
   const notify = useCallback(() => {
@@ -123,7 +134,17 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
   }, [profiles, profileTypes]);
 
   const isEveryone = filter.mode === "everyone";
-  const label = getFilterLabel();
+  // BUG-006/025: derive label from the reactive `filter` state, not from a
+  // direct call into the module — the module is only re-read on event, so
+  // reading on every render risked tearing between trigger button and list.
+  const label = useMemo(() => {
+    if (filter.mode === "everyone") return "Everyone";
+    const names = filter.selectedNames || [];
+    if (names.length === 1) return names[0];
+    if (names.length === 2) return names.join(" & ");
+    if (names.length > 2) return `${names[0]} +${names.length - 1}`;
+    return "Everyone";
+  }, [filter]);
   const selectedCount = filter.selectedIds.length;
 
   // ── Shared list content ──────────────────────────────────

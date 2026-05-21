@@ -59,14 +59,30 @@ function formatMoney(n: number): string {
 }
 
 function timeAgo(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
+  // Round-6 fix (BUG-009): previous logic computed elapsed hours and said
+  // "Yesterday" whenever 24-48 hours had passed. A 25-hour-old expense created
+  // last night could therefore display "Yesterday" even though today's calendar
+  // date matches the expense's calendar date. Compare CALENDAR days in the
+  // user's timezone instead so "Today" actually means today.
+  const entry = new Date(ts);
+  if (isNaN(entry.getTime())) return "";
+  const diff = Date.now() - entry.getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
+  // Compare YYYY-MM-DD strings rendered in the user's local timezone so a
+  // 25-hour-old event whose calendar date equals today still says "Today".
+  const entryDay = entry.toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+  const todayDay = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+  if (entryDay === todayDay) return "Today";
+  // Yesterday in the user's timezone: subtract one day from today's local date.
+  const yest = new Date();
+  yest.setDate(yest.getDate() - 1);
+  const yesterdayDay = yest.toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+  if (entryDay === yesterdayDay) return "Yesterday";
   const days = Math.floor(hrs / 24);
-  if (days === 1) return "Yesterday";
   return `${days}d ago`;
 }
 
@@ -97,20 +113,35 @@ function daysUntilStr(days: number): string {
 // up by the Net Worth tile and the Net Worth popup. Without this, profiles
 // with nested storage report $0 even though their values render in the
 // Trackers grid via the field-resolution logic in trackers.tsx.
+// Round-6 fix: this resolver MUST stay byte-for-byte equivalent to the
+// server-side resolveAssetValue in portal/server/supabase-storage.ts. The
+// dashboard renders three Net Worth surfaces (Hero KPI tile, Net Worth popup,
+// Finance section tile) and they must agree to the dollar. Previous version
+// was missing fields.cost / fields.amount / fields.price / fields.accountBalance
+// / vehicle.cost paths, causing $10–$11K drift between tiles.
 function resolveAssetValue(p: any): number {
   if (!p || !p.fields) return 0;
-  const f = p.fields;
-  // Both camelCase and snake_case keys are present in production data
-  // (Honda CRV stores fields.other.purchase_price). Cover every observed path.
+  const fields = p.fields;
+  const housing = fields.housing || {};
+  const other = fields.other || {};
+  const finance = fields.finance || {};
+  const vehicle = fields.vehicle || {};
+  const vehicles = fields.vehicles || {};
+  const investment = fields.investment || {};
   const candidates: any[] = [
-    f.purchasePrice, f.purchase_price, f.value, f.currentValue, f.current_value,
-    f.marketValue, f.market_value, f.estimatedValue, f.estimated_value,
-    f.housing?.currentValue, f.housing?.current_value, f.housing?.purchasePrice, f.housing?.purchase_price, f.housing?.marketValue, f.housing?.market_value,
-    f.other?.purchasePrice, f.other?.purchase_price, f.other?.value, f.other?.currentValue, f.other?.current_value, f.other?.marketValue, f.other?.market_value,
-    f.finance?.balance, f.finance?.currentValue, f.finance?.current_value, f.finance?.value, f.finance?.marketValue, f.finance?.market_value,
-    f.vehicle?.purchasePrice, f.vehicle?.purchase_price, f.vehicle?.currentValue, f.vehicle?.current_value, f.vehicle?.value,
-    f.vehicles?.purchasePrice, f.vehicles?.purchase_price, f.vehicles?.currentValue, f.vehicles?.current_value, f.vehicles?.value,
-    f.investment?.balance, f.investment?.value, f.investment?.currentValue, f.investment?.current_value,
+    fields.currentValue, fields.current_value, housing.currentValue, housing.current_value, other.currentValue, other.current_value,
+    fields.marketValue, fields.market_value, housing.marketValue, housing.market_value, other.marketValue, other.market_value,
+    fields.estimatedValue, fields.estimated_value,
+    fields.value, other.value,
+    fields.purchasePrice, fields.purchase_price, other.purchasePrice, other.purchase_price, housing.purchasePrice, housing.purchase_price,
+    fields.cost, other.cost,
+    fields.amount, other.amount,
+    fields.price, other.price,
+    fields.balance, finance.balance, finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
+    fields.accountBalance, finance.accountBalance, finance.account_balance,
+    vehicle.purchasePrice, vehicle.purchase_price, vehicle.currentValue, vehicle.current_value, vehicle.value,
+    vehicles.purchasePrice, vehicles.purchase_price, vehicles.currentValue, vehicles.current_value, vehicles.value,
+    investment.balance, investment.value, investment.currentValue, investment.current_value,
   ];
   for (const c of candidates) {
     const n = parseMoney(c);
@@ -119,24 +150,40 @@ function resolveAssetValue(p: any): number {
   return 0;
 }
 
+// Round-6 fix: also mirrored against server resolveLiabilityValue. Adds
+// nested finance.loans[] summing so AI-extracted multi-loan profiles surface.
 function resolveLiabilityBalance(p: any): number {
   if (!p || !p.fields) return 0;
-  const f = p.fields;
+  const fields = p.fields;
+  const finance = fields.finance || {};
+  const loan = fields.loan || {};
+  const other = fields.other || {};
   const candidates: any[] = [
-    // Phase 2 canonical liability field
-    f.currentBalance, f.current_balance,
-    f.finance?.currentBalance, f.finance?.current_balance,
-    f.loan?.currentBalance, f.loan?.current_balance,
-    f.remainingBalance, f.remaining_balance, f.loanBalance, f.loan_balance,
-    f.outstandingBalance, f.outstanding_balance, f.balance,
-    f.finance?.remainingBalance, f.finance?.remaining_balance, f.finance?.loanBalance, f.finance?.loan_balance,
-    f.finance?.outstandingBalance, f.finance?.outstanding_balance, f.finance?.balance,
-    f.loan?.remainingBalance, f.loan?.remaining_balance, f.loan?.balance, f.loan?.outstandingBalance, f.loan?.outstanding_balance,
-    f.other?.remainingBalance, f.other?.remaining_balance, f.other?.balance,
+    // Phase 2 canonical liability field (writes from LiabilityProfilePage)
+    fields.currentBalance, fields.current_balance,
+    finance.currentBalance, finance.current_balance,
+    loan.currentBalance, loan.current_balance,
+    // Registry snake_case shape (CreateProfileDialog with auto_loan/mortgage/etc.)
+    fields.balance,
+    fields.remainingBalance, fields.remaining_balance,
+    fields.loanBalance, fields.loan_balance,
+    fields.outstandingBalance, fields.outstanding_balance,
+    finance.remainingBalance, finance.remaining_balance,
+    finance.loanBalance, finance.loan_balance,
+    finance.outstandingBalance, finance.outstanding_balance, finance.balance,
+    loan.remainingBalance, loan.remaining_balance,
+    loan.balance, loan.outstandingBalance, loan.outstanding_balance,
+    other.remainingBalance, other.remaining_balance, other.balance,
   ];
   for (const c of candidates) {
     const n = parseMoney(c);
     if (n > 0) return n;
+  }
+  // Sum nested loans[] balances if present
+  const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
+  if (loans.length > 0) {
+    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
+    if (sum > 0) return sum;
   }
   return 0;
 }
@@ -161,10 +208,21 @@ const ACTIVITY_ICONS: Record<string, any> = {
 // ─── Animated Count-Up Hook ───────────────────────────────────────────────────
 
 function useCountUp(target: number, duration: number = 600): number {
-  const [current, setCurrent] = useState(0);
-  const prevTarget = useRef(0);
+  const [current, setCurrent] = useState(target);
+  const prevTarget = useRef(target);
+  const hasMountedRef = useRef(false);
   useEffect(() => {
     if (target === prevTarget.current) return;
+    // Round-6 fix (BUG-001): on initial data arrival (mount → first real number)
+    // skip the count-up animation and render the target immediately. Otherwise the
+    // hook would animate from the prev value (often 0 before data loads) up to the
+    // real number, producing the "$0 then jumps after scroll" flash the user saw.
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      prevTarget.current = target;
+      setCurrent(target);
+      return;
+    }
     const start = prevTarget.current;
     prevTarget.current = target;
     const startTime = performance.now();
@@ -479,6 +537,16 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
   const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const trailing = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  // Round-6 fix (BUG-003/004/015): Hero KPI tile previously used
+  // enhanced.financeSnapshot.totalAssetValue (server-computed) while the Finance
+  // section tile and the Net Worth popup compute from allProfiles client-side.
+  // That divergence produced the $10 / $11K drift the user reported. Pull from
+  // the same /api/profiles cache the Net Worth popup uses so all three Net Worth
+  // surfaces (Hero KPI, Finance section, Net Worth popup) agree to the dollar.
+  const { data: allProfiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
   const { data: budgetSummary } = useQuery<{ totalBudget: number; totalSpent: number; remaining: number }>({
     queryKey: ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
     queryFn: async () => {
@@ -504,8 +572,31 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
   });
   const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw as any)?.items || [];
 
-  const totalAssetValue = enhanced?.financeSnapshot?.totalAssetValue ?? 0;
-  const totalLiabilities = enhanced?.financeSnapshot?.totalLiabilities ?? 0;
+  // Filter helper shared by asset + liability roll-ups. Mirrors the predicate
+  // used by the Finance section tile (lines 2939-2950) so the three Net Worth
+  // surfaces stay in lock-step. While allProfiles is still loading we fall
+  // back to financeSnapshot to avoid a $0 flash.
+  const matchesProfileFilter = (p: any): boolean => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    const pParent = p?.fields?._parentProfileId || p?.parentProfileId;
+    if (pParent && filterIds.includes(pParent)) return true;
+    if (filterIds.includes(p?.id)) return true;
+    return false;
+  };
+  const heroAssetProfiles = useMemo(
+    () => (allProfiles || []).filter((p: any) => resolveAssetValue(p) > 0 && matchesProfileFilter(p)),
+    [allProfiles, filterMode, filterIds.join(",")]
+  );
+  const heroLiabilityProfiles = useMemo(
+    () => (allProfiles || []).filter((p: any) => resolveLiabilityBalance(p) > 0 && matchesProfileFilter(p)),
+    [allProfiles, filterMode, filterIds.join(",")]
+  );
+  const totalAssetValue = allProfiles
+    ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
+    : (enhanced?.financeSnapshot?.totalAssetValue ?? 0);
+  const totalLiabilities = allProfiles
+    ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
+    : (enhanced?.financeSnapshot?.totalLiabilities ?? 0);
   const netWorth = totalAssetValue - totalLiabilities;
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
@@ -3161,7 +3252,24 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         items={[
           { label: "Total Income", value: `+$${monthlyIncome.toLocaleString()}`, sub: `${(incomes || []).length} sources`, category: "income" },
           { label: "Total Spending", value: `-$${filteredSpend.toLocaleString()}`, sub: `${monthExpenses.length} expenses`, category: "expense" },
-          { label: "Monthly Bills", value: `-$${((allObligations || []).reduce((s: number, o: any) => s + (o.amount || 0), 0)).toLocaleString()}`, sub: `${(allObligations || []).length} obligations`, category: "obligation" },
+          // Round-6 fix (BUG-019): previously summed raw o.amount, but obligations have
+          // varying frequencies (weekly, biweekly, quarterly, yearly). A weekly $50 obligation
+          // is ~$216/mo, not $50. Summing raw amounts produced the $2,406 → $7,406 → $7,422
+          // fluctuation the user reported because cache invalidations occasionally added or
+          // removed materialized rows of the same recurring series. Match the same
+          // frequency-conversion used by the Finance page (finance.tsx:637-647) so the two
+          // surfaces agree.
+          { label: "Monthly Bills", value: `-$${Math.round((allObligations || []).reduce((s: number, o: any) => {
+            const amt = Number(o.amount) || 0;
+            switch (o.frequency) {
+              case "weekly": return s + (amt * 52) / 12;
+              case "biweekly": return s + (amt * 26) / 12;
+              case "monthly": return s + amt;
+              case "quarterly": return s + (amt * 4) / 12;
+              case "yearly": return s + amt / 12;
+              default: return s + amt;
+            }
+          }, 0)).toLocaleString()}`, sub: `${(allObligations || []).length} obligations`, category: "obligation" },
           ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).slice(0, 5).map(([cat, amt]) => ({
             label: `Spending: ${cat}`, value: `-$${amt.toLocaleString()}`, category: cat,
           })),

@@ -91,14 +91,26 @@ export default function FinancePage() {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
     }
   }, []);
-  const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
+  // Round-6 fix (BUG-016): Add Expense dialog previously had no Date field and
+  // always silently used today's date. Edit Expense had a Date field, so the two
+  // were inconsistent. Initialise the form's date to today in the user's timezone
+  // and let the user override it.
+  const todayLocalISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+  const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+  // BUG-023: track whether the user has attempted to submit so we can show
+  // red borders on empty required fields instead of just a quiet inline hint.
+  const [addAttempt, setAddAttempt] = useState(false);
   const [expenseProfileId, setExpenseProfileId] = useState<string>("");
   const selfProfile = (profiles || []).find((p: any) => p.type === "self");
   useEffect(() => {
     if (selfProfile && !expenseProfileId) setExpenseProfileId(selfProfile.id);
   }, [selfProfile]);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "" });
+  // Round-6 fix (BUG-017): Edit Expense was missing a Profile field, even though
+  // Add Expense had one. Result: re-assigning an expense to a different family
+  // member required deleting and recreating the row. Add profileId to the edit
+  // form so the field is reachable everywhere it can be set.
+  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "" });
   /* ST5: re-sync the form whenever the editing target changes. Previously
      the form was seeded inside the click handler, so if React re-used the
      dialog without remount the second open briefly showed the prior
@@ -112,9 +124,12 @@ export default function FinancePage() {
         category: (editingExpense as any).category ?? "",
         vendor: (editingExpense as any).vendor ?? "",
         date: (editingExpense as any).date?.slice(0, 10) ?? "",
+        // Pre-select the existing linked profile (first one), or empty string
+        // when the expense has no linked profile yet.
+        profileId: ((editingExpense as any).linkedProfiles?.[0]) ?? "",
       });
     } else {
-      setEditForm({ description: "", amount: "", category: "", vendor: "", date: "" });
+      setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "" });
     }
   }, [editingExpense?.id]);
   const [editSaving, setEditSaving] = useState(false);
@@ -167,12 +182,16 @@ export default function FinancePage() {
       if (!desc) {
         throw new Error("Description is required");
       }
+      // Round-6 fix (BUG-016): honour the user-entered date. Falls back to today
+      // in the user's timezone if for some reason the field is cleared.
+      const expenseDate = (newExpense.date || "").trim()
+        || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
       await apiRequest("POST", "/api/expenses", {
         description: desc,
         amount: amt,
         category: newExpense.category,
         vendor: newExpense.vendor || undefined,
-        date: new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
+        date: expenseDate,
         tags: [],
         ...(expenseProfileId ? { linkedProfiles: [expenseProfileId] } : {}),
       });
@@ -185,7 +204,8 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
       setAddOpen(false);
-      setNewExpense({ description: "", amount: "", category: "general", vendor: "" });
+      setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+      setAddAttempt(false);
       toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
     },
     onError: (err: Error) => {
@@ -336,7 +356,10 @@ export default function FinancePage() {
   });
 
   // Cashflow
-  const cfMonth = new Date().toISOString().slice(0, 7);
+  // BUG-021: must use user-local month — toISOString() returns UTC, which can
+  // tip into next month for Pacific users in the evening (Dashboard shows May
+  // while Finance showed April). Match dashboard's `currentMonth` derivation.
+  const cfMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
 
   // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
@@ -418,9 +441,26 @@ export default function FinancePage() {
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
       <div>
         <div className="flex items-center gap-3 mb-4">
-          <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
+          {/* Round-6 fix (BUG-014): previously rendered a wouter <Link href="/dashboard"/>
+              which navigates but does not pop history. On some platforms (mobile back
+              gesture, dashboard → finance → expense detail → back) this could end up
+              looking inert. Use a real button that calls history.back() with a hard
+              fallback to /dashboard when there's nothing to pop. */}
+          <button
+            type="button"
+            onClick={() => {
+              if (window.history.length > 1) {
+                window.history.back();
+              } else {
+                window.location.href = "/dashboard";
+              }
+            }}
+            className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors"
+            aria-label="Back"
+            data-testid="button-back"
+          >
             <ArrowLeft className="w-4 h-4" />
-          </Link>
+          </button>
 
           <MultiProfileFilter
             onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
@@ -439,7 +479,7 @@ export default function FinancePage() {
                 ))}
               </SelectContent>
             </Select>
-            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setNewExpense({ description: "", amount: "", category: "general", vendor: "" }); }}>
+            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setAddAttempt(false); } }}>
               <DialogTrigger asChild>
                 <Button size="sm" className="h-8 text-xs" data-testid="button-add-expense">
                   <Plus className="h-3.5 w-3.5 mr-1" /> Add Expense
@@ -451,11 +491,26 @@ export default function FinancePage() {
                 </DialogHeader>
                 <div className="space-y-3">
                   <div><Label className="text-xs">Description <span className="text-destructive">*</span></Label>
-                    <Input placeholder="What was it for?" value={newExpense.description} onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))} data-testid="input-expense-description" /></div>
+                    <Input
+                      placeholder="What was it for?"
+                      value={newExpense.description}
+                      onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))}
+                      data-testid="input-expense-description"
+                      aria-invalid={addAttempt && !newExpense.description.trim() ? true : undefined}
+                      className={addAttempt && !newExpense.description.trim() ? "border-destructive focus-visible:ring-destructive" : ""}
+                    /></div>
                   <div className="grid grid-cols-2 gap-3">
                     <div><Label className="text-xs">Amount ($) <span className="text-destructive">*</span></Label>
                       {/* U5: enforce non-negative amounts at the input level */}
-                      <Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" placeholder="0.00" value={newExpense.amount} onChange={e => setNewExpense(p => ({ ...p, amount: e.target.value }))} data-testid="input-expense-amount" /></div>
+                      <Input
+                        type="number" inputMode="decimal" step="0.01" min="0" max="999999999"
+                        placeholder="0.00"
+                        value={newExpense.amount}
+                        onChange={e => setNewExpense(p => ({ ...p, amount: e.target.value }))}
+                        data-testid="input-expense-amount"
+                        aria-invalid={addAttempt && (!newExpense.amount || parseFloat(newExpense.amount) <= 0) ? true : undefined}
+                        className={addAttempt && (!newExpense.amount || parseFloat(newExpense.amount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}
+                      /></div>
                     <div><Label className="text-xs">Category</Label>
                       <Select value={newExpense.category} onValueChange={v => setNewExpense(p => ({ ...p, category: v }))}>
                         <SelectTrigger data-testid="select-expense-category"><SelectValue /></SelectTrigger>
@@ -466,6 +521,10 @@ export default function FinancePage() {
                   </div>
                   <div><Label className="text-xs">Vendor (optional)</Label>
                     <Input placeholder="Store or vendor name" value={newExpense.vendor} onChange={e => setNewExpense(p => ({ ...p, vendor: e.target.value }))} data-testid="input-expense-vendor" /></div>
+                  {/* Round-6 fix (BUG-016): Add Expense was missing a Date field, while Edit Expense had one.
+                      Default to today (user TZ); user can override for backdated entries. */}
+                  <div><Label className="text-xs">Date</Label>
+                    <Input type="date" value={newExpense.date} onChange={e => setNewExpense(p => ({ ...p, date: e.target.value }))} data-testid="input-expense-date" /></div>
                   <div><Label className="text-xs">Profile</Label>
                     <Select value={expenseProfileId} onValueChange={setExpenseProfileId}>
                       <SelectTrigger data-testid="select-expense-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
@@ -475,12 +534,16 @@ export default function FinancePage() {
                         ))}
                       </SelectContent>
                     </Select></div>
-                  {/* Inline validation hints — the previous implementation
-                      silently disabled the Save button which left users
-                      guessing why nothing happened. Now we explicitly tell
-                      them which field is missing. */}
+                  {/* BUG-023: validation feedback. Before submit attempt: show
+                      a muted hint. After submit attempt with errors: show a
+                      prominent destructive-colour message AND highlight the
+                      offending field(s) with red borders (see aria-invalid /
+                      className on inputs above). */}
                   {(!newExpense.description.trim() || !newExpense.amount || parseFloat(newExpense.amount) <= 0) && (
-                    <p className="text-xs text-muted-foreground" data-testid="hint-expense-required">
+                    <p
+                      className={addAttempt ? "text-xs font-medium text-destructive" : "text-xs text-muted-foreground"}
+                      data-testid="hint-expense-required"
+                    >
                       {!newExpense.description.trim() && !newExpense.amount
                         ? "Description and amount are required"
                         : !newExpense.description.trim()
@@ -493,9 +556,10 @@ export default function FinancePage() {
                   <Button
                     className="w-full"
                     onClick={() => {
-                      // Defensive client-side check that surfaces a toast even
-                      // if a future refactor accidentally drops the disabled
-                      // attribute. Server still validates independently.
+                      // BUG-023: mark submit-attempted so red borders appear
+                      // on the empty required fields. Defensive client-side
+                      // checks still surface a toast; server validates too.
+                      setAddAttempt(true);
                       if (!newExpense.description.trim()) {
                         toast({ title: "Description is required", variant: "destructive" });
                         return;
@@ -742,7 +806,7 @@ export default function FinancePage() {
       </Card>
 
       {/* Edit Expense Dialog */}
-      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setEditingExpense(null); setEditForm({ description: "", amount: "", category: "", vendor: "", date: "" }); setEditSaving(false); } }}>
+      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setEditingExpense(null); setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "" }); setEditSaving(false); } }}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
           <div className="space-y-3">
@@ -762,6 +826,18 @@ export default function FinancePage() {
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
             {/* U11: prevent picking a future date for an already-incurred expense */}
             <div><Label>Date</Label><Input type="date" max={new Date().toISOString().slice(0,10)} value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
+            {/* Round-6 fix (BUG-017): Edit Expense was missing the Profile field that Add Expense already had.
+                Match parity so re-assigning is possible without delete+recreate. */}
+            <div><Label>Profile</Label>
+              <Select value={editForm.profileId} onValueChange={v => setEditForm(f => ({ ...f, profileId: v }))}>
+                <SelectTrigger data-testid="select-edit-expense-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
+                <SelectContent>
+                  {(profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)).map((p: any) => (
+                    <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingExpense(null)} disabled={editSaving}>Cancel</Button>
               <Button className="flex-1" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0 || editSaving} onClick={async () => {
@@ -774,6 +850,8 @@ export default function FinancePage() {
                     category: editForm.category,
                     vendor: editForm.vendor || undefined,
                     date: editForm.date || undefined,
+                    // Round-6 fix (BUG-017): persist the chosen profile linkage.
+                    ...(editForm.profileId ? { linkedProfiles: [editForm.profileId] } : {}),
                   });
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -806,7 +884,15 @@ export default function FinancePage() {
           </div>
         ) : (
           <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
-            {paychecks.slice().sort((a: any, b: any) => (a.source || '').localeCompare(b.source || '')).map((pc: any) => (
+            {paychecks.slice().sort((a: any, b: any) => (a.source || '').localeCompare(b.source || '')).map((pc: any) => {
+              // Round-6 fix (BUG-024): user reported the "Received" badge appearing on
+              // paychecks before their expected date. The server allowed confirm at any
+              // time. Gate the Received button at the UI layer so a paycheck can only be
+              // marked received once expected_date has actually arrived (in the user's TZ).
+              const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+              const expectedISO = (pc.expected_date || '').slice(0, 10);
+              const isFuture = expectedISO && expectedISO > todayISO;
+              return (
               <div key={pc.id} className="flex items-center gap-3 px-3 py-2 group" style={{ background: pc.confirmed ? 'hsl(142 60% 50% / 0.05)' : undefined }}>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium truncate">{pc.source}</p>
@@ -818,6 +904,8 @@ export default function FinancePage() {
                 <span className="text-xs font-bold tabular-nums">${(pc.actual_amount || pc.amount).toLocaleString()}</span>
                 {pc.confirmed ? (
                   <span className="text-[10px] font-semibold text-green-500 flex items-center gap-0.5"><Check className="h-3 w-3" /> Received</span>
+                ) : isFuture ? (
+                  <span className="text-[10px] font-medium text-muted-foreground">Upcoming</span>
                 ) : (
                   <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-green-600 border-green-500/30"
                     disabled={confirmPaycheckMut.isPending}
@@ -834,7 +922,8 @@ export default function FinancePage() {
                   {deletePaycheckMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -1321,7 +1410,21 @@ export default function FinancePage() {
                 const expense = profileFiltered.find(x => x.id === deleteConfirmId);
                 try {
                   await apiRequest("DELETE", `/api/expenses/${deleteConfirmId}`);
-                  queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter(item => item.id !== deleteConfirmId));
+                  // Round-6 fix (BUG-018): previous code optimistically updated only the
+                  // unparameterised ["/api/expenses"] key, but the active page query key is
+                  // ["/api/expenses", filterMode, ...filterIds] — so the on-screen list and
+                  // the "X expenses" counter weren't updated until a full refetch round-trip.
+                  // Use setQueriesData with a prefix matcher to update every cached expense
+                  // list immediately, then invalidate to reconcile against the server.
+                  queryClient.setQueriesData<any[] | { items?: any[] } | undefined>(
+                    { queryKey: ["/api/expenses"] },
+                    (old: any) => {
+                      if (!old) return old;
+                      if (Array.isArray(old)) return old.filter((item: any) => item.id !== deleteConfirmId);
+                      if (Array.isArray(old?.items)) return { ...old, items: old.items.filter((item: any) => item.id !== deleteConfirmId) };
+                      return old;
+                    }
+                  );
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });

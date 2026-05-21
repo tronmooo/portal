@@ -39,33 +39,65 @@ function parseMoney(v: any): number {
   }
   return 0;
 }
+// Round-6 fix (BUG-003/004/015): mirror server resolveAssetValue exactly
+// (portal/server/supabase-storage.ts). Previously missing cost/amount/price/
+// accountBalance/marketValue-on-other paths caused $10-$11K drift between
+// the Hero KPI tile and the Net Worth popup.
 function resolveAssetValue(p: any): number {
   if (!p?.fields) return 0;
-  const f = p.fields;
+  const fields = p.fields;
+  const housing = fields.housing || {};
+  const other = fields.other || {};
+  const finance = fields.finance || {};
+  const vehicle = fields.vehicle || {};
+  const vehicles = fields.vehicles || {};
+  const investment = fields.investment || {};
   const candidates: any[] = [
-    f.purchasePrice, f.purchase_price, f.value, f.currentValue, f.current_value,
-    f.marketValue, f.market_value, f.estimatedValue, f.estimated_value,
-    f.housing?.currentValue, f.housing?.current_value, f.housing?.purchasePrice, f.housing?.purchase_price,
-    f.other?.purchasePrice, f.other?.purchase_price, f.other?.value, f.other?.currentValue, f.other?.current_value,
-    f.finance?.balance, f.finance?.currentValue, f.finance?.current_value, f.finance?.value,
-    f.vehicle?.purchasePrice, f.vehicle?.purchase_price, f.vehicle?.currentValue, f.vehicle?.current_value,
-    f.investment?.balance, f.investment?.value, f.investment?.currentValue,
+    fields.currentValue, fields.current_value, housing.currentValue, housing.current_value, other.currentValue, other.current_value,
+    fields.marketValue, fields.market_value, housing.marketValue, housing.market_value, other.marketValue, other.market_value,
+    fields.estimatedValue, fields.estimated_value,
+    fields.value, other.value,
+    fields.purchasePrice, fields.purchase_price, other.purchasePrice, other.purchase_price, housing.purchasePrice, housing.purchase_price,
+    fields.cost, other.cost,
+    fields.amount, other.amount,
+    fields.price, other.price,
+    fields.balance, finance.balance, finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
+    fields.accountBalance, finance.accountBalance, finance.account_balance,
+    vehicle.purchasePrice, vehicle.purchase_price, vehicle.currentValue, vehicle.current_value, vehicle.value,
+    vehicles.purchasePrice, vehicles.purchase_price, vehicles.currentValue, vehicles.current_value, vehicles.value,
+    investment.balance, investment.value, investment.currentValue, investment.current_value,
   ];
   for (const c of candidates) { const n = parseMoney(c); if (n > 0) return n; }
   return 0;
 }
 function resolveLiabilityBalance(p: any): number {
   if (!p?.fields) return 0;
-  const f = p.fields;
+  const fields = p.fields;
+  const finance = fields.finance || {};
+  const loan = fields.loan || {};
+  const other = fields.other || {};
   const candidates: any[] = [
-    f.currentBalance, f.current_balance,
-    f.finance?.currentBalance, f.finance?.current_balance,
-    f.loan?.currentBalance, f.loan?.current_balance,
-    f.remainingBalance, f.remaining_balance, f.loanBalance, f.loan_balance,
-    f.outstandingBalance, f.outstanding_balance, f.balance,
-    f.finance?.balance, f.loan?.balance, f.other?.balance,
+    fields.currentBalance, fields.current_balance,
+    finance.currentBalance, finance.current_balance,
+    loan.currentBalance, loan.current_balance,
+    fields.balance,
+    fields.remainingBalance, fields.remaining_balance,
+    fields.loanBalance, fields.loan_balance,
+    fields.outstandingBalance, fields.outstanding_balance,
+    finance.remainingBalance, finance.remaining_balance,
+    finance.loanBalance, finance.loan_balance,
+    finance.outstandingBalance, finance.outstanding_balance, finance.balance,
+    loan.remainingBalance, loan.remaining_balance,
+    loan.balance, loan.outstandingBalance, loan.outstanding_balance,
+    other.remainingBalance, other.remaining_balance, other.balance,
   ];
   for (const c of candidates) { const n = parseMoney(c); if (n > 0) return n; }
+  // Sum nested loans[] balances if present
+  const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
+  if (loans.length > 0) {
+    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
+    if (sum > 0) return sum;
+  }
   return 0;
 }
 
@@ -542,9 +574,17 @@ export function BudgetPopup({
   const qc = useQueryClient();
   const param = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
+  // Round-6 fix (BUG-022): the popup previously fetched /api/budgets without
+  // the active profile filter, so switching profiles didn't update what the
+  // popup showed. Thread filterMode/filterIds the same way the Hero card and
+  // Finance section do.
+  const currentMonthForPopup = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+  const budgetsParam = filterMode === "selected" && filterIds.length > 0
+    ? `?month=${currentMonthForPopup}&profileIds=${filterIds.join(",")}`
+    : `?month=${currentMonthForPopup}`;
   const { data: budgetsResp } = useQuery<any>({
-    queryKey: ["/api/budgets", "popup"],
-    queryFn: async () => (await apiRequest("GET", "/api/budgets")).json(),
+    queryKey: ["/api/budgets", "popup", currentMonthForPopup, filterMode, ...filterIds],
+    queryFn: async () => (await apiRequest("GET", `/api/budgets${budgetsParam}`)).json(),
     enabled: open,
   });
   const budgets: BudgetRow[] = budgetsResp?.budgets ?? [];
@@ -567,7 +607,15 @@ export function BudgetPopup({
   const [showAdd, setShowAdd] = useState(false);
 
   const totalBudget = budgets.reduce((s, b) => s + b.amount, 0);
-  const totalSpent = budgets.reduce((s, b) => s + (spendByCategory[b.category] || 0), 0);
+  // Round-6 fix (BUG-002/020): previous version summed only spend-in-budgeted-categories
+  // which produced a wildly different headline % than the Hero KPI card and the Finance
+  // section's Budget bar (both of which use total monthly spend / total budget). The
+  // user reported Hero card 184% vs popup 69% which traced directly to that divergence.
+  // Unify on totalMonthlySpend (the same number the Hero card displays) so the three
+  // surfaces always agree.
+  const totalMonthlySpend: number = enhancedRes?.financeSnapshot?.totalMonthlySpend
+    ?? Object.values(spendByCategory).reduce((s, v) => s + (Number(v) || 0), 0);
+  const totalSpent = totalMonthlySpend;
   const overallPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
 
   // Invalidate every queryKey that derives from budgets.
@@ -577,12 +625,15 @@ export function BudgetPopup({
   // Finance page Budget banner re-render after an add / edit / delete.
   // (Fixes QA bugs BUG-004 "Dashboard Budget card stale" + BUG-008 "Finance
   // budget banner stale".)
+  // Round-6 fix (BUG-012): previously invalidated /api/expenses and /api/stats on every
+  // budget edit, which caused the Hero KPI Cash Flow tile to flicker / change values
+  // because /api/dashboard-enhanced was refetched with a fresh server cache slice.
+  // Editing a budget has zero effect on expenses, income, or finance snapshot — only
+  // budget-derived queries actually need to refetch. Keeping scope tight prevents the
+  // "unrelated tile changes when I edit budget" cross-tile flicker the user reported.
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["/api/budgets"] });
     qc.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
-    qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-    qc.invalidateQueries({ queryKey: ["/api/stats"] });
-    qc.invalidateQueries({ queryKey: ["/api/expenses"] });
   };
 
   const addMut = useMutation({

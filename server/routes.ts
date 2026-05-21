@@ -5306,15 +5306,22 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
       const _profileIdsParam = (req.query.profileIds as string | undefined) || (req.query.profileId as string | undefined) || "";
       const filterIds: string[] = _profileIdsParam ? _profileIdsParam.split(",").filter(Boolean) : [];
       const CACHE_KEY = filterIds.length > 0 ? `ai_suggestions:${filterIds.sort().join(",")}` : "ai_suggestions";
-      const TTL_MS = 4 * 3600 * 1000; // 4 hours
-
+      // BUG-007/008: TTL was 4h, which made AI Summary / Action Required show
+      // stale facts after the user added/deleted/edited data. Tighten to 30min
+      // AND fingerprint the underlying snapshot — if the fingerprint changed,
+      // we ignore the cache regardless of age. The fingerprint check is the
+      // primary defence; TTL is the safety net for slow-moving data.
+      const TTL_MS = 30 * 60 * 1000; // 30 minutes
+      // Cached entry checked after the snapshot is built so we can compare
+      // fingerprints. Stored separately and short-circuits AI call when valid.
+      let cachedParsed: any = null;
       if (!force) {
         const cached = await storage.getPreference(CACHE_KEY);
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
             if (parsed.generatedAt && (Date.now() - new Date(parsed.generatedAt).getTime()) < TTL_MS) {
-              return res.json(parsed);
+              cachedParsed = parsed;
             }
           } catch { /* ignore */ }
         }
@@ -5365,15 +5372,36 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
         goalCount: goals.length,
       };
 
+      // BUG-007/008: cheap fingerprint of the snapshot. If it matches the
+      // cached entry's fingerprint, the underlying data is unchanged so we
+      // safely return the cached suggestions. Otherwise the cache is stale
+      // (user added/deleted/edited something) and we regenerate.
+      const snapshotFingerprint = (() => {
+        try {
+          const s = JSON.stringify(snapshot);
+          let h = 0;
+          for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+          return String(h);
+        } catch { return String(Date.now()); }
+      })();
+      if (cachedParsed && cachedParsed.fingerprint === snapshotFingerprint) {
+        return res.json(cachedParsed);
+      }
+
       const decision = await aiDecide<{ suggestions: Array<{ title: string; body: string; action: string; priority: "high" | "medium" | "low" }> }>({
         task: "dashboard-ai-suggestions",
-        system: `You are a personal-finance coach surfacing 3 to 5 actionable improvements based on snapshot data.
+        system: `You are a personal-finance coach surfacing 3 to 5 actionable improvements based ONLY on the snapshot data provided.
 Return ONLY JSON: {"suggestions":[{"title":"<8 words max>","body":"<one short sentence>","action":"<short verb phrase>","priority":"high"|"medium"|"low"}]}
+STRICT RULES (BUG-007/008 — factual accuracy):
+- Only state facts that are directly derivable from the snapshot counts/fields. Never invent counts, amounts, dates, vendors, or category names.
+- If a count is 0 (e.g. unlinkedDocCount=0), do NOT suggest fixing that issue.
+- Never reference data not present in the snapshot.
+- If the snapshot is sparse, return fewer suggestions rather than fabricating ones.
 Focus on:
-- expenses categorised as "other"/"general" → re-categorize
-- documents not linked to any profile → link them
-- recurring vendors in expenses with no matching obligation → add as subscription
-- empty trackers → archive or use
+- expenses categorised as "other"/"general" → re-categorize (only if otherCategoryExpenses > 0)
+- documents not linked to any profile → link them (only if unlinkedDocCount > 0)
+- recurring vendors in recentExpenses with no matching obligation → add as subscription
+- empty trackers → archive or use (only if emptyTrackerCount > 0)
 - duplicate-looking profile types
 - missing essential profiles (self has no income/account)
 No emojis. No prose outside the JSON.`,
@@ -5389,6 +5417,7 @@ No emojis. No prose outside the JSON.`,
         suggestions: decision.value.suggestions.slice(0, 5),
         generatedAt: new Date().toISOString(),
         source: decision.source,
+        fingerprint: snapshotFingerprint,
       };
       try { await storage.setPreference(CACHE_KEY, JSON.stringify(result)); } catch { /* ignore */ }
       res.json(result);
