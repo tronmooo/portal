@@ -17,6 +17,7 @@ interface AuthenticatedRequest extends Request {
 }
 import { storage } from "./storage";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
+import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 
 // ────────────────────────────────────────────────────────────────────
 // syncLiabilityObligation
@@ -2327,16 +2328,27 @@ Respond ONLY in JSON format:
 
       // Build compact data snapshot for the profile
       const now = new Date();
+
+      // Sanitize: if the user has explicitly scrubbed a sensitive demographic
+      // key (birthday, age, SSN) from the profile, strip every variant of
+      // that key from each linked document's extractedData before sending
+      // to the AI. Otherwise the AI confidently computes "45-year-old" from
+      // a driver's license DOB even though the user just deleted Birthday.
+      // See block at top of file for full rationale. DATA IS NOT DELETED —
+      // the document's stored extractedData is untouched.
+      const aiStripKeys = computeAiSensitiveStripKeys(detail.fields as Record<string, any>);
+      const sanitizedFields = deepStripKeys(detail.fields, aiStripKeys);
+
       const profileData: Record<string, any> = {
         name: detail.name,
         type: detail.type,
-        fields: detail.fields,
+        fields: sanitizedFields,
         tags: detail.tags,
         notes: detail.notes,
         documents: detail.relatedDocuments.map(d => ({
           name: d.name,
           type: d.type,
-          extractedData: d.extractedData,
+          extractedData: deepStripKeys(d.extractedData, aiStripKeys),
           createdAt: d.createdAt,
         })),
         expenses: detail.relatedExpenses.map(e => ({
@@ -2405,6 +2417,7 @@ Rules:
 - Highlight key metrics as structured data.
 - If data is sparse, still provide useful insights from what's available.
 - Return ONLY valid JSON matching the exact schema below. No markdown, no code fences.
+- The 'fields' block is the AUTHORITATIVE source of truth for personal facts (age, birthday, address, marital status, phone, SSN, etc.). If a personal fact is NOT present in 'fields', you MUST NOT infer it from linked documents, notes, or tags. In particular: NEVER compute or state a person's age unless 'fields.birthday' (or an equivalent date-of-birth field) is present. If 'fields.birthday' is absent, do not write any phrase like "X-year-old" or "age X" — just omit age from the summary.
 
 JSON Schema:
 {
