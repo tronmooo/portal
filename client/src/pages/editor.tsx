@@ -34,7 +34,7 @@ import {
   Share2, Printer, Check, BarChart3, LineChart as LineChartIcon, AreaChart as AreaChartIcon, PieChart as PieChartIcon,
   Link2, User as UserIcon, Activity, FileText, ListChecks, CheckCircle2, BookOpen, Receipt, ExternalLink, PanelRightOpen, PanelRightClose,
   DollarSign, Percent, Hash, AlignLeft, AlignCenter, AlignRight,
-  Calendar as CalendarIcon, Eraser, ChevronDown, Pencil as PencilIcon,
+  Calendar as CalendarIcon, Eraser, ChevronDown, Pencil as PencilIcon, MoreHorizontal,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
@@ -252,8 +252,12 @@ export default function EditorPage() {
   const [chartType, setChartType] = useState<"bar" | "line" | "area" | "pie">("bar");
   const [chartTitle, setChartTitle] = useState("");
   // Cross-link sidebar state (Wave 7) — doc mode only.
+  // On mobile we default to closed so the editor isn't squeezed into 50% of
+  // the viewport. Users can still open it via the chip in the bottom toolbar.
   const [linksOpen, setLinksOpen] = useState<boolean>(() => {
     try {
+      const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
+      if (isMobile) return false;
       const v = localStorage.getItem("portol_editor_links_sidebar");
       return v === null ? true : v === "1";
     } catch { return true; }
@@ -1092,93 +1096,152 @@ export default function EditorPage() {
             Input looked like a static label until hovered; users didn't realise
             they could click into it and rename their doc. Give it a hover/focus
             outline and a pencil hint so the affordance is unambiguous. */}
-        <div className="relative group max-w-md">
+        <div className="relative group flex-1 md:flex-none md:max-w-md min-w-0">
           <Input
             value={title}
             onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
             placeholder={type === "doc" ? "Untitled doc — click to rename" : "Untitled sheet — click to rename"}
-            className="h-9 font-semibold text-base border border-transparent hover:border-border focus:border-primary/60 focus:bg-background bg-transparent pr-7 transition-colors"
+            className="h-9 font-semibold text-base border border-transparent hover:border-border focus:border-primary/60 focus:bg-background bg-transparent pr-7 transition-colors w-full"
             data-testid="input-editor-title"
             aria-label="Document title (click to edit)"
             title="Click to rename"
           />
           <PencilIcon className="h-3.5 w-3.5 text-muted-foreground/40 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-muted-foreground transition-colors" />
         </div>
-        <span className="text-xs text-muted-foreground ml-2" data-testid="text-editor-status">
+        {/* Status line: on mobile we hide the verbose "Doc · N words" and only
+            keep a tiny save indicator to maximise space for the title. */}
+        <span className="hidden md:inline text-xs text-muted-foreground ml-2" data-testid="text-editor-status">
           {type === "doc" ? "Doc" : "Sheet"}
           {saveMut.isPending ? " · Saving…" : (dirty ? " · Unsaved" : (lastSavedAt ? ` · Saved ${formatRelative(lastSavedAt, nowTick)}` : ""))}
           {type === "doc" && docStats ? ` · ${docStats}` : ""}
           {type === "sheet" ? ` · ${sheetStats} filled` : ""}
         </span>
+        <span className="md:hidden text-[11px] text-muted-foreground ml-1" data-testid="text-editor-status-mobile">
+          {saveMut.isPending ? "Saving…" : (dirty ? "Unsaved" : (lastSavedAt ? "Saved" : ""))}
+        </span>
         <div className="flex-1" />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" data-testid="button-editor-template">
-              <LayoutTemplate className="h-4 w-4 mr-1" /> Template
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuLabel>Insert {type === "doc" ? "document" : "spreadsheet"} template</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {getTemplatesByType(type).map((tpl) => (
-              <DropdownMenuItem
-                key={tpl.id}
-                onClick={() => applyTemplate(tpl)}
-                className="flex flex-col items-start gap-0.5 py-2"
-                data-testid={`menu-template-${tpl.id}`}
-              >
-                <span className="font-medium">{tpl.label}</span>
-                <span className="text-xs text-muted-foreground">{tpl.description}</span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {type === "doc" ? (
+        {/* Desktop: full action row. Hidden on mobile (<md) — mobile uses the
+            single overflow menu below to keep the header clean. */}
+        <div className="hidden md:flex items-center gap-1">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" data-testid="button-editor-download">
-                <Download className="h-4 w-4 mr-1" /> Download
+              <Button variant="ghost" size="sm" data-testid="button-editor-template">
+                <LayoutTemplate className="h-4 w-4 mr-1" /> Template
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={downloadDocPdf} data-testid="menu-download-pdf">
-                <span className="font-medium">Download as PDF</span>
-                <span className="ml-2 text-xs text-muted-foreground">.pdf</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={downloadDoc} data-testid="menu-download-docx">
-                <span className="font-medium">Download as Word</span>
-                <span className="ml-2 text-xs text-muted-foreground">.docx</span>
-              </DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel>Insert {type === "doc" ? "document" : "spreadsheet"} template</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {getTemplatesByType(type).map((tpl) => (
+                <DropdownMenuItem
+                  key={tpl.id}
+                  onClick={() => applyTemplate(tpl)}
+                  className="flex flex-col items-start gap-0.5 py-2"
+                  data-testid={`menu-template-${tpl.id}`}
+                >
+                  <span className="font-medium">{tpl.label}</span>
+                  <span className="text-xs text-muted-foreground">{tpl.description}</span>
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        ) : (
-          <Button variant="ghost" size="sm" onClick={downloadSheet} data-testid="button-editor-download">
-            <Download className="h-4 w-4 mr-1" /> Download
-          </Button>
-        )}
-        {type === "doc" && (
-          <Button variant="ghost" size="sm" onClick={() => window.print()} data-testid="button-editor-print">
-            <Printer className="h-4 w-4 mr-1" /> Print
-          </Button>
-        )}
-        {savedId && (
-          <Button variant="ghost" size="sm" onClick={() => setShareOpen(true)} data-testid="button-editor-share">
-            <Share2 className="h-4 w-4 mr-1" /> Share
-          </Button>
-        )}
-        {savedId && (
-          <Button variant="ghost" size="sm" onClick={() => duplicateMut.mutate()} data-testid="button-editor-duplicate">
-            <Copy className="h-4 w-4 mr-1" /> Copy
-          </Button>
-        )}
-        {savedId && (
-          <Button variant="ghost" size="sm" onClick={() => { if (confirm("Delete this artifact?")) deleteMut.mutate(); }} data-testid="button-editor-delete">
-            <Trash2 className="h-4 w-4 mr-1" /> Delete
-          </Button>
-        )}
+          {type === "doc" ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" data-testid="button-editor-download">
+                  <Download className="h-4 w-4 mr-1" /> Download
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={downloadDocPdf} data-testid="menu-download-pdf">
+                  <span className="font-medium">Download as PDF</span>
+                  <span className="ml-2 text-xs text-muted-foreground">.pdf</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadDoc} data-testid="menu-download-docx">
+                  <span className="font-medium">Download as Word</span>
+                  <span className="ml-2 text-xs text-muted-foreground">.docx</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={downloadSheet} data-testid="button-editor-download">
+              <Download className="h-4 w-4 mr-1" /> Download
+            </Button>
+          )}
+          {type === "doc" && (
+            <Button variant="ghost" size="sm" onClick={() => window.print()} data-testid="button-editor-print">
+              <Printer className="h-4 w-4 mr-1" /> Print
+            </Button>
+          )}
+          {savedId && (
+            <Button variant="ghost" size="sm" onClick={() => setShareOpen(true)} data-testid="button-editor-share">
+              <Share2 className="h-4 w-4 mr-1" /> Share
+            </Button>
+          )}
+          {savedId && (
+            <Button variant="ghost" size="sm" onClick={() => duplicateMut.mutate()} data-testid="button-editor-duplicate">
+              <Copy className="h-4 w-4 mr-1" /> Copy
+            </Button>
+          )}
+          {savedId && (
+            <Button variant="ghost" size="sm" onClick={() => { if (confirm("Delete this artifact?")) deleteMut.mutate(); }} data-testid="button-editor-delete">
+              <Trash2 className="h-4 w-4 mr-1" /> Delete
+            </Button>
+          )}
+        </div>
+        {/* Mobile-only overflow menu: collapses Template/Download/Print/Share/Copy/Delete
+            into a single ⋯ button so the header stays clean like the reference. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-9 w-9 md:hidden" data-testid="button-editor-more-mobile" aria-label="More actions">
+              <MoreHorizontal className="h-5 w-5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            {type === "doc" && (
+              <>
+                <DropdownMenuLabel>Templates</DropdownMenuLabel>
+                {getTemplatesByType(type).slice(0, 4).map((tpl) => (
+                  <DropdownMenuItem key={tpl.id} onClick={() => applyTemplate(tpl)}>
+                    <LayoutTemplate className="h-4 w-4 mr-2" /> {tpl.label}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={downloadDocPdf}>
+                  <Download className="h-4 w-4 mr-2" /> Download PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadDoc}>
+                  <Download className="h-4 w-4 mr-2" /> Download Word
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => window.print()}>
+                  <Printer className="h-4 w-4 mr-2" /> Print
+                </DropdownMenuItem>
+              </>
+            )}
+            {type === "sheet" && (
+              <DropdownMenuItem onClick={downloadSheet}>
+                <Download className="h-4 w-4 mr-2" /> Download
+              </DropdownMenuItem>
+            )}
+            {savedId && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setShareOpen(true)}>
+                  <Share2 className="h-4 w-4 mr-2" /> Share
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => duplicateMut.mutate()}>
+                  <Copy className="h-4 w-4 mr-2" /> Duplicate
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { if (confirm("Delete this artifact?")) deleteMut.mutate(); }} className="text-destructive focus:text-destructive">
+                  <Trash2 className="h-4 w-4 mr-2" /> Delete
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending} data-testid="button-editor-save">
           {saveMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
-          Save
+          <span className="hidden sm:inline">Save</span>
         </Button>
       </div>
 
@@ -1212,8 +1275,11 @@ export default function EditorPage() {
       ) : type === "doc" ? (
         <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          {/* Toolbar */}
-          <div className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1 flex-wrap shrink-0">
+          {/* Toolbar — desktop: top sticky strip, wraps when narrow. Mobile:
+              hidden here; we render a clean single-row sticky bottom toolbar
+              below the editor content so it sits above the iOS keyboard like
+              the reference design. */}
+          <div className="hidden md:flex border-b bg-muted/30 px-3 py-1.5 items-center gap-1 flex-wrap shrink-0">
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} data-testid="button-doc-bold"><Bold className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} data-testid="button-doc-italic"><Italic className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleUnderline().run()} aria-pressed={editor?.isActive("underline")} data-testid="button-doc-underline"><UnderlineIcon className="h-4 w-4" /></Button>
@@ -1230,11 +1296,45 @@ export default function EditorPage() {
             }} data-testid="button-doc-link"><LinkIcon className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleCodeBlock().run()} data-testid="button-doc-code"><Code className="h-4 w-4" /></Button>
           </div>
-          {/* Tiptap content */}
+          {/* Tiptap content — tighter side padding on mobile so the writing
+              area uses the full width like the reference design. */}
           <div className="flex-1 overflow-auto">
-            <div className="max-w-3xl mx-auto px-6 py-8">
+            <div className="max-w-3xl mx-auto px-4 md:px-6 py-4 md:py-8">
               <EditorContent editor={editor} className="prose prose-sm max-w-none focus:outline-none [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none" />
             </div>
+          </div>
+          {/* Mobile-only sticky bottom formatting toolbar — sits above the iOS
+              keyboard and gives the editor a clean full-width writing area,
+              matching the reference design (single horizontal strip). Single
+              row, no wrap, horizontal scroll if it overflows. */}
+          <div
+            className="md:hidden border-t bg-card flex items-center gap-0.5 px-2 overflow-x-auto shrink-0"
+            style={{ height: 48, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+            data-testid="toolbar-doc-mobile"
+          >
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} aria-label="Bold"><Bold className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} aria-label="Italic"><Italic className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleUnderline().run()} aria-pressed={editor?.isActive("underline")} aria-label="Underline"><UnderlineIcon className="h-5 w-5" /></Button>
+            <div className="w-px h-6 bg-border mx-1 shrink-0" />
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} aria-label="Heading 1"><Heading1 className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} aria-label="Heading 2"><Heading2 className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleBulletList().run()} aria-label="Bullet list"><List className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleOrderedList().run()} aria-label="Numbered list"><ListOrdered className="h-5 w-5" /></Button>
+            <div className="w-px h-6 bg-border mx-1 shrink-0" />
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => {
+              const url = window.prompt("URL");
+              if (url) editor?.chain().focus().setLink({ href: url }).run();
+            }} aria-label="Insert link"><LinkIcon className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => editor?.chain().focus().toggleCodeBlock().run()} aria-label="Code block"><Code className="h-5 w-5" /></Button>
+            <div className="flex-1" />
+            <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0 relative" onClick={() => setLinksOpen(true)} aria-label="Linked entities" title="Show linked entities">
+              <Link2 className="h-5 w-5" />
+              {mentionTokens.length > 0 && (
+                <span className="absolute text-[9px] font-semibold bg-primary text-primary-foreground rounded-full" style={{ minWidth: 14, height: 14, lineHeight: "14px", textAlign: "center", top: 4, right: 4, paddingLeft: 3, paddingRight: 3 }}>
+                  {mentionTokens.length}
+                </span>
+              )}
+            </Button>
           </div>
           {/* Slash command menu */}
           {slashMenu.open && slashFiltered.length > 0 && (
@@ -2028,8 +2128,10 @@ function CrossLinkSidebar({
   }[t]);
 
   if (!open) {
+    // Collapsed rail is desktop-only — on mobile we hide it entirely because the
+    // bottom toolbar already provides a Linked button.
     return (
-      <div className="border-l bg-muted/20 flex flex-col items-center w-9 shrink-0">
+      <div className="hidden md:flex border-l bg-muted/20 flex-col items-center w-9 shrink-0">
         <Button
           variant="ghost"
           size="icon"
@@ -2045,7 +2147,16 @@ function CrossLinkSidebar({
   }
 
   return (
-    <div className="border-l bg-muted/20 flex flex-col w-72 shrink-0 overflow-hidden">
+    <>
+      {/* Mobile backdrop — tap to close. Hidden on desktop. */}
+      <div
+        className="md:hidden fixed inset-0 z-40 bg-black/40"
+        onClick={onToggle}
+        data-testid="backdrop-links-sidebar"
+      />
+    <div
+      className="fixed md:static top-0 right-0 bottom-0 z-50 md:z-auto w-[85vw] max-w-[320px] md:w-72 border-l bg-card md:bg-muted/20 flex flex-col shrink-0 overflow-hidden shadow-xl md:shadow-none"
+    >
       <div className="flex items-center justify-between px-3 py-2 border-b shrink-0">
         <div className="flex items-center gap-1.5 text-sm font-medium">
           <Link2 className="h-4 w-4" /> Linked
@@ -2114,5 +2225,6 @@ function CrossLinkSidebar({
         )}
       </div>
     </div>
+    </>
   );
 }

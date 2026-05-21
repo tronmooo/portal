@@ -1570,7 +1570,7 @@ interface AISummaryData {
   generatedAt: string;
 }
 
-function AISummaryCard({ profileId, profileType }: { profileId: string; profileType: string }) {
+function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId: string; profileType: string; profileUpdatedAt?: string }) {
   const { data: aiSummary, isLoading, isError, isFetching } = useQuery<AISummaryData>({
     queryKey: ["/api/profiles", profileId, "ai-summary"],
     queryFn: async () => {
@@ -1580,6 +1580,21 @@ function AISummaryCard({ profileId, profileType }: { profileId: string; profileT
     enabled: !!profileId,
     retry: false,
   });
+
+  // When the underlying profile changes (any field edit, AI write, etc) refetch
+  // the summary. The server clears its 2h cache on PATCH, so this triggers a
+  // fresh generation reflecting the latest values (e.g. updated mileage).
+  // Skip on first render (when aiSummary hasn't loaded yet) to avoid a double-fetch.
+  useEffect(() => {
+    if (!profileUpdatedAt) return;
+    if (!aiSummary) return;
+    const summaryAt = new Date(aiSummary.generatedAt).getTime();
+    const profileAt = new Date(profileUpdatedAt).getTime();
+    // If the profile was updated after the summary was generated, refetch.
+    if (Number.isFinite(profileAt) && Number.isFinite(summaryAt) && profileAt > summaryAt) {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
+    }
+  }, [profileUpdatedAt, profileId, aiSummary]);
 
   const handleRefresh = useCallback(async () => {
     // Force refresh bypassing server cache
@@ -2068,6 +2083,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
       delete rest[fieldKey];
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: rest });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onSaved();
@@ -2086,6 +2102,10 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
         fields: { [fieldKey]: draft },
       });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      // Any field edit (mileage, currentValue, etc) can change the AI summary's
+      // narrative — invalidate so the next render refetches a fresh summary
+      // (server also clears its 2h cache on PATCH).
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onSaved();
@@ -10491,7 +10511,7 @@ export default function ProfileDetailPage() {
 
       {/* AI Summary Card */}
       <div className="px-4 md:px-6 pt-4">
-        <AISummaryCard profileId={id} profileType={profile.type} />
+        <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} />
       </div>
 
       {/* Profile Tabs — always use the full tab system */}

@@ -2123,6 +2123,12 @@ If unsure, return "profile_fact".`,
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
+    // Invalidate the cached AI summary so it regenerates on next read. Stored
+    // as a preference (profile_ai_<id>) with a 2h TTL — without this, edits to
+    // fields like mileage / currentValue won't be reflected in the AI summary
+    // for up to two hours. Empty string is treated as a cache miss in the
+    // ai-summary read path (Boolean("") === false).
+    try { await storage.setPreference(`profile_ai_${req.params.id}`, ""); } catch (err) { console.warn("[routes:patch-profile] failed to clear ai-summary cache:", err); }
     // Auto-bill sync: if monthlyPayment was added or changed on a liability,
     // keep its backing obligation row in step so dashboards stay accurate.
     if (updated.type === "liability" || updated.type === "loan") {
