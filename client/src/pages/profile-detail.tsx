@@ -2283,6 +2283,18 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
       { key: "birthday", label: "Birthday" }, { key: "relationship", label: "Relationship" },
       { key: "bloodType", label: "Blood Type" }, { key: "height", label: "Height" }, { key: "weight", label: "Weight" },
     ]},
+    // Identification / Driver's license group — fields most commonly extracted
+    // from a linked driver's license / state ID. Without this group these fields
+    // dump into "Other (N)" which is confusing for the user.
+    { title: "Identification", fields: [
+      { key: "license", label: "License #" },
+      { key: "licenseNumber", label: "License Number" },
+      { key: "licenseExpiration", label: "License Expiration" },
+      { key: "expirationDate", label: "Expiration Date" },
+      { key: "issueDate", label: "Issue Date" },
+      { key: "state", label: "State" },
+      { key: "stateName", label: "State Name" },
+    ]},
     { title: "Emergency", fields: [
       { key: "emergencyContact", label: "Emergency Contact" }, { key: "allergies", label: "Allergies" },
       { key: "medications", label: "Medications" },
@@ -2520,8 +2532,21 @@ function InfoTab({
   const assetSub = profile.type === "asset" ? (profile.fields?.assetSubtype || null) : null;
   const groups = (assetSub && FIELD_GROUPS[assetSub]) ? FIELD_GROUPS[assetSub] : (FIELD_GROUPS[profile.type] ?? []);
   const groupedKeys = new Set(groups.flatMap(g => g.fields.map(f => f.key)));
+  // Keys that are already displayed elsewhere on the page (or are internal)
+  // and should NOT also appear under the "Other" catch-all section. `name`
+  // is the profile name rendered at the top of the page; alias keys for
+  // commonly-edited fields like birthday/phone/address are already promoted
+  // via the flatten step so their canonical key is what the user sees.
+  const ALWAYS_HIDDEN_FROM_OTHER = new Set([
+    "name",
+    "dateOfBirth", "dob", "date_of_birth",
+    "primaryPhone", "homePhone", "cellPhone",
+    "homeAddress", "serviceAddress",
+    "patientName",
+    "issuingAuthority",
+  ]);
   const extraFields = Object.entries(profile.fields).filter(
-    ([k, v]) => !groupedKeys.has(k) && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
+    ([k, v]) => !groupedKeys.has(k) && !ALWAYS_HIDDEN_FROM_OTHER.has(k) && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
   );
 
   const handleSaved = () => {
@@ -5752,7 +5777,11 @@ function TasksTab({
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
-  const [taskFilter, setTaskFilter] = useState<"all" | "open" | "done">("all");
+  // Default to "open" so completed tasks don't clutter the main view.
+  // User explicitly requested on 2026-05-21: "I completed the task however
+  // it still shows up it should be removed." Completed tasks remain
+  // accessible via the "Completed" filter chip but are hidden by default.
+  const [taskFilter, setTaskFilter] = useState<"all" | "open" | "done">("open");
 
   const open = tasks.filter(t => normalizeFilter(t.status) !== normalizeFilter("done"));
   const done = tasks.filter(t => normalizeFilter(t.status) === normalizeFilter("done"));
@@ -9309,31 +9338,22 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
     };
   });
 
-  // BUG-P06: For Person/Self profiles, surface a "+ Link Asset" action so users
-  // can attach assets directly from the Belongings tab, matching the Liabilities UX.
-  const showLinkButton = isPerson;
-  const handleLinkAsset = () => {
-    // Open the Linked page filtered to Assets for this profile so the user can pick.
-    try {
-      window.location.hash = `#/linked?tab=assets&profile=${encodeURIComponent(profileId)}`;
-    } catch {}
-  };
+  // NOTE: This panel previously rendered a "+ Link Asset" button that
+  // navigated to `#/linked?tab=assets&profile=...`. That route does not
+  // exist (404) and the only correct way to link an asset to a person
+  // is from inside the asset's profile (owner picker). Button removed
+  // per user feedback on 2026-05-21 — do not re-add without first
+  // building a working link-picker dialog like the liability flow.
 
   if (items.length === 0) {
     return (
       <div className="text-center py-10" data-testid="linked-assets-empty">
         <Package className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
         <p className="text-sm text-muted-foreground">No linked assets</p>
-        {showLinkButton && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs mt-3"
-            onClick={handleLinkAsset}
-            data-testid="button-link-asset-empty"
-          >
-            <Plus className="h-3 w-3 mr-1" /> Link Asset
-          </Button>
+        {isPerson && (
+          <p className="text-xs text-muted-foreground/70 mt-1">
+            Link assets from the asset's profile.
+          </p>
         )}
       </div>
     );
@@ -9341,19 +9361,6 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
 
   return (
     <div className="space-y-3">
-      {showLinkButton && (
-        <div className="flex justify-end">
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            onClick={handleLinkAsset}
-            data-testid="button-link-asset"
-          >
-            <Plus className="h-3 w-3 mr-1" /> Link Asset
-          </Button>
-        </div>
-      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {items.map((item: any, i: number) => (
           <RelAssetCard
