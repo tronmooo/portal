@@ -214,6 +214,23 @@ export default function SettingsPage() {
   const [lastCsvImport, setLastCsvImport] = useState<string | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
+  // QA Bug 8: when arriving from avatar menu "Change Password" we get
+  // ?changePassword=1 — auto-expand the form and scroll to it. Also strip the
+  // query so a refresh doesn't re-expand on every load.
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const q = hash.includes("?") ? hash.split("?")[1] : "";
+    if (q && new URLSearchParams(q).get("changePassword") === "1") {
+      setShowPasswordForm(true);
+      const cleaned = hash.split("?")[0];
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+      // Scroll after the form mounts so the user lands on it instead of the page top.
+      requestAnimationFrame(() => {
+        const el = document.querySelector("[data-section='change-password']");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
+  }, []);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -436,7 +453,7 @@ export default function SettingsPage() {
                 </Badge>
               </div>
             ) : (
-            <div className="space-y-2">
+            <div className="space-y-2" data-section="change-password">
               <div>
                 <Label className="text-sm font-medium">Change Password</Label>
                 <p className="text-xs text-muted-foreground mt-0.5">Update your account password</p>

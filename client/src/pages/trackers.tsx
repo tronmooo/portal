@@ -3582,6 +3582,16 @@ export default function TrackersPage() {
   });
 
   const [createOpen, setCreateOpen] = useState(false);
+  // QA Bug 7: auto-open New Tracker dialog when arriving via command palette ?new=1
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const q = hash.includes("?") ? hash.split("?")[1] : "";
+    if (q && new URLSearchParams(q).get("new") === "1") {
+      setCreateOpen(true);
+      const cleaned = hash.split("?")[0];
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    }
+  }, []);
   // Profile creation dialog (used for Asset/Loan/Subscription tabs)
   const [createProfileOpen, setCreateProfileOpen] = useState(false);
   const [createProfileFilter, setCreateProfileFilter] = useState<string | string[] | undefined>(undefined);

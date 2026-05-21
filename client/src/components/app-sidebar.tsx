@@ -30,7 +30,15 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="px-4 py-4 border-b border-border/40">
-        <div className="flex items-center gap-2.5">
+        {/* QA Bug 5: the Portol logo / wordmark now navigates home so users can
+            click the brand to return to the chat page like every other app. */}
+        <button
+          type="button"
+          onClick={() => navigate("/")}
+          className="flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md hover:bg-accent/40 transition-colors text-left w-full"
+          aria-label="Go to home"
+          data-testid="sidebar-home-link"
+        >
           <img
             src="/portol-logo-clean.png"
             alt="Portol"
@@ -41,7 +49,7 @@ export function AppSidebar() {
             <span className="font-bold text-sm tracking-tight text-foreground">Portol</span>
             <p className="text-xs text-muted-foreground leading-none mt-0.5">Life OS</p>
           </div>
-        </div>
+        </button>
       </SidebarHeader>
 
       <SidebarContent className="flex flex-col justify-between py-2">

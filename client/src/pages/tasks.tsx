@@ -448,6 +448,19 @@ export default function TasksPage() {
   useEffect(() => { document.title = "Tasks — Portol"; }, []);
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
+  // QA Bug 7: when the command palette sends us here with ?new=1, auto-open
+  // the New Task dialog so the "New task" command actually creates instead of
+  // just navigating. The query lives in the hash (#/tasks?new=1).
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const q = hash.includes("?") ? hash.split("?")[1] : "";
+    if (q && new URLSearchParams(q).get("new") === "1") {
+      setCreateOpen(true);
+      // Strip the param so a refresh doesn't reopen the dialog.
+      const cleaned = hash.split("?")[0];
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    }
+  }, []);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);

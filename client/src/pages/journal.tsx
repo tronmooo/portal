@@ -166,6 +166,16 @@ export default function JournalPage() {
   useEffect(() => { document.title = "Journal — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
+  // QA Bug 7: open create form when arriving via command palette ?new=1
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const q = hash.includes("?") ? hash.split("?")[1] : "";
+    if (q && new URLSearchParams(q).get("new") === "1") {
+      setShowCreate(true);
+      const cleaned = hash.split("?")[0];
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    }
+  }, []);
   const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
   const [mood, setMood] = useState<MoodLevel | null>(null);
   const [energy, setEnergy] = useState(3);

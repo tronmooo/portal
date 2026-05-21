@@ -344,6 +344,16 @@ export default function HabitsPage() {
   useEffect(() => { document.title = "Habits — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
+  // QA Bug 7: auto-open create form when arriving via command palette ?new=1
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const q = hash.includes("?") ? hash.split("?")[1] : "";
+    if (q && new URLSearchParams(q).get("new") === "1") {
+      setShowCreate(true);
+      const cleaned = hash.split("?")[0];
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    }
+  }, []);
   const [newName, setNewName] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const [dupWarning, setDupWarning] = useState<string | null>(null);

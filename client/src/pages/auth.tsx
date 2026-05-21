@@ -175,9 +175,25 @@ export default function AuthPage() {
   const [forgotSent, setForgotSent] = useState(false);
   const loginRef = useRef<HTMLDivElement>(null);
 
+  // QA Bug 1: tracks whether the user has tried to submit so we can show
+  // inline 'required' errors on empty fields without nagging them before
+  // they've interacted with the form.
+  const [attemptedSignIn, setAttemptedSignIn] = useState(false);
+  const [attemptedSignUp, setAttemptedSignUp] = useState(false);
+  const signInEmailMissing = attemptedSignIn && !email.trim();
+  const signInPasswordMissing = attemptedSignIn && !password;
+  const signUpEmailMissing = attemptedSignUp && !email.trim();
+  const signUpPasswordMissing = attemptedSignUp && !password;
+  const signUpConfirmMissing = attemptedSignUp && !confirmPassword;
+
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
+    setAttemptedSignIn(true);
     setError("");
+    if (!email.trim() || !password) {
+      // Don't kick off the request — the inline 'required' UI handles feedback.
+      return;
+    }
     setLoading(true);
     try {
       const result = await signIn(email, password);
@@ -191,7 +207,11 @@ export default function AuthPage() {
 
   async function handleSignUp(e: React.FormEvent) {
     e.preventDefault();
+    setAttemptedSignUp(true);
     setError("");
+    if (!email.trim() || !password || !confirmPassword) {
+      return; // inline required UI takes over
+    }
     if (password !== confirmPassword) {
       setError("Passwords don't match");
       return;
@@ -268,15 +288,40 @@ export default function AuthPage() {
         <div ref={loginRef}>
           <Card className="border-border/50">
             <CardHeader className="pb-4">
-              <Tabs value={tab} onValueChange={(v) => { setTab(v as any); setError(""); }}>
+              <Tabs value={tab} onValueChange={(v) => {
+                // QA Bug 4: clear all form state when switching between Sign In
+                // and Create Account so a typed email/password doesn't bleed
+                // into the other tab's fields.
+                setTab(v as any);
+                setError("");
+                setEmail("");
+                setPassword("");
+                setConfirmPassword("");
+                setAttemptedSignIn(false);
+                setAttemptedSignUp(false);
+                setForgotMode(false);
+                setForgotSent(false);
+              }}>
                 <TabsList className="grid w-full grid-cols-2 bg-muted/60">
                   <TabsTrigger value="signin" data-testid="tab-signin" className="data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:font-semibold">Sign In</TabsTrigger>
                   <TabsTrigger value="signup" data-testid="tab-signup" className="data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:font-semibold">Create Account</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="signin" className="mt-4">
-                  <CardTitle className="text-lg">Welcome back</CardTitle>
-                  <CardDescription>Sign in to access your data</CardDescription>
+                  {/* QA Bug 3: in Forgot Password mode, swap the heading so we
+                      don't show both "Welcome back" and "Reset your password"
+                      at the same time. */}
+                  {forgotMode ? (
+                    <>
+                      <CardTitle className="text-lg">Reset your password</CardTitle>
+                      <CardDescription>We'll email you a secure link to reset it</CardDescription>
+                    </>
+                  ) : (
+                    <>
+                      <CardTitle className="text-lg">Welcome back</CardTitle>
+                      <CardDescription>Sign in to access your data</CardDescription>
+                    </>
+                  )}
                 </TabsContent>
                 <TabsContent value="signup" className="mt-4">
                   <CardTitle className="text-lg">Get started</CardTitle>
@@ -324,14 +369,26 @@ export default function AuthPage() {
               )}
 
               {tab === "signin" && !forgotMode ? (
-                <form onSubmit={handleSignIn} className="space-y-4">
+                <form onSubmit={handleSignIn} className="space-y-4" noValidate>
                   <div className="space-y-2">
                     <Label htmlFor="signin-email">Email</Label>
-                    <Input id="signin-email" type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required data-testid="input-signin-email" />
+                    <Input
+                      id="signin-email" type="email" placeholder="you@example.com"
+                      value={email} onChange={(e) => setEmail(e.target.value)}
+                      className={signInEmailMissing ? "border-destructive focus-visible:ring-destructive" : ""}
+                      aria-invalid={signInEmailMissing} data-testid="input-signin-email"
+                    />
+                    {signInEmailMissing && <p className="text-xs text-destructive">Email is required</p>}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="signin-password">Password</Label>
-                    <Input id="signin-password" type="password" placeholder="Enter your password" value={password} onChange={(e) => setPassword(e.target.value)} required data-testid="input-signin-password" />
+                    <Input
+                      id="signin-password" type="password" placeholder="Enter your password"
+                      value={password} onChange={(e) => setPassword(e.target.value)}
+                      className={signInPasswordMissing ? "border-destructive focus-visible:ring-destructive" : ""}
+                      aria-invalid={signInPasswordMissing} data-testid="input-signin-password"
+                    />
+                    {signInPasswordMissing && <p className="text-xs text-destructive">Password is required</p>}
                   </div>
                   <Button type="submit" className="w-full" disabled={loading} data-testid="button-signin">
                     {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
@@ -364,20 +421,38 @@ export default function AuthPage() {
                   </form>
                 )
               ) : (
-                <form onSubmit={handleSignUp} className="space-y-4">
+                <form onSubmit={handleSignUp} className="space-y-4" noValidate>
                   <div className="space-y-2">
                     <Label htmlFor="signup-email">Email</Label>
-                    <Input id="signup-email" type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required data-testid="input-signup-email" />
+                    <Input
+                      id="signup-email" type="email" placeholder="you@example.com"
+                      value={email} onChange={(e) => setEmail(e.target.value)}
+                      className={signUpEmailMissing ? "border-destructive focus-visible:ring-destructive" : ""}
+                      aria-invalid={signUpEmailMissing} data-testid="input-signup-email"
+                    />
+                    {signUpEmailMissing && <p className="text-xs text-destructive">Email is required</p>}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="signup-password">Password</Label>
-                    <Input id="signup-password" type="password" placeholder="At least 8 characters" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} data-testid="input-signup-password" />
+                    <Input
+                      id="signup-password" type="password" placeholder="At least 8 characters"
+                      value={password} onChange={(e) => setPassword(e.target.value)} minLength={8}
+                      className={signUpPasswordMissing ? "border-destructive focus-visible:ring-destructive" : ""}
+                      aria-invalid={signUpPasswordMissing} data-testid="input-signup-password"
+                    />
+                    {signUpPasswordMissing && <p className="text-xs text-destructive">Password is required</p>}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="signup-confirm">Confirm Password</Label>
-                    <Input id="signup-confirm" type="password" placeholder="Re-enter your password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required data-testid="input-signup-confirm" />
+                    <Input
+                      id="signup-confirm" type="password" placeholder="Re-enter your password"
+                      value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+                      className={signUpConfirmMissing ? "border-destructive focus-visible:ring-destructive" : ""}
+                      aria-invalid={signUpConfirmMissing} data-testid="input-signup-confirm"
+                    />
+                    {signUpConfirmMissing && <p className="text-xs text-destructive">Please confirm your password</p>}
                   </div>
-                  <Button type="submit" className="w-full" disabled={loading || !password || password !== confirmPassword} data-testid="button-signup">
+                  <Button type="submit" className="w-full" disabled={loading} data-testid="button-signup">
                     {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Create Account
                   </Button>

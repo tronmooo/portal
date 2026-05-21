@@ -315,24 +315,36 @@ export function CommandSearch() {
         value={query}
         onValueChange={handleQueryChange}
         data-testid="input-command-search"
+        onKeyDown={(e) => {
+          // QA Bug 10: when the search box is empty, single-letter shortcuts
+          // (D / C / T / P / F / K / H / J / L / A / O / S / I) should jump to
+          // the matching destination instead of being typed as a query.
+          if (query.length === 0 && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+            const key = e.key.toUpperCase();
+            const hit = QUICK_ACTIONS.find((a) => a.shortcut === key);
+            if (hit) {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSelect(hit.path);
+            }
+          }
+        }}
       />
       <CommandList className="max-h-[420px]">
-        {/* Loading indicator */}
-        <AnimatePresence>
-          {loading && (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="py-3 px-4 text-xs text-muted-foreground flex items-center gap-2"
-              data-testid="status-search-loading"
-            >
-              <span className="inline-block h-3 w-3 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-              Searching…
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* QA Bug 6: render the spinner only while loading AND we don't yet
+            have results. Previously the AnimatePresence exit animation kept
+            it visible alongside "No results found". Also dropped from
+            AnimatePresence wrapper so cmdk doesn't treat the motion.div as a
+            command item and suppress CommandEmpty. */}
+        {loading && !hasResults && (
+          <div
+            className="py-3 px-4 text-xs text-muted-foreground flex items-center gap-2"
+            data-testid="status-search-loading"
+          >
+            <span className="inline-block h-3 w-3 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+            Searching…
+          </div>
+        )}
 
         {/* Empty state — when query present, not loading, no results */}
         {!loading && query.trim() && !hasResults && (

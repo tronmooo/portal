@@ -152,7 +152,7 @@ function ProfileButton() {
         <DropdownMenuItem onClick={() => navigate("/settings")} data-testid="menu-settings">
           <Settings className="h-3.5 w-3.5 mr-2" /> Settings
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => navigate("/settings")} data-testid="menu-change-password">
+        <DropdownMenuItem onClick={() => navigate("/settings?changePassword=1")} data-testid="menu-change-password">
           <Lock className="h-3.5 w-3.5 mr-2" /> Change Password
         </DropdownMenuItem>
         <DropdownMenuSeparator />

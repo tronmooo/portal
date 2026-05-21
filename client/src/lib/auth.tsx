@@ -238,18 +238,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // QA Bug 2: never surface a raw HTTP status to the user. apiRequest throws
+  // "400: Authentication failed" — we strip the leading "NNN: " and map any
+  // remaining auth-failure messages to a friendly copy.
+  const humanizeAuthError = (raw: string | undefined, fallback: string): string => {
+    if (!raw) return fallback;
+    const stripped = raw.replace(/^\s*\d{3}\s*:\s*/, "").trim();
+    const lower = stripped.toLowerCase();
+    if (!stripped) return fallback;
+    if (lower.includes("authentication failed") || lower.includes("invalid login") || lower.includes("invalid credentials") || lower.includes("invalid email or password") || lower.includes("wrong password")) {
+      return "Invalid email or password. Please try again.";
+    }
+    if (lower.includes("email not confirmed")) return "Please confirm your email before signing in.";
+    if (lower.includes("user already registered") || lower.includes("already exists")) return "An account with this email already exists. Try signing in.";
+    if (lower.includes("rate limit") || lower.includes("too many")) return "Too many attempts. Please wait a moment and try again.";
+    return stripped;
+  };
+
   const signIn = useCallback(async (email: string, password: string) => {
     try {
       const res = await apiRequest("POST", "/api/auth/signin", { email, password });
       const data = await res.json();
-      if (data.error) return { error: data.error };
+      if (data.error) return { error: humanizeAuthError(data.error, "Sign in failed") };
 
       persistTokens(data.session);
       setUser(data.user);
       setSession(data.session);
       return {};
     } catch (err: any) {
-      return { error: err.message || "Sign in failed" };
+      return { error: humanizeAuthError(err?.message, "Sign in failed. Please try again.") };
     }
   }, []);
 
@@ -257,14 +274,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const res = await apiRequest("POST", "/api/auth/signup", { email, password });
       const data = await res.json();
-      if (data.error) return { error: data.error };
+      if (data.error) return { error: humanizeAuthError(data.error, "Sign up failed") };
 
       persistTokens(data.session);
       setUser(data.user);
       setSession(data.session);
       return {};
     } catch (err: any) {
-      return { error: err.message || "Sign up failed" };
+      return { error: humanizeAuthError(err?.message, "Sign up failed. Please try again.") };
     }
   }, []);
 

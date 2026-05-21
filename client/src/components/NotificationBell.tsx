@@ -193,6 +193,15 @@ export function NotificationBell() {
 
   const handleNotificationClick = useCallback(
     (notification: Notification) => {
+      // Mark as read (same persistence as the X button) so badge count decrements
+      // and the item disappears from the unread list after click.
+      setDismissedIds(prev => {
+        if (prev.has(notification.id)) return prev;
+        const next = new Set(Array.from(prev));
+        next.add(notification.id);
+        saveDismissedIds(Array.from(next));
+        return next;
+      });
       // Deep-link based on notification type/entity
       switch (notification.type) {
         case "task_overdue":
@@ -235,6 +244,7 @@ export function NotificationBell() {
     },
     [setLocation]
   );
+
 
   // Group by severity
   const criticalNotifs = visibleNotifications.filter(n => n.severity === "critical");

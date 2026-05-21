@@ -81,6 +81,16 @@ export default function FinancePage() {
   });
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
+  // QA Bug 7: open Add Expense dialog when arriving via command palette with ?new=expense
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const q = hash.includes("?") ? hash.split("?")[1] : "";
+    if (q && new URLSearchParams(q).get("new") === "expense") {
+      setAddOpen(true);
+      const cleaned = hash.split("?")[0];
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    }
+  }, []);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "" });
   const [expenseProfileId, setExpenseProfileId] = useState<string>("");
   const selfProfile = (profiles || []).find((p: any) => p.type === "self");
