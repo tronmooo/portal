@@ -18,3 +18,4 @@ public/assets/
 # api/index.js stub is committed; the real bundle is gitignored
 api/_bundle.mjs
 .vercel
+.vercel-tmp/
