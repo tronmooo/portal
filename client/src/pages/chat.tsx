@@ -2733,11 +2733,22 @@ export default function ChatPage() {
                                     // (strip keys that didn't exist before, restore those that did).
                                     const cur = await apiRequest("GET", `/api/profiles/${ps.profileId}`).then(r => r.json());
                                     const restoredFields: Record<string, any> = { ...(cur?.fields || {}) };
+                                    // P1 universal-delete: storage now MERGES the incoming `fields`
+                                    // onto the existing record (so a missing key is a no-op, not a
+                                    // delete). To actually remove keys during a revert we must
+                                    // pass them in `fieldsToDelete` instead of relying on shallow
+                                    // overwrite. Track keys to delete as we walk the previous state.
+                                    const fieldsToDelete: string[] = [];
                                     for (const [k, v] of Object.entries(ps.fields || {})) {
-                                      if (v === undefined) delete restoredFields[k];
-                                      else restoredFields[k] = v;
+                                      if (v === undefined) {
+                                        delete restoredFields[k];
+                                        fieldsToDelete.push(k);
+                                      } else {
+                                        restoredFields[k] = v;
+                                      }
                                     }
                                     const body: any = { fields: restoredFields };
+                                    if (fieldsToDelete.length > 0) body.fieldsToDelete = fieldsToDelete;
                                     if (ps.notes !== undefined) body.notes = ps.notes;
                                     if (ps.tags !== undefined) body.tags = ps.tags;
                                     if (ps.type !== undefined) body.type = ps.type;

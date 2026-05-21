@@ -2051,10 +2051,24 @@ If unsure, return "profile_fact".`,
   }));
   app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
     const uid_p2 = (req as AuthenticatedRequest).userId || "anon";
+    // Capture `fieldsToDelete` BEFORE Zod parse. It is not in insertProfileSchema
+    // (it is a write-only deletion hint, not a stored column) so the parser would
+    // strip it. We sanitize to a string[] and re-attach to req.body after parse.
+    // Without this, every profile-field delete from the UI silently no-ops.
+    const fieldsToDeleteRaw: any = (req.body && typeof req.body === "object") ? req.body.fieldsToDelete : undefined;
+    const fieldsToDelete: string[] | undefined = Array.isArray(fieldsToDeleteRaw)
+      ? fieldsToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
+      : undefined;
     {
       const parsed = insertProfileSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
+      if (fieldsToDelete && fieldsToDelete.length > 0) {
+        (req.body as any).fieldsToDelete = fieldsToDelete;
+      } else {
+        // Strip any non-array garbage that may have come in.
+        delete (req.body as any).fieldsToDelete;
+      }
     }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
@@ -2783,7 +2797,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     res.status(201).json(entry);
   }));
   app.patch("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
-    const { values, notes, mood, tags, timestamp } = req.body || {};
+    const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
     // Apply the same numeric validation we use on POST entries so edits can't
     // smuggle bad numbers around the original bounds.
     if (values && typeof values === 'object') {
@@ -2797,6 +2811,14 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     if (mood !== undefined) patch.mood = mood;
     if (tags !== undefined) patch.tags = tags;
     if (timestamp && typeof timestamp === 'string') patch.timestamp = timestamp;
+    // P1 universal-delete: clients can pass `valuesToDelete: [key, ...]` to
+    // remove specific keys from the entry.values JSONB. Shallow-PATCH'ing
+    // `{ values: rest }` no longer removes keys after the storage rewrite,
+    // so we surface the explicit deletion signal here instead.
+    if (Array.isArray(valuesToDelete)) {
+      const clean = valuesToDelete.filter((k: any) => typeof k === 'string' && k.length > 0);
+      if (clean.length > 0) patch.valuesToDelete = clean;
+    }
     const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, patch);
     if (!updated) return res.status(404).json({ error: "Entry not found" });
     const uid_tep = (req as AuthenticatedRequest).userId || "anon";
@@ -3966,10 +3988,23 @@ Rules:
     res.status(201).json(created);
   }));
   app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
+    // P1 universal-delete: capture `metadataToDelete` BEFORE Zod parse. It is
+    // not in insertArtifactSchema (write-only deletion hint, not a stored
+    // column) so the parser would strip it. Without this, every artifact
+    // metadata-field delete from the UI silently no-ops.
+    const metadataToDeleteRaw: any = (req.body && typeof req.body === "object") ? req.body.metadataToDelete : undefined;
+    const metadataToDelete: string[] | undefined = Array.isArray(metadataToDeleteRaw)
+      ? metadataToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
+      : undefined;
     {
       const parsed = insertArtifactSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
+      if (metadataToDelete && metadataToDelete.length > 0) {
+        (req.body as any).metadataToDelete = metadataToDelete;
+      } else {
+        delete (req.body as any).metadataToDelete;
+      }
     }
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Artifact title must be a non-empty string" });

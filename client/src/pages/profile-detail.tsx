@@ -1945,26 +1945,38 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
   }
 
   const deleteMut = useMutation({
+    // P1 universal-delete: send explicit `fieldsToDelete: [key]` instead of a
+    // shallow-PATCH `{ fields: rest }`. The storage layer's mergeAndApplyDeletes
+    // honors the deletion signal so the key is actually removed from the JSONB.
+    // Shallow PATCH no longer works because storage merges incoming fields onto
+    // the existing record (a missing key is a no-op, not a delete).
     mutationFn: async () => {
-      const { [fieldKey]: _, ...rest } = allFields;
-      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: rest });
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fieldsToDelete: [fieldKey] });
     },
     onMutate: async () => {
-      // Optimistic: immediately update cache to remove the field
+      // Optimistic: snapshot prev for rollback, then remove the field from cache.
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const prev = queryClient.getQueryData(["/api/profiles", profileId, "detail"]);
       queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.fields) return old;
         const { [fieldKey]: _, ...rest } = old.fields;
         return { ...old, fields: rest };
       });
+      return { prev };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Field removed" });
     },
-    onError: () => {
+    onError: (_err, _vars, ctx) => {
+      // Roll back optimistic cache to the pre-mutation snapshot — invalidating
+      // alone leaves the user staring at the field re-appearing several hundred
+      // ms later, which makes the UI feel broken.
+      const c = ctx as { prev?: unknown } | undefined;
+      if (c?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], c.prev);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       toast({ title: "Failed to delete", variant: "destructive" });
     },
@@ -2071,17 +2083,20 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
   const { toast } = useToast();
 
   // Delete this field
+  // P1 universal-delete: send explicit `fieldsToDelete: [key]` instead of
+  // shallow-PATCH `{ fields: rest }`. Storage now treats missing keys as
+  // no-op (merge) so the only reliable way to remove a key is to send the
+  // explicit deletion signal. Also snapshot prev for rollback on error.
   const deleteField = async () => {
-    // Optimistically remove field from cache
+    await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+    const prev = queryClient.getQueryData(["/api/profiles", profileId, "detail"]);
     queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
       if (!old?.fields) return old;
       const { [fieldKey]: _, ...rest } = old.fields;
       return { ...old, fields: rest };
     });
     try {
-      const rest = { ...(allFields || {}) };
-      delete rest[fieldKey];
-      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: rest });
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fieldsToDelete: [fieldKey] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
@@ -2089,6 +2104,9 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
       onSaved();
       toast({ title: `"${label}" removed` });
     } catch {
+      // Roll back cache to pre-mutation snapshot so the field doesn't briefly
+      // disappear and re-appear after invalidation refetch — feels broken.
+      if (prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], prev);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       toast({ title: "Failed to delete", variant: "destructive" });
     }

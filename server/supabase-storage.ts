@@ -34,6 +34,44 @@ import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } fro
 const DOCUMENTS_BUCKET = "documents";
 
 /**
+ * Merge an incoming JSONB-style patch into an existing object AND honor deletion
+ * intents. Without explicit deletion support, shallow-merge (`{ ...existing,
+ * ...incoming }`) can only OVERWRITE keys — it can never REMOVE them. That made
+ * every JSONB-bearing column (`profiles.fields`, `tracker_entries.values`,
+ * `artifacts.metadata`) append-only and produced the long-standing user
+ * complaint: "I deleted birthday on Bob, came back after refresh, still there."
+ *
+ * Deletion intents come from three signals (all opt-in, all backward-compatible):
+ *  - `keysToDelete: ["birthday"]`        — explicit allow-list of keys to drop.
+ *  - `incoming[key] === null`            — sentinel: "clear this key."
+ *  - `incoming[key] === undefined`       — same as null (defensive).
+ *
+ * The function returns a fresh object so callers don't mutate `existing`.
+ */
+export function mergeAndApplyDeletes<T extends Record<string, any>>(
+  existing: T | null | undefined,
+  incoming: Partial<T> | null | undefined,
+  keysToDelete?: string[] | null
+): T {
+  const base: any = { ...(existing || {}) };
+  if (incoming && typeof incoming === "object") {
+    for (const [k, v] of Object.entries(incoming)) {
+      if (v === null || v === undefined) {
+        delete base[k];
+      } else {
+        base[k] = v;
+      }
+    }
+  }
+  if (Array.isArray(keysToDelete)) {
+    for (const k of keysToDelete) {
+      if (typeof k === "string") delete base[k];
+    }
+  }
+  return base as T;
+}
+
+/**
  * Parse a money-ish value into a number. Handles strings like "$25,000", "40k", "1.2m".
  * Number("$25,000") returns NaN — this is the root cause of asset values showing $0.
  */
@@ -858,11 +896,22 @@ export class SupabaseStorage implements IStorage {
     }
   }
 
-  async updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined> {
+  async updateProfile(
+    id: string,
+    data: Partial<Profile> & { fieldsToDelete?: string[] }
+  ): Promise<Profile | undefined> {
     const existing = await this.getProfile(id);
     if (!existing) return undefined;
-    // IMPORTANT: Deep merge fields to prevent losing existing fields when updating one field
-    const mergedFields = data.fields ? { ...existing.fields, ...data.fields } : existing.fields;
+    // Merge `fields` JSONB AND honor deletion intents. The old `{ ...existing,
+    // ...data }` spread could only OVERWRITE keys — it could never DROP them,
+    // making profile-field delete (e.g., birthday) silently no-op on the server.
+    // mergeAndApplyDeletes accepts both `fieldsToDelete: ["key"]` and `null`
+    // sentinel values inside `data.fields`. See top of file for the helper.
+    const mergedFields = mergeAndApplyDeletes(
+      existing.fields || {},
+      data.fields,
+      data.fieldsToDelete
+    );
     const merged = { ...existing, ...data, fields: mergedFields };
     const now = new Date().toISOString();
     const updateData: any = {
@@ -1498,12 +1547,31 @@ export class SupabaseStorage implements IStorage {
     return { id, values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: ts };
   }
 
-  async updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<any> {
+  async updateTrackerEntry(
+    trackerId: string,
+    entryId: string,
+    patch: {
+      values?: Record<string, any>;
+      valuesToDelete?: string[];
+      notes?: string;
+      mood?: any;
+      tags?: string[];
+      timestamp?: string;
+    }
+  ): Promise<any> {
     // Fetch existing row so we can merge values + recompute computed fields.
     const { data: existing, error: fetchErr } = await this.supabase.from("tracker_entries")
       .select("*").eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId).maybeSingle();
     if (fetchErr || !existing) return undefined;
-    const mergedValues = patch.values ? { ...(existing.values || {}), ...patch.values } : (existing.values || {});
+    // Merge values JSONB AND honor deletion intents — same reason as updateProfile.
+    // Without this, secondary metrics logged in error could never be cleared from
+    // a tracker entry (e.g. accidentally logged `diastolic` on a single-value
+    // weight tracker).
+    const mergedValues = mergeAndApplyDeletes(
+      existing.values || {},
+      patch.values,
+      patch.valuesToDelete
+    );
     const update: any = { values: mergedValues };
     if (patch.notes !== undefined) update.notes = patch.notes;
     if (patch.mood !== undefined) update.mood = patch.mood;
@@ -2921,25 +2989,44 @@ export class SupabaseStorage implements IStorage {
     return this.getArtifact(id);
   }
 
-  async updateArtifact(id: string, data: Partial<Artifact>): Promise<Artifact | undefined> {
+  async updateArtifact(
+    id: string,
+    data: Partial<Artifact> & { metadataToDelete?: string[] }
+  ): Promise<Artifact | undefined> {
     const existing = await this.getArtifact(id);
     if (!existing) return undefined;
     const merged = { ...existing, ...data };
     const now = new Date().toISOString();
-    // Build metadata from merged fields — keep all non-column attributes here.
-    const metadata: Record<string, any> = {};
-    if (merged.language) metadata.language = merged.language;
-    if (merged.dataBindings) metadata.dataBindings = merged.dataBindings;
-    if (merged.chartData) metadata.chartData = merged.chartData;
-    if ((merged as any).chartType) metadata.chartType = (merged as any).chartType;
-    if (merged.sheetData) metadata.sheetData = merged.sheetData;
-    if (merged.source) metadata.source = merged.source;
-    if (merged.shareToken) metadata.shareToken = merged.shareToken;
+
+    // Read the RAW metadata blob from the DB so unknown / future keys survive.
+    // The previous implementation rebuilt metadata from scratch using truthiness
+    // guards, which (a) made it impossible to clear a key by setting it to ""
+    // or null, and (b) permanently lost any metadata key not in its hard-coded
+    // whitelist on the first PATCH.
+    const { data: rawRow } = await this.supabase.from("artifacts")
+      .select("metadata").eq("id", id).eq("user_id", this.userId).maybeSingle();
+    const existingMeta: Record<string, any> = (rawRow?.metadata && typeof rawRow.metadata === "object") ? rawRow.metadata : {};
+
+    // Build the incoming metadata delta from the fields that are explicitly
+    // present on `data`. "present" means the caller passed the key — use `in`
+    // semantics, NOT truthiness, so callers can pass `language: ""` to clear.
+    const incomingMeta: Record<string, any> = {};
+    const metaKeys = ["language", "dataBindings", "chartData", "chartType", "sheetData", "source", "shareToken"] as const;
+    for (const k of metaKeys) {
+      if (k in (data as any)) {
+        const v = (data as any)[k];
+        // "" / null → deletion intent (handled by mergeAndApplyDeletes).
+        incomingMeta[k] = v === "" ? null : v;
+      }
+    }
+
+    const metadata = mergeAndApplyDeletes(existingMeta, incomingMeta, data.metadataToDelete);
+
     const { error } = await this.supabase.from("artifacts").update({
       type: merged.type, title: merged.title, content: merged.content,
       items: merged.items, tags: merged.tags, linked_profiles: merged.linkedProfiles,
       pinned: merged.pinned,
-      metadata: Object.keys(metadata).length > 0 ? metadata : {},
+      metadata,
       updated_at: now,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
