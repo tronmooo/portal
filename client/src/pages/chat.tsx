@@ -2436,8 +2436,28 @@ export default function ChatPage() {
               <button onClick={() => { setSearchOpen(false); setSearchQuery(''); }} className="text-muted-foreground hover:text-foreground text-xs">Done</button>
             </div>
           )}
+          {(() => {
+            const trimmedQuery = searchQuery.trim();
+            const filteredMessages = messages.filter(msg => !trimmedQuery || msg.content.toLowerCase().includes(trimmedQuery.toLowerCase()));
+            if (searchOpen && trimmedQuery && filteredMessages.length === 0) {
+              return (
+                <div className="flex flex-col items-center justify-center py-12 text-center text-sm text-muted-foreground gap-2" data-testid="chat-search-empty">
+                  <Search className="h-5 w-5 opacity-60" />
+                  <div>No messages match “<span className="font-medium text-foreground">{trimmedQuery}</span>”.</div>
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="mt-1 text-xs px-2.5 py-1 rounded-md border border-border/50 hover:bg-muted/60 text-foreground"
+                    data-testid="button-chat-search-clear"
+                  >
+                    Clear search
+                  </button>
+                </div>
+              );
+            }
+            return null;
+          })()}
           {messages
-            .filter(msg => !searchQuery || msg.content.toLowerCase().includes(searchQuery.toLowerCase()))
+            .filter(msg => !searchQuery.trim() || msg.content.toLowerCase().includes(searchQuery.trim().toLowerCase()))
             .map((msg) => (
             <div
               key={msg.id}
@@ -2856,8 +2876,10 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Suggestions (show only when few messages) */}
-      {messages.length <= 1 && !hasAttachments && (
+      {/* Suggestions — show on first load, and recall any time the input is empty
+          (mid-session) so users can grab a starter prompt again. Hidden while
+          composing or when an attachment is staged. */}
+      {!hasAttachments && (messages.length <= 1 || input.trim().length === 0) && (
         <div className="px-3 pb-2">
           <div className="max-w-2xl mx-auto flex flex-wrap gap-1.5">
             {SUGGESTIONS.slice(0, 6).map((s) => (
@@ -3009,19 +3031,32 @@ export default function ChatPage() {
                   </button>
                   <button
                     onClick={() => speech.listening ? speech.stop() : speech.start()}
-                    title={!speech.supported ? 'Voice input not supported in this browser. Use Chrome or Safari.' : speech.listening ? 'Stop' : 'Voice input'}
+                    title={!speech.supported ? 'Voice input not supported in this browser. Use Chrome or Safari.' : speech.listening ? 'Recording… click to stop' : 'Voice input'}
+                    aria-label={speech.listening ? 'Stop recording' : 'Start voice input'}
                     data-testid="button-voice-input"
-                    className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
+                    className={`h-8 rounded-lg flex items-center justify-center transition-colors ${
                       speech.listening
-                        ? 'text-red-500 bg-red-500/10'
-                        : !speech.supported
+                        ? 'px-2 gap-1 text-red-500 bg-red-500/10 ring-1 ring-red-500/40'
+                        : 'w-8 ' + (!speech.supported
                           ? 'text-muted-foreground/40 cursor-not-allowed'
-                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/60')
                     }`}
                   >
-                    {speech.listening
-                      ? <span className="w-3.5 h-3.5 rounded-sm bg-red-500 animate-pulse" />
-                      : <Mic className="h-4 w-4" />}
+                    {speech.listening ? (
+                      <>
+                        {/* Animated waveform bars to show the mic is live */}
+                        <span className="flex items-end gap-0.5" aria-hidden="true">
+                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-1" style={{ height: 6 }} />
+                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-2" style={{ height: 10 }} />
+                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-3" style={{ height: 14 }} />
+                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-2" style={{ height: 10 }} />
+                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-1" style={{ height: 6 }} />
+                        </span>
+                        <span className="text-[10px] font-medium uppercase tracking-wide">Rec</span>
+                      </>
+                    ) : (
+                      <Mic className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
                 <div className="flex items-center gap-1.5">

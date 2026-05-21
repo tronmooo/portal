@@ -2796,6 +2796,7 @@ BEHAVIOR:
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
 - TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
+- EVENT CREATION HONESTY (Round-5): For create_event specifically, NEVER say "Scheduled", "Added to calendar", or "Done" unless the tool returned an object with a valid `id` AND a valid `date`. If validateToolInput rejects the date (e.g. you sent a non-YYYY-MM-DD value, or omitted the date entirely), the result will contain `{error: ...}` — you MUST report this exactly: say "I couldn't create that event because I didn't have a valid date for it. What date should I use?" Do not pretend it worked. When the user says "next Monday" / "this Friday" / "tomorrow", you MUST compute the explicit YYYY-MM-DD date (using TODAY shown in the system context) and pass it to create_event. If you cannot resolve the date, ASK — do not call create_event with an invalid date and then claim success.
 - ABSOLUTE ZERO FABRICATION: NEVER invent, guess, or fabricate data. This is the #1 rule.
   * If the user asks for a VIN, license plate, account number, or ANY stored value and it's NOT in the data snapshot above, say: "I don't have that saved yet. Would you like to add it?"
   * NEVER generate fake numbers, dates, names, addresses, or identifiers.
@@ -2803,6 +2804,7 @@ BEHAVIOR:
   * NEVER claim a tool succeeded unless you actually called it AND the result confirmed success.
   * If a profile field is empty/null/missing, say it's not stored — do NOT fill it with a made-up value.
   * When updating a profile, ONLY use values the user explicitly provided or that exist in the data snapshot. NEVER auto-generate values like VIN numbers, serial numbers, policy numbers, etc.
+  * PROFILE CREATION FIELDS — ZERO TOLERANCE: When you call create_profile, the ONLY fields you may populate are ones the user literally stated in this message (or a clearly resolvable derived value like species from "cat"/"dog"). NEVER invent breed, color, weight, height, birthday/DOB, age, microchip, license plate, VIN, mileage, make, model, year, sqft, bedrooms, address, phone, email, plan, cost, renewalDate, purchasePrice, serialNumber, or any other entity-specific field. If the user just says "Add my cat Luna", call create_profile(type:"pet", name:"Luna", fields:{ species:"cat" }) — and NOTHING ELSE in `fields`. In your reply, you MAY (optionally) ask the user if they want to add details like breed/DOB/weight, but do NOT pre-fill them with guesses. Same rule applies to vehicles (no fake VIN/mileage), properties (no fake sqft/address), people (no fake birthday/phone), subscriptions (no fake cost/renewalDate). When in doubt: omit the field.
 - LIVE DATABASE CONTEXT: The data snapshot above (Profiles, Trackers, Tasks, etc.) is fetched FRESH from the database at the start of every message. It reflects ALL manual edits, deletions, and UI changes. Trust THIS data over conversation history. If the data snapshot doesn't list something, it does NOT exist — even if conversation history says you created it. Conversation history can be stale; the data snapshot is always current.
 - ANSWERING DATA QUESTIONS: When the user asks about their data ("what's my expiration date?", "how much is my car worth?", "what's Joe's birthday?", "how much do I spend on subscriptions?"), ALWAYS look up the answer from the data snapshot above. Documents include extracted fields in curly braces {field: value}. Profiles include fields like height, weight, birthday. Assets include currentValue, make, model, year. Subscriptions include cost, frequency. Trackers include latest values. NEVER guess or approximate — cite the exact data you see. If the data seems wrong, tell the user what you found and suggest they update it.
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
@@ -3669,6 +3671,55 @@ async function executeTool(name: string, input: any, userId?: string): Promise<a
       return storage.recallMemory(input.query);
 
     case "create_profile": {
+      // Guard: if the AI tried to populate sensitive personal fields without
+      // the user supplying them in this request, strip them. The user message
+      // is appended as `input.__userMessage` when available (see ai-engine
+      // tool-call dispatcher). When unavailable we fall back to a lenient
+      // check against `input.notes` only.
+      const userMsgRaw = String((input as any).__userMessage || "");
+      const userNotesRaw = String(input.notes || "");
+      const corpus = `${userMsgRaw}\n${userNotesRaw}`.toLowerCase();
+      // Fields that must NEVER be auto-filled unless the user clearly stated them.
+      const guardedFields: Array<{ key: string; evidence: RegExp }> = [
+        { key: "breed",        evidence: /\bbreed|tabby|labrador|shepherd|poodle|bulldog|terrier|beagle|husky|pug|maine\s*coon|siamese|persian/i },
+        { key: "weight",       evidence: /\b\d+(\.\d+)?\s*(lb|lbs|pound|kg|kilos?)\b/i },
+        { key: "birthday",     evidence: /\b(birthday|born|dob|date\s*of\s*birth|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(\/\d{2,4})?)\b/i },
+        { key: "dob",          evidence: /\b(birthday|born|dob|date\s*of\s*birth|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(\/\d{2,4})?)\b/i },
+        { key: "color",        evidence: /\b(black|white|brown|gold|golden|silver|gray|grey|red|orange|tan|cream|tabby|calico|blue|green)\b/i },
+        { key: "vin",          evidence: /\bvin\b|[A-HJ-NPR-Z0-9]{17}/i },
+        { key: "mileage",      evidence: /\b\d{1,3}(,\d{3})*\s*(mi|miles|km)\b/i },
+        { key: "make",         evidence: /./ },
+        { key: "model",        evidence: /./ },
+        { key: "year",         evidence: /\b(19|20)\d{2}\b/ },
+        { key: "address",      evidence: /\d+\s+\w|\bstreet|\bave|\broad|\bblvd|\blane|\bcity|\bstate|\bzip\b/i },
+        { key: "sqft",         evidence: /\b\d+\s*(sqft|sq\s*ft|square\s*feet)\b/i },
+        { key: "bedrooms",     evidence: /\b\d+\s*(bed|bedroom|br)\b/i },
+        { key: "phone",        evidence: /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\bphone|\btel\b/i },
+        { key: "email",        evidence: /@/ },
+        { key: "cost",         evidence: /\$\d|\bdollar|\bper\s*(month|year)\b/i },
+        { key: "renewalDate",  evidence: /\brenew|\bevery\s*(month|year)|\bon\s*the\s*\d/i },
+        { key: "purchasePrice",evidence: /\$\d|\bbought\b|\bpurchas/i },
+        { key: "serialNumber", evidence: /\bserial|\bs\/?n\b/i },
+      ];
+      if (input.fields && typeof input.fields === "object") {
+        const stripped: string[] = [];
+        for (const { key, evidence } of guardedFields) {
+          if (input.fields[key] !== undefined && input.fields[key] !== null && input.fields[key] !== "") {
+            // Allow if user mentioned the actual value verbatim, OR the field
+            // class is hinted at in the corpus. Otherwise drop the value.
+            const literalValue = String(input.fields[key]).toLowerCase();
+            const userMentionedValue = literalValue.length >= 2 && corpus.includes(literalValue);
+            const userMentionedField = evidence.test(corpus);
+            if (!userMentionedValue && !userMentionedField) {
+              stripped.push(`${key}=${input.fields[key]}`);
+              delete input.fields[key];
+            }
+          }
+        }
+        if (stripped.length > 0) {
+          logger.info("ai", `create_profile guard: stripped fabricated fields for "${input.name}": ${stripped.join(", ")}`);
+        }
+      }
       // DEDUP: Check if profile with same name already exists
       const existingProfiles = await storage.getProfiles();
       const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
@@ -3936,15 +3987,26 @@ async function executeTool(name: string, input: any, userId?: string): Promise<a
       const incomingNorm = normalizeTitle(input.title || "");
       const incomingTokens = tokenSet(input.title || "");
       const existingTasks = await storage.getTasks();
+      // Round-5 dedup hardening: also catch same-title duplicate when due dates
+      // overlap (or one side is missing) and treat "no profile" as wildcard.
       const dupTask = existingTasks.find(t => {
         if (t.status === "done") return false;
-        const profileOk = taskLinkedProfiles.length === 0 || t.linkedProfiles.some(p => taskLinkedProfiles.includes(p));
+        // Profile match: if neither side specifies a profile, consider matched.
+        // If only the incoming task has no profile, treat as wildcard.
+        const profileOk =
+          taskLinkedProfiles.length === 0 ||
+          (t.linkedProfiles?.length || 0) === 0 ||
+          t.linkedProfiles.some(p => taskLinkedProfiles.includes(p));
         if (!profileOk) return false;
         const tNorm = normalizeTitle(t.title);
-        if (tNorm === incomingNorm) return true;
-        // Fuzzy fallback for near-duplicates
-        if (incomingTokens.size >= 2 && jaccard(tokenSet(t.title), incomingTokens) >= 0.85) return true;
-        return false;
+        const sameTitle = tNorm === incomingNorm ||
+          (incomingTokens.size >= 2 && jaccard(tokenSet(t.title), incomingTokens) >= 0.8);
+        if (!sameTitle) return false;
+        // If the incoming task has a due date, only dedup against tasks with
+        // matching or missing due dates (so back-to-back duplicates collapse,
+        // but legitimately re-scheduled tasks stay separate).
+        if (input.dueDate && t.dueDate && input.dueDate !== t.dueDate) return false;
+        return true;
       });
       if (dupTask) return dupTask; // Return existing instead of creating duplicate
 
@@ -8023,7 +8085,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
           }
           // A2 fix: thread userId so dedup map is scoped per-user.
-          const result = await executeTool(toolUse.name, validation.normalized, userId);
+          // Round-5 fabrication guard: thread the original user message so
+          // create_profile (and any other guarded tool) can compare requested
+          // fields against what the user actually said.
+          const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+          const result = await executeTool(toolUse.name, inputWithCtx, userId);
           
           // Invalidate context cache after any write operation
           const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];

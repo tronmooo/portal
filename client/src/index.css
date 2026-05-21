@@ -656,3 +656,12 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
   * { box-shadow: none !important; }
   @page { margin: 0.6in; }
 }
+
+/* ── Voice input waveform bars (chat) ───────────────────────────────────── */
+@keyframes portol-voice-bar {
+  0%,   100% { transform: scaleY(0.4); }
+  50%        { transform: scaleY(1);   }
+}
+.animate-voice-bar-1 { animation: portol-voice-bar 0.9s ease-in-out infinite;   transform-origin: center; }
+.animate-voice-bar-2 { animation: portol-voice-bar 0.9s ease-in-out 0.15s infinite; transform-origin: center; }
+.animate-voice-bar-3 { animation: portol-voice-bar 0.9s ease-in-out 0.3s  infinite; transform-origin: center; }
