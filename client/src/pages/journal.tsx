@@ -3,6 +3,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
+import { passesProfileFilter } from "@shared/profile-filter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -206,12 +207,16 @@ export default function JournalPage() {
   });
 
   // Client-side profile filter (journal entries have linkedProfiles)
-  // Entries with empty linkedProfiles show for ALL profiles (backward compat)
+  // Uses unified passesProfileFilter: orphan entries (empty linkedProfiles)
+  // only show when the active selection includes a self profile — otherwise
+  // they leak into brand-new profiles (e.g. EMPTYPROBE_QA showed a phantom "1" badge).
   const entries = filterMode === "selected" && filterIds.length > 0
-    ? allEntries.filter(e => {
-        const lp = (e as any).linkedProfiles || [];
-        return lp.length === 0 || lp.some((id: string) => filterIds.includes(id));
-      })
+    ? allEntries.filter(e =>
+        passesProfileFilter((e as any).linkedProfiles, {
+          selectedIds: filterIds,
+          allProfiles: profiles.map(p => ({ id: p.id, type: p.type })),
+        })
+      )
     : allEntries;
 
   const resetForm = () => {

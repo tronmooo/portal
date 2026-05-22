@@ -3632,6 +3632,12 @@ export class SupabaseStorage implements IStorage {
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
+    // Phase-fix: journal entries were the one entity not run through the
+    // unified filter, so brand-new profiles (e.g. EMPTYPROBE_QA) saw the
+    // global journalStreak/currentMood and a phantom "1 entry" badge on
+    // the journal page. Apply the same passesProfileFilter rule so journal
+    // stats are scoped to the active profile selection.
+    const filteredJournal = journalEntries.filter((j: any) => matchesProfile(j.linkedProfiles || []));
     const now = new Date();
     // CRITICAL: month boundaries must be evaluated in the user's timezone, not
     // server UTC. The server runs in UTC on Vercel, so a user adding an expense
@@ -3722,14 +3728,14 @@ export class SupabaseStorage implements IStorage {
     // anchored at T12:00:00 UTC so day arithmetic never drifts.
     let journalStreak = 0;
     const todayUserStr = getUserToday(this._timezone);
-    const journalDays = new Set(journalEntries.map(j => j.date));
+    const journalDays = new Set(filteredJournal.map(j => j.date));
     let jCursor = todayUserStr;
     for (let i = 0; i < 30; i++) {
       if (journalDays.has(jCursor)) journalStreak++; else if (i > 0) break;
       jCursor = tzAddDays(jCursor, -1);
     }
 
-    const recentJournal = [...journalEntries].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const recentJournal = [...filteredJournal].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
     const [profileList, allEvents, artifacts, memories] = await Promise.all([
