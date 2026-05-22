@@ -8000,51 +8000,28 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   const safeContext = sanitize(context).replace(/```/g, "'''");
   const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
 
-  // ─── Smart model routing: Haiku by default, auto-escalate to Sonnet for complex queries ───
-  // Rules:
-  //   • If user has set an explicit preference, honor it (user is boss).
-  //   • Else: default to Haiku 4.5 (fast/cheap).
-  //   • Escalate to Sonnet 4.5 when complexity signals are detected (long input,
-  //     multi-step intent verbs, analytical/planning/comparison queries, large
-  //     conversation history, or attached documents/images via referenced uploads).
-  //   • At loop-time, if Haiku produces 4+ tool calls on the first turn, the next
-  //     iteration is upgraded to Sonnet (handled below in the loop).
-  const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+  // ─── Model selection: Sonnet 4.5 ALWAYS ───
+  // (2026-05-21) Haiku was dropping action-heavy multi-step prompts silently —
+  // emitting a chatty "✅ Logged everything!" text reply with zero tool_use
+  // blocks, so nothing hit the database. User demanded 100% reliability.
+  // Single model, single path. No classifier, no escalation, no surprises.
+  // Env-var ANTHROPIC_MODEL still wins (for emergency override).
+  // User preference still wins (in case they explicitly pick a model in settings).
   const SONNET_MODEL = "claude-sonnet-4-5-20250929";
   let preferredModel: string | null = null;
   try {
     preferredModel = await storage.getPreference("ai_chat_model");
   } catch { /* ignore — use default */ }
 
-  function classifyComplexity(text: string, history: typeof conversationHistory): "simple" | "complex" {
-    /* SPEED FIX (2026-05-10): Haiku is dramatically faster than Sonnet and
-       handles ~95% of chat queries correctly. The old heuristic was over-
-       routing to Sonnet (any " and " before an action verb, any question mark,
-       any analytic word, any uploaded doc). That made the chat feel slow.
-
-       New rule: stay on Haiku unless the prompt is genuinely large or the
-       conversation is deep. Loop-time escalation below (4+ tool calls on the
-       first turn or 8+ tool calls total) still catches truly complex queries
-       so we don't regress on those. */
-    const t = (text || "").trim();
-    if (t.length > 600) return "complex";
-    if (t.split(/\s+/).length > 110) return "complex";
-    if (history && history.length >= 10) return "complex";
-    return "simple";
-  }
-
   let chatModel: string;
   if (preferredModel) {
     chatModel = preferredModel;
   } else if (process.env.ANTHROPIC_MODEL) {
-    // Env override takes precedence over auto-routing (deployment-level pin)
     chatModel = process.env.ANTHROPIC_MODEL;
   } else {
-    const complexity = classifyComplexity(userMessage, conversationHistory);
-    chatModel = complexity === "complex" ? SONNET_MODEL : HAIKU_MODEL;
+    chatModel = SONNET_MODEL;
   }
   const initialModel = chatModel;
-  const allowAutoEscalate = !preferredModel && !process.env.ANTHROPIC_MODEL;
 
   try {
     // Build the tool_use conversation loop — prepend up to 5 history pairs for multi-step context
@@ -8114,25 +8091,21 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use"
       );
 
-      // ─── Loop-time escalation: Haiku → Sonnet on first turn if it spawned many tools ───
-      // Sign of an actually-complex multi-step query that the heuristic missed.
-      if (
-        allowAutoEscalate &&
-        chatModel === HAIKU_MODEL &&
-        iterations === 1 &&
-        toolUses.length >= 4
-      ) {
-        chatModel = SONNET_MODEL;
-      }
-      // Also escalate if Haiku has been stuck in a long tool-loop (likely flailing)
-      if (
-        allowAutoEscalate &&
-        chatModel === HAIKU_MODEL &&
-        iterations >= 4 &&
-        totalToolCalls >= 8
-      ) {
-        chatModel = SONNET_MODEL;
-      }
+      // Structured trace log — surfaces in Vercel logs so we can SEE what
+      // Claude did on every chat turn. Critical for diagnosing "processing
+      // but nothing in the UI" complaints.
+      try {
+        console.log("[chat-trace] " + JSON.stringify({
+          model: chatModel,
+          iter: iterations,
+          tools: toolUses.length,
+          tool_names: toolUses.map(t => t.name),
+          stop_reason: response.stop_reason,
+          total_tool_calls: totalToolCalls,
+          user_id: userId,
+          msg_preview: (userMessage || "").slice(0, 80),
+        }));
+      } catch { /* never let logging break the loop */ }
 
       // If no tool calls or stop_reason is end_turn with no pending tools, we're done
       if (toolUses.length === 0 || response.stop_reason === "end_turn") {
