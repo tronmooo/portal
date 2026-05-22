@@ -281,6 +281,13 @@ const CANONICAL_GROUP_MAP: Record<string, string> = {
   social:       "Lifestyle",
   screen:       "Lifestyle",
   reading:      "Lifestyle",
+  // Gaming/entertainment exact-match (added 2026-05-21 — see PR for Gaming
+  // tracker mis-bucketing bug).
+  gaming:       "Lifestyle",
+  game:         "Lifestyle",
+  entertainment:"Lifestyle",
+  leisure:      "Lifestyle",
+  hobby:        "Lifestyle",
   // Other
   custom:       "Other",
   general:      "Other",
@@ -325,6 +332,11 @@ function getCanonicalGroup(category: string): string {
   if (mentalKw.some(k => c.includes(k))) return "Mental & Wellness";
   const habitKw = ["habit", "routine", "daily"];
   if (habitKw.some(k => c.includes(k))) return "Habits & Routines";
+  // Lifestyle keyword fallback — gaming/leisure/entertainment trackers
+  // were silently bucketed into "Other" before this branch was added
+  // (reported 2026-05-21: AI logged a Gaming tracker the user couldn’t find).
+  const lifestyleKw = ["gaming","game","console","playstation","xbox","nintendo","steam","leisure","entertainment","hobby","screen","reading","book","social","tv","movie","streaming","netflix","pet ","plant"];
+  if (lifestyleKw.some(k => c.includes(k))) return "Lifestyle";
   return "Other";
 }
 

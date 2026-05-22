@@ -4184,6 +4184,11 @@ async function executeTool(name: string, input: any, userId?: string): Promise<a
       else if (["spending","expense","budget","saving","invest","portfolio","net worth","income","salary","revenue","profit","debt","loan","mortgage","credit","crypto","stock","dividend","rent","bill","subscription","dollar","cash"].some(k => nameLC.includes(k))) autoCategory = "finance";
       else if (["habit","routine","streak","daily","checkin","check-in","morning","evening","meditation","gratitude","journaling","reading","journaling","screen time","phone usage","bedtime"].some(k => nameLC.includes(k))) autoCategory = "habit";
       else if (["productivity","focus","work","study","learn","task","project","meeting","call","email","pomodoro","deep work","code","write","create"].some(k => nameLC.includes(k))) autoCategory = "productivity";
+      // Lifestyle catches leisure/entertainment activity that isn't fitness:
+      // gaming, video games, screen time, reading, social. Without this branch
+      // “video games” falls into "custom" → "Other" bucket and users can’t find
+      // their tracker (reported 2026-05-21).
+      else if (["gaming","game","video game","videogame","console","playstation","xbox","nintendo","steam","pc gaming","leisure","entertainment","hobby","reading","book","social","screen time","tv","movie","streaming","netflix"].some(k => nameLC.includes(k))) autoCategory = "lifestyle";
 
       // Resolve display name — handle DB unique constraint (user_id, name)
       let trackerDisplayName = input.trackerName || "Custom";
