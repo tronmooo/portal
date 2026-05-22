@@ -3556,7 +3556,11 @@ function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: 
 }
 
 
-async function executeTool(name: string, input: any, userId?: string): Promise<any> {
+// Exported for QA tests — lets a script invoke any AI tool handler
+// directly without round-tripping through the LLM. Production code
+// reaches this via processMessage(). Do not call this from product
+// code paths.
+export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
   // A2 fix: userId scopes the in-memory dedup map; without this two users
   // sending the same command within 30s would collide.
   const dedupUser = userId || "_global";
@@ -4174,21 +4178,47 @@ async function executeTool(name: string, input: any, userId?: string): Promise<a
         }
         return entry;
       }
-      // Auto-create tracker if not found — infer category from name
+      // Auto-create tracker if not found — infer category from name.
+      //
+      // ORDER MATTERS. The keyword scan is a first-match-wins waterfall,
+      // so put MORE SPECIFIC buckets ahead of MORE GENERAL ones. The order
+      // below was derived from test_ai_render.ts failures on 2026-05-21:
+      //
+      //   - mental (mood, stress, anxiety) before health  — else "mood"
+      //     matches health’s “mood” keyword and lands in Health
+      //   - medication (lisinopril-likes, prescription, refill) before
+      //     health  — else "dose" matches health’s catch-all
+      //   - lifestyle before fitness  — else "video games" matches
+      //     fitness’s “game” keyword (sports games)
+      //   - lifestyle (plant, pet, water-the-plant) carved out of health
+      //     — “plant watering” would otherwise hit health’s “water”
+      //   - habit (reading, meditation routines) sits late so explicit
+      //     activity nouns win first
       const nameLC = (input.trackerName || "").toLowerCase();
       let autoCategory = "custom";
-      // Smart category inference — order matters (most specific first)
-      if (["nutrition","food","diet","meal","calories","protein","carbs","fat","macros","intake","eating"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
-      else if (["running","cycling","swimming","workout","exercise","walk","basketball","tennis","soccer","football","volleyball","baseball","hockey","golf","yoga","pilates","lifting","weights","gym","crossfit","hiit","rowing","skating","skiing","surfing","martial","boxing","wrestling","climbing","hiking","dancing","sport","game","match","practice","drill","steps","miles","cardio","strength","training","reps","sets","pace","distance","sprint","push-up","pullup","squat","deadlift","bench"].some(k => nameLC.includes(k))) autoCategory = "fitness";
-      else if (["weight","blood","bp","sleep","heart","cholesterol","glucose","sugar","oxygen","spo2","pulse","temperature","fever","pain","hydration","water","vitamin","medication","med","dose","symptom","mood","stress","anxiety","mental","creatinine","a1c","bmi"].some(k => nameLC.includes(k))) autoCategory = "health";
+      // 1) Mental & wellness — explicit emotional/mental words.
+      if (["mood","stress","anxiety","depression","panic","meditation","mindful","mindfulness","therapy","therapist","counsel","journal","gratitude","emotion","feeling","mental","wellness","calm"].some(k => nameLC.includes(k))) autoCategory = "mental";
+      // 2) Medication — explicit drug/dose words. Catches “Lisinopril
+      // Doses”, “Prescription Refills”, “Adderall”, supplements, etc.
+      else if (["medication","prescription","prescribed","supplement","pill","tablet","capsule","injection","vaccine","refill","rx","dose","dosage","mg","mcg","ml","iu","lisinopril","metformin","adderall","ozempic","statin","heartgard","insulin"].some(k => nameLC.includes(k))) autoCategory = "medication";
+      // 3) Lifestyle — leisure/entertainment/pet/plant. Has to beat
+      // fitness ("game") and health ("water", "plant tea").
+      else if (["gaming","video game","videogame","console","playstation","xbox","nintendo","steam deck","pc gaming","leisure","entertainment","hobby","social media","tv","movie","streaming","netflix","hulu","youtube","podcast","pet ","pets ","plant","garden","feeding","feed ","litter","walking the dog"].some(k => nameLC.includes(k))) autoCategory = "lifestyle";
+      // 4) Nutrition — eating-specific words. Sits before fitness so
+      // "protein shake" lands in nutrition not fitness.
+      else if (["nutrition","food","diet","meal","calories","protein","carbs","fat","macros","intake","eating","snack","breakfast","lunch","dinner"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
+      // 5) Fitness — movement and sport. “game” here intentionally lives
+      // AFTER lifestyle so "video games" can’t collide.
+      else if (["running","cycling","swimming","workout","exercise","walk ","walking ","basketball","tennis","soccer","football","volleyball","baseball","hockey","golf","yoga","pilates","lifting","weights","gym","crossfit","hiit","rowing","skating","skiing","surfing","martial","boxing","wrestling","climbing","hiking","dancing","sport","match","practice","drill","steps","miles","cardio","strength","training","reps","sets","pace","distance","sprint","push-up","pullup","squat","deadlift","bench"].some(k => nameLC.includes(k))) autoCategory = "fitness";
+      // 6) Health — body vitals, labs, symptoms (catchall after mental/
+      // medication/lifestyle have had their pass).
+      else if (["weight","blood","bp","sleep","heart","cholesterol","glucose","sugar","oxygen","spo2","pulse","temperature","fever","pain","hydration","water","vitamin","symptom","creatinine","a1c","bmi","vital","lab","panel"].some(k => nameLC.includes(k))) autoCategory = "health";
+      // 7) Finance.
       else if (["spending","expense","budget","saving","invest","portfolio","net worth","income","salary","revenue","profit","debt","loan","mortgage","credit","crypto","stock","dividend","rent","bill","subscription","dollar","cash"].some(k => nameLC.includes(k))) autoCategory = "finance";
-      else if (["habit","routine","streak","daily","checkin","check-in","morning","evening","meditation","gratitude","journaling","reading","journaling","screen time","phone usage","bedtime"].some(k => nameLC.includes(k))) autoCategory = "habit";
+      // 8) Habits & routines.
+      else if (["habit","routine","streak","daily","checkin","check-in","morning","evening","reading","screen time","phone usage","bedtime"].some(k => nameLC.includes(k))) autoCategory = "habit";
+      // 9) Productivity.
       else if (["productivity","focus","work","study","learn","task","project","meeting","call","email","pomodoro","deep work","code","write","create"].some(k => nameLC.includes(k))) autoCategory = "productivity";
-      // Lifestyle catches leisure/entertainment activity that isn't fitness:
-      // gaming, video games, screen time, reading, social. Without this branch
-      // “video games” falls into "custom" → "Other" bucket and users can’t find
-      // their tracker (reported 2026-05-21).
-      else if (["gaming","game","video game","videogame","console","playstation","xbox","nintendo","steam","pc gaming","leisure","entertainment","hobby","reading","book","social","screen time","tv","movie","streaming","netflix"].some(k => nameLC.includes(k))) autoCategory = "lifestyle";
 
       // Resolve display name — handle DB unique constraint (user_id, name)
       let trackerDisplayName = input.trackerName || "Custom";
