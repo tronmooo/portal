@@ -4111,30 +4111,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               || nameMatches[0] // fallback to first match if none linked to target
             : nameMatches[0]);
 
-      // If the found tracker belongs to a DIFFERENT profile, SHARE it instead
-      // of cloning a per-person duplicate ("Running - Bob"). The user's
-      // complaint: per-person clones disappear behind the "Me" profile
-      // filter, so Bob's data “is nowhere” on the Linked page. Solution:
-      // add the target profile to the tracker's linkedProfiles so the
-      // tracker shows up under BOTH profiles' groups, and stamp the entry
-      // with forProfile so the data is still per-person attributable.
+      // PER-PERSON TRACKERS POLICY (2026-05-21):
+      // Each profile gets its OWN tracker. If the matched tracker belongs
+      // to a different profile (and we don't already have one for the
+      // target), null out `tracker` so the code below auto-creates a
+      // per-person clone like "Running - Bob". This is the user's chosen
+      // behavior — they want one card per person on the Linked page, with
+      // separate edit/delete scopes.
       if (tracker && targetProfileId && nameMatches.length > 0) {
         const trackerProfiles = tracker.linkedProfiles || [];
-        const belongsToOther = trackerProfiles.length > 0 && !trackerProfiles.includes(targetProfileId);
-        if (belongsToOther) {
-          // Prefer a tracker already linked to the target profile if one exists
+        const belongsToTarget = trackerProfiles.includes(targetProfileId);
+        if (!belongsToTarget) {
+          // Prefer an existing tracker that IS linked to the target.
           const ownTracker = nameMatches.find(t => (t.linkedProfiles || []).includes(targetProfileId!));
           if (ownTracker) {
             tracker = ownTracker;
           } else {
-            // Share the tracker with the target profile by extending its
-            // linkedProfiles. This is reversible and side-effect-free for
-            // the original owner — their entries still belong to them via
-            // for_profile/profile_id columns on each entry row.
-            const newLinkedProfiles = [...new Set([...trackerProfiles, targetProfileId])];
-            logger.info("ai", `Sharing tracker "${tracker.name}" with profile ${targetProfileId} (was linked to ${trackerProfiles.join(",")})`);
-            const updated = await storage.updateTracker(tracker.id, { linkedProfiles: newLinkedProfiles } as any).catch(() => null);
-            if (updated) tracker = updated;
+            // No tracker exists for this person yet → create a per-person clone.
+            logger.info("ai", `Per-person policy: matched "${tracker.name}" belongs to other profile(s); will create clone for ${targetProfileId}`);
+            tracker = undefined as any;
           }
         }
       }
@@ -4245,15 +4240,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         trackerDisplayName = `${trackerDisplayName}${suffix}`;
       }
 
-      // For new trackers, link to BOTH self and the target profile so the
-      // tracker shows up on the owner's view AND under the person tag.
-      // The user expectation is: “my Linked page shows everything I logged,
-      // for anyone.” Linking only to a non-self profile would hide it
-      // behind the “Me” filter.
+      // PER-PERSON TRACKERS: each tracker is owned by exactly ONE profile.
+      // The Linked page filters by linkedProfiles, so linking to multiple
+      // profiles would show one card under each person — the user wants
+      // one card per person, period.
       const selfProfileId = profiles.find(p => p.type === "self")?.id;
-      const newTrackerLinkedProfiles = targetProfileId && targetProfileId !== selfProfileId && selfProfileId
-        ? [selfProfileId, targetProfileId]
-        : targetProfileId ? [targetProfileId] : (selfProfileId ? [selfProfileId] : undefined);
+      const newTrackerLinkedProfiles = targetProfileId
+        ? [targetProfileId]
+        : (selfProfileId ? [selfProfileId] : undefined);
 
       const newTracker = await storage.createTracker({
         name: trackerDisplayName,
