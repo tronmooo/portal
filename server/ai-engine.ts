@@ -8420,6 +8420,76 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       finalReply = `${finalReply}\n\n${unknownFieldWarnings.join("\n")}`;
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // SAFETY NET — "create a profile for X" hallucination guard.
+    //
+    // Symptom: user says "Create a profile for Tim he's a human", the AI
+    // emits a text reply like "✅ Tim's profile created" but never actually
+    // calls the create_profile tool. The chat UI renders the bare text but
+    // no inline profile card (because msg.actions[] is empty) and the DB
+    // has no row, so the next time the dashboard loads Tim does not exist.
+    //
+    // Detection: the user message clearly asks to create a profile and the
+    // reply claims success, but allActions has no create_profile entry. In
+    // that case, parse the intended name out of the user message, run
+    // create_profile ourselves, and inject the action so the card renders.
+    // This is a server-side belt-and-suspenders fix for model drift — it
+    // does NOT replace the system-prompt instruction at L2810, just covers
+    // the case where the model ignores it.
+    try {
+      const createdProfileNames = allActions
+        .filter(a => a.type === "create_profile")
+        .map(a => String(a.data?.name || "").toLowerCase().trim())
+        .filter(Boolean);
+      const userMsgLC = (userMessage || "").toLowerCase();
+      const replyLC = (finalReply || "").toLowerCase();
+      // Match: "create a profile for NAME", "add a profile for NAME",
+      //        "make a profile for NAME", "new profile for NAME".
+      // Capture the rest-of-message so we can grab descriptors like
+      // "he's a human" / "my cat" / "a vehicle" for type inference.
+      const m = userMessage.match(/\b(?:create|add|make|new)\s+(?:a\s+)?profile\s+(?:for|called|named)\s+([A-Za-z][A-Za-z0-9'\-\. ]{0,40}?)(?:[,\.\?!]|\s+(?:he|she|they|it|his|her|their|its|who|that|which|the|a|an|is|was|as)\b|$)/i);
+      const claimedSuccess = /(profile\s+(created|added|saved|made|set\s*up)|created\s+(?:a\s+)?profile|added\s+(?:a\s+)?profile)/.test(replyLC);
+      if (m && claimedSuccess) {
+        const candidateName = (m[1] || "").trim();
+        const candidateLC = candidateName.toLowerCase();
+        const alreadyCreated = createdProfileNames.some(n => n === candidateLC);
+        if (candidateName && !alreadyCreated) {
+          // Re-check DB to make sure we don't double-create.
+          const existing = await storage.getProfiles();
+          const dupe = existing.find(p => (p.name || "").toLowerCase().trim() === candidateLC);
+          if (!dupe) {
+            // Light type inference from the rest of the user message.
+            let inferredType: string = "person";
+            const ctxLC = userMsgLC;
+            if (/\b(cat|dog|pet|kitten|puppy|bird|hamster|rabbit|fish|reptile)\b/.test(ctxLC)) inferredType = "pet";
+            else if (/\b(car|truck|suv|vehicle|motorcycle|tesla|honda|toyota|ford)\b/.test(ctxLC)) inferredType = "vehicle";
+            else if (/\b(house|home|property|apartment|condo|land)\b/.test(ctxLC)) inferredType = "property";
+            else if (/\b(loan|debt|mortgage|credit\s*card)\b/.test(ctxLC)) inferredType = "loan";
+            else if (/\b(subscription|netflix|spotify|gym\s*member)\b/.test(ctxLC)) inferredType = "subscription";
+            else if (/\b(investment|stock|crypto|portfolio|brokerage)\b/.test(ctxLC)) inferredType = "investment";
+            else if (/\b(insurance|policy)\b/.test(ctxLC)) inferredType = "insurance";
+            else if (/\b(human|person|friend|family|spouse|partner|coworker|colleague)\b/.test(ctxLC)) inferredType = "person";
+            try {
+              const recovered = await executeTool("create_profile", { name: candidateName, type: inferredType, __userMessage: userMessage }, userId);
+              if (recovered && !(recovered as any).error) {
+                allActions.push({
+                  type: "create_profile",
+                  category: "ai",
+                  data: { name: candidateName, type: inferredType, _entityId: (recovered as any).id },
+                });
+                allResults.push(recovered);
+                logger.warn("ai", `[hallucination-guard] AI claimed "${candidateName}" profile was created but never called create_profile. Recovered server-side.`);
+              }
+            } catch (e: any) {
+              logger.warn("ai", `[hallucination-guard] Recovery failed for "${candidateName}": ${e?.message || e}`);
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      logger.warn("ai", `[hallucination-guard] Unexpected error: ${e?.message || e}`);
+    }
+
     // If artifact found, persist it to chat_artifacts table.
     // No storage.upsertChatArtifact() exists — the chat_artifacts table has no
     // RLS in any migration, so user_id is the SOLE isolation guard. Pull it
