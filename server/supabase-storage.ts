@@ -2835,7 +2835,12 @@ export class SupabaseStorage implements IStorage {
       frequency: data.frequency || "monthly", category: data.category || "general",
       kind,
       next_due_date: data.nextDueDate, autopay: data.autopay || false,
-      lead_time_days: (data as any).leadTimeDays ?? null,
+      // Bug fix (AI e2e): the DB column is NOT NULL, but the AI path
+      // calls createObligation without supplying leadTimeDays and the
+      // insert blew up with "null value in column lead_time_days". The
+      // read path already defaults to 3 when missing (see getObligations),
+      // so write the same default here.
+      lead_time_days: (data as any).leadTimeDays ?? 3,
       auto_log_expense: (data as any).autoLogExpense ?? false,
       linked_asset_id: (data as any).linkedAssetId || null,
       linked_liability_id: (data as any).linkedLiabilityId || null,
@@ -3316,8 +3321,17 @@ export class SupabaseStorage implements IStorage {
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
     const { error } = await this.supabase.from("goals").insert({
-      id, user_id: this.userId, title: data.title, type: data.type, target: data.target,
-      current: data.startValue || 0, unit: data.unit, start_value: data.startValue ?? null,
+      // Bug fix (AI e2e): `type` column is NOT NULL but the AI's
+      // create_goal often omits it (the LLM treats it as optional). Fall
+      // back to "custom" so the insert succeeds and the goal is still
+      // visible on the goals page — "custom" is a valid enum value.
+      // Bug fix (AI e2e): `target` and `unit` are NOT NULL in the DB but
+      // the AI's create_goal often omits one or both (it phrases a goal
+      // like "read more this year" without a numeric target). Default
+      // sensible values so the row inserts and the goal is at least
+      // visible — the user can edit specifics inline afterwards.
+      id, user_id: this.userId, title: data.title, type: data.type || "custom", target: data.target ?? 0,
+      current: data.startValue || 0, unit: data.unit || "", start_value: data.startValue ?? null,
       deadline: data.deadline || null, tracker_id: data.trackerId || null,
       habit_id: data.habitId || null, category: data.category || null,
       linked_profiles: linkedProfiles,

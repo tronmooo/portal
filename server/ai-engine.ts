@@ -4111,19 +4111,30 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               || nameMatches[0] // fallback to first match if none linked to target
             : nameMatches[0]);
 
-      // If the found tracker belongs to a DIFFERENT profile, create a new one for the target
+      // If the found tracker belongs to a DIFFERENT profile, SHARE it instead
+      // of cloning a per-person duplicate ("Running - Bob"). The user's
+      // complaint: per-person clones disappear behind the "Me" profile
+      // filter, so Bob's data “is nowhere” on the Linked page. Solution:
+      // add the target profile to the tracker's linkedProfiles so the
+      // tracker shows up under BOTH profiles' groups, and stamp the entry
+      // with forProfile so the data is still per-person attributable.
       if (tracker && targetProfileId && nameMatches.length > 0) {
         const trackerProfiles = tracker.linkedProfiles || [];
         const belongsToOther = trackerProfiles.length > 0 && !trackerProfiles.includes(targetProfileId);
         if (belongsToOther) {
-          // Check if there's already a tracker for this profile
+          // Prefer a tracker already linked to the target profile if one exists
           const ownTracker = nameMatches.find(t => (t.linkedProfiles || []).includes(targetProfileId!));
           if (ownTracker) {
             tracker = ownTracker;
           } else {
-            // Create a new tracker for the target profile instead of using someone else's
-            logger.info("ai", `Tracker "${tracker.name}" belongs to another profile — creating one for target profile`);
-            tracker = undefined as any; // fall through to auto-create below
+            // Share the tracker with the target profile by extending its
+            // linkedProfiles. This is reversible and side-effect-free for
+            // the original owner — their entries still belong to them via
+            // for_profile/profile_id columns on each entry row.
+            const newLinkedProfiles = [...new Set([...trackerProfiles, targetProfileId])];
+            logger.info("ai", `Sharing tracker "${tracker.name}" with profile ${targetProfileId} (was linked to ${trackerProfiles.join(",")})`);
+            const updated = await storage.updateTracker(tracker.id, { linkedProfiles: newLinkedProfiles } as any).catch(() => null);
+            if (updated) tracker = updated;
           }
         }
       }
@@ -4203,7 +4214,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       else if (["medication","prescription","prescribed","supplement","pill","tablet","capsule","injection","vaccine","refill","rx","dose","dosage","mg","mcg","ml","iu","lisinopril","metformin","adderall","ozempic","statin","heartgard","insulin"].some(k => nameLC.includes(k))) autoCategory = "medication";
       // 3) Lifestyle — leisure/entertainment/pet/plant. Has to beat
       // fitness ("game") and health ("water", "plant tea").
-      else if (["gaming","video game","videogame","console","playstation","xbox","nintendo","steam deck","pc gaming","leisure","entertainment","hobby","social media","tv","movie","streaming","netflix","hulu","youtube","podcast","pet ","pets ","plant","garden","feeding","feed ","litter","walking the dog"].some(k => nameLC.includes(k))) autoCategory = "lifestyle";
+      else if (["gaming","video game","videogame","console","playstation","xbox","nintendo","steam deck","pc gaming","leisure","entertainment","hobby","social media","tv","movie","streaming","netflix","hulu","youtube","podcast","pet ","pets ","plant","garden","feeding","feed ","litter","walking the dog","vet","veterinary","veterinarian","grooming","groomer","kennel","dog walk","cat litter","aquarium","terrarium"].some(k => nameLC.includes(k))) autoCategory = "lifestyle";
       // 4) Nutrition — eating-specific words. Sits before fitness so
       // "protein shake" lands in nutrition not fitness.
       else if (["nutrition","food","diet","meal","calories","protein","carbs","fat","macros","intake","eating","snack","breakfast","lunch","dinner"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
@@ -4220,35 +4231,34 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // 9) Productivity.
       else if (["productivity","focus","work","study","learn","task","project","meeting","call","email","pomodoro","deep work","code","write","create"].some(k => nameLC.includes(k))) autoCategory = "productivity";
 
-      // Resolve display name — handle DB unique constraint (user_id, name)
+      // Resolve display name. Per the share-not-clone policy above, when a
+      // same-name tracker already exists (linked to another profile), we
+      // would have shared it above and never gotten here. So if we ARE here
+      // and a same-name tracker exists, it's a soft-deleted or other-user
+      // edge case — fall back to a suffixed name to keep the unique index
+      // happy. Otherwise use the clean name.
       let trackerDisplayName = input.trackerName || "Custom";
-      const selfProfileId = profiles.find(p => p.type === "self")?.id;
-      const isForSelf = !targetProfileId || targetProfileId === selfProfileId;
-
-      if (isForSelf) {
-        // Self profile gets the clean name. If another profile already owns it, rename that one first.
-        const conflictTracker = nameMatches.find(t => t.name.toLowerCase() === trackerDisplayName.toLowerCase());
-        if (conflictTracker) {
-          // Find the other profile's name to use as suffix
-          const otherProfileId = (conflictTracker.linkedProfiles || [])[0];
-          const otherProfile = otherProfileId ? profiles.find(p => p.id === otherProfileId) : null;
-          const suffix = otherProfile ? ` - ${otherProfile.name}` : ` - Other`;
-          const renamedName = `${conflictTracker.name}${suffix}`;
-          logger.info("ai", `Renaming "${conflictTracker.name}" to "${renamedName}" so self profile can have clean name`);
-          await storage.updateTracker(conflictTracker.id, { name: renamedName }).catch(() => {});
-        }
-      } else {
-        // Non-self profile: append the profile name to avoid conflicts
+      const conflictTracker = nameMatches.find(t => t.name.toLowerCase() === trackerDisplayName.toLowerCase());
+      if (conflictTracker) {
         const targetProfile = profiles.find(p => p.id === targetProfileId);
-        if (targetProfile && !trackerDisplayName.toLowerCase().endsWith(targetProfile.name.toLowerCase())) {
-          trackerDisplayName = `${trackerDisplayName} - ${targetProfile.name}`;
-        }
+        const suffix = targetProfile && targetProfile.type !== "self" ? ` - ${targetProfile.name}` : " (2)";
+        trackerDisplayName = `${trackerDisplayName}${suffix}`;
       }
+
+      // For new trackers, link to BOTH self and the target profile so the
+      // tracker shows up on the owner's view AND under the person tag.
+      // The user expectation is: “my Linked page shows everything I logged,
+      // for anyone.” Linking only to a non-self profile would hide it
+      // behind the “Me” filter.
+      const selfProfileId = profiles.find(p => p.type === "self")?.id;
+      const newTrackerLinkedProfiles = targetProfileId && targetProfileId !== selfProfileId && selfProfileId
+        ? [selfProfileId, targetProfileId]
+        : targetProfileId ? [targetProfileId] : (selfProfileId ? [selfProfileId] : undefined);
 
       const newTracker = await storage.createTracker({
         name: trackerDisplayName,
         category: autoCategory,
-        linkedProfiles: targetProfileId ? [targetProfileId] : undefined,
+        linkedProfiles: newTrackerLinkedProfiles,
         fields: Object.keys(input.values || {}).filter(k => k !== '_notes').map(k => ({
           name: k,
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
@@ -5321,8 +5331,31 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         return dupHabit;
       }
 
+      // Bug fix (AI e2e): DB has UNIQUE (user_id, name) on habits, so two
+      // people can't both have a habit called "Walk". If a same-name habit
+      // already exists (for ANOTHER profile), auto-suffix with the target
+      // profile name — matches the pattern trackers already use.
+      let habitName: string = input.name;
+      const nameTaken = existingHabits.some(h => h.name.toLowerCase() === (input.name || "").toLowerCase());
+      if (nameTaken) {
+        let suffix = "";
+        if (input.forProfile) {
+          suffix = ` - ${input.forProfile}`;
+        } else {
+          const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
+          suffix = selfProf ? ` - ${selfProf.name}` : " (2)";
+        }
+        habitName = `${input.name}${suffix}`;
+        // If even the suffixed name is taken, append numeric counter.
+        let counter = 2;
+        while (existingHabits.some(h => h.name.toLowerCase() === habitName.toLowerCase())) {
+          habitName = `${input.name}${suffix} (${counter++})`;
+        }
+        logger.info("ai", `Habit name "${input.name}" already taken — using "${habitName}"`);
+      }
+
       const habit = await storage.createHabit({
-        name: input.name,
+        name: habitName,
         frequency: input.frequency || "daily",
         icon: input.icon,
         color: input.color,
@@ -5474,26 +5507,52 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "journal_entry": {
       const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      // When forProfile is set: ALWAYS create a new entry for that profile (no de-dup).
-      // De-dup only applies to self-profile entries.
-      let existingToday: any = null;
-      if (!input.forProfile) {
-        const allJournalEntries = await storage.getJournalEntries();
-        existingToday = allJournalEntries.find(j => j.date === todayDate) || null;
+      // Bug fix (AI e2e): the journal_entries table has a UNIQUE
+      // constraint on (user_id, date) — meaning only ONE entry per user
+      // per day, regardless of which profile it's for. Previously, if a
+      // self entry already existed and the AI tried to log a journal
+      // entry for Bob, the insert blew up with
+      // "duplicate key value violates unique constraint
+      // journal_entries_unique_day".
+      //
+      // We honor the constraint by ALWAYS finding today's entry (if any)
+      // and appending to it, tagging the appended content with the
+      // target profile name when forProfile is set. The entry's
+      // linkedProfiles also gets unioned so the entry surfaces under
+      // every profile's journal view.
+      const allJournalEntries = await storage.getJournalEntries();
+      let existingToday: any = allJournalEntries.find(j => j.date === todayDate) || null;
+      // Look up target profile early so we can use its name + id below.
+      let targetProfile: any = null;
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        targetProfile = matchProfileByName(profiles, input.forProfile);
       }
 
       let entry: any;
       if (existingToday) {
-        // APPEND to existing entry instead of blocking
+        // APPEND to existing entry instead of blocking on unique
+        // constraint. When forProfile is set, prefix the new content
+        // with the target profile's name so the appended snippet is
+        // attributable in the UI.
+        const newContent = input.content || "";
+        const profileLabel = targetProfile?.name ? `[${targetProfile.name}] ` : "";
         const appendedContent = existingToday.content
-          ? existingToday.content + "\n\n" + (input.content || "")
-          : (input.content || "");
+          ? existingToday.content + "\n\n" + profileLabel + newContent
+          : profileLabel + newContent;
+        // Union linkedProfiles so the entry shows under every relevant
+        // profile's journal view.
+        const mergedLinked = Array.from(new Set([
+          ...(existingToday.linkedProfiles || []),
+          ...(targetProfile ? [targetProfile.id] : []),
+        ]));
         entry = await storage.updateJournalEntry(existingToday.id, {
           content: appendedContent,
           mood: input.mood || existingToday.mood,
           energy: input.energy ?? existingToday.energy,
           gratitude: input.gratitude || existingToday.gratitude,
           highlights: input.highlights || existingToday.highlights,
+          linkedProfiles: mergedLinked,
         } as any);
         if (!entry) entry = existingToday;
       } else {
@@ -5507,14 +5566,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         });
       }
 
-      // Direct profile linking for forProfile
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        const target = matchProfileByName(profiles, input.forProfile);
-        if (target) {
-          await storage.updateJournalEntry(entry.id, { linkedProfiles: [target.id] } as any);
-          await storage.linkProfileTo(target.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-        }
+      // Direct profile linking for forProfile (when we created a new entry).
+      if (targetProfile && !existingToday) {
+        await storage.updateJournalEntry(entry.id, { linkedProfiles: [targetProfile.id] } as any);
+        await storage.linkProfileTo(targetProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
+      }
+      // For the append path, linkedProfiles is already merged above.
+      // Also write the junction-table link so /profile views surface it.
+      if (targetProfile && existingToday) {
+        await storage.linkProfileTo(targetProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
       }
 
       return entry;
