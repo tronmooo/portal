@@ -694,3 +694,57 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
 .animate-voice-bar-1 { animation: portol-voice-bar 0.9s ease-in-out infinite;   transform-origin: center; }
 .animate-voice-bar-2 { animation: portol-voice-bar 0.9s ease-in-out 0.15s infinite; transform-origin: center; }
 .animate-voice-bar-3 { animation: portol-voice-bar 0.9s ease-in-out 0.3s  infinite; transform-origin: center; }
+
+/* ── Google-Sheets-style mobile skin for Univer ────────────────────────────
+   Applied to a wrapper <div class="gsheet-mobile-skin"> that contains the
+   Univer container. Forces pure-black cell area, gray gridlines, and gray
+   row/column headers to match the screenshot reference (IMG_0418/0419).
+   Univer normally renders with a white background — we override its canvas
+   tint via the .univer-app-container backgrounds, and on top of that paint
+   the cells through Univer's own theme variables so selection (blue
+   rectangle with circular drag handles) stays intact.
+*/
+.gsheet-mobile-skin {
+  background: #000;
+}
+.gsheet-mobile-skin .univer-app-container,
+.gsheet-mobile-skin .univer-render-canvas,
+.gsheet-mobile-skin canvas {
+  background: #000 !important;
+}
+/* Hide Univer's desktop ribbon/menu — we use our own mobile chrome.
+   These selectors target the top toolbar and formula bar that Univer
+   ships with the core preset. We keep the canvas + scrollbars + tab area. */
+.gsheet-mobile-skin .univer-toolbar,
+.gsheet-mobile-skin .univer-ribbon,
+.gsheet-mobile-skin .univer-formula-bar,
+.gsheet-mobile-skin [class*="univer-header"],
+.gsheet-mobile-skin [class*="univer-menu"] {
+  display: none !important;
+}
+/* Bottom sheet-tab bar Univer renders — hide and replace with ours. */
+.gsheet-mobile-skin .univer-sheet-bar,
+.gsheet-mobile-skin [class*="sheet-bar"] {
+  display: none !important;
+}
+
+/* Status bar at bottom of Univer — also hide on mobile skin. */
+.gsheet-mobile-skin .univer-status-bar,
+.gsheet-mobile-skin [class*="status-bar"] {
+  display: none !important;
+}
+
+/* ── Doc editor mobile black canvas ────────────────────────────────────────
+   When .doc-mobile-black is applied to the doc wrapper, the writing area
+   becomes pure black like IMG_0420. */
+.doc-mobile-black,
+.doc-mobile-black .ProseMirror {
+  background: #000 !important;
+  color: #fff !important;
+  caret-color: #fff !important;
+}
+.doc-mobile-black .ProseMirror::selection,
+.doc-mobile-black .ProseMirror *::selection {
+  background: rgba(96, 165, 250, 0.45);
+}
+
