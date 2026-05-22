@@ -1895,23 +1895,36 @@ export default function ChatPage() {
   });
 
   function invalidateAll() {
-    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/insights"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/ai-digest"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+    // refetchType: "all" forces react-query to refetch EVERY matching query
+    // (active + inactive), not just the ones currently mounted. Without this,
+    // a tracker entry logged from /chat would not appear on /trackers until
+    // the user manually refreshed — because the trackers page query was
+    // inactive at the moment of the chat write. With "all", the data is
+    // refetched in the background immediately so navigating to /trackers
+    // shows fresh data on the very first render.
+    const refetchType = "all" as const;
+    const keys = [
+      "/api/stats",
+      "/api/dashboard-enhanced",
+      "/api/trackers",
+      "/api/profiles",
+      "/api/tasks",
+      "/api/expenses",
+      "/api/events",
+      "/api/habits",
+      "/api/obligations",
+      "/api/journal",
+      "/api/documents",
+      "/api/insights",
+      "/api/calendar/timeline",
+      "/api/goals",
+      "/api/activity",
+      "/api/ai-digest",
+      "/api/artifacts",
+    ];
+    for (const key of keys) {
+      queryClient.invalidateQueries({ queryKey: [key], refetchType });
+    }
   }
 
   const handleConfirmExtraction = async (data: {

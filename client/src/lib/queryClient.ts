@@ -162,8 +162,18 @@ export const queryClient = new QueryClient({
            instead of leaving in-flight requests hanging forever. */
       refetchOnWindowFocus: true,
       refetchOnReconnect: "always",
-      refetchOnMount: false,             // Use cached data on mount; revalidate via window focus only when stale
-      staleTime: 15 * 60_000,            // 15 minutes — less aggressive refetching
+      // refetchOnMount: true means "if the cached data is stale at the time
+      // the component mounts, refetch in the background while showing the
+      // cached data immediately." Crucially this is what makes invalidated
+      // queries actually refresh when the user navigates from /chat to
+      // /trackers — without it, react-query marks the cache stale but never
+      // refetches because the tracker page wasn't mounted when the invalidate
+      // happened. With `false`, the user had to hit refresh manually.
+      // Setting to `true` (not "always") avoids the skeleton storm: cached
+      // data still renders instantly; the refetch happens silently in the
+      // background and swaps in fresh data without a loading state.
+      refetchOnMount: true,
+      staleTime: 30_000,                 // 30s — chat writes must surface fast; window-focus refetch still keeps idle tabs fresh
       gcTime: 60 * 60_000,               // Keep unused data for 60 min
       networkMode: "always",             // Don't hang on flaky network
       retry: (failureCount, error) => {
