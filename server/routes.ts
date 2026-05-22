@@ -5,6 +5,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { passesProfileFilter } from "@shared/profile-filter";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -3061,6 +3062,23 @@ Rules:
   app.get("/api/budgets", asyncHandler(async (req, res) => {
     const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
     const budgets = await storage.getBudgets(month);
+    // Bug: budgets are stored per-user (not per-profile) so this endpoint used
+    // to return the same list regardless of selected profile. That made fresh
+    // non-self profiles (e.g. a brand-new EMPTYPROBE_QA) show "Budgeted: $X"
+    // on the dashboard hero tile even though that profile owns nothing.
+    // Treat budgets as a self-only concept: hide them when the active filter
+    // explicitly excludes the self profile. "everyone"/no filter still shows.
+    const fps = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    if (filterProfileIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      const selfIds = new Set(allProfiles.filter(p => p.type === "self").map(p => p.id));
+      const selfInSel = filterProfileIds.some(id => selfIds.has(id));
+      if (!selfInSel) {
+        return res.json({ month, budgets: [] });
+      }
+    }
     res.json({ month, budgets });
   }));
 
@@ -3349,9 +3367,16 @@ Rules:
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
     let items = await storage.getCashflow(month);
     if (ids.length > 0) {
+      // Use the unified passesProfileFilter so non-self profiles do NOT see
+      // orphan cashflow rows, but the rule still allows item.profileId direct
+      // matches (legacy cashflow rows store the owner in profileId, not
+      // linkedProfiles).
+      const allProfiles = await storage.getProfiles();
+      const filterCtx = { selectedIds: ids, allProfiles };
       items = items.filter((item: any) => {
         const linked = item.linkedProfiles || [];
-        return ids.some(id => linked.includes(id) || item.profileId === id);
+        if (item.profileId && ids.includes(item.profileId)) return true;
+        return passesProfileFilter(linked, filterCtx);
       });
     }
     res.json(items);
@@ -5746,10 +5771,14 @@ No emojis. No prose outside the JSON.`,
     const fp = req.query.profileId as string | undefined;
     const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
     if (filterProfileIds.length > 0) {
-      incomes = incomes.filter((i: any) => {
-        const lp = i.linkedProfiles || [];
-        return lp.length === 0 || lp.some((id: string) => filterProfileIds.includes(id));
-      });
+      // Bug: previous filter was `lp.length === 0 || lp.some(...)` which
+      // leaks ALL orphan incomes (no linked_profiles) to any selected profile,
+      // including brand-new non-self profiles that should see zero data.
+      // Use the unified passesProfileFilter rule so orphans only fall through
+      // when a self profile is in the selection.
+      const allProfiles = await storage.getProfiles();
+      const filterCtx = { selectedIds: filterProfileIds, allProfiles };
+      incomes = incomes.filter((i: any) => passesProfileFilter(i.linkedProfiles || [], filterCtx));
     }
     res.json(incomes);
   }));
