@@ -5407,17 +5407,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Skipped duplicate obligation: ${dupOb.name}`);
         return dupOb;
       }
-      const newObligation = await storage.createObligation({
-        name: input.name,
-        amount: parseFloat(input.amount) || 0,
-        frequency: input.frequency || "monthly",
-        category: input.category || "general",
-        nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-        autopay: input.autopay ?? false,
-      });
 
-      // DIRECT link to profile FIRST (before any auto-subscription logic)
-      // Also scan the obligation name for profile names as a fallback
+      // BUG FIX (multi-person obligation): Resolve forProfile BEFORE
+      // calling storage.createObligation so we can pass linkedProfiles
+      // upfront. Otherwise the Supabase storage layer auto-prepends Self
+      // when linkedProfiles is empty, which causes Bob's phone obligation
+      // to end up with linked_profiles=[Self, Bob, SubProfile] instead of
+      // [Bob, SubProfile].
       let oblForProfile = input.forProfile;
       if (!oblForProfile) {
         const allProfiles = await storage.getProfiles();
@@ -5429,6 +5425,29 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         }
       }
+      // Pre-resolve the target profile id so we can seed linkedProfiles
+      // and skip the auto-self-prepend in Supabase storage.
+      let preResolvedTargetProfileId: string | undefined;
+      if (oblForProfile) {
+        const allProfiles = await storage.getProfiles();
+        const matched = matchProfileByName(allProfiles, oblForProfile);
+        if (matched) preResolvedTargetProfileId = matched.id;
+      }
+
+      const newObligation = await storage.createObligation({
+        name: input.name,
+        amount: parseFloat(input.amount) || 0,
+        frequency: input.frequency || "monthly",
+        category: input.category || "general",
+        nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        autopay: input.autopay ?? false,
+        // Seed linkedProfiles so Supabase storage doesn't auto-prepend Self
+        ...(preResolvedTargetProfileId ? { linkedProfiles: [preResolvedTargetProfileId] } as any : {}),
+      } as any);
+
+      // DIRECT link to profile (idempotent — already in linkedProfiles
+      // when preResolvedTargetProfileId was set, but still registers
+      // the junction-table link).
       await directLinkToProfile("obligation", newObligation.id, oblForProfile);
 
       // Auto-create subscription profile if this looks like a subscription/service
@@ -5576,6 +5595,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Also write the junction-table link so /profile views surface it.
       if (targetProfile && existingToday) {
         await storage.linkProfileTo(targetProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
+      }
+
+      // BUG FIX (multi-person journals): when a self entry is created
+      // FIRST without forProfile, it starts with empty linkedProfiles.
+      // Then when subsequent forProfile=Bob appends merge in, the union
+      // becomes [Bob] only — dropping Self from the entry's profile list.
+      // Fix: if linkedProfiles ends up empty, stamp Self so the entry
+      // still surfaces under the Self journal view.
+      if (!targetProfile) {
+        const profiles = await storage.getProfiles();
+        const selfProfile = profiles.find(p => p.type === "self");
+        if (selfProfile) {
+          const current = (entry as any).linkedProfiles || [];
+          if (!current.includes(selfProfile.id)) {
+            const merged = Array.from(new Set([...current, selfProfile.id]));
+            await storage.updateJournalEntry(entry.id, { linkedProfiles: merged } as any);
+            await storage.linkProfileTo(selfProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Self profile linking failed:", e?.message); });
+          }
+        }
       }
 
       return entry;
