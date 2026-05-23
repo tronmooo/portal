@@ -265,6 +265,26 @@ function scheduleSnapshot(): void {
   }, 1500); // throttle to once per 1.5s
 }
 
+// Bug #21: centralized full-cache clear for sign-out (or anywhere else we need
+// to scrub user-scoped state). Wipes the in-memory React Query cache, the
+// persisted localStorage snapshot, and (lazily) the profile filter so the
+// next user doesn't inherit anyone else's data.
+export function clearAllClientCaches(): void {
+  try {
+    queryClient.clear();
+  } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch { /* private mode — ignore */ }
+  // Profile filter lives in client/src/lib/profileFilter.ts. We dynamically
+  // import to avoid a circular dep between auth, profileFilter, and this file.
+  try {
+    void import("./profileFilter").then((m) => {
+      try { m.clearProfileFilterForUser(); } catch { /* ignore */ }
+    });
+  } catch { /* ignore */ }
+}
+
 export function hydrateQueryCache(): void {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);

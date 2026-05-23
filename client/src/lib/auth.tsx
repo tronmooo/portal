@@ -3,7 +3,7 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 // references that break sandboxed iframe deployment. Instead we call the Supabase OAuth
 // endpoint directly via URL redirect.
 import { apiRequest } from "./queryClient";
-import { queryClient } from "./queryClient";
+import { queryClient, clearAllClientCaches } from "./queryClient";
 import { clearChatCache } from "@/pages/chat";
 import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
 
@@ -315,8 +315,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 1. Clear the in-memory auth tokens
     persistTokens(null);
 
-    // 2. Clear ALL React Query cache — prevents data leaking between users
-    queryClient.clear();
+    // 2. Clear ALL client caches — React Query in-memory cache, the persisted
+    // localStorage snapshot, and the profile filter. Without this, the next
+    // user that signs in on the same browser tab would hydrate from the prior
+    // user's persisted cache before their first refetch lands. (Bug #21)
+    clearAllClientCaches();
 
     // 3. Clear module-level chat history cache
     clearChatCache();
