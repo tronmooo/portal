@@ -139,23 +139,25 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
-      /* IDLE-FREEZE FIX (2026-05-10) + SKELETON FIX (2026-05-19):
-         The previous combination (refetchOnWindowFocus: true + 30s staleTime
+      /* IDLE-FREEZE FIX (2026-05-10) + SKELETON FIX (2026-05-19) + CHAT-SYNC TUNE (2026-05-22):
+         The previous combination (refetchOnWindowFocus: true + long staleTime
          + ~25 active queries on the dashboard) caused the tab to lock up when
          the user returned after >2 min — every query refetched in parallel
          and the UI froze waiting for the storm to settle.
 
          The user's complaint "when I come back to the website, it's always
          loading in this skeleton" is from refetchOnMount + a cleared cache
-         (full reload, not just tab switch). Combined with a 60s refetch
-         storm on focus, the UI shows skeletons even when nothing changed.
+         (full reload, not just tab switch). Combined with a refetch storm on
+         focus, the UI shows skeletons even when nothing changed.
 
-         New strategy:
-         - 15 min staleTime → returning after a short break uses cached data
-           instantly, no refetch.
-         - refetchOnMount: "always" was the skeleton culprit. Set to false so
-           cached data renders instantly; window-focus refetch still keeps
-           data fresh if user comes back after staleTime elapsed.
+         Current strategy (see staleTime below):
+         - 30s staleTime → AI chat / co-owner writes surface fast on the next
+           render without waiting on an explicit invalidate. Returning to the
+           tab within 30s reuses cache instantly; after 30s window-focus does
+           one quiet background refetch.
+         - refetchOnMount: true (not "always") → cached data renders instantly
+           when navigating between pages; the background refetch fills in any
+           data that was invalidated while the page was unmounted.
          - Cache is persisted to localStorage (see persistCache below) so a
            full reload restores instantly instead of showing skeletons.
          - networkMode: "always" → queries continue even on flaky network
