@@ -294,3 +294,56 @@ export function buildOptimisticListMutation<TItem, TVars>(
     },
   };
 }
+
+// ─── optimisticBust ─────────────────────────────────────────────────
+// For AI chat (and any other write that can’t predict the new server
+// state up front but still wants the UI to feel instant). Caller passes
+// the domains the action touched and a `mutator` describing how each
+// affected list should look after the change. The bus:
+//   1. Cancels in-flight refetches so they don’t clobber our optimistic
+//      state mid-flight.
+//   2. Runs the mutator against current cached lists via setQueryData
+//      — the UI updates synchronously without waiting for the network.
+//   3. Kicks off the normal invalidateDomains() refetch in the
+//      background so the optimistic state is replaced by the truth
+//      from the server as soon as it arrives.
+// If the network write is already in flight when this is called, the
+// caller just needs to make sure the server result is applied via the
+// usual mutation onSuccess path — or rely on the invalidation refetch.
+export interface OptimisticBustEntry {
+  // Query key (or prefix) to update. We match by JSON-equal on the
+  // first element so ["/api/tasks"] hits every nested tasks query.
+  queryKey: unknown[];
+  // Receives the current cached value and returns the new value.
+  // Return undefined to leave the cache untouched for that key.
+  updater: (old: any) => any;
+}
+
+export async function optimisticBust(
+  domains: Domain[],
+  entries: OptimisticBustEntry[] = []
+): Promise<void> {
+  // Cancel anything in-flight that could overwrite our optimistic state.
+  await Promise.allSettled(
+    entries.map((e) => queryClient.cancelQueries({ queryKey: e.queryKey }))
+  );
+
+  // Apply optimistic updates. We use predicate matching so nested keys
+  // (e.g. ["/api/tasks", profileId]) all receive the same updater.
+  for (const entry of entries) {
+    const head = entry.queryKey[0];
+    queryClient.setQueriesData(
+      {
+        predicate: (q) =>
+          Array.isArray(q.queryKey) && q.queryKey[0] === head,
+      },
+      (old: any) => {
+        const next = entry.updater(old);
+        return next === undefined ? old : next;
+      }
+    );
+  }
+
+  // Background refetch — server is the source of truth.
+  await invalidateDomains(...domains);
+}
