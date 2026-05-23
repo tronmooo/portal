@@ -6377,6 +6377,24 @@ No emojis. No prose outside the JSON.`,
   // RELATIONSHIPS — asset ↔ party links + history + move
   // ============================================================
 
+  // Bulk GET: every asset-party link for the current user. Used by the Linked
+  // tab and Dashboard to extend visibility from the legacy parent-profile rule
+  // (Furniture belongs to Jane because Jane is its parent) to the co-ownership
+  // rule (Furniture is ALSO Lexi's because asset_party_links shows Lexi 50%).
+  // Cheap query, fully scoped by user_id by storage layer.
+  app.get("/api/asset-party-links", asyncHandler(async (_req, res) => {
+    const rows = await storage.getAssetPartyLinks();
+    res.json(rows || []);
+  }));
+
+  // Bulk GET: every liability-party link for the current user. Same
+  // motivation — a liability co-owned by Bob and Jane must surface under
+  // BOTH profile filters, not just the parent.
+  app.get("/api/liability-profile-links", asyncHandler(async (_req, res) => {
+    const rows = await storage.getLiabilityProfileLinks();
+    res.json(rows || []);
+  }));
+
   app.get("/api/assets/:id/parties", asyncHandler(async (req, res) => {
     const rows = await storage.getAssetPartyLinks(req.params.id);
     // Enrich each link with the linked party profile's name + type so the

@@ -3613,6 +3613,70 @@ export default function TrackersPage() {
     queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
   });
 
+  // Co-ownership link tables. The parent-profile rule alone misses assets/
+  // liabilities where the active filter profile is a CO-OWNER via
+  // asset_party_links / liability_profile_links — e.g. Home is parented to
+  // Test but Jane owns 50%, so a filter on Jane must still show Home.
+  // These two endpoints are cheap user-scoped queries.
+  const { data: assetPartyLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()),
+  });
+  const { data: liabilityProfileLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
+  });
+
+  // Build O(1) lookups: for any given party (profile id), which asset/liability
+  // ids does it (co-)own? Used by the visibility predicates below.
+  const assetsByOwner = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const l of assetPartyLinks || []) {
+      const pid = l.partyProfileId; const aid = l.assetProfileId;
+      if (!pid || !aid) continue;
+      if (!m.has(pid)) m.set(pid, new Set());
+      m.get(pid)!.add(aid);
+    }
+    return m;
+  }, [assetPartyLinks]);
+  const liabilitiesByOwner = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const l of liabilityProfileLinks || []) {
+      const pid = l.partyProfileId; const lid = l.liabilityProfileId;
+      if (!pid || !lid) continue;
+      if (!m.has(pid)) m.set(pid, new Set());
+      m.get(pid)!.add(lid);
+    }
+    return m;
+  }, [liabilityProfileLinks]);
+
+  // Visibility helper: an asset is visible to the selected filter set if it's
+  // (a) directly selected, (b) parented to a selected profile, or (c) the
+  // selected profile appears as a co-owner via asset_party_links. Same logic
+  // for liabilities. Returns true when filterMode is "everyone".
+  const isAssetVisible = (assetId: string, parentId: string | null | undefined): boolean => {
+    if (filterMode === "everyone") return true;
+    if (filterIds.length === 0) return true;
+    if (filterIds.includes(assetId)) return true;
+    if (parentId && filterIds.includes(parentId)) return true;
+    for (const fid of filterIds) {
+      const owned = assetsByOwner.get(fid);
+      if (owned && owned.has(assetId)) return true;
+    }
+    return false;
+  };
+  const isLiabilityVisible = (liabId: string, parentId: string | null | undefined): boolean => {
+    if (filterMode === "everyone") return true;
+    if (filterIds.length === 0) return true;
+    if (filterIds.includes(liabId)) return true;
+    if (parentId && filterIds.includes(parentId)) return true;
+    for (const fid of filterIds) {
+      const owned = liabilitiesByOwner.get(fid);
+      if (owned && owned.has(liabId)) return true;
+    }
+    return false;
+  };
+
   // `createOpen` is retained only so the CreateTrackerDialog component
   // (still mounted below) compiles. All UI affordances that opened it
   // were removed 2026-05-21 — trackers can only be created via chat.
@@ -3869,7 +3933,10 @@ export default function TrackersPage() {
       if (!childTypeSet.has(p.type)) return false;
       if (isShowAll) return true;
       const pParent = p.fields?._parentProfileId || (p as any).parentProfileId;
-      return pParent && filterIds.includes(pParent);
+      // Visible if directly selected, parented to selected profile, OR
+      // co-owned via asset_party_links (Home shows under Jane even though
+      // it's parented to Test).
+      return isAssetVisible(p.id, pParent);
     });
     const labelFor = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
     const counts: Record<string, number> = {};
@@ -3878,7 +3945,7 @@ export default function TrackersPage() {
       counts[lab] = (counts[lab] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds]);
+  }, [profiles, filterMode, filterIds, assetsByOwner]);
 
   // Subscriptions/recurring bills are conceptually liabilities (things you owe
   // every month) so they live in the same Liabilities bucket alongside loans,
@@ -3904,12 +3971,10 @@ export default function TrackersPage() {
     const liabs = (profiles || []).filter(p => {
       if (!isLiabilityLikeProfile(p)) return false;
       if (isShowAll) return true;
-      // A liability is in scope if it's directly selected, parented to a selected
-      // profile, or linked via liability_profile_links — but the link data isn't
-      // on the profile object, so we approximate via parent + direct selection.
+      // Visible if directly selected, parented to selected profile, OR
+      // co-owned via liability_profile_links.
       const pParent = (p.fields as any)?._parentProfileId || (p as any).parentProfileId;
-      if (filterIds.includes(p.id)) return true;
-      return pParent && filterIds.includes(pParent);
+      return isLiabilityVisible(p.id, pParent);
     });
     const counts: Record<string, number> = {};
     for (const s of liabs) {
@@ -3917,7 +3982,7 @@ export default function TrackersPage() {
       counts[c] = (counts[c] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds]);
+  }, [profiles, filterMode, filterIds, liabilitiesByOwner]);
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
   const sortedFilterProfiles = useMemo(() => {
@@ -4100,8 +4165,8 @@ export default function TrackersPage() {
               const pParent = p.fields?._parentProfileId || p.parentProfileId;
               const parentProfile = pParent ? (profiles || []).find(x => x.id === pParent) : null;
               const parentIsAsset = !!parentProfile && childTypeSet.has(parentProfile.type);
-              // Profile-filter scope
-              const inScope = isShowAllForCounts || (pParent && filterIds.includes(pParent as string));
+              // Profile-filter scope — include co-owners via asset_party_links.
+              const inScope = isShowAllForCounts || isAssetVisible(p.id, pParent as string | null | undefined);
               if (!inScope) return false;
               // Asset type chip filter — only applies on the Assets tab
               if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForTypeCount(p.type) !== assetTypeFilter) return false;
@@ -4123,10 +4188,8 @@ export default function TrackersPage() {
             const filteredLiabilityCount = (profiles || []).filter(p => {
               if (!isLiabilityLikeProfile(p)) return false;
               if (isShowAllForCounts) return true;
-              if (filterIds.includes(p.id)) return true;
               const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
-              if (pParent && filterIds.includes(pParent)) return true;
-              return false;
+              return isLiabilityVisible(p.id, pParent);
             }).length;
             return (["all", "trackers", "documents", "profiles", "liabilities"] as const).map(s => {
             const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", liabilities: "Liabilities" };
@@ -4339,7 +4402,8 @@ export default function TrackersPage() {
           (profiles || []).forEach(p => {
             if (!childTypeSet.has(p.type)) return;
             const pParent = p.fields?._parentProfileId || p.parentProfileId;
-            if (!isShowAll && !filterIds.includes(p.id) && !(pParent && filterIds.includes(pParent))) return;
+            // Include co-owners via asset_party_links (Home shows for Jane).
+            if (!isShowAll && !isAssetVisible(p.id, pParent)) return;
             const f = p.fields || {}; const fin = f.finance || {}; const housing = f.housing || {}; const other = f.other || {};
             const cv = toNum(f.currentValue) ?? toNum(housing.currentValue) ?? toNum(other.currentValue) ?? toNum(other.value) ?? toNum(fin.balance) ?? toNum(f.value);
             const sub = p.type.charAt(0).toUpperCase() + p.type.slice(1);
@@ -4352,7 +4416,8 @@ export default function TrackersPage() {
           (profiles || []).forEach(p => {
             if (!isLiabilityLikeProfile(p)) return;
             const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
-            if (!isShowAll && !filterIds.includes(p.id) && !(pParent && filterIds.includes(pParent))) return;
+            // Include co-owners via liability_profile_links.
+            if (!isShowAll && !isLiabilityVisible(p.id, pParent)) return;
             const f = (p.fields as any) || {}; const fin = f.finance || {};
             const bal = toNum(f.currentBalance) ?? toNum(f.remainingBalance) ?? toNum(f.loanBalance) ?? toNum(f.balance) ?? toNum(fin.remainingBalance) ?? toNum(fin.loanBalance) ?? toNum(fin.balance);
             const cost = toNum(f.cost) ?? toNum(f.amount) ?? toNum(f.monthlyPayment) ?? toNum(fin.monthlyPayment);

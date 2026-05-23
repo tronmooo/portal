@@ -166,7 +166,24 @@ async function perplexityValuation(profile: { type: string; name: string; fields
   }
 }
 
+// Profile types we run live market valuation on. Anything else (person, pet,
+// self, medical, subscription, account, ...) must NEVER hit a stock/ticker
+// lookup — the AI happily resolves "Patrick" → PATK, "Lexi" → LEXI ETF,
+// "Jim" → a microcap crypto, etc. and writes those phantom valuations onto
+// the person's profile.
+const VALUABLE_TYPES = new Set(["vehicle", "asset", "property", "investment"]);
+export function isValuableType(t: string | undefined | null): boolean {
+  return !!t && VALUABLE_TYPES.has(t);
+}
+
 export async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
+  // HARD GUARD: refuse to value non-valuable profile types. Without this,
+  // perplexityValuation below blindly searches the web for a market price
+  // for any name (including people, pets, etc.) and confidently returns a
+  // ticker price. This is the root cause of the "Patrick = $90.21 PATK"
+  // bug and friends (Mike=$1, Lexi=$39.24, Jim=$0.0000025, Scrappy=$11k).
+  if (!isValuableType(profile.type)) return null;
+
   // PRIMARY: Perplexity Sonar (live web search + LLM in one call). This is the
   // same API the chat uses, so it works reliably from Vercel cloud IPs.
   const ppx = await perplexityValuation(profile);
@@ -3838,9 +3855,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
-      // Auto-estimate asset value for valuable profile types (best-effort, non-blocking)
+      // Auto-estimate asset value for valuable profile types (best-effort, non-blocking).
+      // Defense in depth: estimateAssetValue also enforces the type guard, but
+      // skipping here saves a Perplexity API call for every person/pet profile
+      // created from chat. Without this guard the AI happily resolves any
+      // name to a ticker (Patrick → PATK, Lexi → LEXI ETF, Jim → a crypto)
+      // and stamps a phantom market value onto a person's profile.
+      const _autoValType = input.type || "asset";
+      if (!isValuableType(_autoValType)) {
+        logger.info("ai", `Skipping auto-valuation for non-valuable type "${_autoValType}" (profile: ${input.name})`);
+        return newProfile;
+      }
       try {
-        const valuation = await estimateAssetValue({ type: input.type || "asset", name: input.name, fields: finalFields });
+        const valuation = await estimateAssetValue({ type: _autoValType, name: input.name, fields: finalFields });
         if (valuation && valuation.estimatedValue > 0) {
           await storage.updateProfile(newProfile.id, {
             fields: {

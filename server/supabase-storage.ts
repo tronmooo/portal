@@ -774,8 +774,47 @@ export class SupabaseStorage implements IStorage {
     const relatedObligations = (obligationsRes as any[]).map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
     const relatedJournal = (journalRows as any[]).map((r: any) => this.rowToJournalEntry(r));
 
-    // Child profiles: profiles whose parentProfileId points to this profile
-    const childProfiles = allProfiles.filter(p => p.parentProfileId === id);
+    // Child profiles: profiles whose parentProfileId points to this profile.
+    // PLUS: assets/liabilities where this profile is a CO-OWNER via the link
+    // tables. Rule: co-ownership only applies to asset & liability profiles,
+    // and a co-owned item must surface on each owner's individual profile
+    // page — e.g. Home (parented to Test) appears on Jane's page because Jane
+    // owns 50% via asset_party_links. We tag the synthetic adds with a
+    // `_coOwner: true` marker so the UI can show them with the right framing.
+    const directChildren = allProfiles.filter(p => p.parentProfileId === id);
+    const childProfiles: any[] = [...directChildren];
+    const isPersonLike = profile.type === "self" || profile.type === "person" || profile.type === "pet";
+    if (isPersonLike) {
+      try {
+        const [assetLinks, liabLinks] = await Promise.all([
+          this.getAssetPartyLinksForParty(id).catch(() => [] as any[]),
+          this.getLiabilityProfileLinksForParty(id).catch(() => [] as any[]),
+        ]);
+        const seen = new Set(directChildren.map(p => p.id));
+        for (const l of assetLinks || []) {
+          const aid = (l as any).assetProfileId;
+          if (!aid || seen.has(aid)) continue;
+          const a = allProfiles.find(p => p.id === aid);
+          if (!a) continue;
+          // Only assets surface as co-owned children, per the rule.
+          if (!["vehicle", "asset", "investment", "property"].includes(a.type)) continue;
+          seen.add(aid);
+          childProfiles.push({ ...a, _coOwner: true, _ownershipPercentage: (l as any).ownershipPercentage });
+        }
+        for (const l of liabLinks || []) {
+          const lid = (l as any).liabilityProfileId;
+          if (!lid || seen.has(lid)) continue;
+          const x = allProfiles.find(p => p.id === lid);
+          if (!x) continue;
+          if (!["liability", "loan", "subscription"].includes(x.type)) continue;
+          seen.add(lid);
+          childProfiles.push({ ...x, _coOwner: true, _ownershipPercentage: (l as any).ownershipPercentage });
+        }
+      } catch (e) {
+        // Non-fatal — fall back to the parent-only child list.
+        console.warn("getProfile: co-owner link lookup failed:", (e as any)?.message || e);
+      }
+    }
 
     // Build timeline from all related entities
     const timeline: TimelineEntry[] = [];
@@ -3818,10 +3857,40 @@ export class SupabaseStorage implements IStorage {
     // 5pm PDT on April 30 (UTC has already rolled to May).
     const userYearMonth = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone }).slice(0, 7);
 
-    const [documents, rawTrackers, allProfiles, rawExpenses, rawObligations, rawTasks, rawEvents] = await Promise.all([
+    const [documents, rawTrackers, allProfiles, rawExpenses, rawObligations, rawTasks, rawEvents, allAssetLinks, allLiabLinks] = await Promise.all([
       this.getDocuments(), this.getTrackers(), this.getProfiles(),
       this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
+      this.getAssetPartyLinks().catch(() => [] as any[]),
+      this.getLiabilityProfileLinks().catch(() => [] as any[]),
     ]);
+    // Co-ownership lookups for asset/liability share math — same shape as
+    // getStats. A filtered profile that's a co-owner via the party_link
+    // tables must see their fractional share of the asset/liability in
+    // their dashboard totals (e.g. Jane = 50% of Home).
+    const assetLinksByParty = new Map<string, Map<string, number>>();
+    for (const l of (allAssetLinks as any[]) || []) {
+      const pid = (l as any).partyProfileId; const aid = (l as any).assetProfileId;
+      if (!pid || !aid) continue;
+      if (!assetLinksByParty.has(pid)) assetLinksByParty.set(pid, new Map());
+      assetLinksByParty.get(pid)!.set(aid, Number((l as any).ownershipPercentage ?? 100));
+    }
+    const liabLinksByParty = new Map<string, Map<string, number>>();
+    for (const l of (allLiabLinks as any[]) || []) {
+      const pid = (l as any).partyProfileId; const lid = (l as any).liabilityProfileId;
+      if (!pid || !lid) continue;
+      if (!liabLinksByParty.has(pid)) liabLinksByParty.set(pid, new Map());
+      liabLinksByParty.get(pid)!.set(lid, Number((l as any).ownershipPercentage ?? 100));
+    }
+    const assetCoOwnerTotalPct = new Map<string, number>();
+    for (const l of (allAssetLinks as any[]) || []) {
+      const aid = (l as any).assetProfileId; if (!aid) continue;
+      assetCoOwnerTotalPct.set(aid, (assetCoOwnerTotalPct.get(aid) || 0) + Number((l as any).ownershipPercentage ?? 0));
+    }
+    const liabCoOwnerTotalPct = new Map<string, number>();
+    for (const l of (allLiabLinks as any[]) || []) {
+      const lid = (l as any).liabilityProfileId; if (!lid) continue;
+      liabCoOwnerTotalPct.set(lid, (liabCoOwnerTotalPct.get(lid) || 0) + Number((l as any).ownershipPercentage ?? 0));
+    }
     // Use the SAME unified rule the client uses (shared/profile-filter.ts).
     // The previous strict-only rule diverged from the Finance / Calendar /
     // dashboard popup logic, which is why the user saw "Monthly Spend $0"
@@ -3936,21 +4005,34 @@ export class SupabaseStorage implements IStorage {
           // Asset profiles: vehicles, real estate, investments, accounts, subscriptions, generic assets, even loans
           // (a loan profile may carry the asset's market value separately from its remaining balance).
           const childTypes = new Set(["vehicle", "asset", "investment", "property", "subscription", "loan", "account"]);
-          const filteredAssetProfiles = allProfiles.filter(p => {
-            if (!childTypes.has(p.type)) return false;
-            if (!fpIds || fpIds.length === 0) return true; // No filter = show all
+          const noFilter = !fpIds || fpIds.length === 0;
+          // Per filtered profile, what fraction of each asset's value belongs
+          // to them? 0 → they don't own it at all. 100 → full credit.
+          // Rules (co-ownership only applies to true asset/liability items):
+          //  - co-owner link present → use ownership_percentage
+          //  - parent profile + no link → 100% (or residual after co-owners)
+          //  - directly selected (asset itself) → 100%
+          const shareFor = (p: any): number => {
+            if (noFilter) return 100;
             const pParent = p.parentProfileId || p.fields?._parentProfileId;
-            if (pParent && fpIds.includes(pParent)) return true;
-            // Also include the filtered profile itself — an asset can be linked
-            // directly (e.g. a vehicle owned by Bob with no parent), not just as
-            // a child. Without this, switching to Bob hides Bob's own assets.
-            if (fpIds.includes(p.id)) return true;
-            return false;
-          });
-          return filteredAssetProfiles.reduce((s, p) => {
-            // resolveAssetValue walks all known nesting paths (housing.currentValue,
-            // other.purchasePrice, finance.balance, etc.) so historical data shows up.
-            return s + resolveAssetValue(p.fields);
+            let pct = 0;
+            for (const fid of fpIds!) {
+              if (fid === p.id) { pct = Math.max(pct, 100); continue; }
+              const linkPct = assetLinksByParty.get(fid)?.get(p.id);
+              if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
+              if (pParent && pParent === fid) {
+                // Parent gets residual share after explicit co-owners.
+                const taken = assetCoOwnerTotalPct.get(p.id) || 0;
+                pct = Math.max(pct, Math.max(0, 100 - taken));
+              }
+            }
+            return pct;
+          };
+          return allProfiles.reduce((s, p) => {
+            if (!childTypes.has(p.type)) return s;
+            const share = shareFor(p);
+            if (share <= 0) return s;
+            return s + (resolveAssetValue(p.fields) * share / 100);
           }, 0);
         })(),
         // Liabilities: profiles carrying a loan/remaining balance (financed cars, mortgages,
@@ -3967,17 +4049,31 @@ export class SupabaseStorage implements IStorage {
           // 'liability' is the new canonical type (Phase 1+); 'loan' is the legacy
           // alias kept around for any rows that haven't been migrated yet.
           const liabilityTypes = new Set(["liability", "loan", "vehicle", "property", "asset", "account", "investment"]);
-          const filteredProfiles = allProfiles.filter(p => {
-            if (!liabilityTypes.has(p.type)) return false;
-            if (!fpIds || fpIds.length === 0) return true;
+          const noFilter = !fpIds || fpIds.length === 0;
+          const shareFor = (p: any): number => {
+            if (noFilter) return 100;
             const pParent = p.parentProfileId || p.fields?._parentProfileId;
-            if (pParent && fpIds.includes(pParent)) return true;
-            // Also include the filtered profile itself (in case the loan IS the parent)
-            if (fpIds.includes(p.id)) return true;
-            return false;
-          });
-          return filteredProfiles.reduce((s, p) => {
-            return s + resolveLiabilityValue(p.fields);
+            let pct = 0;
+            for (const fid of fpIds!) {
+              if (fid === p.id) { pct = Math.max(pct, 100); continue; }
+              // Liability link tables only key real liability/loan/subscription
+              // rows; for asset-type carrying-a-debt rows we still fall back
+              // to parent rule. Liability links also apply to vehicles that
+              // are actually financed (legacy data shape).
+              const linkPct = liabLinksByParty.get(fid)?.get(p.id);
+              if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
+              if (pParent && pParent === fid) {
+                const taken = liabCoOwnerTotalPct.get(p.id) || 0;
+                pct = Math.max(pct, Math.max(0, 100 - taken));
+              }
+            }
+            return pct;
+          };
+          return allProfiles.reduce((s, p) => {
+            if (!liabilityTypes.has(p.type)) return s;
+            const share = shareFor(p);
+            if (share <= 0) return s;
+            return s + (resolveLiabilityValue(p.fields) * share / 100);
           }, 0);
         })(),
         recentExpenses: allExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category })),
