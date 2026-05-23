@@ -5,7 +5,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/schema.test.ts', 'tests/utils.test.ts'],
+    include: [
+      'tests/schema.test.ts',
+      'tests/utils.test.ts',
+      'tests/liability-calc.test.ts',
+      'tests/profile-filter.test.ts',
+    ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts'],
     testTimeout: 30000,
   },
