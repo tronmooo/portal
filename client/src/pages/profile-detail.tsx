@@ -9442,8 +9442,9 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
         role: "owner",
       });
     },
-    onSuccess: () => {
+    onSuccess: (_data, _vars) => {
       toast({ title: "Asset linked" });
+      const linkedAssetId = pickerPendingId; // capture before reset
       setPickerOpen(false);
       setPickerPendingId(null);
       setPickerPct("100");
@@ -9453,6 +9454,13 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/parties", profileId, "assets"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Bug #2: also invalidate the asset's own party-links view so the asset's
+      // Linked-People panel reflects the new owner immediately.
+      if (linkedAssetId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/assets", linkedAssetId, "parties"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", linkedAssetId, "detail"] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/asset-party-links"] });
     },
     onError: (err: Error) => toast({ title: "Failed to link", description: formatApiError(err), variant: "destructive" }),
   });
@@ -9466,6 +9474,17 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/parties", profileId, "assets"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Bug #14: the unlinked asset's own party-links query is keyed by the
+      // asset id (not the person id), and we don't have the asset id in scope
+      // from just the link id. Broadly invalidate every [/api/assets, *, parties]
+      // query so the asset's Linked-People view refreshes wherever it's mounted.
+      queryClient.invalidateQueries({
+        predicate: (q) => {
+          const k = q.queryKey;
+          return Array.isArray(k) && k[0] === "/api/assets" && k[2] === "parties";
+        },
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/asset-party-links"] });
     },
     onError: (err: Error) => toast({ title: "Failed to unlink", description: formatApiError(err), variant: "destructive" }),
   });
@@ -10500,25 +10519,45 @@ export default function ProfileDetailPage() {
           ownershipPercentage: pct,
         });
       }
-      // Also update fields.ownerName / _parentProfileId for backward-compat
+      // Also update fields.ownerName / _parentProfileId for backward-compat display.
+      // Note: ownerProfileId is intentionally NOT written — no reader consumes it
+      // (party-link rows are the source of truth). ownerName is still kept as a
+      // display fallback at line ~10533 when no party links exist yet.
       const firstName = selectedIds.length === 1
         ? (personOptions.find((p: any) => p.id === selectedIds[0])?.name || null)
         : null;
       await apiRequest("PATCH", `/api/profiles/${id}`, {
         fields: {
           ...(profile?.fields || {}),
-          ownerProfileId: selectedIds.length === 1 ? selectedIds[0] : null,
           ownerName: firstName,
           _parentProfileId: selectedIds.length === 1 ? selectedIds[0] : (profile?.fields?._parentProfileId || null),
         },
       });
+      // Return the union of old + new owners so onSuccess can invalidate each
+      // affected person's caches (their assets list must refresh too).
+      const oldOwnerIds = (currentPartyLinks || [])
+        .map((l: any) => l.partyProfileId || l.party?.id)
+        .filter(Boolean) as string[];
+      return Array.from(new Set([...oldOwnerIds, ...selectedIds]));
     },
-    onSuccess: () => {
+    onSuccess: (affectedOwnerIds: string[] = []) => {
       toast({ title: "Ownership updated" });
       refetchPartyLinks();
       handleSaved();
+      // Bug #1 + #15: invalidate every cache key the new ownership affects so
+      // the UI is consistent without a refresh. Each affected person's profile
+      // detail + their assets list, the global profile list, the dashboard,
+      // the asset's own party links query, and the bulk party-links endpoint.
       queryClient.invalidateQueries({ queryKey: ["/api/rel-people"] });
       queryClient.invalidateQueries({ queryKey: ["/api/assets", id, "parties"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/asset-party-links"] });
+      for (const ownerId of affectedOwnerIds) {
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", ownerId, "detail"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/parties", ownerId, "assets"] });
+      }
       setOwnerPopoverOpen(false);
     },
     onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),

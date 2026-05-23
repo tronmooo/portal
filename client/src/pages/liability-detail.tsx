@@ -587,12 +587,28 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           ownershipPercentage: pct,
         });
       }
+      // Bug #1: return union of old + new owners so each affected person's
+      // caches can be invalidated.
+      const oldOwnerIds = (currentPartyLinks || [])
+        .map((l: any) => l.partyProfileId || l.party?.id)
+        .filter(Boolean) as string[];
+      return Array.from(new Set([...oldOwnerIds, ...selectedIds]));
     },
-    onSuccess: () => {
+    onSuccess: (affectedOwnerIds: string[] = []) => {
       toast({ title: "Ownership updated" });
       refetchPartyLinks();
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "parties"] });
       qc.invalidateQueries({ queryKey: ["/api/profiles"] });
+      // Bug #1 + #15: also invalidate the liability profile's detail, the
+      // dashboard, the bulk links endpoint, and every affected owner's caches.
+      qc.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
+      qc.invalidateQueries({ queryKey: ["/api/rel-people"] });
+      for (const ownerId of affectedOwnerIds) {
+        qc.invalidateQueries({ queryKey: ["/api/profiles", ownerId, "detail"] });
+        qc.invalidateQueries({ queryKey: ["/api/parties", ownerId, "liabilities"] });
+      }
       setOwnerPopoverOpen(false);
     },
     onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),
@@ -2209,9 +2225,18 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       toast({ title: "Person linked" });
+      // Bug #2: also invalidate the linked party's own caches and the dashboard.
       qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+      qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles", liabilityId, "detail"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles", vars.partyProfileId, "detail"] });
+      qc.invalidateQueries({ queryKey: ["/api/parties", vars.partyProfileId, "liabilities"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
+      qc.invalidateQueries({ queryKey: ["/api/rel-people"] });
       setPickerOpen(false);
       setSelectedPartyId("");
     },
@@ -2237,7 +2262,20 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
     },
     onSuccess: () => {
       toast({ title: "Person unlinked" });
+      // Bug #14 (liability side): broadly invalidate so every affected view refreshes.
       qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+      qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
+      qc.invalidateQueries({ queryKey: ["/api/profiles", liabilityId, "detail"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
+      qc.invalidateQueries({ queryKey: ["/api/rel-people"] });
+      qc.invalidateQueries({
+        predicate: (q) => {
+          const k = q.queryKey;
+          return Array.isArray(k) && k[0] === "/api/parties" && k[2] === "liabilities";
+        },
+      });
     },
     onError: (err: Error) =>
       toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" }),
