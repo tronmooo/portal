@@ -1104,87 +1104,150 @@ export class SupabaseStorage implements IStorage {
       await this.supabase.from("tracker_entries").delete().eq("profile_id", id).eq("user_id", this.userId);
     } catch (e) { errors.push("trackers"); }
 
-    // DELETE EVERYTHING linked to this profile — no "shared" exceptions.
-    // If you delete Jane Doe, every expense, task, habit, event, document linked to Jane is gone.
+    // Bug #7: previously this block deleted entire rows whenever a row was
+    // linked to the deleted profile — even if other profiles co-owned it. So
+    // deleting Bob would also delete every expense, task, habit, event,
+    // document, obligation, artifact, or goal that Alice and Bob co-owned,
+    // wiping data Alice still needed. Now we follow the journal pattern at
+    // step 10: if the deleted profile is the SOLE owner (linkedProfiles
+    // length <= 1) delete the row; if it's a co-owner, strip just that id
+    // from linkedProfiles and update. PROFILE_EXCLUSIVE entities (habit, goal
+    // — see PROFILE_EXCLUSIVE set above) always have <= 1 owner so the
+    // "strip" branch is a no-op for them in practice.
 
-    try { // 2. Delete expenses
+    try { // 2. Expenses (multi-owner: preserve shared rows)
       const allExpenses = await this.getExpenses();
       for (const exp of allExpenses) {
-        if (exp.linkedProfiles.includes(id)) {
+        const lp = exp.linkedProfiles || [];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("user_id", this.userId);
           await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
+        } else {
+          // Remove the deleted profile from the junction row AND strip from
+          // the JSONB array on the entity row so both stay consistent.
+          await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("profile_id", id).eq("user_id", this.userId);
+          await this.supabase.from("expenses").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", exp.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("expenses"); }
 
-    try { // 3. Delete tasks
+    try { // 3. Tasks (multi-owner: preserve shared rows)
       const allTasks = await this.getTasks();
       for (const task of allTasks) {
-        if (task.linkedProfiles.includes(id)) {
+        const lp = task.linkedProfiles || [];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("user_id", this.userId);
           await this.supabase.from("tasks").delete().eq("id", task.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("profile_id", id).eq("user_id", this.userId);
+          await this.supabase.from("tasks").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", task.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("tasks"); }
 
-    try { // 4. Delete habits + check-ins
+    try { // 4. Habits + check-ins (PROFILE_EXCLUSIVE, but use same shape for safety)
       const allHabits = await this.getHabits();
       for (const habit of allHabits) {
-        if ((habit.linkedProfiles || []).includes(id)) {
+        const lp = (habit.linkedProfiles || []) as string[];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("habit_checkins").delete().eq("habit_id", habit.id).eq("user_id", this.userId);
           await this.supabase.from("habits").delete().eq("id", habit.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("habits").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", habit.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("habits"); }
 
-    try { // 5. Delete obligations
+    try { // 5. Obligations (multi-owner: preserve shared rows)
       const allObligations = await this.getObligations();
       for (const ob of allObligations) {
-        if (ob.linkedProfiles.includes(id)) {
+        const lp = ob.linkedProfiles || [];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("user_id", this.userId);
           await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("profile_id", id).eq("user_id", this.userId);
+          await this.supabase.from("obligations").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", ob.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("obligations"); }
 
-    try { // 6. Delete events
+    try { // 6. Events (multi-owner: preserve shared rows)
       const allEvents = await this.getEvents();
       for (const ev of allEvents) {
-        if (ev.linkedProfiles.includes(id)) {
+        const lp = ev.linkedProfiles || [];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("user_id", this.userId);
           await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("profile_id", id).eq("user_id", this.userId);
+          await this.supabase.from("events").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("events"); }
 
-    try { // 7. Delete documents
+    try { // 7. Documents (multi-owner: preserve shared rows)
       const allDocuments = await this.getDocuments();
       for (const doc of allDocuments) {
-        if ((doc.linkedProfiles || []).includes(id)) {
+        const lp = (doc.linkedProfiles || []) as string[];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("user_id", this.userId);
           await this.supabase.from("documents").delete().eq("id", doc.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("profile_id", id).eq("user_id", this.userId);
+          await this.supabase.from("documents").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", doc.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("documents"); }
 
-    try { // 8. Delete artifacts
+    try { // 8. Artifacts (multi-owner: preserve shared rows)
       const allArtifacts = await this.getArtifacts();
       for (const art of allArtifacts) {
-        if ((art.linkedProfiles || []).includes(id)) {
+        const lp = (art.linkedProfiles || []) as string[];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("user_id", this.userId);
           await this.supabase.from("artifacts").delete().eq("id", art.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("profile_id", id).eq("user_id", this.userId);
+          await this.supabase.from("artifacts").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", art.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("artifacts"); }
 
-    try { // 9. Delete goals
+    try { // 9. Goals (PROFILE_EXCLUSIVE; use same shape for safety)
       const allGoals = await this.getGoals();
       for (const goal of allGoals) {
-        if ((goal.linkedProfiles || []).includes(id)) {
+        const lp = ((goal as any).linkedProfiles || []) as string[];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
           await this.supabase.from("goals").delete().eq("id", goal.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("goals").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", goal.id).eq("user_id", this.userId);
         }
       }
     } catch (e) { errors.push("goals"); }
+
+    try { // 9b. Incomes (multi-owner: preserve shared rows) — Bug #8: incomes
+      // were never part of the cascade at all, so deleted profiles left orphan
+      // income rows still pointing at them in linked_profiles.
+      const allIncomes = await this.getIncomes();
+      for (const inc of allIncomes) {
+        const lp = (inc.linkedProfiles || []) as string[];
+        if (!lp.includes(id)) continue;
+        if (lp.length <= 1) {
+          await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", inc.id).eq("user_id", this.userId);
+        } else {
+          await this.supabase.from("incomes").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", inc.id).eq("user_id", this.userId);
+        }
+      }
+    } catch (e) { errors.push("incomes"); }
 
     try { // 10. Delete/unlink journal entries
       const { data: journalRows } = await this.supabase.from("journal_entries").select("id, linked_profiles").eq("user_id", this.userId);
