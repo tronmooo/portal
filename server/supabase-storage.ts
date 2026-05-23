@@ -1954,6 +1954,12 @@ export class SupabaseStorage implements IStorage {
     if (data.category !== undefined) updates.category = data.category;
     if (data.frequency !== undefined) updates.frequency = data.frequency;
     if (data.date !== undefined) updates.date = data.date;
+    // Bug #4: linkedProfiles and tags were silently dropped on update, so any
+    // edit (manual or via AI updateEntityLinkedProfiles → updateIncome path,
+    // bug #12) would wipe the income's profile attribution. The PATCH route
+    // accepts these fields and returns 200 — but they never reached the DB.
+    if (data.linkedProfiles !== undefined) updates.linked_profiles = data.linkedProfiles;
+    if (data.tags !== undefined) updates.tags = data.tags;
     const { error } = await this.supabase.from("incomes").update(updates).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     const all = await this.getIncomes();

@@ -7265,6 +7265,7 @@ async function getEntityLinkedProfiles(entityType: string, entityId: string): Pr
       case "habit": { const h = (await storage.getHabits()).find(h => h.id === entityId); return (h as any)?.linkedProfiles || []; }
       case "goal": { const g = (await storage.getGoals()).find(g => g.id === entityId); return (g as any)?.linkedProfiles || []; }
       case "journal": { const j = (await storage.getJournalEntries()).find(j => j.id === entityId); return (j as any)?.linkedProfiles || []; }
+      case "income": { const inc = (await storage.getIncomes()).find((i: any) => i.id === entityId); return inc?.linkedProfiles || []; }
       default: return [];
     }
   } catch { return []; }
@@ -7373,6 +7374,22 @@ async function updateEntityLinkedProfiles(entityType: string, entityId: string, 
         if (!existing.includes(profileId)) {
           existing.push(profileId);
           await storage.updateDocument(entityId, { linkedProfiles: existing } as any);
+        }
+      }
+      break;
+    }
+    case "income": {
+      // Bug #12: "income" case was missing from the switch, so AI-created or
+      // AI-edited incomes never got their linkedProfiles synced through this
+      // path. Pairs with bug #4 (updateIncome dropping linkedProfiles) — both
+      // sides of the round-trip are now wired.
+      const incomes = await storage.getIncomes();
+      const income = incomes.find((i: any) => i.id === entityId);
+      if (income) {
+        const existing = income.linkedProfiles || [];
+        if (!existing.includes(profileId)) {
+          existing.push(profileId);
+          await storage.updateIncome(entityId, { linkedProfiles: existing } as any);
         }
       }
       break;

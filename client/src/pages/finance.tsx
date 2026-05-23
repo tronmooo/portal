@@ -140,20 +140,25 @@ export default function FinancePage() {
   const [addPaycheckOpen, setAddPaycheckOpen] = useState(false);
   const [newPaycheck, setNewPaycheck] = useState({ source: "", amount: "", expectedDate: "" });
 
-  // ── Income CRUD state ────────────────────────────────────────────────────
+  // ── Income CRUD state ──────────────────────────────────────────────
+  // Bug #5: both dialogs now carry profileId so users can re-assign income
+  // ownership without delete + recreate (matches Edit Expense at line ~831).
   const [addIncomeOpen, setAddIncomeOpen] = useState(false);
-  const [newIncome, setNewIncome] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" });
+  const [newIncome, setNewIncome] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
   const [editingIncome, setEditingIncome] = useState<any | null>(null);
-  const [editIncomeForm, setEditIncomeForm] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" });
+  const [editIncomeForm, setEditIncomeForm] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
   const [incomeToDelete, setIncomeToDelete] = useState<{ id: string; description: string; amount: number } | null>(null);
   useEffect(() => {
     if (editingIncome) {
+      // Bug #18 (income subset): re-seed every time the income changes so the
+      // dialog never shows stale state from the previously-edited row.
       setEditIncomeForm({
         description: editingIncome.description ?? "",
         amount: String(editingIncome.amount ?? ""),
         category: editingIncome.category ?? "salary",
         frequency: editingIncome.frequency ?? "monthly",
         date: editingIncome.date?.slice(0, 10) ?? "",
+        profileId: (editingIncome.linkedProfiles?.[0]) ?? "",
       });
     }
   }, [editingIncome?.id]);
@@ -294,6 +299,10 @@ export default function FinancePage() {
       if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
       const desc = newIncome.description.trim();
       if (!desc) throw new Error("Description is required");
+      // Bug #5: prefer the dialog's own profile picker; fall back to the
+      // page-level expenseProfileId chip so users who don't change it still
+      // get correct attribution.
+      const chosenProfileId = newIncome.profileId || expenseProfileId;
       await apiRequest("POST", "/api/incomes", {
         description: desc,
         amount: amt,
@@ -301,7 +310,7 @@ export default function FinancePage() {
         frequency: newIncome.frequency,
         date: newIncome.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
         tags: [],
-        ...(expenseProfileId ? { linkedProfiles: [expenseProfileId] } : {}),
+        ...(chosenProfileId ? { linkedProfiles: [chosenProfileId] } : {}),
       });
       return { description: desc, amount: amt };
     },
@@ -311,7 +320,7 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       setAddIncomeOpen(false);
-      setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" });
+      setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
       toast({ title: `Income added`, description: `${description} — $${amount.toFixed(2)}` });
     },
     onError: (err: Error) => toast({ title: "Failed to add income", description: formatApiError(err), variant: "destructive" }),
@@ -323,12 +332,16 @@ export default function FinancePage() {
       if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
       const desc = editIncomeForm.description.trim();
       if (!desc) throw new Error("Description is required");
+      // Bug #5: Edit Income previously never sent linkedProfiles, so users
+      // could not re-attribute an income without delete+recreate. Now sends
+      // the chosen profile (or [] to clear). Pairs with bug #4 server fix.
       await apiRequest("PATCH", `/api/incomes/${input.id}`, {
         description: desc,
         amount: amt,
         category: editIncomeForm.category,
         frequency: editIncomeForm.frequency,
         ...(editIncomeForm.date ? { date: editIncomeForm.date } : {}),
+        linkedProfiles: editIncomeForm.profileId ? [editIncomeForm.profileId] : [],
       });
     },
     onSuccess: () => {
@@ -1002,7 +1015,7 @@ export default function FinancePage() {
       </div>
 
       {/* Add Income Dialog */}
-      <Dialog open={addIncomeOpen} onOpenChange={(open) => { if (!open) setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "" }); setAddIncomeOpen(open); }}>
+      <Dialog open={addIncomeOpen} onOpenChange={(open) => { if (!open) setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" }); setAddIncomeOpen(open); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Add Income</DialogTitle>
@@ -1059,6 +1072,20 @@ export default function FinancePage() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            {/* Bug #5: Income now has a profile picker. Defaults to the
+                page-level expenseProfileId chip so users who don't touch it
+                still get attribution. */}
+            <div>
+              <Label className="text-xs">Profile</Label>
+              <Select value={newIncome.profileId || expenseProfileId} onValueChange={v => setNewIncome(p => ({ ...p, profileId: v }))}>
+                <SelectTrigger data-testid="select-income-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
+                <SelectContent>
+                  {(profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).map((p: any) => (
+                    <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <Button
               className="w-full"
@@ -1129,6 +1156,19 @@ export default function FinancePage() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            {/* Bug #5: Edit Income now has a profile picker so users can
+                re-attribute income without delete + recreate. */}
+            <div>
+              <Label className="text-xs">Profile</Label>
+              <Select value={editIncomeForm.profileId} onValueChange={v => setEditIncomeForm(p => ({ ...p, profileId: v }))}>
+                <SelectTrigger data-testid="select-edit-income-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
+                <SelectContent>
+                  {(profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).map((p: any) => (
+                    <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <Button
               className="w-full"
