@@ -1744,7 +1744,17 @@ export class SupabaseStorage implements IStorage {
     });
     if (error) throw error;
     this.logActivity("tracker", `Logged ${tracker.name}`);
-    return { id, values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: ts };
+    return {
+      id,
+      values,
+      computed,
+      notes: data.notes,
+      mood: data.mood as any,
+      tags: data.tags,
+      forProfile: data.forProfile || undefined,
+      profileId: data.profileId || undefined,
+      timestamp: ts,
+    };
   }
 
   async updateTrackerEntry(
