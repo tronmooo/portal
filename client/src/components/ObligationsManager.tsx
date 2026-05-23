@@ -230,6 +230,19 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
   const [editCategory, setEditCategory] = useState(ob.category);
   const [editKind, setEditKind] = useState<ObligationKind>((ob.kind as ObligationKind) || "bill");
 
+  // Bug #18: useState seeds only on first render; if the underlying obligation
+  // changes (background refetch, another tab edit, AI chat update) the dialog
+  // would show stale values when re-opened. Re-seed whenever we transition
+  // from closed → open OR when the source obligation id/updated fields change.
+  useEffect(() => {
+    if (!editOpen) return;
+    setEditAmount(String(ob.amount));
+    setEditDueDate(ob.nextDueDate?.slice(0, 10) || "");
+    setEditFrequency(ob.frequency);
+    setEditCategory(ob.category);
+    setEditKind((ob.kind as ObligationKind) || "bill");
+  }, [editOpen, ob.id, ob.amount, ob.nextDueDate, ob.frequency, ob.category, ob.kind]);
+
   const undoPayMutation = useMutation({
     mutationFn: () => apiRequest("PATCH", `/api/obligations/${ob.id}`, { isPaid: false }),
     onSuccess: () => { invalidateAll(); toast({ title: `"${ob.name}" payment undone` }); },

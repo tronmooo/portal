@@ -588,6 +588,12 @@ export default function EditorPage() {
       setDirty(false);
       setLastSavedAt(Date.now());
       qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      // Bug #22: artifact saves auto-create a backing document row server-side
+      // (PDF/Word/etc. preview surface). The Documents page reads from
+      // /api/documents — without invalidating it the new doc doesn’t appear
+      // until next mount. Also refresh dashboard counters that read both.
+      qc.invalidateQueries({ queryKey: ["/api/documents"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       // Update URL so refresh re-opens the right artifact.
       if (isNew) {
         const qs = fromChat ? "?source=chat" : "";
@@ -639,6 +645,9 @@ export default function EditorPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      // Bug #22: keep documents list in sync — backing doc is removed too.
+      qc.invalidateQueries({ queryKey: ["/api/documents"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: "Deleted" });
       setLocation("/artifacts");
     },
@@ -657,6 +666,9 @@ export default function EditorPage() {
     },
     onSuccess: (copy: Artifact) => {
       qc.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      // Bug #22: duplicate also creates a new backing document row.
+      qc.invalidateQueries({ queryKey: ["/api/documents"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       toast({ title: "Copy created" });
       setLocation(`/editor/${copy.id}`);
     },

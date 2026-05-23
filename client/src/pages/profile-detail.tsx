@@ -8913,10 +8913,18 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
   const isPerson = profileType === "person" || profileType === "self";
 
   // For asset profiles use /api/assets/:id/parties
-  // For liability profiles use /api/liabilities/:id/profile-links
+  // For liability profiles use /api/liabilities/:id/parties
   // For person/self: people via graph 2-hops
+  // Query key reflects the actual endpoint so cache-bus predicates and
+  // ownership-mutation invalidations match this entry instead of going
+  // through a fake "/api/rel-people" alias key.
+  const partiesQueryKey: any[] = isAsset
+    ? ["/api/assets", profileId, "parties"]
+    : isLiability
+    ? ["/api/liabilities", profileId, "parties"]
+    : ["/api/relationships/graph", profileId, { hops: 2, view: "linked-people" }];
   const { data: parties = [], refetch } = useQuery<any[]>({
-    queryKey: ["/api/rel-people", profileType, profileId],
+    queryKey: partiesQueryKey,
     queryFn: async () => {
       if (isAsset) {
         return apiRequest("GET", `/api/assets/${profileId}/parties`).then(r => r.json());
@@ -10548,8 +10556,10 @@ export default function ProfileDetailPage() {
       // the UI is consistent without a refresh. Each affected person's profile
       // detail + their assets list, the global profile list, the dashboard,
       // the asset's own party links query, and the bulk party-links endpoint.
-      queryClient.invalidateQueries({ queryKey: ["/api/rel-people"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rel-people"] }); // legacy key (still invalidated by ProfileSharedTabs)
       queryClient.invalidateQueries({ queryKey: ["/api/assets", id, "parties"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/liabilities", id, "parties"] });
+      queryClient.invalidateQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey[0] === "/api/relationships/graph" });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });

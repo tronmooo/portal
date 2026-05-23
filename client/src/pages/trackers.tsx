@@ -1783,6 +1783,16 @@ function EntryRow({
     setEditing(true);
   };
 
+  // Bug #18: if the source entry refetches (or another tab updates it) while
+  // the row is being edited, re-seed so the form reflects current server
+  // state instead of holding the values captured on the first startEdit.
+  // Watching entry.id covers the (unlikely) case where the same DOM row is
+  // re-keyed to a different entry without unmounting.
+  useEffect(() => {
+    if (!editing) return;
+    setEditVals({ ...entry.values });
+  }, [editing, entry.id, JSON.stringify(entry.values)]);
+
   const primaryVal = entry.values[primaryField];
   const otherFields = tracker.fields.filter((f) => f.name !== primaryField);
   // BP detection for display
