@@ -225,15 +225,43 @@ function EventFormDialog({
       }
     },
     onMutate: async () => {
-      // Optimistic update: only on create (edits would require richer merge)
+      // Optimistic update for BOTH create and edit: patch the matching event in
+      // every cached list immediately so the calendar reflects the change before
+      // the round-trip completes. On edit we don't add a temp row — we mutate
+      // the existing one in place by id.
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      if (isEdit) {
-        return { prevEvents: [], prevTimeline: [], tempId };
-      }
       await queryClient.cancelQueries({ queryKey: ["/api/events"] });
       await queryClient.cancelQueries({ queryKey: ["/api/calendar/timeline"] });
       const prevEvents = queryClient.getQueriesData({ queryKey: ["/api/events"] });
       const prevTimeline = queryClient.getQueriesData({ queryKey: ["/api/calendar/timeline"] });
+      if (isEdit && eventId) {
+        // Patch existing event in caches.
+        const patch: any = {
+          title: form.title,
+          date: form.date,
+          allDay: form.allDay,
+          category: form.category,
+          recurrence: form.recurrence,
+          linkedProfiles: form.linkedProfiles,
+          time: !form.allDay && form.time ? form.time : null,
+          endTime: !form.allDay && form.endTime ? form.endTime : null,
+          description: form.description || null,
+          location: form.location || null,
+        };
+        queryClient.setQueriesData<any[]>({ queryKey: ["/api/events"] }, (old) =>
+          Array.isArray(old) ? old.map((e: any) => e?.id === eventId ? { ...e, ...patch } : e) : old
+        );
+        queryClient.setQueriesData<any>({ queryKey: ["/api/calendar/timeline"] }, (old: any) => {
+          if (!old) return old;
+          const patchItem = (it: any) => (it && it.sourceId === eventId && (it.type === "event" || it.kind === "event"))
+            ? { ...it, ...patch }
+            : it;
+          if (Array.isArray(old)) return old.map(patchItem);
+          if (Array.isArray(old.items)) return { ...old, items: old.items.map(patchItem) };
+          return old;
+        });
+        return { prevEvents, prevTimeline, tempId };
+      }
       const tempEvent: any = {
         id: tempId,
         title: form.title,
@@ -249,7 +277,7 @@ function EventFormDialog({
         location: form.location || null,
         _optimistic: true,
       };
-      // Append to events lists
+      // Append to events lists (create only)
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/events"] }, (old) =>
         Array.isArray(old) ? [...old, tempEvent] : old
       );
@@ -524,7 +552,7 @@ function EventDetailDialog({
     .map(id => profiles.find(p => p.id === id)?.name)
     .filter(Boolean);
 
-  const deleteMutation = useMutation({
+  const deleteMutation = useMutation<void, Error, void, { prevTimeline: [readonly unknown[], unknown][]; prevEntity: [readonly unknown[], unknown][]; entityKey: string }>({
     mutationFn: async () => {
       if (item.type === "event") {
         await apiRequest("DELETE", `/api/events/${item.sourceId}`);
@@ -534,10 +562,27 @@ function EventDetailDialog({
         await apiRequest("DELETE", `/api/obligations/${item.sourceId}`);
       }
     },
-    onSuccess: () => {
-      // Optimistically remove from the relevant cache
+    onMutate: async () => {
+      // Optimistically remove from the timeline + the underlying entity list so
+      // the dialog can close and the row vanishes instantly.
       const entityKey = item.type === "event" ? "/api/events" : item.type === "task" ? "/api/tasks" : "/api/obligations";
-      queryClient.setQueryData([entityKey], (old: any[]) => old?.filter(e => e.id !== item.sourceId));
+      await queryClient.cancelQueries({ queryKey: ["/api/calendar/timeline"] });
+      await queryClient.cancelQueries({ queryKey: [entityKey] });
+      const prevTimeline = queryClient.getQueriesData({ queryKey: ["/api/calendar/timeline"] });
+      const prevEntity = queryClient.getQueriesData({ queryKey: [entityKey] });
+      const dropFromTimeline = (it: any) => it && it.sourceId !== item.sourceId;
+      queryClient.setQueriesData<any>({ queryKey: ["/api/calendar/timeline"] }, (old: any) => {
+        if (!old) return old;
+        if (Array.isArray(old)) return old.filter(dropFromTimeline);
+        if (Array.isArray(old.items)) return { ...old, items: old.items.filter(dropFromTimeline) };
+        return old;
+      });
+      queryClient.setQueriesData<any[]>({ queryKey: [entityKey] }, (old) =>
+        Array.isArray(old) ? old.filter((e: any) => e.id !== item.sourceId) : old
+      );
+      return { prevTimeline, prevEntity, entityKey };
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
@@ -546,9 +591,10 @@ function EventDetailDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       toast({ title: `"${item?.title || "Item"}" deleted` });
-      onClose();
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prevTimeline) { for (const [k, d] of ctx.prevTimeline) queryClient.setQueryData(k, d); }
+      if (ctx?.prevEntity) { for (const [k, d] of ctx.prevEntity) queryClient.setQueryData(k, d); }
       toast({ title: `Failed to delete "${item?.title || "item"}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -785,7 +831,11 @@ function EventDetailDialog({
               variant="destructive"
               size="sm"
               disabled={deleteMutation.isPending}
-              onClick={() => deleteMutation.mutate()}
+              onClick={() => {
+                // Close immediately for snappy UX — optimistic removal in onMutate.
+                deleteMutation.mutate();
+                onClose();
+              }}
               data-testid="btn-delete-event-detail"
             >
               <Trash2 className="h-3.5 w-3.5 mr-1" />

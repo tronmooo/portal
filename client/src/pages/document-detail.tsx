@@ -606,15 +606,32 @@ export default function DocumentDetailPage() {
     enabled: !!id,
   });
 
-  const mutation = useMutation({
+  const mutation = useMutation<Document, Error, Partial<Document>, { prevDetail: unknown; prevList: [readonly unknown[], unknown][] }>({
     mutationFn: (patch: Partial<Document>) =>
       apiRequest("PATCH", `/api/documents/${id}`, patch).then((r) => r.json()),
+    onMutate: async (patch) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/documents", id] });
+      await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
+      const prevDetail = queryClient.getQueryData(["/api/documents", id]);
+      const prevList = queryClient.getQueriesData({ queryKey: ["/api/documents"] });
+      // Optimistically merge into the single detail object
+      queryClient.setQueryData(["/api/documents", id], (old: any) => old ? { ...old, ...patch } : old);
+      // Optimistically merge into list queries that contain this doc
+      queryClient.setQueriesData({ queryKey: ["/api/documents"] }, (old: any) => {
+        if (!old) return old;
+        if (Array.isArray(old)) return old.map((d: any) => d.id === id ? { ...d, ...patch } : d);
+        return old;
+      });
+      return { prevDetail, prevList };
+    },
     onSuccess: (updated) => {
       queryClient.setQueryData(["/api/documents", id], updated);
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
       toast({ title: "Saved", description: "Document updated" });
     },
-    onError: () => {
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prevDetail) queryClient.setQueryData(["/api/documents", id], ctx.prevDetail);
+      if (ctx?.prevList) { for (const [key, data] of ctx.prevList) queryClient.setQueryData(key, data); }
       toast({ title: "Error", description: "Failed to save changes", variant: "destructive" });
     },
   });

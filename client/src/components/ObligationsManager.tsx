@@ -149,15 +149,37 @@ function OccurrenceRow({ occ }: { occ: any }) {
   const isDone = occ.status === "done";
   const isSkipped = occ.status === "skipped";
 
-  const setStatus = useMutation({
+  const setStatus = useMutation<unknown, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: (status: string) => apiRequest("POST", `/api/obligation-occurrences/${occ.id}/status`, { status }),
+    onMutate: async (status) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligation-occurrences"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligation-occurrences"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligation-occurrences"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === occ.id ? { ...o, status } : o) : old
+      );
+      return { prev };
+    },
     onSuccess: (_d, status) => { invalidateAll(); toast({ title: status === "done" ? "Marked done" : status === "skipped" ? "Skipped" : "Updated" }); },
-    onError: (err: Error) => toast({ title: "Update failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: "Update failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
-  const reschedule = useMutation({
+  const reschedule = useMutation<unknown, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: (newDueAt: string) => apiRequest("POST", `/api/obligation-occurrences/${occ.id}/reschedule`, { newDueAt }),
+    onMutate: async (newDueAt) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligation-occurrences"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligation-occurrences"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligation-occurrences"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === occ.id ? { ...o, due_at: newDueAt } : o) : old
+      );
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); toast({ title: "Rescheduled" }); },
-    onError: (err: Error) => toast({ title: "Reschedule failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: "Reschedule failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   // BUG-OBL-003: "0d overdue" reads wrong on today's items; show "Due today" instead.
@@ -243,18 +265,38 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
     setEditKind((ob.kind as ObligationKind) || "bill");
   }, [editOpen, ob.id, ob.amount, ob.nextDueDate, ob.frequency, ob.category, ob.kind]);
 
-  const undoPayMutation = useMutation({
+  const undoPayMutation = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     // Bug fix: previously PATCHed { isPaid: false } against a route that has
     // no such field — server silently dropped it and the obligation stayed
     // "paid". Now we hit the dedicated DELETE /last-payment route which
     // removes the most recent obligation_payments row.
     mutationFn: () => apiRequest("DELETE", `/api/obligations/${ob.id}/last-payment`),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === ob.id ? { ...o, isPaid: false, lastPaidAt: null } : o) : old
+      );
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); toast({ title: `"${ob.name}" payment undone` }); },
-    onError: (err: Error) => toast({ title: `Failed to undo payment`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: `Failed to undo payment`, description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const payMutation = useMutation({
+  const payMutation = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      const nowIso = new Date().toISOString();
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === ob.id ? { ...o, isPaid: true, lastPaidAt: nowIso } : o) : old
+      );
+      return { prev };
+    },
     onSuccess: () => {
       invalidateAll();
       toast({
@@ -263,16 +305,36 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
         action: <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => undoPayMutation.mutate()}>Undo</Button>,
       });
     },
-    onError: (err: Error) => toast({ title: `Failed to pay "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: `Failed to pay "${ob.name}"`, description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const deleteMutation = useMutation({
+  const deleteMutation = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("DELETE", `/api/obligations/${ob.id}`),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/obligation-occurrences"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((o: any) => o?.id !== ob.id) : old
+      );
+      // Also drop any occurrences that belong to this obligation so the live
+      // "Due today" panel doesn't keep showing rows for a deleted bill.
+      queryClient.setQueriesData({ queryKey: ["/api/obligation-occurrences"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((o: any) => o?.obligation_id !== ob.id && o?.obligation?.id !== ob.id) : old
+      );
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); toast({ title: `"${ob.name}" deleted` }); },
-    onError: (err: Error) => toast({ title: `Failed to delete "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: `Failed to delete "${ob.name}"`, description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const editMutation = useMutation({
+  const editMutation = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("PATCH", `/api/obligations/${ob.id}`, {
       amount: parseFloat(editAmount),
       nextDueDate: editDueDate,
@@ -280,8 +342,27 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
       category: editCategory,
       kind: editKind,
     }),
-    onSuccess: () => { invalidateAll(); setEditOpen(false); toast({ title: `"${ob.name}" updated` }); },
-    onError: (err: Error) => toast({ title: `Failed to update "${ob.name}"`, description: formatApiError(err), variant: "destructive" }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      const amt = parseFloat(editAmount);
+      const patch: any = {
+        ...(isFinite(amt) ? { amount: amt } : {}),
+        nextDueDate: editDueDate,
+        frequency: editFrequency,
+        category: editCategory,
+        kind: editKind,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === ob.id ? { ...o, ...patch } : o) : old
+      );
+      return { prev };
+    },
+    onSuccess: () => { invalidateAll(); toast({ title: `"${ob.name}" updated` }); },
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: `Failed to update "${ob.name}"`, description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   const kindMeta = OBLIGATION_KIND_META[(ob.kind as ObligationKind) || "bill"];
@@ -454,7 +535,11 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setEditOpen(false)}>Cancel</Button>
             <Button size="sm" disabled={!editAmount || parseFloat(editAmount) <= 0 || editMutation.isPending}
-              onClick={() => editMutation.mutate()} data-testid="button-save-edit-obligation">
+              onClick={() => {
+                // Close immediately for snappy UX — optimistic patch in onMutate.
+                editMutation.mutate();
+                setEditOpen(false);
+              }} data-testid="button-save-edit-obligation">
               {editMutation.isPending ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>
@@ -587,8 +672,16 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
   const nextThree = nextOccurrencesFrom(ob.nextDueDate, ob.frequency, 3);
   const seriesSummary = occurrenceSeries(ob.nextDueDate, (ob as any).recurrenceEnd || null, ob.frequency);
 
-  const payMut = useMutation({
+  const payMut = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === ob.id ? { ...o, isPaid: true, lastPaidAt: new Date().toISOString() } : o) : old
+      );
+      return { prev };
+    },
     onSuccess: () => {
       invalidateAll();
       const logged = ob.autoLogExpense || kind === "subscription" || kind === "bill" || kind === "loan_payment";
@@ -597,27 +690,63 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
         description: logged ? `$${ob.amount.toFixed(2)} logged to Finance · next due advanced` : `Next due advanced`,
         action: logged ? <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => navigate("/dashboard/finance")}>View</Button> : undefined,
       });
-      onClose();
     },
-    onError: (err: Error) => toast({ title: "Failed to mark paid", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: "Failed to mark paid", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const pauseMut = useMutation({
+  const pauseMut = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("PATCH", `/api/obligations/${ob.id}`, { status: isPaused ? "active" : "paused" }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      const nextStatus = isPaused ? "active" : "paused";
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === ob.id ? { ...o, status: nextStatus } : o) : old
+      );
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); toast({ title: isPaused ? `"${ob.name}" resumed` : `"${ob.name}" paused` }); },
-    onError: (err: Error) => toast({ title: "Update failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: "Update failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const rescheduleMut = useMutation({
+  const rescheduleMut = useMutation<unknown, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: (newDate: string) => apiRequest("PATCH", `/api/obligations/${ob.id}`, { nextDueDate: newDate }),
+    onMutate: async (newDate) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.map((o: any) => o?.id === ob.id ? { ...o, nextDueDate: newDate } : o) : old
+      );
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); setRescheduleDate(""); toast({ title: "Rescheduled" }); },
-    onError: (err: Error) => toast({ title: "Reschedule failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: "Reschedule failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const deleteMut = useMutation({
+  const deleteMut = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("DELETE", `/api/obligations/${ob.id}`),
-    onSuccess: () => { invalidateAll(); toast({ title: `"${ob.name}" deleted` }); onClose(); },
-    onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((o: any) => o?.id !== ob.id) : old
+      );
+      return { prev };
+    },
+    onSuccess: () => { invalidateAll(); toast({ title: `"${ob.name}" deleted` }); },
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   return (
@@ -743,7 +872,11 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
         {/* Action grid */}
         <DialogFooter className="flex-col sm:flex-col gap-2 mt-2 pt-3 border-t border-border/40">
           <div className="grid grid-cols-2 gap-2 w-full">
-            <Button size="sm" onClick={() => payMut.mutate()} disabled={payMut.isPending || isPaused}
+            <Button size="sm" onClick={() => {
+              // Close drawer immediately for snappy UX — optimistic update in onMutate.
+              payMut.mutate();
+              onClose();
+            }} disabled={payMut.isPending || isPaused}
               data-testid="drawer-mark-paid" className="h-9">
               <CheckCircle className="h-3.5 w-3.5 mr-1.5" /> Mark paid
             </Button>
@@ -771,7 +904,12 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                onClick={() => { deleteMut.mutate(); setShowDeleteConfirm(false); }}>
+                onClick={() => {
+                  // Close drawer + confirm immediately — optimistic removal in onMutate.
+                  deleteMut.mutate();
+                  setShowDeleteConfirm(false);
+                  onClose();
+                }}>
                 Delete
               </AlertDialogAction>
             </AlertDialogFooter>

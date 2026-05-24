@@ -197,20 +197,37 @@ function QuickTaskDialog({ open, onClose }: { open: boolean; onClose: () => void
 
   useEffect(() => { if (!open) { setTitle(""); setPriority("medium"); setDueDate(""); } }, [open]);
 
-  const m = useMutation({
-    mutationFn: async () => {
-      const payload: any = { title: title.trim(), priority };
-      if (dueDate) payload.dueDate = dueDate;
+  const m = useMutation<any, Error, { title: string; priority: string; dueDate?: string }, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: async (payload) => {
       const res = await apiRequest("POST", "/api/tasks", payload);
       return res.json();
+    },
+    onMutate: async (vars) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/tasks"] });
+      const temp = {
+        id: `temp-${Date.now()}`,
+        title: vars.title,
+        priority: vars.priority,
+        dueDate: vars.dueDate,
+        completed: false,
+        _optimistic: true,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) => {
+        if (Array.isArray(old)) return [temp, ...old];
+        return old;
+      });
+      return { prev };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Task created" });
-      onClose();
     },
-    onError: (e: Error) => toast({ title: "Could not create task", description: e.message, variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Could not create task", description: err.message, variant: "destructive" });
+    },
   });
 
   return (
@@ -241,7 +258,12 @@ function QuickTaskDialog({ open, onClose }: { open: boolean; onClose: () => void
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button onClick={() => m.mutate()} disabled={!title.trim() || m.isPending}>{m.isPending ? "Saving…" : "Create"}</Button>
+            <Button onClick={() => {
+              const payload: any = { title: title.trim(), priority };
+              if (dueDate) payload.dueDate = dueDate;
+              m.mutate(payload);
+              onClose();
+            }} disabled={!title.trim()}>Create</Button>
           </div>
         </div>
       </DialogContent>
@@ -265,23 +287,31 @@ function QuickBillDialog({ open, onClose }: { open: boolean; onClose: () => void
     }
   }, [open]);
 
-  const m = useMutation({
-    mutationFn: async () => {
-      const amt = parseFloat(amount);
-      if (!name.trim() || !Number.isFinite(amt) || amt <= 0) throw new Error("Name and positive amount required");
-      const res = await apiRequest("POST", "/api/obligations", {
-        name: name.trim(), amount: amt, frequency, category, nextDueDate, autopay: false,
-      });
+  const m = useMutation<any, Error, { name: string; amount: number; frequency: string; category: string; nextDueDate: string }, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: async (vars) => {
+      const res = await apiRequest("POST", "/api/obligations", { ...vars, autopay: false });
       return res.json();
+    },
+    onMutate: async (vars) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      const temp = { id: `temp-${Date.now()}`, ...vars, autopay: false, _optimistic: true };
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) => {
+        if (Array.isArray(old)) return [temp, ...old];
+        return old;
+      });
+      return { prev };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar"] });
       toast({ title: "Bill added" });
-      onClose();
     },
-    onError: (e: Error) => toast({ title: "Could not add bill", description: e.message, variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Could not add bill", description: err.message, variant: "destructive" });
+    },
   });
 
   return (
@@ -337,8 +367,16 @@ function QuickBillDialog({ open, onClose }: { open: boolean; onClose: () => void
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button onClick={() => m.mutate()} disabled={!name.trim() || !amount.trim() || m.isPending}>
-              {m.isPending ? "Saving…" : "Create"}
+            <Button onClick={() => {
+              const amt = parseFloat(amount);
+              if (!name.trim() || !Number.isFinite(amt) || amt <= 0) {
+                toast({ title: "Invalid input", description: "Name and positive amount required", variant: "destructive" });
+                return;
+              }
+              m.mutate({ name: name.trim(), amount: amt, frequency, category, nextDueDate });
+              onClose();
+            }} disabled={!name.trim() || !amount.trim()}>
+              Create
             </Button>
           </div>
         </div>

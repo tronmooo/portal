@@ -636,31 +636,69 @@ export function BudgetPopup({
     qc.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
   };
 
-  const addMut = useMutation({
-    mutationFn: async () => {
-      const amt = newMode === "percent"
-        ? (monthlyIncome > 0 ? (Number(newAmount) / 100) * monthlyIncome : Number(newAmount))
-        : Number(newAmount);
-      if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
-      if (!newCategory.trim()) throw new Error("Enter a category");
-      return (await apiRequest("POST", "/api/budgets", { category: newCategory.trim(), amount: amt })).json();
+  const addMut = useMutation<any, Error, { category: string; amount: number }, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: async (vars) => {
+      return (await apiRequest("POST", "/api/budgets", vars)).json();
     },
-    onSuccess: () => { invalidate(); setNewCategory(""); setNewAmount(""); setShowAdd(false); toast({ title: "Budget added" }); },
-    onError: (e: any) => toast({ title: "Couldn't add", description: e?.message || "Try again", variant: "destructive" }),
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["/api/budgets"] });
+      const prev = qc.getQueriesData({ queryKey: ["/api/budgets"] });
+      const temp = { id: `temp-${Date.now()}`, category: vars.category, amount: vars.amount, _optimistic: true };
+      qc.setQueriesData({ queryKey: ["/api/budgets"] }, (old: any) => {
+        if (!old) return old;
+        if (Array.isArray(old)) return [temp, ...old];
+        if (Array.isArray(old?.budgets)) return { ...old, budgets: [temp, ...old.budgets] };
+        return old;
+      });
+      return { prev };
+    },
+    onSuccess: () => { invalidate(); toast({ title: "Budget added" }); },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) qc.setQueryData(key, data); }
+      toast({ title: "Couldn't add", description: e?.message || "Try again", variant: "destructive" });
+    },
   });
 
-  const updateMut = useMutation({
-    mutationFn: async ({ id, amount }: { id: string; amount: number }) => {
+  const updateMut = useMutation<any, Error, { id: string; amount: number }, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: async ({ id, amount }) => {
       return (await apiRequest("PATCH", `/api/budgets/${id}`, { amount })).json();
     },
-    onSuccess: () => { invalidate(); setEditingId(null); toast({ title: "Budget updated" }); },
-    onError: (e: any) => toast({ title: "Couldn't update", description: e?.message || "Try again", variant: "destructive" }),
+    onMutate: async ({ id, amount }) => {
+      await qc.cancelQueries({ queryKey: ["/api/budgets"] });
+      const prev = qc.getQueriesData({ queryKey: ["/api/budgets"] });
+      qc.setQueriesData({ queryKey: ["/api/budgets"] }, (old: any) => {
+        if (!old) return old;
+        if (Array.isArray(old)) return old.map((b: any) => b.id === id ? { ...b, amount } : b);
+        if (Array.isArray(old?.budgets)) return { ...old, budgets: old.budgets.map((b: any) => b.id === id ? { ...b, amount } : b) };
+        return old;
+      });
+      return { prev };
+    },
+    onSuccess: () => { invalidate(); toast({ title: "Budget updated" }); },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) qc.setQueryData(key, data); }
+      toast({ title: "Couldn't update", description: e?.message || "Try again", variant: "destructive" });
+    },
   });
 
-  const deleteMut = useMutation({
+  const deleteMut = useMutation<any, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async (id: string) => apiRequest("DELETE", `/api/budgets/${id}`),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["/api/budgets"] });
+      const prev = qc.getQueriesData({ queryKey: ["/api/budgets"] });
+      qc.setQueriesData({ queryKey: ["/api/budgets"] }, (old: any) => {
+        if (!old) return old;
+        if (Array.isArray(old)) return old.filter((b: any) => b.id !== id);
+        if (Array.isArray(old?.budgets)) return { ...old, budgets: old.budgets.filter((b: any) => b.id !== id) };
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => { invalidate(); toast({ title: "Budget removed" }); },
-    onError: (e: any) => toast({ title: "Couldn't delete", description: e?.message || "Try again", variant: "destructive" }),
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) qc.setQueryData(key, data); }
+      toast({ title: "Couldn't delete", description: e?.message || "Try again", variant: "destructive" });
+    },
   });
 
   const startEdit = (b: BudgetRow) => {
@@ -676,6 +714,23 @@ export function BudgetPopup({
       return;
     }
     updateMut.mutate({ id: b.id, amount: amt });
+    setEditingId(null); // close edit row immediately
+  };
+
+  const handleAdd = () => {
+    const amt = newMode === "percent"
+      ? (monthlyIncome > 0 ? (Number(newAmount) / 100) * monthlyIncome : Number(newAmount))
+      : Number(newAmount);
+    if (!isFinite(amt) || amt <= 0) {
+      toast({ title: "Enter a valid amount", variant: "destructive" });
+      return;
+    }
+    if (!newCategory.trim()) {
+      toast({ title: "Enter a category", variant: "destructive" });
+      return;
+    }
+    addMut.mutate({ category: newCategory.trim(), amount: amt });
+    setNewCategory(""); setNewAmount(""); setShowAdd(false);
   };
 
   return (
@@ -849,8 +904,8 @@ export function BudgetPopup({
                 className={`h-8 text-xs flex-1 ${!amtOk && newAmount.length > 0 ? "border-destructive focus-visible:ring-destructive" : ""}`}
                 aria-invalid={!amtOk && newAmount.length > 0}
               />
-              <Button size="sm" className="h-8 text-xs px-2" onClick={() => addMut.mutate()} disabled={!canSubmit} data-testid="budget-add-submit">
-                {addMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
+              <Button size="sm" className="h-8 text-xs px-2" onClick={handleAdd} disabled={!canSubmit} data-testid="budget-add-submit">
+                Add
               </Button>
               <Button size="sm" variant="ghost" className="h-8 text-xs px-2" onClick={() => { setShowAdd(false); setNewCategory(""); setNewAmount(""); }}>
                 Cancel

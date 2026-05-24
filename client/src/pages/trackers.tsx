@@ -993,12 +993,42 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
   const refillDate = getFieldDefault('refillDate') || '';
   const prescriber = getFieldDefault('prescriber') || '';
 
-  // Log dose mutation
-  const logDoseMut = useMutation({
+  // Log dose mutation — optimistic so the "Taken today" badge flips instantly
+  // and the day count rolls up before the network round-trip completes.
+  const logDoseMut = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: () => apiRequest('POST', `/api/trackers/${tracker.id}/entries`, {
       values: { drugName, dosage, timeTaken: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), adherence: 'taken', frequency },
       notes: `Dose taken at ${new Date().toLocaleTimeString()}`
     }),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ['/api/trackers'] });
+      const prev = qc.getQueriesData({ queryKey: ['/api/trackers'] });
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const nowIso = new Date().toISOString();
+      const tempEntry: any = {
+        id: tempId,
+        trackerId: tracker.id,
+        timestamp: nowIso,
+        values: { drugName, dosage, timeTaken: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), adherence: 'taken', frequency },
+        notes: `Dose taken at ${new Date().toLocaleTimeString()}`,
+        _optimistic: true,
+      };
+      // Inject the new entry into every cached tracker list that contains this
+      // tracker so all surfaces (page, dashboard hero) update at the same time.
+      qc.setQueriesData({ queryKey: ['/api/trackers'] }, (old: any) => {
+        if (!old) return old;
+        if (Array.isArray(old)) {
+          return old.map((t: any) => t?.id === tracker.id
+            ? { ...t, entries: Array.isArray(t.entries) ? [tempEntry, ...t.entries] : [tempEntry] }
+            : t);
+        }
+        if (old && typeof old === 'object' && old.id === tracker.id) {
+          return { ...old, entries: Array.isArray(old.entries) ? [tempEntry, ...old.entries] : [tempEntry] };
+        }
+        return old;
+      });
+      return { prev, tempId };
+    },
     onSuccess: () => {
       // BUG-T05/UI01: refetchType:"all" so the count badge updates even when
       // the page-level trackers query is technically inactive at the moment.
@@ -1007,7 +1037,10 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
       qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'], refetchType: "all" });
       toast({ title: `${drugName} logged`, description: `${dosage} taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
     },
-    onError: () => toast({ title: 'Failed to log dose', variant: 'destructive' }),
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) qc.setQueryData(key, data); }
+      toast({ title: 'Failed to log dose', variant: 'destructive' });
+    },
   });
 
   // Adherence this week

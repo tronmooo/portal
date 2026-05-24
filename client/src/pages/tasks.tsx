@@ -89,7 +89,7 @@ function TaskDialog({
     if (selfProfile && !selectedProfileId) setSelectedProfileId(selfProfile.id);
   }, [selfProfile]);
 
-  const mutation = useMutation({
+  const mutation = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
       const body: Record<string, any> = {
         title: title.trim(),
@@ -106,12 +106,50 @@ function TaskDialog({
       const res = await apiRequest("POST", "/api/tasks", body);
       return res.json();
     },
+    onMutate: async () => {
+      // Optimistic create/edit so the task list updates the moment the user
+      // hits Save and the dialog can close without waiting for the network.
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/tasks"] });
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const tags = tagsInput.split(",").map(t => t.trim()).filter(Boolean);
+      if (isEdit && task?.id) {
+        const patch: any = {
+          title: title.trim(),
+          description: description.trim() || null,
+          priority,
+          dueDate: dueDate || null,
+          tags,
+        };
+        queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
+          Array.isArray(old) ? old.map((t: any) => t?.id === task.id ? { ...t, ...patch } : t) : old
+        );
+      } else {
+        const tempTask: any = {
+          id: tempId,
+          title: title.trim(),
+          description: description.trim() || null,
+          priority,
+          dueDate: dueDate || null,
+          status: "todo",
+          completed: false,
+          tags,
+          linkedProfiles: selectedProfileId ? [selectedProfileId] : [],
+          createdAt: new Date().toISOString(),
+          _optimistic: true,
+        };
+        queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
+          Array.isArray(old) ? [tempTask, ...old] : old
+        );
+      }
+      return { prev, tempId };
+    },
     onSuccess: () => {
       invalidateTaskQueries();
       toast({ title: isEdit ? `"${title.trim()}" updated` : `"${title.trim()}" created`, description: dueDate ? `Due ${new Date(dueDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : undefined });
-      onClose();
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
       toast({ title: isEdit ? "Update failed" : "Create failed", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -122,7 +160,9 @@ function TaskDialog({
       toast({ title: "Title required", description: "Enter a task title", variant: "destructive" });
       return;
     }
+    // Close dialog immediately for snappy UX — optimistic insert/patch is in onMutate.
     mutation.mutate();
+    onClose();
   };
 
   return (

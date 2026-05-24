@@ -39,7 +39,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   CalendarDays, Sparkles, Repeat, Cake, ListTodo, FileWarning, Plus, Trash2, Pencil,
   Receipt, CreditCard, Pill, Wrench, CalendarClock, Activity, CheckSquare, Bell,
-  AlertTriangle, Loader2,
 } from "lucide-react";
 import { OBLIGATION_KIND_META, type ObligationKind } from "@shared/schema";
 import type { Obligation } from "@shared/schema";
@@ -169,28 +168,45 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<ReturnType<typeof parseQuickAdd> | null>(null);
 
-  const create = useMutation({
+  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; previewSnapshot: ReturnType<typeof parseQuickAdd> | null; textSnapshot: string }>({
     mutationFn: async () => {
       if (!preview) throw new Error("Nothing to create");
       const path = preview.kind === "obligation" ? "/api/obligations"
         : preview.kind === "task" ? "/api/tasks" : "/api/events";
       return apiRequest("POST", path, preview.payload).then(r => r.json());
     },
+    onMutate: async () => {
+      const previewSnapshot = preview;
+      const textSnapshot = text;
+      if (!preview) return { prev: [], previewSnapshot, textSnapshot };
+      const path = preview.kind === "obligation" ? "/api/obligations"
+        : preview.kind === "task" ? "/api/tasks" : "/api/events";
+      await queryClient.cancelQueries({ queryKey: [path] });
+      const prev = queryClient.getQueriesData({ queryKey: [path] });
+      const tempId = `temp-${Date.now()}`;
+      queryClient.setQueriesData({ queryKey: [path] }, (old: any) => {
+        const tempItem = { id: tempId, ...preview.payload, _optimistic: true };
+        if (Array.isArray(old)) return [tempItem, ...old];
+        return old;
+      });
+      return { prev, previewSnapshot, textSnapshot };
+    },
     onSuccess: async () => {
       invalidateAll();
-      // BUG-REC-002/SYNC-002: Wait for the obligation queries to actually
-      // refetch before clearing the form, otherwise the user switches to
-      // the Bills filter and still sees the stale list (no row yet).
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["/api/obligations"], type: "active" }),
         queryClient.refetchQueries({ queryKey: ["/api/obligation-occurrences"], type: "active" }),
         queryClient.refetchQueries({ queryKey: ["/api/calendar/timeline"], type: "active" }),
       ]).catch(() => {});
-      toast({ title: "Added to calendar", description: text });
-      setText(""); setPreview(null);
-      onCreated();
+      toast({ title: "Added to calendar" });
     },
-    onError: (err: Error) => toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      // Restore form on failure so user can retry
+      if (ctx?.previewSnapshot) setPreview(ctx.previewSnapshot);
+      if (ctx?.textSnapshot) setText(ctx.textSnapshot);
+      toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   return (
@@ -211,10 +227,10 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
             onChange={(e) => { setText(e.target.value); setPreview(parseQuickAdd(e.target.value)); }}
             placeholder="Describe a one-time or recurring item…"
             data-testid="quick-add-input"
-            onKeyDown={(e) => { if (e.key === "Enter" && preview) create.mutate(); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && preview) { create.mutate(); setText(""); setPreview(null); onCreated(); } }}
           />
-          <Button size="sm" disabled={!preview || create.isPending} onClick={() => create.mutate()} data-testid="quick-add-submit">
-            {create.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+          <Button size="sm" disabled={!preview} onClick={() => { create.mutate(); setText(""); setPreview(null); onCreated(); }} data-testid="quick-add-submit">
+            Add
           </Button>
         </div>
         {preview && (
@@ -266,7 +282,7 @@ function ManualEventSection() {
   const [linkedProfile, setLinkedProfile] = useState<string>("");
   const [linkedDoc, setLinkedDoc] = useState<string>("");
 
-  const create = useMutation({
+  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("POST", "/api/events", {
       title: title.trim(), date,
       time: !allDay && time ? time : undefined,
@@ -281,12 +297,37 @@ function ManualEventSection() {
       linkedDocuments: linkedDoc ? [linkedDoc] : [],
       source: "manual",
     }).then(r => r.json()),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/events"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/events"] });
+      const tempId = `temp-${Date.now()}`;
+      const temp = {
+        id: tempId,
+        title: title.trim(), date,
+        time: !allDay && time ? time : undefined,
+        endTime: !allDay && endTime ? endTime : undefined,
+        allDay,
+        location: location || undefined,
+        category,
+        recurrence,
+        description: description || undefined,
+        source: "manual",
+        _optimistic: true,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/events"] }, (old: any) => {
+        if (Array.isArray(old)) return [temp, ...old];
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => {
       invalidateAll();
       toast({ title: "Event added" });
-      setTitle(""); setLocation(""); setDescription(""); setRecurrence("none"); setLinkedProfile(""); setLinkedDoc("");
     },
-    onError: (err: Error) => toast({ title: "Couldn't add event", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Couldn't add event", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   return (
@@ -374,8 +415,11 @@ function ManualEventSection() {
           </div>
         </div>
         <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Notes (optional)" rows={2} />
-        <Button size="sm" className="w-full" disabled={!title.trim() || create.isPending} onClick={() => create.mutate()} data-testid="event-create">
-          {create.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Plus className="h-3.5 w-3.5 mr-1" /> Add event</>}
+        <Button size="sm" className="w-full" disabled={!title.trim()} onClick={() => {
+          create.mutate();
+          setTitle(""); setLocation(""); setDescription(""); setRecurrence("none"); setLinkedProfile(""); setLinkedDoc("");
+        }} data-testid="event-create">
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add event
         </Button>
       </CardContent>
     </Card>
@@ -413,7 +457,7 @@ function RecurringObligationSection() {
     setAutoLog(k === "bill" || k === "subscription");
   };
 
-  const create = useMutation({
+  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("POST", "/api/obligations", {
       name: name.trim(),
       amount: parseFloat(amount || "0"),
@@ -431,12 +475,37 @@ function RecurringObligationSection() {
       linkedLiabilityId: linkedLiability || undefined,
       linkedDocumentId: linkedDoc || undefined,
     }).then(r => r.json()),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      const tempId = `temp-${Date.now()}`;
+      const temp = {
+        id: tempId,
+        name: name.trim(),
+        amount: parseFloat(amount || "0"),
+        frequency,
+        nextDueDate: dueDate,
+        kind,
+        leadTimeDays: parseInt(leadTimeDays) || 0,
+        autopay,
+        autoLogExpense: autoLog,
+        notes: notes || undefined,
+        _optimistic: true,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) => {
+        if (Array.isArray(old)) return [temp, ...old];
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => {
       invalidateAll();
-      toast({ title: `"${name}" added`, description: `${OBLIGATION_KIND_META[kind].label} · ${frequency}` });
-      setName(""); setAmount(""); setNotes(""); setLinkedAsset(""); setLinkedLiability(""); setLinkedDoc("");
+      toast({ title: "Added", description: `${OBLIGATION_KIND_META[kind].label} · ${frequency}` });
     },
-    onError: (err: Error) => toast({ title: "Couldn't create", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Couldn't create", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   const meta = OBLIGATION_KIND_META[kind];
@@ -563,10 +632,12 @@ function RecurringObligationSection() {
         <Textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes (optional)" rows={2} />
 
         <Button size="sm" className="w-full"
-          disabled={!name.trim() || !dueDate || create.isPending}
-          onClick={() => create.mutate()} data-testid="obl-create">
-          {create.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> :
-            <><Icon className="h-3.5 w-3.5 mr-1" style={{ color: meta.color }} /> Add {meta.label}</>}
+          disabled={!name.trim() || !dueDate}
+          onClick={() => {
+            create.mutate();
+            setName(""); setAmount(""); setNotes(""); setLinkedAsset(""); setLinkedLiability(""); setLinkedDoc("");
+          }} data-testid="obl-create">
+          <Icon className="h-3.5 w-3.5 mr-1" style={{ color: meta.color }} /> Add {meta.label}
         </Button>
       </CardContent>
     </Card>
@@ -586,7 +657,7 @@ function BirthdaySection() {
   });
   const [linkedPerson, setLinkedPerson] = useState<string>("");
 
-  const create = useMutation({
+  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("POST", "/api/events", {
       title: type === "birthday" ? `🎂 ${name}'s birthday` : `💞 ${name} — anniversary`,
       date,
@@ -596,12 +667,34 @@ function BirthdaySection() {
       linkedProfiles: linkedPerson ? [linkedPerson] : [],
       source: "manual",
     }).then(r => r.json()),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/events"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/events"] });
+      const tempId = `temp-${Date.now()}`;
+      const temp = {
+        id: tempId,
+        title: type === "birthday" ? `🎂 ${name}'s birthday` : `💞 ${name} — anniversary`,
+        date,
+        allDay: true,
+        category: "family",
+        recurrence: "yearly",
+        source: "manual",
+        _optimistic: true,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/events"] }, (old: any) => {
+        if (Array.isArray(old)) return [temp, ...old];
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => {
       invalidateAll();
       toast({ title: "Added", description: `Recurs every year on ${date}` });
-      setName(""); setLinkedPerson("");
     },
-    onError: (err: Error) => toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   return (
@@ -634,8 +727,11 @@ function BirthdaySection() {
             </SelectContent>
           </Select>
         </div>
-        <Button size="sm" className="w-full" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()} data-testid="bday-create">
-          {create.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Plus className="h-3.5 w-3.5 mr-1" /> Add (recurs yearly)</>}
+        <Button size="sm" className="w-full" disabled={!name.trim()} onClick={() => {
+          create.mutate();
+          setName(""); setLinkedPerson("");
+        }} data-testid="bday-create">
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add (recurs yearly)
         </Button>
       </CardContent>
     </Card>
@@ -651,16 +747,35 @@ function TaskSection() {
   const [priority, setPriority] = useState("medium");
   const [description, setDescription] = useState("");
 
-  const create = useMutation({
+  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("POST", "/api/tasks", {
       title: title.trim(), dueDate, priority, description: description || undefined,
     }).then(r => r.json()),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/tasks"] });
+      const tempId = `temp-${Date.now()}`;
+      const temp = {
+        id: tempId,
+        title: title.trim(), dueDate, priority,
+        description: description || undefined,
+        completed: false,
+        _optimistic: true,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) => {
+        if (Array.isArray(old)) return [temp, ...old];
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => {
       invalidateAll();
       toast({ title: "Reminder added" });
-      setTitle(""); setDescription("");
     },
-    onError: (err: Error) => toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   return (
@@ -689,8 +804,11 @@ function TaskSection() {
           </div>
         </div>
         <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Details (optional)" rows={2} />
-        <Button size="sm" className="w-full" disabled={!title.trim() || create.isPending} onClick={() => create.mutate()} data-testid="task-create">
-          {create.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Plus className="h-3.5 w-3.5 mr-1" /> Add reminder</>}
+        <Button size="sm" className="w-full" disabled={!title.trim()} onClick={() => {
+          create.mutate();
+          setTitle(""); setDescription("");
+        }} data-testid="task-create">
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add reminder
         </Button>
       </CardContent>
     </Card>
@@ -717,20 +835,56 @@ function ManageList({ filter, onClose }: { filter: string; onClose: () => void }
     queryKey: ["/api/tasks"], queryFn: () => apiRequest("GET", "/api/tasks").then(r => r.json()),
   });
 
-  const deleteObligation = useMutation({
+  const deleteObligation = useMutation<any, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/obligations/${id}`),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) => {
+        if (Array.isArray(old)) return old.filter((o: any) => o.id !== id);
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); toast({ title: "Deleted" }); },
-    onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
-  const deleteEvent = useMutation({
+  const deleteEvent = useMutation<any, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/events/${id}`),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/events"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/events"] });
+      queryClient.setQueriesData({ queryKey: ["/api/events"] }, (old: any) => {
+        if (Array.isArray(old)) return old.filter((e: any) => e.id !== id);
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); toast({ title: "Deleted" }); },
-    onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
-  const deleteTask = useMutation({
+  const deleteTask = useMutation<any, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/tasks/${id}`),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/tasks"] });
+      queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) => {
+        if (Array.isArray(old)) return old.filter((t: any) => t.id !== id);
+        return old;
+      });
+      return { prev };
+    },
     onSuccess: () => { invalidateAll(); toast({ title: "Deleted" }); },
-    onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   const items = useMemo<AnyItem[]>(() => {
