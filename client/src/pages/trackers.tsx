@@ -1390,7 +1390,22 @@ function AddEntryDialog({
             Cancel
           </Button>
           <Button
-            onClick={() => mutation.mutate()}
+            onClick={() => {
+              // Validate before close so we don't dismiss the dialog on an invalid entry
+              const hasValue = tracker.fields.some(f => {
+                const v = values[f.name];
+                return v !== undefined && v !== "" && v !== null;
+              });
+              if (!hasValue) {
+                mutation.mutate(); // will throw "Please fill in at least one field"
+                return;
+              }
+              mutation.mutate();
+              // Close immediately — optimistic update has already added the entry to the chart
+              setValues({});
+              setNotes("");
+              onOpenChange(false);
+            }}
             disabled={mutation.isPending}
             data-testid="button-entry-submit"
           >
@@ -1913,7 +1928,7 @@ function CreateTrackerDialog({
     { name: "value", type: "number", unit: "", options: "" },
   ]);
 
-  const mutation = useMutation({
+  const mutation = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string } | undefined>({
     mutationFn: async () => {
       if (!name.trim()) { toast({ title: "Name required", description: "Enter a tracker name", variant: "destructive" }); throw new Error("Name required"); }
       const INVALID_NAMES = ["tracker", "log", "new tracker", "custom tracker", "my tracker", "track"];
@@ -1946,6 +1961,42 @@ function CreateTrackerDialog({
       });
       return res.json();
     },
+    onMutate: async () => {
+      // Optimistic create: prepend a temp tracker so the list updates instantly.
+      // Skip validation errors here — mutationFn will throw them and we'll roll back.
+      if (!name.trim()) return undefined;
+      const INVALID_NAMES = ["tracker", "log", "new tracker", "custom tracker", "my tracker", "track"];
+      if (INVALID_NAMES.includes(name.trim().toLowerCase())) return undefined;
+
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/trackers"] });
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const builtFields = fields
+        .filter((f) => f.name.trim())
+        .map((f, i) => ({
+          name: f.name.trim(),
+          type: f.type,
+          unit: f.unit.trim() || undefined,
+          isPrimary: i === 0,
+          options: f.type === "select" && f.options
+            ? f.options.split(",").map((o) => o.trim()).filter(Boolean)
+            : undefined,
+        }));
+      const tempTracker: any = {
+        id: tempId,
+        name: name.trim(),
+        category,
+        unit: unit.trim() || undefined,
+        fields: builtFields.length > 0 ? builtFields : [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true }],
+        entries: [],
+        createdAt: new Date().toISOString(),
+        _optimistic: true,
+      };
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
+        Array.isArray(old) ? [tempTracker, ...old] : old
+      );
+      return { prev, tempId };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -1957,7 +2008,11 @@ function CreateTrackerDialog({
       onOpenChange(false);
       toast({ title: "Tracker created" });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _vars, ctx) => {
+      // Rollback optimistic insert
+      if (ctx?.prev) {
+        for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      }
       // BUG-CRUD01: surface a clearer, more actionable toast when the server
       // says the tracker name already exists (409) so the user knows their
       // click did register but was deduplicated, instead of seeing a silent
@@ -2149,7 +2204,22 @@ function CreateTrackerDialog({
             Cancel
           </Button>
           <Button
-            onClick={() => mutation.mutate()}
+            onClick={() => {
+              if (!name.trim()) return;
+              const INVALID_NAMES = ["tracker", "log", "new tracker", "custom tracker", "my tracker", "track"];
+              const isGeneric = INVALID_NAMES.includes(name.trim().toLowerCase());
+              mutation.mutate();
+              // Close immediately when input is valid — optimistic update has
+              // already prepended the tracker. If the name is generic, keep the dialog
+              // open so the user can fix it (mutationFn will toast the error).
+              if (!isGeneric) {
+                setName("");
+                setCategory("custom");
+                setUnit("");
+                setFields([{ name: "value", type: "number", unit: "", options: "" }]);
+                onOpenChange(false);
+              }
+            }}
             disabled={mutation.isPending || !name.trim()}
             data-testid="button-create-submit"
           >
@@ -3519,17 +3589,13 @@ function TrackerDetailDialog({
       </Dialog>
 
       {/* ── Add Entry sub-dialog ── */}
+      {/* Note: do NOT invalidate queries on close — the mutation's onSettled already does this.
+          Invalidating here would race with the optimistic update and wipe the temp entry
+          before the server response arrives. */}
       <AddEntryDialog
         tracker={tracker}
         open={addEntryOpen}
-        onOpenChange={(v) => {
-          setAddEntryOpen(v);
-          if (!v) {
-            queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-          }
-        }}
+        onOpenChange={setAddEntryOpen}
       />
 
       {/* ── Delete Tracker confirmation ── */}

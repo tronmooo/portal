@@ -200,7 +200,7 @@ function EventFormDialog({
     queryKey: ["/api/profiles"],
   });
 
-  const mutation = useMutation({
+  const mutation = useMutation<any, Error, void, { prevEvents: [readonly unknown[], unknown][]; prevTimeline: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
       const payload: any = {
         title: form.title,
@@ -224,6 +224,56 @@ function EventFormDialog({
         return res.json();
       }
     },
+    onMutate: async () => {
+      // Optimistic update: only on create (edits would require richer merge)
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      if (isEdit) {
+        return { prevEvents: [], prevTimeline: [], tempId };
+      }
+      await queryClient.cancelQueries({ queryKey: ["/api/events"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/calendar/timeline"] });
+      const prevEvents = queryClient.getQueriesData({ queryKey: ["/api/events"] });
+      const prevTimeline = queryClient.getQueriesData({ queryKey: ["/api/calendar/timeline"] });
+      const tempEvent: any = {
+        id: tempId,
+        title: form.title,
+        date: form.date,
+        allDay: form.allDay,
+        category: form.category,
+        recurrence: form.recurrence,
+        linkedProfiles: form.linkedProfiles,
+        source: "manual",
+        time: !form.allDay && form.time ? form.time : null,
+        endTime: !form.allDay && form.endTime ? form.endTime : null,
+        description: form.description || null,
+        location: form.location || null,
+        _optimistic: true,
+      };
+      // Append to events lists
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/events"] }, (old) =>
+        Array.isArray(old) ? [...old, tempEvent] : old
+      );
+      // Append a timeline item that matches CalendarTimelineItem shape
+      const tempTimelineItem: any = {
+        id: tempId,
+        sourceId: tempId,
+        type: "event",
+        title: form.title,
+        date: form.date,
+        time: !form.allDay && form.time ? form.time : null,
+        endTime: !form.allDay && form.endTime ? form.endTime : null,
+        allDay: form.allDay,
+        category: form.category,
+        linkedProfiles: form.linkedProfiles,
+        location: form.location || null,
+        description: form.description || null,
+        _optimistic: true,
+      };
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/calendar/timeline"] }, (old) =>
+        Array.isArray(old) ? [...old, tempTimelineItem] : old
+      );
+      return { prevEvents, prevTimeline, tempId };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
@@ -231,9 +281,15 @@ function EventFormDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       toast({ title: isEdit ? `"${form.title}" updated` : `"${form.title}" created`, description: form.date ? new Date(form.date + "T12:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : undefined });
-      onClose();
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _vars, ctx) => {
+      // Rollback optimistic insert
+      if (ctx?.prevEvents) {
+        for (const [key, data] of ctx.prevEvents) queryClient.setQueryData(key, data);
+      }
+      if (ctx?.prevTimeline) {
+        for (const [key, data] of ctx.prevTimeline) queryClient.setQueryData(key, data);
+      }
       toast({ title: isEdit ? "Failed to update event" : "Failed to create event", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -242,6 +298,8 @@ function EventFormDialog({
     e.preventDefault();
     if (!form.title.trim() || !form.date) return;
     mutation.mutate();
+    // Close dialog immediately for snappy UX (optimistic update already in cache)
+    onClose();
   };
 
   const toggleProfile = (id: string) => {

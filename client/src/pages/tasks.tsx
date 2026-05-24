@@ -593,23 +593,38 @@ export default function TasksPage() {
                   <SwipeableItem
                     key={task.id}
                     onSwipeLeft={async () => {
+                      // Optimistic update: mark task done immediately
+                      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+                      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+                      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+                        (old || []).map(t => t.id === task.id ? { ...t, status: "done" as const } : t)
+                      );
+                      toast({ title: `"${task.title}" completed` });
                       try {
                         await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "done" });
                         invalidateTaskQueries();
-                        toast({ title: `"${task.title}" completed` });
                       } catch (err: any) {
+                        // Rollback
+                        for (const [key, data] of prevQueries) queryClient.setQueryData(key, data);
                         toast({ title: `Failed to complete "${task.title}"`, description: formatApiError(err), variant: "destructive" });
                       }
                     }}
                     onSwipeRight={async () => {
+                      const tomorrow = new Date();
+                      tomorrow.setDate(tomorrow.getDate() + 1);
+                      const dateStr = tomorrow.toISOString().slice(0, 10);
+                      // Optimistic update: set dueDate immediately
+                      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+                      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+                      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+                        (old || []).map(t => t.id === task.id ? { ...t, dueDate: dateStr } : t)
+                      );
+                      toast({ title: `"${task.title}" snoozed to tomorrow` });
                       try {
-                        const tomorrow = new Date();
-                        tomorrow.setDate(tomorrow.getDate() + 1);
-                        const dateStr = tomorrow.toISOString().slice(0, 10);
                         await apiRequest("PATCH", `/api/tasks/${task.id}`, { dueDate: dateStr });
                         invalidateTaskQueries();
-                        toast({ title: `"${task.title}" snoozed to tomorrow` });
                       } catch (err: any) {
+                        for (const [key, data] of prevQueries) queryClient.setQueryData(key, data);
                         toast({ title: `Failed to snooze "${task.title}"`, description: formatApiError(err), variant: "destructive" });
                       }
                     }}
@@ -634,11 +649,18 @@ export default function TasksPage() {
                     leftLabel="↩ Reopen"
                     leftColor="#3b82f6"
                     onSwipeLeft={async () => {
+                      // Optimistic: reopen immediately
+                      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+                      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+                      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+                        (old || []).map(t => t.id === task.id ? { ...t, status: "todo" as const } : t)
+                      );
+                      toast({ title: `"${task.title}" reopened` });
                       try {
                         await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: "todo" });
                         invalidateTaskQueries();
-                        toast({ title: `"${task.title}" reopened` });
                       } catch (err: any) {
+                        for (const [key, data] of prevQueries) queryClient.setQueryData(key, data);
                         toast({ title: `Failed to reopen "${task.title}"`, description: formatApiError(err), variant: "destructive" });
                       }
                     }}

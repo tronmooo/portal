@@ -787,9 +787,15 @@ export interface ObligationsManagerProps {
   showHeader?: boolean;
   /** Compact mode for tab embeds — drops summary cards. */
   compact?: boolean;
+  /** Optional external profile filter override. When set, takes precedence
+   *  over the internal subscription to the global filter store. Used by the
+   *  standalone /obligations page which owns the filter UI and wants to be
+   *  the single source of truth (was a no-op before, hence the bug report). */
+  externalFilterMode?: "everyone" | "selected";
+  externalFilterIds?: string[];
 }
 
-export default function ObligationsManager({ showHeader = true, compact = false }: ObligationsManagerProps) {
+export default function ObligationsManager({ showHeader = true, compact = false, externalFilterMode, externalFilterIds }: ObligationsManagerProps) {
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -811,8 +817,13 @@ export default function ObligationsManager({ showHeader = true, compact = false 
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
     staleTime: 5 * 60_000,
   });
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  const [internalFilterMode, setInternalFilterMode] = useState(() => getProfileFilter().mode);
+  const [internalFilterIds, setInternalFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  // External props (from parent page) take precedence — lets a host like
+  // /obligations own the filter UI without relying on the global event
+  // bus, which is what made the filter feel like "nothing happens".
+  const filterMode = externalFilterMode ?? internalFilterMode;
+  const filterIds = externalFilterIds ?? internalFilterIds;
   const [kindFilter, setKindFilter] = useState<"all" | ObligationKind>("all");
   // Time window: overdue / today / week / month / all
   const [windowFilter, setWindowFilter] = useState<"all" | "overdue" | "today" | "week" | "month">("all");
@@ -822,19 +833,22 @@ export default function ObligationsManager({ showHeader = true, compact = false 
   const [drawerOb, setDrawerOb] = useState<Obligation | null>(null);
 
   useEffect(() => {
+    // Only subscribe to the global filter store when the host did not supply
+    // explicit external filter props — otherwise we’d fight the parent.
+    if (externalFilterMode !== undefined || externalFilterIds !== undefined) return;
     const unsub = subscribeProfileFilter(state => {
-      setFilterMode(state.mode);
-      setFilterIds([...state.selectedIds]);
+      setInternalFilterMode(state.mode);
+      setInternalFilterIds([...state.selectedIds]);
     });
     // Window-focus fallback for cases where the filter changed in another tab.
     const handleFocus = () => {
       const { mode, selectedIds } = getProfileFilter();
-      setFilterMode(mode);
-      setFilterIds(selectedIds);
+      setInternalFilterMode(mode);
+      setInternalFilterIds(selectedIds);
     };
     window.addEventListener("focus", handleFocus);
     return () => { unsub(); window.removeEventListener("focus", handleFocus); };
-  }, []);
+  }, [externalFilterMode, externalFilterIds]);
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
   const { data: allObligations = [], isLoading, error, refetch } = useQuery<Obligation[]>({
