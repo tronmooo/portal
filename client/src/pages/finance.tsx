@@ -174,7 +174,7 @@ export default function FinancePage() {
     actual_expenses: "",
   });
 
-  const addExpenseMutation = useMutation({
+  const addExpenseMutation = useMutation<{ amount: number; description: string }, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
       // Defense-in-depth: validate amount before sending. The submit button
       // already guards this, but if mutation is invoked any other way we
@@ -202,18 +202,50 @@ export default function FinancePage() {
       });
       return { amount: amt, description: desc };
     },
+    onMutate: async () => {
+      const amt = parseFloat(newExpense.amount);
+      const desc = (newExpense.description || "").trim();
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      if (!isFinite(amt) || amt <= 0 || !desc) {
+        // mutationFn will throw — nothing to do
+        return { prev: [], tempId };
+      }
+      const expenseDate = (newExpense.date || "").trim() || todayLocalISO;
+      await queryClient.cancelQueries({ queryKey: ["/api/expenses"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/expenses"] });
+      const tempExpense: any = {
+        id: tempId,
+        description: desc,
+        amount: amt,
+        category: newExpense.category,
+        vendor: newExpense.vendor || undefined,
+        date: expenseDate,
+        tags: [],
+        linkedProfiles: expenseProfileId ? [expenseProfileId] : [],
+        createdAt: new Date().toISOString(),
+        _optimistic: true,
+      };
+      // Prepend to every cached /api/expenses variant (handles filtered keys)
+      queryClient.setQueriesData({ queryKey: ["/api/expenses"] }, (old: any) => {
+        if (!old) return old;
+        if (Array.isArray(old)) return [tempExpense, ...old];
+        if (Array.isArray(old?.items)) return { ...old, items: [tempExpense, ...old.items] };
+        return old;
+      });
+      return { prev, tempId };
+    },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
-      setAddOpen(false);
-      setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
-      setAddAttempt(false);
       toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) {
+        for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      }
       toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -221,7 +253,7 @@ export default function FinancePage() {
   // ── ALL hooks MUST be above early returns (React Rules of Hooks) ──
   // Paychecks
   const { data: paychecks = [] } = useQuery<any[]>({ queryKey: ["/api/paychecks"] });
-  const addPaycheckMut = useMutation({
+  const addPaycheckMut = useMutation<void, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
       await apiRequest("POST", "/api/paychecks", {
         source: newPaycheck.source.trim(),
@@ -229,22 +261,47 @@ export default function FinancePage() {
         expected_date: newPaycheck.expectedDate,
       });
     },
+    onMutate: async () => {
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await queryClient.cancelQueries({ queryKey: ["/api/paychecks"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/paychecks"] });
+      const temp = {
+        id: tempId,
+        source: newPaycheck.source.trim(),
+        amount: parseFloat(newPaycheck.amount),
+        expected_date: newPaycheck.expectedDate,
+        confirmed: false,
+        _optimistic: true,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/paychecks"] }, (old: any) =>
+        Array.isArray(old) ? [temp, ...old] : old
+      );
+      return { prev, tempId };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       toast({ title: "Paycheck added", description: `${newPaycheck.source} — $${parseFloat(newPaycheck.amount).toFixed(2)}` });
-      setAddPaycheckOpen(false);
-      setNewPaycheck({ source: "", amount: "", expectedDate: "" });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Failed to add paycheck", description: formatApiError(err), variant: "destructive" });
     },
   });
-  const confirmPaycheckMut = useMutation({
+  const confirmPaycheckMut = useMutation<void, Error, { id: string; actual_amount?: number }, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async ({ id, actual_amount }: { id: string; actual_amount?: number }) => {
       await apiRequest("PATCH", `/api/paychecks/${id}/confirm`, { actual_amount });
+    },
+    onMutate: async ({ id, actual_amount }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/paychecks"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/paychecks"] });
+      queryClient.setQueriesData({ queryKey: ["/api/paychecks"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((p: any) => p.id === id ? { ...p, confirmed: true, actual_amount: actual_amount ?? p.amount } : p);
+      });
+      return { prev };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
@@ -254,29 +311,57 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       toast({ title: "Paycheck confirmed" });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Failed to confirm paycheck", description: formatApiError(err), variant: "destructive" });
     },
   });
-  const deletePaycheckMut = useMutation({
+  const deletePaycheckMut = useMutation<string, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/paychecks/${id}`); return id; },
-    onSuccess: (_data, id) => {
-      queryClient.setQueryData(["/api/paychecks"], (old: any[]) => old?.filter(item => item.id !== id));
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/paychecks"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/paychecks"] });
+      queryClient.setQueriesData({ queryKey: ["/api/paychecks"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((item: any) => item.id !== id) : old
+      );
+      return { prev };
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       toast({ title: "Paycheck deleted" });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Failed to delete paycheck", description: formatApiError(err), variant: "destructive" });
     },
   });
 
   // Loan Amortization
   const { data: loanSchedules = [] } = useQuery<any[]>({ queryKey: ["/api/loans/schedule"] });
-  const markLoanPaymentMut = useMutation({
+  const markLoanPaymentMut = useMutation<void, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async (id: string) => { await apiRequest("PATCH", `/api/loans/payment/${id}/mark`, {}); },
+    onMutate: async (id) => {
+      // Optimistic: flip the payment row to paid immediately so the UI feels instant.
+      await queryClient.cancelQueries({ queryKey: ["/api/loans/schedule"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/loans/schedule"] });
+      queryClient.setQueriesData({ queryKey: ["/api/loans/schedule"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+        return old.map((schedule: any) => {
+          if (!schedule || !Array.isArray(schedule.payments)) return schedule;
+          return {
+            ...schedule,
+            payments: schedule.payments.map((p: any) =>
+              p?.id === id ? { ...p, paid: true, paidDate: p.paidDate || today, status: "paid" } : p
+            ),
+          };
+        });
+      });
+      return { prev };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -285,7 +370,8 @@ export default function FinancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       toast({ title: "Loan payment marked as paid" });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Failed to mark payment", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -293,7 +379,7 @@ export default function FinancePage() {
   // ── Incomes (separate from paychecks: recurring income streams) ──────────
   const { data: incomes = [] } = useQuery<any[]>({ queryKey: ["/api/incomes"] });
 
-  const addIncomeMut = useMutation({
+  const addIncomeMut = useMutation<{ description: string; amount: number }, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
       const amt = parseFloat(newIncome.amount);
       if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
@@ -314,19 +400,44 @@ export default function FinancePage() {
       });
       return { description: desc, amount: amt };
     },
+    onMutate: async () => {
+      const amt = parseFloat(newIncome.amount);
+      const desc = newIncome.description.trim();
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      if (!isFinite(amt) || amt <= 0 || !desc) return { prev: [], tempId };
+      const chosenProfileId = newIncome.profileId || expenseProfileId;
+      await queryClient.cancelQueries({ queryKey: ["/api/incomes"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/incomes"] });
+      const temp: any = {
+        id: tempId,
+        description: desc,
+        amount: amt,
+        category: newIncome.category,
+        frequency: newIncome.frequency,
+        date: newIncome.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
+        tags: [],
+        linkedProfiles: chosenProfileId ? [chosenProfileId] : [],
+        _optimistic: true,
+      };
+      queryClient.setQueriesData({ queryKey: ["/api/incomes"] }, (old: any) =>
+        Array.isArray(old) ? [temp, ...old] : old
+      );
+      return { prev, tempId };
+    },
     onSuccess: ({ description, amount }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      setAddIncomeOpen(false);
-      setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
       toast({ title: `Income added`, description: `${description} — $${amount.toFixed(2)}` });
     },
-    onError: (err: Error) => toast({ title: "Failed to add income", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to add income", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const editIncomeMut = useMutation({
+  const editIncomeMut = useMutation<void, Error, { id: string }, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async (input: { id: string }) => {
       const amt = parseFloat(editIncomeForm.amount);
       if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
@@ -344,28 +455,60 @@ export default function FinancePage() {
         linkedProfiles: editIncomeForm.profileId ? [editIncomeForm.profileId] : [],
       });
     },
+    onMutate: async ({ id }) => {
+      const amt = parseFloat(editIncomeForm.amount);
+      const desc = editIncomeForm.description.trim();
+      if (!isFinite(amt) || amt <= 0 || !desc) return { prev: [] };
+      await queryClient.cancelQueries({ queryKey: ["/api/incomes"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/incomes"] });
+      queryClient.setQueriesData({ queryKey: ["/api/incomes"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((i: any) => i.id === id ? {
+          ...i,
+          description: desc,
+          amount: amt,
+          category: editIncomeForm.category,
+          frequency: editIncomeForm.frequency,
+          ...(editIncomeForm.date ? { date: editIncomeForm.date } : {}),
+          linkedProfiles: editIncomeForm.profileId ? [editIncomeForm.profileId] : [],
+        } : i);
+      });
+      return { prev };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      setEditingIncome(null);
       toast({ title: "Income updated" });
     },
-    onError: (err: Error) => toast({ title: "Failed to update income", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to update income", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
-  const deleteIncomeMut = useMutation({
+  const deleteIncomeMut = useMutation<string, Error, string, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/incomes/${id}`); return id; },
-    onSuccess: (_data, id) => {
-      queryClient.setQueryData(["/api/incomes"], (old: any[]) => old?.filter(i => i.id !== id) || []);
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/incomes"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/incomes"] });
+      queryClient.setQueriesData({ queryKey: ["/api/incomes"] }, (old: any) =>
+        Array.isArray(old) ? old.filter((i: any) => i.id !== id) : old
+      );
+      return { prev };
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({ title: "Income deleted" });
     },
-    onError: (err: Error) => toast({ title: "Failed to delete income", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to delete income", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   // Cashflow
@@ -376,7 +519,7 @@ export default function FinancePage() {
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
 
   // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
-  const addCashflowMut = useMutation({
+  const addCashflowMut = useMutation<void, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async () => {
       const wk = parseInt(newCashflow.week, 10);
       if (!isFinite(wk) || wk < 1 || wk > 6) throw new Error("Week must be between 1 and 6");
@@ -391,18 +534,52 @@ export default function FinancePage() {
       }
       await apiRequest("POST", "/api/cashflow", body);
     },
+    onMutate: async () => {
+      // Optimistic upsert: merge the new row into the cached cashflow list so the
+      // chart/table updates immediately. Server is the source of truth on refetch.
+      const wk = parseInt(newCashflow.week, 10);
+      if (!isFinite(wk) || wk < 1 || wk > 6) return { prev: [] };
+      if (!/^\d{4}-\d{2}$/.test(newCashflow.month)) return { prev: [] };
+      const numeric: Record<string, number> = {};
+      for (const k of ["projected_income", "projected_expenses", "actual_income", "actual_expenses"] as const) {
+        const raw = (newCashflow as any)[k] as string;
+        if (raw === "" || raw == null) continue;
+        const n = Number(raw);
+        if (isFinite(n)) numeric[k] = n;
+      }
+      await queryClient.cancelQueries({ queryKey: ["/api/cashflow"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/cashflow"] });
+      queryClient.setQueriesData({ queryKey: ["/api/cashflow"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        const idx = old.findIndex((c: any) => c?.month === newCashflow.month && Number(c?.week) === wk);
+        if (idx >= 0) {
+          const merged = { ...old[idx], ...numeric, month: newCashflow.month, week: wk };
+          return old.map((c: any, i: number) => i === idx ? merged : c);
+        }
+        const temp = {
+          id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          month: newCashflow.month,
+          week: wk,
+          projected_income: numeric.projected_income ?? 0,
+          projected_expenses: numeric.projected_expenses ?? 0,
+          actual_income: numeric.actual_income ?? 0,
+          actual_expenses: numeric.actual_expenses ?? 0,
+          _optimistic: true,
+        };
+        return [...old, temp];
+      });
+      return { prev };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      setAddCashflowOpen(false);
-      setNewCashflow({
-        month: new Date().toISOString().slice(0, 7),
-        week: "1", projected_income: "", projected_expenses: "", actual_income: "", actual_expenses: "",
-      });
       toast({ title: "Cashflow entry saved" });
     },
-    onError: (err: Error) => toast({ title: "Failed to save cashflow", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to save cashflow", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   // ── ALL useMemo hooks MUST be before early returns (React Rules of Hooks) ──
@@ -583,6 +760,10 @@ export default function FinancePage() {
                         return;
                       }
                       addExpenseMutation.mutate();
+                      // Close immediately — optimistic insert already populated the list.
+                      setAddOpen(false);
+                      setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+                      setAddAttempt(false);
                     }}
                     disabled={!newExpense.description.trim() || !newExpense.amount || !Number.isFinite(parseFloat(newExpense.amount)) || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending}
                     data-testid="button-save-expense"
@@ -855,25 +1036,54 @@ export default function FinancePage() {
               <Button variant="outline" className="flex-1" onClick={() => setEditingExpense(null)} disabled={editSaving}>Cancel</Button>
               <Button className="flex-1" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0 || editSaving} onClick={async () => {
                 if (!editingExpense) return;
+                const targetId = editingExpense.id;
+                const newDesc = editForm.description;
+                const newAmount = parseFloat(editForm.amount);
+                const newCategory = editForm.category;
+                const newVendor = editForm.vendor || undefined;
+                const newDate = editForm.date || undefined;
+                const newProfiles = editForm.profileId ? [editForm.profileId] : undefined;
+                // Optimistic in-place edit across every cached expense list
+                await queryClient.cancelQueries({ queryKey: ["/api/expenses"] });
+                const prev = queryClient.getQueriesData({ queryKey: ["/api/expenses"] });
+                queryClient.setQueriesData({ queryKey: ["/api/expenses"] }, (old: any) => {
+                  const patch = (e: any) => e.id !== targetId ? e : {
+                    ...e,
+                    description: newDesc,
+                    amount: newAmount,
+                    category: newCategory,
+                    vendor: newVendor,
+                    ...(newDate ? { date: newDate } : {}),
+                    ...(newProfiles ? { linkedProfiles: newProfiles } : {}),
+                  };
+                  if (!old) return old;
+                  if (Array.isArray(old)) return old.map(patch);
+                  if (Array.isArray(old?.items)) return { ...old, items: old.items.map(patch) };
+                  return old;
+                });
+                // Close the dialog immediately
+                toast({ title: `"${newDesc}" updated` });
+                setEditingExpense(null);
                 setEditSaving(true);
                 try {
-                  await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
-                    description: editForm.description,
-                    amount: parseFloat(editForm.amount),
-                    category: editForm.category,
-                    vendor: editForm.vendor || undefined,
-                    date: editForm.date || undefined,
+                  await apiRequest("PATCH", `/api/expenses/${targetId}`, {
+                    description: newDesc,
+                    amount: newAmount,
+                    category: newCategory,
+                    vendor: newVendor,
+                    date: newDate,
                     // Round-6 fix (BUG-017): persist the chosen profile linkage.
-                    ...(editForm.profileId ? { linkedProfiles: [editForm.profileId] } : {}),
+                    ...(newProfiles ? { linkedProfiles: newProfiles } : {}),
                   });
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-                  toast({ title: `"${editForm.description}" updated` });
-                  setEditingExpense(null);
-                } catch (err: any) { toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" }); }
+                } catch (err: any) {
+                  for (const [key, data] of prev) queryClient.setQueryData(key, data);
+                  toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" });
+                }
                 finally { setEditSaving(false); }
               }}>{editSaving ? "Saving…" : "Save Changes"}</Button>
             </div>
@@ -958,7 +1168,13 @@ export default function FinancePage() {
               <div><Label className="text-xs">Expected Date <span className="text-destructive">*</span></Label>
                 <Input type="date" min={new Date().toISOString().slice(0,10)} value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
             </div>
-            <Button className="w-full" onClick={() => addPaycheckMut.mutate()} disabled={!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate || addPaycheckMut.isPending} data-testid="button-save-paycheck">
+            <Button className="w-full" onClick={() => {
+              if (!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate) return;
+              addPaycheckMut.mutate();
+              // Close immediately — optimistic insert already populated the list.
+              setAddPaycheckOpen(false);
+              setNewPaycheck({ source: "", amount: "", expectedDate: "" });
+            }} disabled={!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate || addPaycheckMut.isPending} data-testid="button-save-paycheck">
               {addPaycheckMut.isPending ? "Saving..." : "Add Paycheck"}
             </Button>
           </div>
@@ -1089,7 +1305,12 @@ export default function FinancePage() {
             </div>
             <Button
               className="w-full"
-              onClick={() => addIncomeMut.mutate()}
+              onClick={() => {
+                // Close immediately for snappy UX — optimistic insert is in onMutate.
+                addIncomeMut.mutate();
+                setAddIncomeOpen(false);
+                setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
+              }}
               disabled={!newIncome.description.trim() || !newIncome.amount || parseFloat(newIncome.amount) <= 0 || addIncomeMut.isPending}
               data-testid="button-save-income"
             >
@@ -1172,7 +1393,12 @@ export default function FinancePage() {
             </div>
             <Button
               className="w-full"
-              onClick={() => editingIncome && editIncomeMut.mutate({ id: editingIncome.id })}
+              onClick={() => {
+                if (!editingIncome) return;
+                // Close immediately for snappy UX — optimistic edit is in onMutate.
+                editIncomeMut.mutate({ id: editingIncome.id });
+                setEditingIncome(null);
+              }}
               disabled={!editIncomeForm.description.trim() || !editIncomeForm.amount || parseFloat(editIncomeForm.amount) <= 0 || editIncomeMut.isPending}
               data-testid="button-save-edit-income"
             >
@@ -1393,7 +1619,15 @@ export default function FinancePage() {
             <p className="text-[10px] text-muted-foreground">Upserts on (month, week). Leave any number blank to keep its current value.</p>
             <Button
               className="w-full"
-              onClick={() => addCashflowMut.mutate()}
+              onClick={() => {
+                // Close immediately for snappy UX — optimistic upsert is in onMutate.
+                addCashflowMut.mutate();
+                setAddCashflowOpen(false);
+                setNewCashflow({
+                  month: new Date().toISOString().slice(0, 7),
+                  week: "1", projected_income: "", projected_expenses: "", actual_income: "", actual_expenses: "",
+                });
+              }}
               disabled={
                 !/^\d{4}-\d{2}$/.test(newCashflow.month) ||
                 !newCashflow.week ||
@@ -1447,34 +1681,33 @@ export default function FinancePage() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={async () => {
                 if (!deleteConfirmId) return;
-                const expense = profileFiltered.find(x => x.id === deleteConfirmId);
+                const targetId = deleteConfirmId;
+                const expense = profileFiltered.find(x => x.id === targetId);
+                // Close dialog immediately and apply optimistic remove before the network call.
+                setDeleteConfirmId(null);
+                await queryClient.cancelQueries({ queryKey: ["/api/expenses"] });
+                const prev = queryClient.getQueriesData({ queryKey: ["/api/expenses"] });
+                queryClient.setQueriesData(
+                  { queryKey: ["/api/expenses"] },
+                  (old: any) => {
+                    if (!old) return old;
+                    if (Array.isArray(old)) return old.filter((item: any) => item.id !== targetId);
+                    if (Array.isArray(old?.items)) return { ...old, items: old.items.filter((item: any) => item.id !== targetId) };
+                    return old;
+                  }
+                );
+                toast({ title: `"${expense?.description}" deleted` });
                 try {
-                  await apiRequest("DELETE", `/api/expenses/${deleteConfirmId}`);
-                  // Round-6 fix (BUG-018): previous code optimistically updated only the
-                  // unparameterised ["/api/expenses"] key, but the active page query key is
-                  // ["/api/expenses", filterMode, ...filterIds] — so the on-screen list and
-                  // the "X expenses" counter weren't updated until a full refetch round-trip.
-                  // Use setQueriesData with a prefix matcher to update every cached expense
-                  // list immediately, then invalidate to reconcile against the server.
-                  queryClient.setQueriesData<any[] | { items?: any[] } | undefined>(
-                    { queryKey: ["/api/expenses"] },
-                    (old: any) => {
-                      if (!old) return old;
-                      if (Array.isArray(old)) return old.filter((item: any) => item.id !== deleteConfirmId);
-                      if (Array.isArray(old?.items)) return { ...old, items: old.items.filter((item: any) => item.id !== deleteConfirmId) };
-                      return old;
-                    }
-                  );
+                  await apiRequest("DELETE", `/api/expenses/${targetId}`);
                   queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
                   queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-                  toast({ title: `"${expense?.description}" deleted` });
                 } catch (err: any) {
+                  for (const [key, data] of prev) queryClient.setQueryData(key, data);
                   toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" });
                 }
-                setDeleteConfirmId(null);
               }}
             >
               Delete

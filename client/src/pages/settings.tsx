@@ -155,11 +155,23 @@ function GoogleCalendarRow() {
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
     } catch (err: any) {
-      toast({
-        title: "Sync failed",
-        description: err?.message?.includes("502") ? "Could not reach Google Calendar" : "Please try again",
-        variant: "destructive",
-      });
+      // Friendly, actionable messages — the previous "Could not reach Google
+      // Calendar" was vague and gave no recovery path. Map common failure modes
+      // to specific guidance so users know what to do next.
+      const msg: string = String(err?.message || "");
+      let description = "Something went wrong. Please try again in a moment.";
+      if (/\b502\b|bad gateway/i.test(msg)) {
+        description = "Google Calendar sync is temporarily unavailable. We're working on it — please try again in a few minutes.";
+      } else if (/\b401\b|unauthor/i.test(msg)) {
+        description = "Your Google Calendar connection expired. Please reconnect in Settings.";
+      } else if (/\b403\b|forbidden/i.test(msg)) {
+        description = "Google denied the request. Re-grant calendar access in your Google account.";
+      } else if (/\b429\b|rate.?limit/i.test(msg)) {
+        description = "Too many sync requests. Please wait a minute and try again.";
+      } else if (/network|fetch|timeout/i.test(msg)) {
+        description = "Network issue reaching Google. Check your connection and retry.";
+      }
+      toast({ title: "Sync failed", description, variant: "destructive" });
     } finally {
       setSyncing(false);
     }
