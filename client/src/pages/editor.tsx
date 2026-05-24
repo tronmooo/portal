@@ -1919,13 +1919,13 @@ export default function EditorPage() {
               size="sm"
               className="h-6 w-6 p-0"
               onClick={() => {
-                const next = prompt("Add a new sheet tab — coming soon. For now, rename the current tab.", sheet.sheetName || "Sheet1");
+                const next = prompt("Rename sheet tab", sheet.sheetName || "Sheet1");
                 if (next && next.trim()) {
                   setSheet(s => ({ ...s, sheetName: next.trim() }));
                   setDirty(true);
                 }
               }}
-              title="Add sheet"
+              title="Rename sheet"
               data-testid="sheet-tab-add"
             ><Plus className="h-3.5 w-3.5" /></Button>
             <button

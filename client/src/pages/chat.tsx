@@ -2601,7 +2601,9 @@ export default function ChatPage() {
                       'delete_task', 'delete_habit', 'delete_tracker_entry',
                       'update_tracker_entry', 'uncomplete_habit', 'save_memory',
                     ].includes(a.type)).map((action, i) => {
-                      const entityId = action.data?._entityId;
+                      // _entityId is set by the AI engine; fall back to .id which the
+                      // server returns directly on create/log actions (Bug #CHAT-002)
+                      const entityId = action.data?._entityId || action.data?.id;
                       const isUndone = action.data?._undone;
                       // All create/log actions can be undone
                       // Mapping covers BOTH the raw tool name AND the mapped ParsedAction type

@@ -1254,7 +1254,7 @@ function AddEntryDialog({
         else if (f.type === "boolean") coerced[f.name] = raw === true || raw === "true";
         else coerced[f.name] = raw ?? "";
       }
-      const tempEntry = { id: 'temp-' + Date.now(), values: coerced, notes: notes.trim() || undefined, timestamp: new Date().toISOString(), computed: {} };
+      const tempEntry = { id: 'temp-' + crypto.randomUUID(), values: coerced, notes: notes.trim() || undefined, timestamp: new Date().toISOString(), computed: {} };
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
         (old || []).map((t: any) => t.id === tracker.id
           ? { ...t, entries: [...(t.entries || []), tempEntry] }
