@@ -2662,6 +2662,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
   const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7));
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [newCat, setNewCat] = useState("");
   const [newAmt, setNewAmt] = useState("");
   const [newNotes, setNewNotes] = useState("");
@@ -2729,8 +2730,16 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
   const updateMutation = useMutation({
     mutationFn: (data: {id: string; amount: number}) =>
       apiRequest("PATCH", `/api/budgets/${data.id}?month=${month}`, { amount: data.amount }),
+    onMutate: async (data) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/budgets", month] });
+      const prev = queryClient.getQueryData(["/api/budgets", month]);
+      queryClient.setQueryData(["/api/budgets", month], (old: any) =>
+        old ? { ...old, budgets: (old.budgets || []).map((b: any) => b.id === data.id ? { ...b, amount: data.amount } : b) } : old
+      );
+      return { prev };
+    },
     onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setEditId(null); toast({ title: "Budget updated" }); },
-    onError: () => toast({ title: "Failed to update budget", variant: "destructive" }),
+    onError: (_e, _v, ctx: any) => { if (ctx?.prev) queryClient.setQueryData(["/api/budgets", month], ctx.prev); toast({ title: "Failed to update budget", variant: "destructive" }); },
   });
 
   const copyMutation = useMutation({
@@ -2820,7 +2829,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditId(b.id)} data-testid={`edit-budget-${b.category}`} aria-label={`Edit ${b.category} budget`}>
                           <Pencil className="h-2.5 w-2.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(b.id)} data-testid={`delete-budget-${b.category}`} aria-label={`Delete ${b.category} budget`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" disabled={deleteMutation.isPending} onClick={() => setDeleteConfirmId(b.id)} data-testid={`delete-budget-${b.category}`} aria-label={`Delete ${b.category} budget`}>
                           <X className="h-2.5 w-2.5" />
                         </Button>
                       </>
@@ -2889,6 +2898,20 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
           )}
         </div>
       )}
+
+      {/* Budget delete confirmation */}
+      <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete budget?</AlertDialogTitle>
+            <AlertDialogDescription>This will remove the budget limit for this category. Existing expenses are not affected.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteConfirmId(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (deleteConfirmId) { deleteMutation.mutate(deleteConfirmId); setDeleteConfirmId(null); } }}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

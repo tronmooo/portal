@@ -22,6 +22,16 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -456,6 +466,7 @@ function EventDetailDialog({
   onEdit: () => void;
 }) {
   const { toast } = useToast();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const Icon = TYPE_ICONS[item.type] || CalendarIcon;
 
   const { data: profiles = [] } = useQuery<Profile[]>({
@@ -540,6 +551,7 @@ function EventDetailDialog({
   });
 
   return (
+    <>
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <DialogContent className="max-w-sm" data-testid="dialog-event-detail">
         <DialogHeader>
@@ -727,7 +739,7 @@ function EventDetailDialog({
               variant="destructive"
               size="sm"
               disabled={deleteMutation.isPending}
-              onClick={() => deleteMutation.mutate()}
+              onClick={() => setConfirmDelete(true)}
               data-testid="btn-delete-event-detail"
             >
               <Trash2 className="h-3.5 w-3.5 mr-1" />
@@ -737,6 +749,28 @@ function EventDetailDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete "{item.title}"?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This {item.type === "event" ? "event" : item.type === "task" ? "task" : "bill"} will be permanently removed. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={() => { setConfirmDelete(false); deleteMutation.mutate(); }}
+            data-testid="btn-confirm-delete-event"
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 
