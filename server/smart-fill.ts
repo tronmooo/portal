@@ -167,7 +167,7 @@ Return ONLY valid JSON in this exact shape (no markdown, no commentary):
     : { type: "document", source: { type: "base64", media_type: "application/pdf", data: cleanBase64 } };
 
   const response = await getClient().messages.create({
-    model: "claude-sonnet-4-5-20250929",
+    model: "claude-sonnet-4-6",
     max_tokens: 4096,
     messages: [
       {

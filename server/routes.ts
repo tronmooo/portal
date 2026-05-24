@@ -1096,7 +1096,7 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
       const resp = await anthropicClient.messages.create({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-6",
         max_tokens: 400,
         messages: [{ role: "user", content: prompt }],
       });
@@ -2298,7 +2298,7 @@ Respond ONLY in JSON format:
 
       const resp = await client.messages.create({
         // Same model used elsewhere in the codebase — "claude-opus-4-5" is not a valid alias.
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5-20250929",
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 512,
         messages: [{ role: "user", content: prompt }],
       });

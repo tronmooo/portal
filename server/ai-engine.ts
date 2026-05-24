@@ -870,7 +870,7 @@ Extract every single field. Do not skip anything. Do not make up data — only r
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: "claude-sonnet-4-5-20250929", // Sonnet 4.5/4.6 — same model as Claude app, best vision accuracy
+      model: "claude-sonnet-4-6", // Sonnet 4.6 — best vision accuracy
       max_tokens: 4096,
       messages: [{
         role: "user",
@@ -8090,7 +8090,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // Single model, single path. No classifier, no escalation, no surprises.
   // Env-var ANTHROPIC_MODEL still wins (for emergency override).
   // User preference still wins (in case they explicitly pick a model in settings).
-  const SONNET_MODEL = "claude-sonnet-4-5-20250929";
+  const SONNET_MODEL = "claude-sonnet-4-6";
   let preferredModel: string | null = null;
   try {
     preferredModel = await storage.getPreference("ai_chat_model");
