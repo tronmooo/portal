@@ -1096,7 +1096,7 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
       const resp = await anthropicClient.messages.create({
-        model: "claude-sonnet-4-5-20250929",
+        model: "claude-sonnet-4-6",
         max_tokens: 400,
         messages: [{ role: "user", content: prompt }],
       });
@@ -2297,8 +2297,10 @@ Respond ONLY in JSON format:
 {"value": 25000, "confidence": "medium", "explanation": "Based on...", "range": {"low": 22000, "high": 28000}}`;
 
       const resp = await client.messages.create({
-        // Same model used elsewhere in the codebase — "claude-opus-4-5" is not a valid alias.
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5-20250929",
+        // Same model used elsewhere in the codebase. Note: claude-sonnet-4-5-20250929
+        // was retired/erroring (2026-05-24); use 4-6 as the safe default. The env
+        // override still works for emergencies but should also be set to a live ID.
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 512,
         messages: [{ role: "user", content: prompt }],
       });

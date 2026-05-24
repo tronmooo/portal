@@ -274,7 +274,17 @@ export default function SettingsPage() {
     queryFn: () => apiRequest("GET", "/api/preferences/ai_smart_routing").then(r => r.json()),
   });
 
-  const aiChatModel = prefChatModel?.value || "claude-sonnet-4-5-20250929";
+  // (2026-05-24) Map retired Sonnet 4.5 saved preferences onto the current
+  // Sonnet 4.6 so the Select displays the right option and the server doesn't
+  // get a dead model id when chat runs. Server-side ai-engine.ts does the
+  // same migration on read for safety.
+  const RETIRED_SONNET_IDS = new Set([
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-5",
+    "claude-3-5-sonnet-20241022",
+  ]);
+  const rawAiChatModel = prefChatModel?.value || "claude-sonnet-4-6";
+  const aiChatModel = RETIRED_SONNET_IDS.has(rawAiChatModel) ? "claude-sonnet-4-6" : rawAiChatModel;
   const aiFastPath = prefFastPath?.value !== "false";
   const aiAutoExpense = prefAutoExpense?.value !== "false";
   const aiSmartRouting = prefSmartRouting?.value !== "false";
@@ -679,8 +689,8 @@ export default function SettingsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="claude-sonnet-4-5-20250929">
-                    <span className="flex items-center gap-1.5"><Zap className="h-3 w-3" /> Sonnet 4.5 (powerful)</span>
+                  <SelectItem value="claude-sonnet-4-6">
+                    <span className="flex items-center gap-1.5"><Zap className="h-3 w-3" /> Sonnet 4.6 (powerful)</span>
                   </SelectItem>
                   <SelectItem value="claude-haiku-4-5-20251001">
                     <span className="flex items-center gap-1.5"><Zap className="h-3 w-3" /> Haiku 4.5 (faster)</span>
@@ -695,7 +705,7 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted-foreground mt-0.5">Vision model for document scanning</p>
               </div>
               <Badge variant="outline" className="text-xs">
-                <Eye className="h-3 w-3 mr-1" /> Claude Sonnet 4.5
+                <Eye className="h-3 w-3 mr-1" /> Claude Sonnet 4.6
               </Badge>
             </div>
             <Separator />

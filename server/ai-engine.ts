@@ -870,7 +870,7 @@ Extract every single field. Do not skip anything. Do not make up data — only r
 
     // Keep backward-compatible by using the old structure for images
     const response = await getClient().messages.create({
-      model: "claude-sonnet-4-5-20250929", // Sonnet 4.5/4.6 — same model as Claude app, best vision accuracy
+      model: "claude-sonnet-4-6", // Sonnet 4.6 — same model family as Claude app, best vision accuracy
       max_tokens: 4096,
       messages: [{
         role: "user",
@@ -8090,16 +8090,30 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // Single model, single path. No classifier, no escalation, no surprises.
   // Env-var ANTHROPIC_MODEL still wins (for emergency override).
   // User preference still wins (in case they explicitly pick a model in settings).
-  const SONNET_MODEL = "claude-sonnet-4-5-20250929";
+  const SONNET_MODEL = "claude-sonnet-4-6";
   let preferredModel: string | null = null;
   try {
     preferredModel = await storage.getPreference("ai_chat_model");
   } catch { /* ignore — use default */ }
 
+  // Migrate retired/deprecated saved preferences to the current Sonnet so a
+  // user who picked Sonnet 4.5 in the past doesn't get a 404 from Anthropic.
+  // (2026-05-24) claude-sonnet-4-5-20250929 was returning errors for users.
+  const RETIRED_MODELS = new Set([
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-5",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-sonnet-20240620",
+    "claude-3-sonnet-20240229",
+  ]);
+  if (preferredModel && RETIRED_MODELS.has(preferredModel)) {
+    preferredModel = SONNET_MODEL;
+  }
+
   let chatModel: string;
   if (preferredModel) {
     chatModel = preferredModel;
-  } else if (process.env.ANTHROPIC_MODEL) {
+  } else if (process.env.ANTHROPIC_MODEL && !RETIRED_MODELS.has(process.env.ANTHROPIC_MODEL)) {
     chatModel = process.env.ANTHROPIC_MODEL;
   } else {
     chatModel = SONNET_MODEL;
