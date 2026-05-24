@@ -206,6 +206,10 @@ function HabitCard({ habit }: { habit: Habit }) {
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Calendar timeline reads habit checkins to render the dot grid — with
+      // checkins now cascade-deleted server-side, the timeline view needs
+      // to refetch or it shows ghost completion dots for the gone habit.
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
     },
   });
 

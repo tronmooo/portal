@@ -4324,9 +4324,11 @@ Rules:
     res.json(updated);
   }));
   app.delete("/api/journal/:id", asyncHandler(async (req, res) => {
-    const entries = await storage.getJournalEntries();
-    if (!entries.find(e => e.id === req.params.id)) return res.status(404).json({ error: "Journal entry not found" });
-    await storage.deleteJournalEntry(req.params.id);
+    // Single-call delete — storage.deleteJournalEntry uses .select() to tell
+    // us whether a row was actually removed, so we avoid the TOCTOU race that
+    // existed when we used getJournalEntries() to pre-check existence.
+    const removed = await storage.deleteJournalEntry(req.params.id);
+    if (!removed) return res.status(404).json({ error: "Journal entry not found" });
     const uid_j3 = (req as AuthenticatedRequest).userId || "anon";
     bustCache(`stats:${uid_j3}`);
     res.json({ success: true });
@@ -4371,9 +4373,11 @@ Rules:
     } catch (e: any) { console.error("[memories]", e?.message || e); res.status(500).json({ error: "Failed to update memory" }); }
   }));
   app.delete("/api/memories/:id", asyncHandler(async (req, res) => {
-    const memories = await storage.getMemories();
-    if (!memories.find((m: any) => m.id === req.params.id)) return res.status(404).json({ error: "Memory not found" });
-    await storage.deleteMemory(req.params.id);
+    // Single-call delete — storage.deleteMemory uses .select() to detect
+    // whether a row was removed, avoiding TOCTOU between getMemories() and
+    // delete that could let two concurrent clients both think they succeeded.
+    const removed = await storage.deleteMemory(req.params.id);
+    if (!removed) return res.status(404).json({ error: "Memory not found" });
     res.json({ success: true });
   }));
 
@@ -6292,11 +6296,23 @@ No emojis. No prose outside the JSON.`,
   }));
 
   app.delete("/api/chat-artifacts/:id", asyncHandler(async (req, res) => {
-    await (storage as any).supabase
+    // Bug fix: previously this swallowed the Supabase error and returned 200
+    // even when the delete failed (e.g. RLS denial, network blip). The frontend
+    // then optimistically removed the row and the user thought it was gone.
+    const uid = (req as AuthenticatedRequest).userId;
+    const { data, error } = await (storage as any).supabase
       .from('chat_artifacts')
       .delete()
       .eq('id', req.params.id)
-      .eq('user_id', (req as AuthenticatedRequest).userId);
+      .eq('user_id', uid)
+      .select();
+    if (error) {
+      console.error("[api] chat-artifact delete failed:", error.message);
+      return res.status(500).json({ error: "Failed to delete chat artifact" });
+    }
+    if (!data || data.length === 0) {
+      return res.status(404).json({ error: "Chat artifact not found" });
+    }
     res.json({ success: true });
   }));
 
@@ -6331,7 +6347,8 @@ No emojis. No prose outside the JSON.`,
     res.json(updated);
   }));
   app.delete("/api/liability-asset-links/:id", asyncHandler(async (req, res) => {
-    await storage.deleteLiabilityAssetLink(req.params.id);
+    const ok = await storage.deleteLiabilityAssetLink(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Link not found" });
     res.json({ success: true });
   }));
 
@@ -6422,7 +6439,8 @@ No emojis. No prose outside the JSON.`,
     res.json(updated);
   }));
   app.delete("/api/liability-profile-links/:id", asyncHandler(async (req, res) => {
-    await storage.deleteLiabilityProfileLink(req.params.id);
+    const ok = await storage.deleteLiabilityProfileLink(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Link not found" });
     res.json({ success: true });
   }));
 
@@ -6446,7 +6464,8 @@ No emojis. No prose outside the JSON.`,
     res.json(row);
   }));
   app.delete("/api/liability-payments/:id", asyncHandler(async (req, res) => {
-    await storage.deleteLiabilityPayment(req.params.id);
+    const ok = await storage.deleteLiabilityPayment(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Payment not found" });
     res.json({ success: true });
   }));
 
@@ -6524,7 +6543,8 @@ No emojis. No prose outside the JSON.`,
     res.json(updated);
   }));
   app.delete("/api/asset-party-links/:id", asyncHandler(async (req, res) => {
-    await storage.deleteAssetPartyLink(req.params.id);
+    const ok = await storage.deleteAssetPartyLink(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Link not found" });
     res.json({ success: true });
   }));
 
@@ -6537,7 +6557,8 @@ No emojis. No prose outside the JSON.`,
     res.json(rows);
   }));
   app.delete("/api/ownership-history/:id", asyncHandler(async (req, res) => {
-    await storage.deleteOwnershipHistoryEntry(req.params.id);
+    const ok = await storage.deleteOwnershipHistoryEntry(req.params.id);
+    if (!ok) return res.status(404).json({ error: "History entry not found" });
     res.json({ success: true });
   }));
 

@@ -2083,21 +2083,31 @@ function ObligationsSection({ data }: { data: any[] }) {
 
   const deleteMutation = useMutation({
     mutationFn: ({ id, name }: { id: string; name?: string }) => apiRequest("DELETE", `/api/obligations/${id}`),
-    onSuccess: (_data, variables) => {
-      queryClient.setQueryData(["/api/obligations"], (old: any[]) =>
-        old?.filter((item: any) => item.id !== variables.id) || []
-      );
+    onMutate: async (variables) => {
+      // Optimistic removal so the row disappears instantly. Snapshot every
+      // observed query under ["/api/obligations", ...] so we can roll back
+      // if the server rejects the delete (e.g. 404 from a stale duplicate).
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const snapshots = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
       queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
         Array.isArray(old) ? old.filter((item: any) => item.id !== variables.id) : old
       );
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      return { snapshots };
+    },
+    onSuccess: (_data, variables) => {
       toast({ title: `"${variables.name || "Obligation"}" deleted` });
       setSelectedBill(null);
     },
-    onError: (_err, variables) => toast({ title: `Failed to delete "${variables.name || "obligation"}"`, variant: "destructive" }),
+    onError: (_err, variables, ctx: any) => {
+      // Restore each observed cache snapshot we captured in onMutate.
+      ctx?.snapshots?.forEach(([key, data]: [any, any]) => queryClient.setQueryData(key, data));
+      toast({ title: `Failed to delete "${variables.name || "obligation"}"`, variant: "destructive" });
+    },
+    onSettled: () => {
+      // Use the cache bus so /api/stats, /api/dashboard-enhanced,
+      // /api/cashflow, /api/loans/schedule all refresh together.
+      invalidateDomain("obligations");
+    },
   });
 
   // Group bills by timeframe — autopay bills are never "overdue" (they auto-charge on due date).

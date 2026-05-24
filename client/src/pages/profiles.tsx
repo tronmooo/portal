@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { EmptyState } from "@/components/EmptyState";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -1240,20 +1241,18 @@ export default function ProfilesPage() {
       await apiRequest("DELETE", `/api/profiles/${id}`);
     },
     onSuccess: () => {
-      // Cascade: profile delete also removes linked obligations, events, expenses, etc.
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Profile delete cascades server-side to obligations, events, expenses,
+      // tasks, trackers, habits, journal, goals, documents (entity_links
+      // cleanup + soft-delete fan-out). Use the cache bus to invalidate every
+      // affected domain at once — it routes via `refetchType: "active"` so
+      // only currently-mounted queries actually refetch (not all 16 in the
+      // background), which is what made this look like a "refetch storm" in
+      // the audit. The bus also handles nested keys (["/api/profiles", id,
+      // "detail"]) that the per-key list above silently missed.
+      void invalidateDomains(
+        "profiles", "obligations", "events", "expenses", "tasks",
+        "trackers", "habits", "journal", "goals", "documents", "dashboard",
+      );
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       const delProfile = profiles?.find(p => p.id === deleteId);
       toast({ title: `"${delProfile?.name || "Profile"}" deleted`, description: "All linked data removed" });

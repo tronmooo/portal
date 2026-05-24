@@ -10,6 +10,10 @@ import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import {
   Dialog, DialogContent, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { getProfileFilter } from "@/lib/profileFilter";
 import {
@@ -509,7 +513,10 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                if (window.confirm(`Delete "${item.title}"? This cannot be undone.`)) onDelete();
+                // Open a controlled AlertDialog instead of window.confirm() —
+                // prevents double-fire from rapid clicks and lets us disable
+                // the action button while the mutation is in-flight.
+                onDelete();
               }}
               className="p-1 rounded opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all"
               title="Delete"
@@ -618,9 +625,16 @@ export default function ArtifactsPage() {
     onSettled: (_d, _e, item) => {
       qc.invalidateQueries({ queryKey: item?.isArtifact ? ["/api/artifacts"] : ["/api/documents"] });
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      // Dashboard "Recent" / artifacts widgets read from /api/dashboard-enhanced —
+      // include it so the deleted row disappears from the dashboard too.
+      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
+    onSuccess: () => { setPendingDelete(null); },
   });
-  const handleDelete = (item: UnifiedArtifact) => deleteMut.mutate(item);
+  // Controlled AlertDialog state — replaces window.confirm() so rapid double
+  // clicks can’t race past the modal and trigger two deletes.
+  const [pendingDelete, setPendingDelete] = useState<UnifiedArtifact | null>(null);
+  const handleDelete = (item: UnifiedArtifact) => setPendingDelete(item);
 
   // Fetch all three data sources in parallel
   const { data: documents = [], isLoading: docsLoading } = useQuery<Document[]>({
@@ -994,6 +1008,31 @@ export default function ArtifactsPage() {
           </Dialog>
         );
       })()}
+
+      {/* Controlled delete confirmation — replaces window.confirm() so rapid
+          double-clicks can’t race the modal. Action button is disabled while
+          the mutation is pending. */}
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o && !deleteMut.isPending) setPendingDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete “{pendingDelete?.title}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the file and any history. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMut.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteMut.isPending}
+              onClick={(e) => { e.preventDefault(); if (pendingDelete) deleteMut.mutate(pendingDelete); }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-artifact-delete-confirm"
+            >
+              {deleteMut.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -44,6 +44,10 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type { Artifact, SheetData, SheetCell, SheetCellFormat } from "@shared/schema";
 import { getTemplatesByType, type EditorTemplate } from "@/lib/editor-templates";
 import {
@@ -638,6 +642,10 @@ export default function EditorPage() {
   }, [dirty, savedId]);
 
   // ── Delete & duplicate ──────────────────────────────────────────────────────
+  // Controlled AlertDialog state replaces window.confirm() so two rapid clicks
+  // of "Delete" cannot race past the modal and fire the mutation twice. The
+  // dialog action button is disabled while the mutation is pending.
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const deleteMut = useMutation({
     mutationFn: async () => {
       if (!savedId) return;
@@ -648,10 +656,14 @@ export default function EditorPage() {
       // Bug #22: keep documents list in sync — backing doc is removed too.
       qc.invalidateQueries({ queryKey: ["/api/documents"] });
       qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      setDeleteOpen(false);
       toast({ title: "Deleted" });
       setLocation("/artifacts");
     },
-    onError: (err: any) => toast({ title: "Delete failed", description: err?.message, variant: "destructive" }),
+    onError: (err: any) => {
+      setDeleteOpen(false);
+      toast({ title: "Delete failed", description: err?.message, variant: "destructive" });
+    },
   });
 
   const duplicateMut = useMutation({
@@ -1229,7 +1241,7 @@ export default function EditorPage() {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => setShareOpen(true)}><Share2 className="h-4 w-4 mr-2" /> Share</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => duplicateMut.mutate()}><Copy className="h-4 w-4 mr-2" /> Duplicate</DropdownMenuItem>
-                <DropdownMenuItem className="text-destructive" onClick={() => { if (confirm("Delete this artifact?")) deleteMut.mutate(); }}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                <DropdownMenuItem className="text-destructive" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
               </>
             )}
           </DropdownMenuContent>
@@ -1337,7 +1349,7 @@ export default function EditorPage() {
             </Button>
           )}
           {savedId && (
-            <Button variant="ghost" size="sm" onClick={() => { if (confirm("Delete this artifact?")) deleteMut.mutate(); }} data-testid="button-editor-delete">
+            <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(true)} data-testid="button-editor-delete">
               <Trash2 className="h-4 w-4 mr-1" /> Delete
             </Button>
           )}
@@ -1385,7 +1397,7 @@ export default function EditorPage() {
                 <DropdownMenuItem onClick={() => duplicateMut.mutate()}>
                   <Copy className="h-4 w-4 mr-2" /> Duplicate
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => { if (confirm("Delete this artifact?")) deleteMut.mutate(); }} className="text-destructive focus:text-destructive">
+                <DropdownMenuItem onClick={() => setDeleteOpen(true)} className="text-destructive focus:text-destructive">
                   <Trash2 className="h-4 w-4 mr-2" /> Delete
                 </DropdownMenuItem>
               </>
@@ -1944,6 +1956,30 @@ export default function EditorPage() {
           </div>
         </div>
       )}
+
+      {/* Delete confirmation — controlled dialog replaces window.confirm() so
+          double-clicking Delete can’t race the modal and fire two deletes. */}
+      <AlertDialog open={deleteOpen} onOpenChange={(o) => { if (!deleteMut.isPending) setDeleteOpen(o); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this artifact?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove the {type === "doc" ? "document" : "sheet"} and its history. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMut.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteMut.isPending}
+              onClick={(e) => { e.preventDefault(); deleteMut.mutate(); }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-editor-delete-confirm"
+            >
+              {deleteMut.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Share dialog (Wave 5) */}
       <Dialog open={shareOpen} onOpenChange={setShareOpen}>

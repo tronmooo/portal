@@ -2900,7 +2900,12 @@ export class SupabaseStorage implements IStorage {
   async deleteHabit(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this habit */
     await this.cleanupEntityLinks("habit", id);
-    // Soft delete — set deleted_at instead of removing the row
+    // Cascade delete habit_checkins — they are per-habit metadata with no value once
+    // the habit is gone. Leaving them would orphan rows that show up in analytics /
+    // AI summaries / calendar timeline queries that hit habit_checkins directly.
+    await this.supabase.from("habit_checkins").delete().eq("habit_id", id).eq("user_id", this.userId);
+    // Soft delete the habit row itself — set deleted_at instead of removing it so
+    // restoreHabit still works (the row is recoverable; the checkins are not).
     const { error } = await this.supabase.from("habits").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -3320,8 +3325,14 @@ export class SupabaseStorage implements IStorage {
   async deleteJournalEntry(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this journal */
     await this.cleanupEntityLinks("journal", id);
-    const { error } = await this.supabase.from("journal_entries").delete().eq("id", id).eq("user_id", this.userId);
-    return !error;
+    // Use .select() so we can tell apart "row deleted" from "row did not exist".
+    // Without this, Supabase returns no error in both cases and the caller
+    // can't return a correct 404 vs 200.
+    const { data, error } = await this.supabase
+      .from("journal_entries").delete().eq("id", id).eq("user_id", this.userId)
+      .select("id");
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
@@ -3371,8 +3382,12 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteMemory(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("memories").delete().eq("id", id).eq("user_id", this.userId);
-    return !error;
+    // .select() returns the deleted rows so we can distinguish 404 from 200.
+    const { data, error } = await this.supabase
+      .from("memories").delete().eq("id", id).eq("user_id", this.userId)
+      .select("id");
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
   }
 
   async updateMemory(id: string, data: Partial<any>): Promise<any | undefined> {
@@ -4727,9 +4742,10 @@ export class SupabaseStorage implements IStorage {
     return data ? this.rowToLiabilityAssetLink(data) : undefined;
   }
 
-  async deleteLiabilityAssetLink(id: string): Promise<void> {
+  async deleteLiabilityAssetLink(id: string): Promise<boolean> {
     const { data: existing } = await this.supabase.from("liability_asset_links")
       .select("*").eq("id", id).eq("user_id", this.userId).single();
+    if (!existing) return false;
     const { error } = await this.supabase.from("liability_asset_links")
       .delete().eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
@@ -4744,6 +4760,7 @@ export class SupabaseStorage implements IStorage {
         });
       } catch (e) { /* best-effort */ }
     }
+    return true;
   }
 
   async getLiabilityProfileLinks(liabilityProfileId?: string): Promise<LiabilityProfileLink[]> {
@@ -4822,23 +4839,23 @@ export class SupabaseStorage implements IStorage {
     return data ? this.rowToLiabilityProfileLink(data) : undefined;
   }
 
-  async deleteLiabilityProfileLink(id: string): Promise<void> {
+  async deleteLiabilityProfileLink(id: string): Promise<boolean> {
     const { data: existing } = await this.supabase.from("liability_profile_links")
       .select("*").eq("id", id).eq("user_id", this.userId).single();
+    if (!existing) return false;
     const { error } = await this.supabase.from("liability_profile_links")
       .delete().eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    if (existing) {
-      try {
-        await this.recordOwnershipHistory({
-          linkKind: "liability_party", linkId: id,
-          subjectId: existing.liability_profile_id, counterpartyId: existing.party_profile_id,
-          action: "delete", fieldChanged: null,
-          oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
-          newValue: null, changedBy: "user", note: null,
-        });
-      } catch (e) { /* best-effort */ }
-    }
+    try {
+      await this.recordOwnershipHistory({
+        linkKind: "liability_party", linkId: id,
+        subjectId: existing.liability_profile_id, counterpartyId: existing.party_profile_id,
+        action: "delete", fieldChanged: null,
+        oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
+        newValue: null, changedBy: "user", note: null,
+      });
+    } catch (e) { /* best-effort */ }
+    return true;
   }
 
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {
@@ -4892,10 +4909,14 @@ export class SupabaseStorage implements IStorage {
     return row ? this.rowToLiabilityPayment(row) : undefined;
   }
 
-  async deleteLiabilityPayment(id: string): Promise<void> {
-    const { error } = await this.supabase.from("liability_payments")
-      .delete().eq("id", id).eq("user_id", this.userId);
+  async deleteLiabilityPayment(id: string): Promise<boolean> {
+    // Returns true iff a row was actually deleted. Without `.select()` the
+    // Supabase client returns no rows and the route was reporting success even
+    // when the id didn't exist (RLS denial looks the same to callers).
+    const { data, error } = await this.supabase.from("liability_payments")
+      .delete().eq("id", id).eq("user_id", this.userId).select();
     if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
@@ -5013,21 +5034,21 @@ export class SupabaseStorage implements IStorage {
     return data ? this.rowToAssetPartyLink(data) : undefined;
   }
 
-  async deleteAssetPartyLink(id: string): Promise<void> {
+  async deleteAssetPartyLink(id: string): Promise<boolean> {
     const { data: existing } = await this.supabase.from("asset_party_links")
       .select("*").eq("id", id).eq("user_id", this.userId).single();
+    if (!existing) return false;
     const { error } = await this.supabase.from("asset_party_links")
       .delete().eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    if (existing) {
-      await this.recordOwnershipHistory({
-        linkKind: "asset_party", linkId: id,
-        subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
-        action: "delete", fieldChanged: null,
-        oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
-        newValue: null, changedBy: "user", note: null,
-      });
-    }
+    await this.recordOwnershipHistory({
+      linkKind: "asset_party", linkId: id,
+      subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
+      action: "delete", fieldChanged: null,
+      oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
+      newValue: null, changedBy: "user", note: null,
+    });
+    return true;
   }
 
   async getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<OwnershipHistoryEntry[]> {
@@ -5067,10 +5088,11 @@ export class SupabaseStorage implements IStorage {
     return this.rowToOwnershipHistory(row);
   }
 
-  async deleteOwnershipHistoryEntry(id: string): Promise<void> {
-    const { error } = await this.supabase.from("ownership_history")
-      .delete().eq("id", id).eq("user_id", this.userId);
+  async deleteOwnershipHistoryEntry(id: string): Promise<boolean> {
+    const { data, error } = await this.supabase.from("ownership_history")
+      .delete().eq("id", id).eq("user_id", this.userId).select();
     if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
