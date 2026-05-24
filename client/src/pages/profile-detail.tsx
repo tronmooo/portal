@@ -9826,12 +9826,19 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
 
   const calendarSyncMutation = useMutation({
     mutationFn: async () => {
+      // Bug fix: server insertEventSchema uses `category` (not `type`) and
+      // `recurrence` (not `recurring`). Previously both fields were dropped
+      // by zod safeParse so the event landed with default category=personal
+      // and recurrence=none instead of a recurring finance event.
+      const freq = (f.frequency || "monthly").toLowerCase();
+      const validRecurrence = ["none", "daily", "weekly", "biweekly", "monthly", "yearly"];
+      const recurrence = validRecurrence.includes(freq) ? freq : "monthly";
       await apiRequest("POST", "/api/events", {
         title: `\u{1F4B0} ${profile.name} billing`,
         date: f.renewalDate || new Date().toISOString().slice(0, 10),
-        type: "subscription",
+        category: "finance",
         linkedProfiles: [profileId],
-        recurring: f.frequency || "monthly",
+        recurrence,
       });
     },
     onSuccess: () => {

@@ -1867,7 +1867,7 @@ export class SupabaseStorage implements IStorage {
     }
     const { error } = await this.supabase.from("tasks").insert({
       id, user_id: this.userId, title: data.title, description: data.description || null,
-      status: "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
+      status: (data as any).status || "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
       linked_profiles: linkedProfiles, tags: data.tags || [],
       source: (data as any).source || "manual", created_at: now,
     });
@@ -3011,6 +3011,10 @@ export class SupabaseStorage implements IStorage {
       currency: merged.currency || "USD",
       icon: merged.icon || null,
       notes: merged.notes || null,
+      // Bug fix: status (active|paused|...) was previously dropped on update,
+      // making the pause/resume button a no-op. Forward the merged value so
+      // PATCH /api/obligations/:id { status } actually persists.
+      status: merged.status || "active",
       updated_at: new Date().toISOString(),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;

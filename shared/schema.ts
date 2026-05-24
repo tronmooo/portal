@@ -476,6 +476,7 @@ export const insertObligationSchema = z.object({
   kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
   nextDueDate: z.string(),
   autopay: z.boolean().default(false),
+  status: z.enum(["active", "paused", "cancelled"]).optional(),
   notes: z.string().optional(),
   leadTimeDays: z.number().int().min(0).max(365).optional(),
   autoLogExpense: z.boolean().optional(),
@@ -671,6 +672,7 @@ export interface Task {
 export const insertTaskSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
+  status: z.enum(["todo", "in_progress", "done"]).optional(),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   dueDate: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),

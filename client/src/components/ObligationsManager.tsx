@@ -244,7 +244,11 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
   }, [editOpen, ob.id, ob.amount, ob.nextDueDate, ob.frequency, ob.category, ob.kind]);
 
   const undoPayMutation = useMutation({
-    mutationFn: () => apiRequest("PATCH", `/api/obligations/${ob.id}`, { isPaid: false }),
+    // Bug fix: previously PATCHed { isPaid: false } against a route that has
+    // no such field — server silently dropped it and the obligation stayed
+    // "paid". Now we hit the dedicated DELETE /last-payment route which
+    // removes the most recent obligation_payments row.
+    mutationFn: () => apiRequest("DELETE", `/api/obligations/${ob.id}/last-payment`),
     onSuccess: () => { invalidateAll(); toast({ title: `"${ob.name}" payment undone` }); },
     onError: (err: Error) => toast({ title: `Failed to undo payment`, description: formatApiError(err), variant: "destructive" }),
   });

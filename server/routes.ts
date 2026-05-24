@@ -3927,6 +3927,40 @@ Rules:
     bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
   }));
+
+  // Undo the most recent payment for an obligation. The toast-action "Undo"
+  // button shown right after marking-paid was previously a no-op (it PATCHed
+  // a non-existent `isPaid` field). This deletes the latest obligation_payments
+  // row so the obligation re-appears as unpaid for the current period.
+  app.delete("/api/obligations/:id/last-payment", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ob = await storage.getObligation(req.params.id);
+    if (!ob) return res.status(404).json({ error: "Obligation not found" });
+    if (!ob.payments || ob.payments.length === 0) {
+      return res.status(404).json({ error: "No payments to undo" });
+    }
+    // Pick the most recent payment (by createdAt if available, else by date).
+    const sorted = [...ob.payments].sort((a, b) => {
+      const ak = (a.createdAt || a.date || "");
+      const bk = (b.createdAt || b.date || "");
+      return bk.localeCompare(ak);
+    });
+    const latest = sorted[0];
+    const { error } = await (storage as any).supabase
+      .from("obligation_payments")
+      .delete()
+      .eq("id", latest.id)
+      .eq("user_id", uid);
+    if (error) {
+      console.error("[api] undo payment failed:", error.message);
+      return res.status(500).json({ error: "Failed to undo payment" });
+    }
+    // Also clear the dedupe entry so the user can immediately re-pay.
+    recentPayments.delete(`${uid}:${req.params.id}`);
+    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`); bustCache(`notifications:${uid}`);
+    res.json({ success: true, deletedPaymentId: latest.id });
+  }));
+
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getObligation(req.params.id);
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
@@ -5865,6 +5899,47 @@ No emojis. No prose outside the JSON.`,
       .range(offset, offset + limit - 1);
     if (error) { console.error("[api]", error.message); return res.status(500).json({ error: "Failed to load data" }); }
     res.json(data || []);
+  }));
+
+  // POST audit-log: used by client errorReporter and other client-side logging.
+  // Body: { action, entity_type, entity_id?, entity_name?, details?, source? }
+  app.post("/api/audit-log", asyncHandler(async (req, res) => {
+    try {
+      const userId = (req as AuthenticatedRequest).userId;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      // Rate-limit per user to avoid runaway error storms filling the table.
+      if (rateLimit(`audit-log-post:${userId}`, 120, 60_000)) {
+        return res.status(429).json({ error: "Rate limited" });
+      }
+      const body = req.body || {};
+      const action = typeof body.action === "string" ? body.action.slice(0, 100) : null;
+      const entity_type = typeof body.entity_type === "string" ? body.entity_type.slice(0, 100) : null;
+      if (!action || !entity_type) {
+        return res.status(400).json({ error: "action and entity_type are required" });
+      }
+      const row: Record<string, any> = {
+        user_id: userId,
+        action,
+        entity_type,
+        entity_id: typeof body.entity_id === "string" ? body.entity_id.slice(0, 200) : null,
+        entity_name: typeof body.entity_name === "string" ? body.entity_name.slice(0, 500) : null,
+        details: body.details && typeof body.details === "object" ? body.details : {},
+        source: typeof body.source === "string" ? body.source.slice(0, 100) : "manual",
+      };
+      const { data, error } = await (storage as any).supabase
+        .from("audit_log")
+        .insert(row)
+        .select()
+        .single();
+      if (error) {
+        console.error("[api] audit-log insert failed:", error.message);
+        return res.status(500).json({ error: "Failed to write audit log" });
+      }
+      res.json(data);
+    } catch (err: any) {
+      console.error("[api] audit-log POST failed:", err?.message);
+      res.status(500).json({ error: "Failed to write audit log" });
+    }
   }));
 
   // ---- Delete All User Data ----
