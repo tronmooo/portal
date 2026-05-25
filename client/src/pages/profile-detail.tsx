@@ -1435,16 +1435,14 @@ function NestedAssetSections({
         </CardContent>
       </Card>
 
-      {/* Section 3: Child Assets — only meaningful for property/asset/account
-          profiles which can have real sub-items (a house with solar panels,
-          a business with equipment, an account with sub-accounts). Vehicles
-          and investments don't have child assets in practice and showing an
-          empty "Child Assets" card next to "Linked Assets" / "Linked
-          Liabilities" just confuses users — it duplicates the relationship
-          model. Use the Linked Assets section for sibling cross-links. */}
-      {["property", "asset", "account"].includes(profile.type) && (
-        <ChildAssetsCard profile={profile} onChildAdded={onSaved} />
-      )}
+      {/* Section 3: Child Assets — the primary way to attach things that
+          BELONG to this asset. For a vehicle: tires, rims, dashcam, roof
+          rack, stereo, child seat. For a property: solar panels, hot tub,
+          appliances. For a generic asset: any sub-item. Kept on every
+          asset-like type — 'Linked Assets' (sibling cross-links between
+          two top-level assets) was the redundant section and is now hidden
+          on vehicles where it was almost never meaningful. */}
+      <ChildAssetsCard profile={profile} onChildAdded={onSaved} />
 
       {/* Section 4: Value Rollup */}
       <ValueRollupCard profile={profile} />
@@ -10845,17 +10843,23 @@ export default function ProfileDetailPage() {
                         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
                         <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
                       </section>
-                      <section className="mt-6">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
-                        <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
-                      </section>
+                      {/* Linked Assets — SIBLING cross-links between two
+                          top-level assets (e.g. a trailer tied to a truck,
+                          twin investment accounts). For vehicles this is
+                          almost never meaningful; sub-items belong under
+                          'Child Assets' above (tires, dashcam, roof rack).
+                          Hidden on vehicle to avoid the duplicate-section
+                          confusion from the previous build. */}
+                      {!["vehicle"].includes(profile.type) && (
+                        <section className="mt-6">
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
+                          <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
+                        </section>
+                      )}
                       {/* Linked Liabilities — surface debts/loans secured by this
-                          asset (e.g. the auto loan on this Honda, the mortgage on
-                          this house). Previously this section was missing on the
-                          asset side, so users had to open the liability profile to
-                          see the link. Now it's bidirectional. The component
-                          itself supports adding/removing links and links straight
-                          through to /api/assets/:id/liabilities. */}
+                          asset (auto loan on this Honda, mortgage on this house).
+                          Bidirectional with the Liability detail page. Uses
+                          /api/assets/:id/liabilities and supports add/remove. */}
                       {["vehicle","property","investment","asset"].includes(profile.type) && (
                         <section className="mt-6">
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
