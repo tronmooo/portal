@@ -1435,8 +1435,16 @@ function NestedAssetSections({
         </CardContent>
       </Card>
 
-      {/* Section 3: Child Assets */}
-      <ChildAssetsCard profile={profile} onChildAdded={onSaved} />
+      {/* Section 3: Child Assets — only meaningful for property/asset/account
+          profiles which can have real sub-items (a house with solar panels,
+          a business with equipment, an account with sub-accounts). Vehicles
+          and investments don't have child assets in practice and showing an
+          empty "Child Assets" card next to "Linked Assets" / "Linked
+          Liabilities" just confuses users — it duplicates the relationship
+          model. Use the Linked Assets section for sibling cross-links. */}
+      {["property", "asset", "account"].includes(profile.type) && (
+        <ChildAssetsCard profile={profile} onChildAdded={onSaved} />
+      )}
 
       {/* Section 4: Value Rollup */}
       <ValueRollupCard profile={profile} />
@@ -10841,6 +10849,19 @@ export default function ProfileDetailPage() {
                         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
                         <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
                       </section>
+                      {/* Linked Liabilities — surface debts/loans secured by this
+                          asset (e.g. the auto loan on this Honda, the mortgage on
+                          this house). Previously this section was missing on the
+                          asset side, so users had to open the liability profile to
+                          see the link. Now it's bidirectional. The component
+                          itself supports adding/removing links and links straight
+                          through to /api/assets/:id/liabilities. */}
+                      {["vehicle","property","investment","asset"].includes(profile.type) && (
+                        <section className="mt-6">
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
+                          <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
+                        </section>
+                      )}
                     </>
                   )}
                 </TabsContent>

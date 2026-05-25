@@ -1643,7 +1643,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         forgivenessDate: { type: "string", description: "Student loan only: YYYY-MM-DD of expected forgiveness date." },
         // Cross-cutting
         forProfile: { type: "string", description: "Owner profile name. Defaults to the self profile. Set to a person's name (e.g. 'Mom', 'Sarah') to nest the liability under that person, OR set to an asset name (e.g. 'My House', 'Honda Civic') to nest under that collateral asset. To assign multiple owners with shared %, use link_liability_owner after creation." },
-        linkAssetName: { type: "string", description: "Optional: name of an existing asset to auto-link as collateral after creation (mortgage → the property; auto loan → the vehicle). Equivalent to calling link_liability_asset right after." },
+        linkAssetName: { type: "string", description: "REQUIRED whenever the user's message references an existing asset for this debt — even indirectly. Examples of references that MUST set this: 'for the Honda', 'on my house', 'against the Tesla', 'the auto loan' (when an existing vehicle is in the profiles list), 'the mortgage' (when a property exists). Pass the user's phrase verbatim OR the matching asset's name from the Assets & Vehicles list in context — the server fuzzy-matches make/model/year tokens (e.g. linkAssetName='Honda' matches 'Honda CRV 2021'). Do NOT skip this and rely on the server inferring it from the liability's name — that path is a fallback and is less reliable than you sending the hint. If the user has NO matching existing asset and is creating a totally new one, omit this field and the server will create a stub collateral asset." },
         notes: { type: "string", description: "Free-form notes." },
       },
       required: ["name", "subtype"],
@@ -2996,7 +2996,7 @@ FIELD POPULATION RULES:
 - For student_loan: set pslfEligible:true when user mentions PSLF / public service, set repaymentPlan from SAVE/PAYE/IBR/REPAYE/standard/income-driven.
 - For bnpl: set numberOfInstallments from "4 payments" / "6 payments".
 - forProfile: pass when the debt belongs to a non-self person ("my wife's car loan" → forProfile:"Wife"). Omit / leave undefined for self debts.
-- linkAssetName: pass when the user mentions a securing asset in the same sentence ("mortgage on 123 Maple" → linkAssetName:"123 Maple"; "car loan on the Tesla" → linkAssetName:"Tesla").
+- linkAssetName: pass when the user mentions ANY securing asset, even indirectly. Always scan the Assets & Vehicles list in the system context FIRST before creating a new liability — if the user says 'for the Honda' and the list contains 'Honda CRV 2021', set linkAssetName:'Honda CRV 2021' (or just 'Honda' — the server fuzzy-matches make/model/year). If the user says 'mortgage on 123 Maple' → linkAssetName:'123 Maple'. If they say 'auto loan' and exactly one vehicle exists in the profile list, set linkAssetName to that vehicle's name. Skipping this when an asset clearly exists creates a duplicate empty collateral stub — a common QA failure mode.
 
 PAYMENT PHRASING → add_liability_payment:
 - "paid $500 on my Chase card" → add_liability_payment(liabilityName:"Chase", amount:500). Tool auto-splits via amortization.
