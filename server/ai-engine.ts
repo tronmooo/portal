@@ -1643,7 +1643,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         forgivenessDate: { type: "string", description: "Student loan only: YYYY-MM-DD of expected forgiveness date." },
         // Cross-cutting
         forProfile: { type: "string", description: "Owner profile name. Defaults to the self profile. Set to a person's name (e.g. 'Mom', 'Sarah') to nest the liability under that person, OR set to an asset name (e.g. 'My House', 'Honda Civic') to nest under that collateral asset. To assign multiple owners with shared %, use link_liability_owner after creation." },
-        linkAssetName: { type: "string", description: "REQUIRED whenever the user's message references an existing asset for this debt — even indirectly. Examples of references that MUST set this: 'for the Honda', 'on my house', 'against the Tesla', 'the auto loan' (when an existing vehicle is in the profiles list), 'the mortgage' (when a property exists). Pass the user's phrase verbatim OR the matching asset's name from the Assets & Vehicles list in context — the server fuzzy-matches make/model/year tokens (e.g. linkAssetName='Honda' matches 'Honda CRV 2021'). Do NOT skip this and rely on the server inferring it from the liability's name — that path is a fallback and is less reliable than you sending the hint. If the user has NO matching existing asset and is creating a totally new one, omit this field and the server will create a stub collateral asset." },
+        linkAssetName: { type: "string", description: "OPTIONAL: pass ONLY when the user explicitly says the debt is FOR an existing asset (e.g. 'auto loan for the Honda', 'mortgage on 123 Maple', 'HELOC against the house'). Pass the user's phrase or the matching asset's name from the Assets & Vehicles list in context — the server fuzzy-matches make/model/year. If the user does NOT mention an asset (credit card balance, personal loan, medical bill, student loan with no collateral) — OMIT this field; liabilities stand alone fine. If the server finds ambiguous candidate matches it will return `suggestedAssetLink` in the result — ASK the user which to link (or leave standalone) rather than guessing." },
         notes: { type: "string", description: "Free-form notes." },
       },
       required: ["name", "subtype"],
@@ -2996,7 +2996,8 @@ FIELD POPULATION RULES:
 - For student_loan: set pslfEligible:true when user mentions PSLF / public service, set repaymentPlan from SAVE/PAYE/IBR/REPAYE/standard/income-driven.
 - For bnpl: set numberOfInstallments from "4 payments" / "6 payments".
 - forProfile: pass when the debt belongs to a non-self person ("my wife's car loan" → forProfile:"Wife"). Omit / leave undefined for self debts.
-- linkAssetName: pass when the user mentions ANY securing asset, even indirectly. Always scan the Assets & Vehicles list in the system context FIRST before creating a new liability — if the user says 'for the Honda' and the list contains 'Honda CRV 2021', set linkAssetName:'Honda CRV 2021' (or just 'Honda' — the server fuzzy-matches make/model/year). If the user says 'mortgage on 123 Maple' → linkAssetName:'123 Maple'. If they say 'auto loan' and exactly one vehicle exists in the profile list, set linkAssetName to that vehicle's name. Skipping this when an asset clearly exists creates a duplicate empty collateral stub — a common QA failure mode.
+- linkAssetName: pass ONLY when the user explicitly references an existing asset for the debt ("for the Honda", "on my house", "against the Tesla", "the mortgage on 123 Maple"). Always scan the Assets & Vehicles list in context FIRST when the user uses such language — if the list contains 'Honda CRV 2021' and the user says 'for the Honda', set linkAssetName:'Honda' (server fuzzy-matches make/model). If the user does NOT mention an asset — e.g. 'I owe 5k on my Chase card', '1200/mo personal loan from SoFi', 'medical debt of 3k from the hospital' — OMIT linkAssetName. Liabilities CAN stand alone (credit cards, personal/medical/student loans without collateral). Do not invent a link.
+- AFTER create_liability returns: inspect the result. If it includes a suggestedAssetLink field with candidates, the server found existing assets that MIGHT match this debt but isn't sure. ASK the user ONE concise question listing the candidates by name and offering to leave the liability standalone. Then on the user's reply, call link_liability_asset with their choice (or do nothing if they pick standalone). NEVER silently link in response to a suggestedAssetLink — always ask first.
 
 PAYMENT PHRASING → add_liability_payment:
 - "paid $500 on my Chase card" → add_liability_payment(liabilityName:"Chase", amount:500). Tool auto-splits via amortization.
@@ -4476,43 +4477,43 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           parentProfileId,
         } as any);
       }
-      // Auto-derive linkAssetName from the liability's name when the model
-      // didn't pass one explicitly. If the user said "loan for my Sony TV
-      // financed at Best Buy", the model often produces name="Sony TV Best
-      // Buy Financing" + lender="Best Buy" and forgets linkAssetName. Strip
-      // the lender + financing/loan/credit-card suffix off the name and use
-      // the remainder as the asset hint, so the user's mental model ("this
-      // loan is for my Sony TV") still results in a linked asset.
+      // ASSET-LINKING DECISION TREE — three cases:
+      //   A) AI explicitly passed linkAssetName → user clearly wants to link.
+      //      Try to match; if strong match found auto-link; if weak/ambiguous,
+      //      return pendingAssetLink so the AI can ask which one. If nothing
+      //      matches and the hint clearly describes a physical asset, create
+      //      a stub. Otherwise leave standalone.
+      //   B) AI did NOT pass linkAssetName but the LIABILITY NAME looks like
+      //      it references a physical asset ("Sony TV Best Buy Financing")
+      //      → derive a HINT only. We do NOT silently auto-link or auto-
+      //      create. Instead, surface candidate matches in suggestedAssetLink
+      //      so the AI can ask the user. This avoids spawning duplicate
+      //      collateral stubs for things like "Mark's Honda Auto Loan".
+      //   C) Neither → liability stands alone (credit cards, personal loans,
+      //      medical debt, student loans without collateral).
+      const userExplicitLink = !!input.linkAssetName;
       let derivedLinkAssetName: string | undefined = input.linkAssetName;
       if (!derivedLinkAssetName && liability?.id) {
         const rawName = String(input.name || "").trim();
         const lender = String(input.lender || "").trim();
         let stripped = rawName;
-        // Strip the lender from the name if it's there.
         if (lender) {
           const re = new RegExp(`\\b${lender.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
           stripped = stripped.replace(re, '').trim();
         }
-        // Strip common loan-instrument suffix words.
         stripped = stripped.replace(/\b(financing|loan|mortgage|credit\s+card|line\s+of\s+credit|payment(?:s)?|debt|account)\b/ig, ' ').replace(/\s+/g, ' ').trim();
-        // Only use it if there's still a meaningful product noun left and the
-        // remainder differs from the liability name (otherwise we'd be re-
-        // linking to the liability itself).
         if (stripped && stripped.length >= 3 && stripped.toLowerCase() !== rawName.toLowerCase()) {
-          // Check the remainder looks like an asset (contains at least one
-          // common product / property / vehicle keyword).
           const ASSET_HINT = /\b(fridge|refrigerator|tv|television|laptop|macbook|computer|iphone|phone|console|playstation|xbox|nintendo|peloton|bike|appliance|washer|dryer|oven|dishwasher|sofa|couch|mattress|car|truck|suv|sedan|tesla|honda|toyota|ford|chevy|bmw|audi|nissan|hyundai|kia|jeep|subaru|lexus|acura|mazda|volkswagen|porsche|motorcycle|moto|atv|rv|boat|yacht|jet ski|home|house|condo|apartment|duplex|property|land|street|avenue|ave|drive|road|lane)\b/i;
           if (ASSET_HINT.test(stripped)) {
             derivedLinkAssetName = stripped;
-            logger.info("ai", `auto-derived linkAssetName="${derivedLinkAssetName}" from liability name "${rawName}"`);
+            logger.info("ai", `derived candidate linkAssetName="${derivedLinkAssetName}" from liability name "${rawName}" (will NOT auto-link without user confirmation)`);
           }
         }
       }
-      // Optional: auto-link an asset as collateral right after creation.
-      // If no matching asset profile exists yet, auto-create a stub one so
-      // the user's mental model ("this loan is for my fridge") is preserved.
-      // Without this, asking the AI to "add a loan for my Samsung refrigerator"
-      // when no fridge profile exists would silently drop the link.
+      // Holders for the response: when we don't auto-link, surface candidates
+      // so the AI can ask the user.
+      const candidateMatches: Array<{ id: string; name: string; type: string; score: number }> = [];
+      let suggestedAssetLink: { reason: string; candidates: typeof candidateMatches } | undefined;
       if (derivedLinkAssetName && liability?.id) {
         const linkName = String(derivedLinkAssetName).trim();
         const linkLC = linkName.toLowerCase();
@@ -4531,16 +4532,27 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           "financing", "mortgage", "payment", "payments", "credit", "card",
         ]);
         const meaningfulTokens = linkTokens.filter(t => !STOPWORDS.has(t));
-        // 1) exact-name match (best)
+        // 1) exact-name match (always safe to link — user typed/picked it exactly)
         let asset = profiles.find((p: any) => ASSET_TYPES.has(p.type) && p.name.toLowerCase() === linkLC);
-        // 2) substring either direction
+        // 2) substring either direction — only auto-link when the user EXPLICITLY
+        // passed linkAssetName. If derivedLinkAssetName came from the silent name
+        // stripper (case B), we surface candidates and let the AI ask the user.
         if (!asset) {
-          asset = profiles.find((p: any) =>
+          const subMatches = profiles.filter((p: any) =>
             ASSET_TYPES.has(p.type) && (
               p.name.toLowerCase().includes(linkLC) ||
               linkLC.includes(p.name.toLowerCase())
             )
           );
+          if (subMatches.length === 1 && userExplicitLink) {
+            asset = subMatches[0];
+          } else if (subMatches.length > 0) {
+            // Either multiple substring candidates, OR the user didn't
+            // explicitly request the link — hand off to the suggestion path.
+            for (const p of subMatches.slice(0, 5)) {
+              candidateMatches.push({ id: p.id, name: p.name, type: p.type, score: 2 });
+            }
+          }
         }
         // 3) For auto loans specifically: prefer an existing vehicle under the
         // SAME parent person whose make/model/year match the loan's fields or
@@ -4574,14 +4586,49 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             for (const t of meaningfulTokens) if (haystack.includes(t)) score += 1;
             if (score > 0 && (!best || score > best.score)) best = { p, score };
           }
-          if (best && best.score >= 2) {
+          // Collect all plausible candidates so we can return them to the AI
+          // for clarification when we don't auto-link.
+          const scored = matchCandidates
+            .map((p: any) => {
+              const haystack = [
+                p.name,
+                p.fields?.make, p.fields?.model, p.fields?.year,
+                p.fields?.vehicleMake, p.fields?.vehicleModel, p.fields?.vehicleYear,
+              ].filter(Boolean).map(String).join(" ").toLowerCase();
+              let score = 0;
+              for (const f of stubFieldsForMatch) if (f && haystack.includes(f)) score += 2;
+              for (const t of meaningfulTokens) if (haystack.includes(t)) score += 1;
+              return { p, score };
+            })
+            .filter(x => x.score > 0)
+            .sort((a, b) => b.score - a.score);
+          for (const s of scored.slice(0, 5)) {
+            candidateMatches.push({ id: s.p.id, name: s.p.name, type: s.p.type, score: s.score });
+          }
+          if (best && best.score >= 3 && userExplicitLink) {
+            // STRONG match + user explicitly asked to link → safe to auto-link.
             asset = best.p;
-            logger.info("ai", `linked liability to existing ${best.p.type} "${best.p.name}" (score=${best.score}) instead of creating a duplicate stub`);
+            logger.info("ai", `linked liability to existing ${best.p.type} "${best.p.name}" (score=${best.score}, explicit linkAssetName)`);
           }
         }
-        // Auto-create a stub asset profile if nothing matched. Subtype is
-        // inferred from the name when possible so the right tab set lights up.
-        if (!asset) {
+        // Build suggestion AFTER all match attempts: if we still don't have an
+        // auto-linked asset but DO have candidates, ask the AI to confirm.
+        if (!asset && candidateMatches.length > 0) {
+          // Dedupe by id (substring path + scored path can overlap).
+          const seen = new Set<string>();
+          const deduped = candidateMatches.filter(c => seen.has(c.id) ? false : (seen.add(c.id), true));
+          suggestedAssetLink = {
+            reason: userExplicitLink
+              ? `"${derivedLinkAssetName}" partially matches ${deduped.length} existing asset(s) but the match isn't unambiguous. Ask the user which to link, or confirm none.`
+              : `Found ${deduped.length} existing asset(s) that could match this debt based on its name. The user did NOT explicitly request linking — ask whether to link this liability to one of them, or leave it standalone.`,
+            candidates: deduped,
+          };
+          logger.info("ai", `suggesting asset link for liability ${liability.id} — ${deduped.length} candidate(s), userExplicit=${userExplicitLink}`);
+        }
+        // Stub creation: ONLY if the user explicitly passed linkAssetName AND
+        // nothing matched at all. Silent derivation must never spawn a stub —
+        // that was the source of the empty-duplicate-asset bug.
+        if (!asset && userExplicitLink && candidateMatches.length === 0) {
           try {
             const blob = linkLC;
             // Infer profile type — prefer vehicle/property when obvious.
@@ -4620,6 +4667,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             } as any);
           } catch (e: any) { logger.warn("ai", `auto link asset failed: ${e?.message}`); }
         }
+      }
+      // Stash suggestedAssetLink on the liability response so the AI sees it
+      // in the tool result and can ask the user a clarifying question.
+      if (suggestedAssetLink && liability) {
+        (liability as any).suggestedAssetLink = suggestedAssetLink;
       }
       // Auto-generate a recurring obligation so the liability appears on the calendar
       // (mirrors how create_obligation drives subscription calendar entries).
