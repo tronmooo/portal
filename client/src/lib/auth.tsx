@@ -62,10 +62,45 @@ function loadPersistedTokens(): typeof memoryTokens {
 // Supabase config (loaded lazily from /api/auth/config)
 let supabaseConfig: { url: string; anonKey: string } | null = null;
 
+// PERF FIX (2026-05-24): hydrate a provisional user from sessionStorage so the
+// app doesn't blank to a full-page spinner on every return visit. The real
+// session is still validated against the backend in the background, but the
+// shell + persisted query cache can render instantly.
+function provisionalUserFromStorage(): { user: User | null; session: Session | null } {
+  try {
+    const stored = sessionStorage.getItem('portol_session');
+    if (!stored) return { user: null, session: null };
+    const tokens = JSON.parse(stored) as { access_token: string; refresh_token: string; expires_at: number };
+    // Decode the JWT to get user id + email without trusting the server yet.
+    // If it's already expired we don't show a provisional user — the refresh
+    // flow needs to run first.
+    const now = Math.floor(Date.now() / 1000);
+    if (tokens.expires_at && tokens.expires_at < now) return { user: null, session: null };
+    const payload = tokens.access_token.split('.')[1];
+    const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    if (!decoded?.sub) return { user: null, session: null };
+    // Populate module-level memoryTokens so the fetch interceptor and
+    // apiRequest helpers can attach the Authorization header during the
+    // initial render — otherwise every dashboard query would 401 until
+    // restoreSession() finishes.
+    memoryTokens = tokens;
+    return {
+      user: { id: decoded.sub, email: decoded.email || '' },
+      session: tokens,
+    };
+  } catch {
+    return { user: null, session: null };
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const provisional = provisionalUserFromStorage();
+  const [user, setUser] = useState<User | null>(provisional.user);
+  const [session, setSession] = useState<Session | null>(provisional.session);
+  // Start `loading: false` when we have a provisional user — the app shell can
+  // render immediately while `checkAuthConfig()` validates the token in the
+  // background. Without this, every return visit shows the spinner.
+  const [loading, setLoading] = useState(!provisional.user);
   const [authRequired, setAuthRequired] = useState(false);
 
   // Check auth config on mount

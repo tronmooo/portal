@@ -190,21 +190,20 @@ export const queryClient = new QueryClient({
     mutations: {
       retry: false,
       onSuccess: () => {
-        // Global safety net: after ANY successful mutation, refresh every
-        // /api/* query that has active observers on screen. This is the
-        // backstop — individual mutations should still call
-        // invalidateDomains() for the specific domain so optimistic updates
-        // happen instantly. Without this default, ad-hoc apiRequest calls
-        // or third-party mutations would leave stale data on screen.
-        //
-        // We use refetchType:"active" so only on-screen queries refetch;
-        // background data is marked stale and refreshes on next view.
-        // We use predicate matching so nested keys like
-        // ["/api/profiles", id, "detail"] also bust — the previous
-        // top-level list missed those.
+        // PERF (2026-05-24): the previous default invalidated EVERY `/api/*`
+        // query after any mutation — a single expense write triggered
+        // refetches of profiles, obligations, events, trackers, goals,
+        // habits, journal, etc. That's the "app feels slow / over-fetches"
+        // symptom. We now mark them stale (no immediate refetch) so:
+        //  - On-screen data updates the next time the component re-renders
+        //    via the per-mutation optimistic update.
+        //  - Background data refreshes silently when the user navigates to it.
+        // Individual mutations still call invalidateQueries({queryKey: ...,
+        // refetchType: "active"}) for the specific domain they touched, which
+        // is the right scoped refresh.
         queryClient.invalidateQueries({
           predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
-          refetchType: "active",
+          refetchType: "none",
         });
       },
       onError: (error: Error) => {

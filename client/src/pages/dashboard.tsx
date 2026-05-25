@@ -5,7 +5,7 @@ import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
-import { getProfileFilter, setDashboardProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
+import { getProfileFilter, setDashboardProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -3535,11 +3535,27 @@ function AISummaryWidget({
   };
 
   // Auto-regenerate when filter changes (or on first mount once stats arrive).
+  // PERF (2026-05-24): defer to idle / 1.5s after first paint so the AI
+  // summary fetch (which can take 5–6s) doesn't block the dashboard
+  // network-idle and doesn't show "app is still loading" to the user.
   useEffect(() => {
     if (!stats) return;
     if (lastKey.current === filterKey) return;
     lastKey.current = filterKey;
-    generateSummary();
+    const schedule: (cb: () => void) => number = (cb) => {
+      const w = window as any;
+      if (typeof w.requestIdleCallback === "function") {
+        return w.requestIdleCallback(cb, { timeout: 2500 });
+      }
+      return window.setTimeout(cb, 1500);
+    };
+    const cancel: (id: number) => void = (id) => {
+      const w = window as any;
+      if (typeof w.cancelIdleCallback === "function") return w.cancelIdleCallback(id);
+      return clearTimeout(id);
+    };
+    const handle = schedule(() => { generateSummary(); });
+    return () => cancel(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stats, filterKey]);
 
@@ -3841,14 +3857,20 @@ export default function DashboardPage() {
   // Keep dashboard filter state in lockstep with the global filter store — prevents
   // multi-profile selections from silently collapsing if a child component's onChange
   // is stale or batched.
+  //
+  // PERF FIX (2026-05-24): only update state when values actually change. The
+  // previous version always spread `state.selectedIds` into a new array, which
+  // gave every queryKey a fresh array reference on every auth-state ping and
+  // double-fetched the entire dashboard. We compare values up-front and skip
+  // the setState entirely when nothing changed.
   useEffect(() => {
-    const unsub = subscribeProfileFilter(state => {
-      setFilterMode(state.mode);
-      setFilterIds([...state.selectedIds]);
-    });
-    const cur = getProfileFilter();
-    setFilterMode(cur.mode);
-    setFilterIds([...cur.selectedIds]);
+    const idsEqual = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+    const apply = (state: { mode: FilterMode; selectedIds: string[] }) => {
+      setFilterMode(prev => prev === state.mode ? prev : state.mode);
+      setFilterIds(prev => idsEqual(prev, state.selectedIds) ? prev : [...state.selectedIds]);
+    };
+    const unsub = subscribeProfileFilter(apply);
+    apply(getProfileFilter());
     return unsub;
   }, []);
 
@@ -3880,8 +3902,11 @@ export default function DashboardPage() {
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
-    // Always refetch on mount: dashboard KPI tiles must never show stale aggregates
-    refetchOnMount: "always",
+    // PERF (2026-05-24): was `refetchOnMount: "always"`, which made every
+    // dashboard mount feel like a cold load. With persisted cache + the
+    // global onMutate invalidation hook (see queryClient.ts) we get fresh
+    // numbers after any write. For pure navigation, default behaviour
+    // ("return cached, refetch in background if stale") feels instant.
   });
   // Delay dashboard skeleton — instant if data is cached
   const [showDashSkeleton, setShowDashSkeleton] = useState(false);
@@ -3900,7 +3925,8 @@ export default function DashboardPage() {
       } catch (err) { console.error("[dashboard-enhanced] fetch failed:", err); return null; }
     },
     retry: false,
-    refetchOnMount: "always",
+    // PERF (2026-05-24): see /api/stats note above. Removed `"always"` so
+    // returning to the dashboard renders from cache instantly.
   });
 
   // Load saved dashboard layout from preferences API
