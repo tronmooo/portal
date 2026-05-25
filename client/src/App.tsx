@@ -444,7 +444,9 @@ const ALL_PREFETCH_KEYS = [
   '/api/goals',
   '/api/expenses',
   '/api/obligations',
-  '/api/notifications',
+  // PERF 2026-05-24: notifications uses a filtered queryKey ['/api/notifications', mode, ...ids]
+  // so prefetching the unfiltered key never satisfies the bell's query and just doubles the
+  // request count. Bell fetches lazily when the topbar mounts — that's fine.
 ];
 
 function DataPrefetch() {
