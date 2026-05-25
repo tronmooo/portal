@@ -3,6 +3,63 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { hashNavigate } from "@/lib/hashNavigate";
 
+// Detect "stale chunk" errors thrown when the browser has an old HTML/JS bundle
+// cached and tries to lazy-import a chunk hash that no longer exists on the
+// server (typical after a deploy). The fix is to hard-reload once so the
+// browser picks up the new index.html + asset map.
+export function isStaleChunkError(err: unknown): boolean {
+  const msg = (err as any)?.message || String(err || "");
+  return (
+    /Importing a module script failed/i.test(msg) ||
+    /Failed to fetch dynamically imported module/i.test(msg) ||
+    /Loading chunk \d+ failed/i.test(msg) ||
+    /ChunkLoadError/i.test(msg) ||
+    /error loading dynamically imported module/i.test(msg)
+  );
+}
+
+const RELOAD_FLAG = "portol:chunk-reload-ts";
+const RELOAD_COOLDOWN_MS = 30_000; // don't loop more than once per 30s
+
+export function reloadForStaleChunk(reason: string) {
+  try {
+    const last = Number(sessionStorage.getItem(RELOAD_FLAG) || 0);
+    if (Date.now() - last < RELOAD_COOLDOWN_MS) {
+      // Already reloaded recently — don't loop; surface the error instead.
+      console.warn("[stale-chunk] reload skipped (recent attempt):", reason);
+      return false;
+    }
+    sessionStorage.setItem(RELOAD_FLAG, String(Date.now()));
+    console.warn("[stale-chunk] reloading to pick up new bundle:", reason);
+    // Bypass HTTP cache so we definitely fetch the new index.html.
+    window.location.reload();
+    return true;
+  } catch {
+    try { window.location.reload(); } catch { /* ignore */ }
+    return true;
+  }
+}
+
+// Install global handlers ONCE so lazy-import failures thrown outside any
+// React boundary (e.g. from a route Switch) still trigger the auto-reload.
+let GLOBAL_HANDLERS_INSTALLED = false;
+export function installStaleChunkHandlers() {
+  if (GLOBAL_HANDLERS_INSTALLED || typeof window === "undefined") return;
+  GLOBAL_HANDLERS_INSTALLED = true;
+  window.addEventListener("error", (e) => {
+    if (isStaleChunkError(e.error || e.message)) {
+      e.preventDefault();
+      reloadForStaleChunk("window.error");
+    }
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    if (isStaleChunkError(e.reason)) {
+      e.preventDefault();
+      reloadForStaleChunk("unhandledrejection");
+    }
+  });
+}
+
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
@@ -29,6 +86,14 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught:", error, errorInfo);
+    // Stale-chunk recovery: if the bundle the browser cached references a
+    // lazy chunk that no longer exists, auto-reload once instead of showing
+    // a dead-end error page. This is the single biggest cause of "the app
+    // crashed when I switched tabs after a deploy".
+    if (isStaleChunkError(error)) {
+      reloadForStaleChunk("ErrorBoundary:" + (this.props.name || "unknown"));
+      return;
+    }
     // Persist the full error so we can read it after a refresh wipes
     // React's in-memory state. Helps diagnose mobile crashes where the
     // user can't easily copy the stack.
@@ -85,10 +150,25 @@ export class ErrorBoundary extends Component<Props, State> {
           <h2 className="text-lg font-bold">Something went wrong</h2>
           <p className="text-sm text-muted-foreground text-center">An unexpected error occurred.</p>
           <div className="flex gap-2">
-            <button onClick={() => window.location.reload()} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium">
+            <button
+              onClick={() => {
+                // Manual refresh — clear the stale-chunk cooldown so the user
+                // isn't stuck if the auto-reload already fired once recently.
+                try { sessionStorage.removeItem(RELOAD_FLAG); } catch { /* ignore */ }
+                window.location.reload();
+              }}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium"
+            >
               Refresh Page
             </button>
-            <button onClick={() => { hashNavigate('/dashboard'); window.location.reload(); }} className="px-4 py-2 bg-muted text-foreground rounded-lg text-sm font-medium">
+            <button
+              onClick={() => {
+                try { sessionStorage.removeItem(RELOAD_FLAG); } catch { /* ignore */ }
+                hashNavigate('/dashboard');
+                window.location.reload();
+              }}
+              className="px-4 py-2 bg-muted text-foreground rounded-lg text-sm font-medium"
+            >
               Go to Dashboard
             </button>
           </div>

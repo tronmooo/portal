@@ -3,6 +3,14 @@ import App from "./App";
 import "./index.css";
 import { hashNavigate } from "./lib/hashNavigate";
 import { hydrateQueryCache } from "./lib/queryClient";
+import { installStaleChunkHandlers } from "./components/ErrorBoundary";
+
+// Install BEFORE anything else — catches lazy-import failures thrown from
+// route Switches, sentinels, or any code path that bypasses the React tree.
+// When the browser has a cached HTML referencing chunk hashes that no longer
+// exist on the server (after a deploy), we auto-reload once to pick up the
+// new bundle instead of leaving the user on a dead-end error screen.
+installStaleChunkHandlers();
 
 // Restore the React Query cache from localStorage BEFORE React mounts so the
 // dashboard renders with cached data instantly instead of flashing a skeleton.
