@@ -82,23 +82,22 @@ export default defineConfig({
         return deps.filter(d => !/(univer|exceljs|pdfjs)-[A-Za-z0-9_-]+\.(js|css)/.test(d));
       },
     },
-    rollupOptions: {
-      output: {
-        // Only split the genuinely huge deps that are imported dynamically
-        // by a single route. Splitting radix / react across chunks caused a
-        // load-order bug where radix tried to use React.forwardRef before
-        // React was loaded — leaving the page blank. Anything that touches
-        // React stays in the default vendor split so Rollup can order it
-        // correctly.
-        manualChunks(id: string): string | undefined {
-          if (!id.includes("node_modules")) return undefined;
-          if (id.includes("@univerjs") || id.includes("opentype.js")) return "univer";
-          if (id.includes("exceljs")) return "exceljs";
-          if (id.includes("pdfjs-dist")) return "pdfjs";
-          return undefined;
-        },
-      },
-    },
+    // NOTE: manualChunks INTENTIONALLY DROPPED for univer / exceljs / pdfjs.
+    //
+    // Background: previously we used `manualChunks` to force these heavy
+    // libs into named chunks. But Rollup’s name-based chunking introduced
+    // a load-order bug — even though `editor.tsx` is lazy and the only
+    // statically-reachable code path, Rollup still leaked a top-level
+    // `import "./univer-*.js"` into the main entry bundle (verified by
+    // grepping the built index-*.js). That caused every cold load to
+    // download 2.5MB / 10MB-decoded just to render /dashboard.
+    //
+    // Without manualChunks, Rollup’s natural dynamic-import code splitting
+    // keeps the univer / exceljs / pdfjs code inside the editor’s lazy
+    // chunk hierarchy (or its own dynamic sub-chunks), so they only load
+    // when the /editor route is actually visited. The strip-preload plugin
+    // above is kept as belt-and-suspenders in case Rollup re-introduces a
+    // named chunk via dependency sharing.
   },
   server: {
     fs: {
