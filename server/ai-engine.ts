@@ -4519,8 +4519,66 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Only consider real asset-like profile types as collateral candidates
         // — never another liability, person, etc.
         const ASSET_TYPES = new Set(["asset", "vehicle", "property", "investment", "account"]);
-        let asset = profiles.find((p: any) => ASSET_TYPES.has(p.type) && p.name.toLowerCase() === linkLC)
-          || profiles.find((p: any) => ASSET_TYPES.has(p.type) && p.name.toLowerCase().includes(linkLC));
+        // Pull tokens we can match against existing assets. For auto loans the
+        // vehicleMake/Model/Year + parent person is a MUCH better signal than
+        // the liability's display name (which often contains the lender, e.g.
+        // "Mark's Honda Auto Loan" stripped to "Mark's Honda Auto" — that
+        // substring won't match a real existing vehicle named "Honda CRV 2021").
+        const tokenize = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 3);
+        const linkTokens = tokenize(linkName);
+        const STOPWORDS = new Set([
+          "the", "and", "for", "auto", "car", "loan", "loans", "vehicle",
+          "financing", "mortgage", "payment", "payments", "credit", "card",
+        ]);
+        const meaningfulTokens = linkTokens.filter(t => !STOPWORDS.has(t));
+        // 1) exact-name match (best)
+        let asset = profiles.find((p: any) => ASSET_TYPES.has(p.type) && p.name.toLowerCase() === linkLC);
+        // 2) substring either direction
+        if (!asset) {
+          asset = profiles.find((p: any) =>
+            ASSET_TYPES.has(p.type) && (
+              p.name.toLowerCase().includes(linkLC) ||
+              linkLC.includes(p.name.toLowerCase())
+            )
+          );
+        }
+        // 3) For auto loans specifically: prefer an existing vehicle under the
+        // SAME parent person whose make/model/year match the loan's fields or
+        // appear in the derived link name. This is the case that produced the
+        // "Mark's Honda Auto" duplicate next to "Honda CRV 2021" under Jim.
+        if (!asset && (input.subtype === "auto_loan" || input.subtype === "mortgage")) {
+          const make = String(input.vehicleMake || "").toLowerCase();
+          const model = String(input.vehicleModel || "").toLowerCase();
+          const year = String(input.vehicleYear || "").toLowerCase();
+          const stubFieldsForMatch: string[] = [make, model, year].filter(Boolean);
+          const matchCandidates = profiles.filter((p: any) => {
+            if (!ASSET_TYPES.has(p.type)) return false;
+            // Constrain to same owner when we resolved one.
+            if (parentProfileId && p.parentProfileId !== parentProfileId) return false;
+            // For auto_loan, require a vehicle profile; for mortgage, require property.
+            if (input.subtype === "auto_loan" && p.type !== "vehicle") return false;
+            if (input.subtype === "mortgage" && p.type !== "property") return false;
+            return true;
+          });
+          // Score: +2 per matching field (make/model/year), +1 per meaningful
+          // token from the link name found in the asset name or its fields.
+          let best: { p: any; score: number } | null = null;
+          for (const p of matchCandidates) {
+            const haystack = [
+              p.name,
+              p.fields?.make, p.fields?.model, p.fields?.year,
+              p.fields?.vehicleMake, p.fields?.vehicleModel, p.fields?.vehicleYear,
+            ].filter(Boolean).map(String).join(" ").toLowerCase();
+            let score = 0;
+            for (const f of stubFieldsForMatch) if (f && haystack.includes(f)) score += 2;
+            for (const t of meaningfulTokens) if (haystack.includes(t)) score += 1;
+            if (score > 0 && (!best || score > best.score)) best = { p, score };
+          }
+          if (best && best.score >= 2) {
+            asset = best.p;
+            logger.info("ai", `linked liability to existing ${best.p.type} "${best.p.name}" (score=${best.score}) instead of creating a duplicate stub`);
+          }
+        }
         // Auto-create a stub asset profile if nothing matched. Subtype is
         // inferred from the name when possible so the right tab set lights up.
         if (!asset) {
