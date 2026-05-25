@@ -1,4 +1,4 @@
-import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { QueryClient, QueryFunction, keepPreviousData } from "@tanstack/react-query";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -175,6 +175,15 @@ export const queryClient = new QueryClient({
       // data still renders instantly; the refetch happens silently in the
       // background and swaps in fresh data without a loading state.
       refetchOnMount: true,
+      /* FILTER-SWAP UX (2026-05-25): when the user changes the dashboard profile
+         filter (Everyone ↔ Person A ↔ Person B) or navigates a paginated/keyed
+         query, the queryKey changes and React Query treats it as a brand-new
+         query with no data → every component flips to a loading skeleton. With
+         `placeholderData: keepPreviousData` it instead keeps showing the prior
+         result while the new request is in flight, then swaps in fresh data
+         when it arrives. This is exactly the "feels persisted" behaviour the
+         user asked for when toggling filters and tabs. */
+      placeholderData: keepPreviousData,
       staleTime: 30_000,                 // 30s — chat writes must surface fast; window-focus refetch still keeps idle tabs fresh
       gcTime: 60 * 60_000,               // Keep unused data for 60 min
       networkMode: "always",             // Don't hang on flaky network
