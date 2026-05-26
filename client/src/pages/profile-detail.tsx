@@ -110,6 +110,7 @@ import {
   BookOpen,
   Users,
   Network,
+  Link as LinkIcon,
 } from "lucide-react";
 import {
   LineChart,
@@ -717,6 +718,13 @@ function ChildAssetsCard({
   const [showAddChild, setShowAddChild] = useState(false);
   const [childName, setChildName] = useState("");
   const [childType, setChildType] = useState<NestedAssetType>("asset");
+  // LINK-EXISTING (2026-05-26): the user reported "It won't let me add the
+  // asset to the house" — they wanted to attach an EXISTING standalone asset
+  // as a child of the current parent (House), not just create a new one. This
+  // dialog lets them pick any asset whose parent is currently a person/self/pet
+  // (i.e. a top-level asset) and re-parent it under this profile in one step.
+  const [showLinkExisting, setShowLinkExisting] = useState(false);
+  const [linkSearch, setLinkSearch] = useState("");
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const { view: assetView, setView: setAssetView } = useLinkedView(); // Wave 15
@@ -765,6 +773,89 @@ function ChildAssetsCard({
   const visibleChildren: DepthRow[] = treeMode === "full" && hasDeepDescendants
     ? subtreeRows
     : directChildren.map((c: any) => ({ id: c.id, name: c.name, type: c.type, fields: c.fields, depth: 0 }));
+
+  // Pull every profile so we can show a picker of standalone assets.
+  const { data: allProfilesForLink } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: showLinkExisting,
+  });
+
+  // Eligible candidates: asset-type profiles whose parent is currently a
+  // person/self/pet (top-level), AND not this profile, AND not already a
+  // descendant of this profile, AND not soft-deleted. We also exclude assets
+  // that are already nested under some other asset — if the user really wants
+  // to move them, they can use the Belongs-to picker on that asset.
+  const linkCandidates = useMemo(() => {
+    if (!allProfilesForLink) return [] as any[];
+    const descendantIds = new Set<string>();
+    const subId = subtreeData?.id;
+    if (subId) {
+      const walk = (node: TreeNode) => {
+        for (const c of node.children || []) {
+          descendantIds.add(c.id);
+          walk(c);
+        }
+      };
+      if (subtreeData) walk(subtreeData);
+    }
+    return allProfilesForLink
+      .filter((p: any) => {
+        if (!NESTED_ASSET_TYPES.includes(p.type as NestedAssetType)) return false;
+        if (p.id === profile.id) return false;
+        if (descendantIds.has(p.id)) return false;
+        if (p.fields?.deleted || p.deleted) return false;
+        const parentId = p.parentProfileId || p.fields?._parentProfileId || null;
+        // Skip items already nested under THIS profile.
+        if (parentId === profile.id) return false;
+        return true;
+      })
+      .sort((a: any, b: any) => {
+        // Surface true top-level (parent is person/self/pet) first.
+        const personTypes = new Set(["person", "self", "pet"]);
+        const aParent = allProfilesForLink.find(x => x.id === (a.parentProfileId || a.fields?._parentProfileId));
+        const bParent = allProfilesForLink.find(x => x.id === (b.parentProfileId || b.fields?._parentProfileId));
+        const aTop = aParent && personTypes.has(aParent.type) ? 0 : 1;
+        const bTop = bParent && personTypes.has(bParent.type) ? 0 : 1;
+        if (aTop !== bTop) return aTop - bTop;
+        return (a.name || "").localeCompare(b.name || "");
+      });
+  }, [allProfilesForLink, profile.id, subtreeData]);
+
+  const filteredLinkCandidates = useMemo(() => {
+    if (!linkSearch.trim()) return linkCandidates;
+    const q = linkSearch.toLowerCase();
+    return linkCandidates.filter((p: any) =>
+      (p.name || "").toLowerCase().includes(q) || (p.type || "").toLowerCase().includes(q)
+    );
+  }, [linkCandidates, linkSearch]);
+
+  const linkExistingMut = useMutation({
+    mutationFn: async (childId: string) => {
+      const res = await apiRequest("PATCH", `/api/profiles/${childId}`, {
+        parentProfileId: profile.id,
+      });
+      return res.json();
+    },
+    onSuccess: (_data, childId) => {
+      const c = (allProfilesForLink || []).find(p => p.id === childId);
+      toast({ title: `"${c?.name || "Asset"}" linked under "${profile.name}"` });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "tree"] });
+      // Old parent's detail also needs invalidating so its child list refreshes.
+      const childOldParent = c?.parentProfileId || c?.fields?._parentProfileId;
+      if (childOldParent) {
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", childOldParent, "detail"] });
+      }
+      setShowLinkExisting(false);
+      setLinkSearch("");
+      onChildAdded();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Couldn't link asset", description: err.message, variant: "destructive" });
+    },
+  });
 
   const createChildMut = useMutation({
     mutationFn: async () => {
@@ -820,6 +911,16 @@ function ChildAssetsCard({
               </div>
             )}
             {directChildren.length > 0 && <LinkedViewToggle view={assetView} onChange={setAssetView} />}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-[44px] text-xs gap-1 px-3"
+              onClick={() => setShowLinkExisting(true)}
+              data-testid="button-link-existing-asset"
+              title="Move an existing asset under this one"
+            >
+              <LinkIcon className="h-3.5 w-3.5" /> Link Existing
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -948,6 +1049,63 @@ function ChildAssetsCard({
               data-testid="button-confirm-add-child-asset"
             >
               {createChildMut.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Link Existing Asset Dialog */}
+      <Dialog open={showLinkExisting} onOpenChange={setShowLinkExisting}>
+        <DialogContent className="max-w-sm max-h-[80vh] flex flex-col" data-testid="dialog-link-existing-asset">
+          <DialogHeader>
+            <DialogTitle>Link Existing Asset</DialogTitle>
+            <DialogDescription>Move an existing asset under &quot;{profile.name}&quot;. It will disappear from the top-level Linked page and show only here.</DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
+            <Input
+              placeholder="Search assets..."
+              value={linkSearch}
+              onChange={(e) => setLinkSearch(e.target.value)}
+              className="h-[44px] text-sm"
+              data-testid="input-link-existing-search"
+            />
+            <div className="flex-1 overflow-y-auto space-y-1 pr-1" data-testid="list-link-existing-candidates">
+              {filteredLinkCandidates.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-6">
+                  {allProfilesForLink ? "No standalone assets found" : "Loading..."}
+                </p>
+              ) : (
+                filteredLinkCandidates.map((p: any) => {
+                  const parentRef = (allProfilesForLink || []).find(x => x.id === (p.parentProfileId || p.fields?._parentProfileId));
+                  const isUnderAsset = parentRef && NESTED_ASSET_TYPES.includes(parentRef.type as NestedAssetType);
+                  return (
+                    <button
+                      key={p.id}
+                      className="w-full text-left px-3 py-3 rounded-lg text-xs hover:bg-muted transition-colors min-h-[44px] flex items-center gap-2"
+                      onClick={() => linkExistingMut.mutate(p.id)}
+                      disabled={linkExistingMut.isPending}
+                      data-testid={`option-link-existing-${p.id}`}
+                    >
+                      <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        {profileIcon(p.type)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="truncate font-medium">{p.name}</p>
+                        <p className="text-[10px] text-muted-foreground capitalize">
+                          {p.type}{parentRef ? ` · currently under ${parentRef.name}` : " · top-level"}
+                          {isUnderAsset && " (will move)"}
+                        </p>
+                      </div>
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" className="h-[44px]" onClick={() => setShowLinkExisting(false)}>
+              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>
