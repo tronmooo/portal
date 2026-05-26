@@ -4269,11 +4269,25 @@ export default function TrackersPage() {
             // on the Assets tab. Mirror the list's filter logic exactly, including
             // the assetNestingFilter modes.
             const labelForTypeCount = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
+            // Walk full parent chain so chip count matches list (nested-at-any-depth hidden)
+            const _profileByIdChip = new Map<string, any>();
+            (profiles || []).forEach(p => _profileByIdChip.set(p.id, p));
+            const _hasAssetAncestorChip = (p: any): boolean => {
+              let cur: any = p;
+              for (let i = 0; i < 32 && cur; i++) {
+                const pid = cur.fields?._parentProfileId || cur.parentProfileId;
+                if (!pid) return false;
+                const par = _profileByIdChip.get(pid);
+                if (!par) return false;
+                if (childTypeSet.has(par.type)) return true;
+                cur = par;
+              }
+              return false;
+            };
             const filteredAssetCount = (profiles || []).filter(p => {
               if (!childTypeSet.has(p.type)) return false;
               const pParent = p.fields?._parentProfileId || p.parentProfileId;
-              const parentProfile = pParent ? (profiles || []).find(x => x.id === pParent) : null;
-              const parentIsAsset = !!parentProfile && childTypeSet.has(parentProfile.type);
+              const parentIsAsset = _hasAssetAncestorChip(p);
               // Profile-filter scope — include co-owners via asset_party_links.
               const inScope = isShowAllForCounts || isAssetVisible(p.id, pParent as string | null | undefined);
               if (!inScope) return false;
@@ -4296,6 +4310,9 @@ export default function TrackersPage() {
             // rent, utilities all behave like recurring debts you owe).
             const filteredLiabilityCount = (profiles || []).filter(p => {
               if (!isLiabilityLikeProfile(p)) return false;
+              // Exclude liabilities nested under an asset — they live inside
+              // the parent asset's detail page, not at top-level Linked.
+              if (_hasAssetAncestorChip(p)) return false;
               if (isShowAllForCounts) return true;
               const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
               return isLiabilityVisible(p.id, pParent);
@@ -4476,6 +4493,27 @@ export default function TrackersPage() {
         const rows: Row[] = [];
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone";
+        // NESTED-HIDE (2026-05-25): walk the parent chain (up to 32 levels — far
+        // beyond any realistic nesting depth) and return true if any ancestor
+        // is itself an asset-type profile. This is what powers the rule
+        // "once an item is nested under an asset, it disappears from the
+        // top-level Linked page — even if it's nested 5 levels deep."
+        // Examples: Home → Furniture → Couch → Screws — only Home appears
+        // at top level; the rest are reachable by drilling into Home.
+        const profileById = new Map<string, any>();
+        (profiles || []).forEach(p => profileById.set(p.id, p));
+        const hasAssetAncestor = (p: any): boolean => {
+          let cur: any = p;
+          for (let i = 0; i < 32 && cur; i++) {
+            const parentId = cur.fields?._parentProfileId || cur.parentProfileId;
+            if (!parentId) return false;
+            const parent = profileById.get(parentId);
+            if (!parent) return false;
+            if (childTypeSet.has(parent.type)) return true;
+            cur = parent;
+          }
+          return false;
+        };
         const toNum = (v: any): number | null => {
           if (v == null || v === '') return null;
           if (typeof v === 'number' && isFinite(v)) return v;
@@ -4513,6 +4551,17 @@ export default function TrackersPage() {
             const pParent = p.fields?._parentProfileId || p.parentProfileId;
             // Include co-owners via asset_party_links (Home shows for Jane).
             if (!isShowAll && !isAssetVisible(p.id, pParent)) return;
+            // Hide nested assets unless the user explicitly chose the
+            // "Nested" chip. "all" / "topLevel" both mean "top-level only".
+            const nestingFilterList = sectionFilter === "profiles" ? assetNestingFilter : "all";
+            if (nestingFilterList === "all" || nestingFilterList === "topLevel") {
+              if (hasAssetAncestor(p)) return;
+            } else if (nestingFilterList === "nested") {
+              if (!hasAssetAncestor(p)) return;
+            } else if (nestingFilterList === "hasChildren") {
+              const hasChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
+              if (!hasChild) return;
+            }
             const f = p.fields || {}; const fin = f.finance || {}; const housing = f.housing || {}; const other = f.other || {};
             const cv = toNum(f.currentValue) ?? toNum(housing.currentValue) ?? toNum(other.currentValue) ?? toNum(other.value) ?? toNum(fin.balance) ?? toNum(f.value);
             const sub = p.type.charAt(0).toUpperCase() + p.type.slice(1);
@@ -4527,6 +4576,9 @@ export default function TrackersPage() {
             const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
             // Include co-owners via liability_profile_links.
             if (!isShowAll && !isLiabilityVisible(p.id, pParent)) return;
+            // Hide liabilities nested under an asset (e.g. "Service plan for
+            // Sony TV" nested under TV — shows only inside the TV detail page).
+            if (hasAssetAncestor(p)) return;
             const f = (p.fields as any) || {}; const fin = f.finance || {};
             const bal = toNum(f.currentBalance) ?? toNum(f.remainingBalance) ?? toNum(f.loanBalance) ?? toNum(f.balance) ?? toNum(fin.remainingBalance) ?? toNum(fin.loanBalance) ?? toNum(fin.balance);
             const cost = toNum(f.cost) ?? toNum(f.amount) ?? toNum(f.monthlyPayment) ?? toNum(fin.monthlyPayment);
@@ -4689,6 +4741,24 @@ export default function TrackersPage() {
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone";
         const labelForType = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
+        // Walk full parent chain (up to 32 levels) so an asset nested at ANY
+        // depth — Home → Furniture → Couch → Screws — is hidden from the
+        // top-level Linked page. Previously only the direct parent was checked,
+        // so a Couch under Furniture under Home would still leak through.
+        const _profileByIdCards = new Map<string, any>();
+        (profiles || []).forEach(p => _profileByIdCards.set(p.id, p));
+        const _hasAssetAncestorCards = (p: any): boolean => {
+          let cur: any = p;
+          for (let i = 0; i < 32 && cur; i++) {
+            const pid = cur.fields?._parentProfileId || cur.parentProfileId;
+            if (!pid) return false;
+            const par = _profileByIdCards.get(pid);
+            if (!par) return false;
+            if (childTypeSet.has(par.type)) return true;
+            cur = par;
+          }
+          return false;
+        };
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
           if (isShowAll || (p.fields?._parentProfileId || p.parentProfileId) && filterIds.includes((p.fields?._parentProfileId || p.parentProfileId) as string)) {
@@ -4696,26 +4766,15 @@ export default function TrackersPage() {
             // "all" means no chip-level filter; everything passes.
             if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
             // Asset nesting filter — applies on BOTH the "All" tab and the "Assets" tab.
-            // Bug fix: previously this check was gated on sectionFilter === "profiles",
-            // so nested assets (e.g. Samsung refrigerator under Home) leaked into the
-            // "All" view's asset row even though the rule says they should only live
-            // inside their parent's detail page. Apply it universally — only the
-            // explicit "Nested" / "Has children" chips on the Assets tab override it.
-            const pParentId = p.fields?._parentProfileId || p.parentProfileId;
-            const parentProfile = pParentId ? (profiles || []).find(x => x.id === pParentId) : null;
-            const parentIsAsset = !!parentProfile && childTypeSet.has(parentProfile.type);
+            const parentIsAssetChain = _hasAssetAncestorCards(p);
             const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
             if (nestingFilter === "all" || nestingFilter === "topLevel") {
-              // Hide assets whose parent is itself an asset-type profile.
-              // Children of a person/self/pet still appear (they're top-level relative to assets).
-              if (parentIsAsset) return false;
+              if (parentIsAssetChain) return false;
             } else if (nestingFilter === "hasChildren") {
-              // Pass if at least one other profile has this profile as parent AND is an asset type
               const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
               if (!hasAssetChild) return false;
             } else if (nestingFilter === "nested") {
-              // Pass only if parent is itself an asset-type profile
-              if (!parentIsAsset) return false;
+              if (!parentIsAssetChain) return false;
             }
             return true;
           }
@@ -4917,8 +4976,26 @@ export default function TrackersPage() {
       {/* Liabilities Section (replaces Subscriptions) */}
       {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "liabilities") && (() => {
         const isShowAll = filterMode === "everyone";
+        const _assetTypes = new Set(["vehicle", "asset", "investment", "property"]);
+        const _profileByIdLiab = new Map<string, any>();
+        (profiles || []).forEach(p => _profileByIdLiab.set(p.id, p));
+        const _liabHasAssetAncestor = (p: any): boolean => {
+          let cur: any = p;
+          for (let i = 0; i < 32 && cur; i++) {
+            const pid = cur.fields?._parentProfileId || cur.parentProfileId;
+            if (!pid) return false;
+            const par = _profileByIdLiab.get(pid);
+            if (!par) return false;
+            if (_assetTypes.has(par.type)) return true;
+            cur = par;
+          }
+          return false;
+        };
         const liabs = (profiles || []).filter(p => {
           if (!isLiabilityLikeProfile(p)) return false;
+          // Hide liabilities nested under an asset — they live inside the
+          // parent asset's detail page (Linked Liabilities section).
+          if (_liabHasAssetAncestor(p)) return false;
           // Profile-level scope first — liability is in scope if it's directly
           // selected, parented to a selected profile, or the user is on "everyone".
           let inScope = isShowAll;

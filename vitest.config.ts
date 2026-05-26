@@ -10,6 +10,7 @@ export default defineConfig({
       'tests/utils.test.ts',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
+      'tests/asset-rollup.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts'],
     testTimeout: 30000,

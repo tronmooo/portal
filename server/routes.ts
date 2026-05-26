@@ -2148,6 +2148,25 @@ If unsure, return "profile_fact".`,
         if (cycle) {
           return res.status(400).json({ error: "Cannot set parent: would create a cycle" });
         }
+        // Depth cap: 32 levels of nesting is far beyond any realistic use
+        // (Home → Furniture → Couch → Screws is 4 levels). Reject inserts
+        // that would push us past 32 to keep the parent-chain walks bounded.
+        let depthFromParent = 1; // parent counts as level 1
+        let walkId: string | null = newParentId;
+        const seen = new Set<string>();
+        while (walkId && depthFromParent < 64) {
+          if (seen.has(walkId)) break;
+          seen.add(walkId);
+          const walkP = await storage.getProfile(walkId);
+          if (!walkP) break;
+          const wpid: string | null = walkP.parentProfileId || (walkP.fields as any)?._parentProfileId || null;
+          if (!wpid) break;
+          depthFromParent++;
+          walkId = wpid;
+        }
+        if (depthFromParent > 32) {
+          return res.status(400).json({ error: "Cannot set parent: nesting depth would exceed 32 levels" });
+        }
       }
 
       // Persist: set top-level parentProfileId and mirror to fields._parentProfileId

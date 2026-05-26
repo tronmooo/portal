@@ -290,6 +290,10 @@ interface AssetRollup {
   netValue: number;
   childCount: number;
   descendantCount: number;
+  /** Sum of monthly recurring expenses on this profile + all descendants. */
+  monthlyExpense: number;
+  /** Sum of maintenance / service costs on this profile + all descendants. */
+  maintenanceCost: number;
 }
 
 interface TreeNode {
@@ -369,12 +373,50 @@ function flattenTreeNodes(node: TreeNode): TreeNode[] {
   return result;
 }
 
+// Pull a recurring monthly expense from a fields object, normalising yearly
+// to monthly. Returns 0 if none found.
+function getMonthlyExpense(fields: any): number {
+  if (!fields || typeof fields !== "object") return 0;
+  const direct = parseMoneyVal(
+    fields.monthlyCost ?? fields.monthly_cost ??
+    fields.monthlyExpense ?? fields.monthly_expense ??
+    fields.monthlyPayment ?? fields.monthly_payment ??
+    fields?.finance?.monthlyPayment ?? fields?.finance?.monthly_payment ??
+    fields?.maintenance?.monthlyCost ?? fields?.expense?.monthlyCost,
+  );
+  if (direct > 0) return direct;
+  const cost = parseMoneyVal(fields.cost ?? fields.amount ?? fields.price);
+  const freq = String(fields.frequency || "").toLowerCase();
+  if (cost > 0 && freq) {
+    if (freq.startsWith("month")) return cost;
+    if (freq.startsWith("year") || freq.startsWith("annual")) return cost / 12;
+    if (freq.startsWith("week")) return cost * 4.345;
+    if (freq.startsWith("day")) return cost * 30.44;
+    if (freq.startsWith("quarter")) return cost / 3;
+  }
+  return 0;
+}
+
+// Pull a maintenance / service cost number from a fields object.
+function getMaintenanceCost(fields: any): number {
+  if (!fields || typeof fields !== "object") return 0;
+  return parseMoneyVal(
+    fields.maintenanceCost ?? fields.maintenance_cost ??
+    fields.serviceCost ?? fields.service_cost ??
+    fields.upkeepCost ?? fields.upkeep_cost ??
+    fields?.maintenance?.totalCost ?? fields?.maintenance?.cost ??
+    fields?.service?.totalCost ?? fields?.service?.cost,
+  );
+}
+
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
   const baseValue = getAssetBaseValue(profile.fields);
   const baseLoans = getAssetLoanValue(profile.fields);
   const directChildren = descendants.filter((d) => d.parentProfileId === profile.id);
   const nestedValue = descendants.reduce((s, d) => s + getAssetBaseValue(d.fields), 0);
   const nestedLoans = descendants.reduce((s, d) => s + getAssetLoanValue(d.fields), 0);
+  const monthlyExpense = getMonthlyExpense(profile.fields) + descendants.reduce((s, d) => s + getMonthlyExpense(d.fields), 0);
+  const maintenanceCost = getMaintenanceCost(profile.fields) + descendants.reduce((s, d) => s + getMaintenanceCost(d.fields), 0);
   return {
     baseValue,
     nestedValue,
@@ -385,6 +427,8 @@ function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup 
     netValue: baseValue + nestedValue - baseLoans - nestedLoans,
     childCount: directChildren.length,
     descendantCount: descendants.length,
+    monthlyExpense,
+    maintenanceCost,
   };
 }
 
@@ -676,11 +720,51 @@ function ChildAssetsCard({
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const { view: assetView, setView: setAssetView } = useLinkedView(); // Wave 15
+  // NESTED-DEPTH (2026-05-25): the user wants infinite nesting (Home →
+  // Furniture → Couch → Screws). Previously only direct children showed,
+  // so reaching a deep node took N clicks. Toggle "Direct / Full tree"
+  // lets the user see the whole subtree from any level with depth indent.
+  const [treeMode, setTreeMode] = useState<"direct" | "full">("direct");
 
   const directChildren = useMemo(() => {
     const all = ((profile as any).childProfiles || []) as any[];
     return all.filter((c) => NESTED_ASSET_TYPES.includes(c.type as NestedAssetType));
   }, [profile]);
+
+  // Fetch the entire subtree so we can render "Full tree" view on demand.
+  // Server endpoint already exists — used elsewhere for rollup math.
+  const { data: subtreeData } = useQuery<TreeNode>({
+    queryKey: ["/api/profiles", profile.id, "tree"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profile.id}/tree`);
+      return res.json();
+    },
+    retry: false,
+  });
+
+  // Flatten subtree into rows with depth, skipping the root (== profile itself).
+  // Only asset-type nodes are rendered as children — person nodes don't belong
+  // in this card.
+  type DepthRow = { id: string; name: string; type: string; fields: any; depth: number };
+  const subtreeRows = useMemo((): DepthRow[] => {
+    if (!subtreeData) return [];
+    const rows: DepthRow[] = [];
+    const walk = (node: TreeNode, depth: number) => {
+      for (const child of (node.children || [])) {
+        if (NESTED_ASSET_TYPES.includes(child.type as NestedAssetType)) {
+          rows.push({ id: child.id, name: child.name, type: child.type, fields: child.fields, depth });
+        }
+        walk(child, depth + 1);
+      }
+    };
+    walk(subtreeData, 0);
+    return rows;
+  }, [subtreeData]);
+
+  const hasDeepDescendants = subtreeRows.length > directChildren.length;
+  const visibleChildren: DepthRow[] = treeMode === "full" && hasDeepDescendants
+    ? subtreeRows
+    : directChildren.map((c: any) => ({ id: c.id, name: c.name, type: c.type, fields: c.fields, depth: 0 }));
 
   const createChildMut = useMutation({
     mutationFn: async () => {
@@ -714,8 +798,27 @@ function ChildAssetsCard({
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <Package className="h-4 w-4 text-muted-foreground" /> Child Assets
+            {hasDeepDescendants && (
+              <span className="text-[10px] font-normal text-muted-foreground ml-1" data-testid="child-assets-counts">
+                {directChildren.length} direct · {subtreeRows.length} total
+              </span>
+            )}
           </CardTitle>
           <div className="flex items-center gap-2">
+            {hasDeepDescendants && assetView === "list" && (
+              <div className="inline-flex rounded-md border bg-card text-[10px] font-medium" data-testid="tree-mode-toggle">
+                <button
+                  className={`px-2 py-1 ${treeMode === "direct" ? "bg-primary text-primary-foreground rounded-l-md" : "text-muted-foreground"}`}
+                  onClick={() => setTreeMode("direct")}
+                  data-testid="tree-mode-direct"
+                >Direct</button>
+                <button
+                  className={`px-2 py-1 ${treeMode === "full" ? "bg-primary text-primary-foreground rounded-r-md" : "text-muted-foreground"}`}
+                  onClick={() => setTreeMode("full")}
+                  data-testid="tree-mode-full"
+                >Full tree</button>
+              </div>
+            )}
             {directChildren.length > 0 && <LinkedViewToggle view={assetView} onChange={setAssetView} />}
             <Button
               size="sm"
@@ -760,24 +863,33 @@ function ChildAssetsCard({
           />
         ) : (
           <div className="space-y-1" data-testid="child-assets-list">
-            {directChildren
-              .slice()
-              .sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""))
-              .map((child: any) => {
+            {(treeMode === "full"
+                // Preserve depth-first order from the tree walk so Furniture
+                // appears above its own Couch above its own Screws.
+                ? visibleChildren
+                // Direct view — alphabetical sort for predictability.
+                : visibleChildren.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")))
+              .map((child) => {
                 const childValue = getAssetBaseValue(child.fields);
+                // 14px indent per nesting level. We cap visual indent at
+                // 6 levels (84px) so deep trees stay readable inside the
+                // card width — depth is still tracked accurately for sort.
+                const visualDepth = Math.min(child.depth, 6);
                 return (
                   <button
                     key={child.id}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg border hover:bg-muted/30 transition-colors text-left min-h-[44px]"
+                    style={{ marginLeft: visualDepth * 14 }}
                     onClick={() => setLocation(`/profiles/${child.id}`)}
                     data-testid={`child-asset-row-${child.id}`}
+                    data-depth={child.depth}
                   >
                     <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                       {profileIcon(child.type)}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{child.name}</p>
-                      <p className="text-xs text-muted-foreground capitalize">{child.type}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{child.type}{child.depth > 0 ? ` · level ${child.depth + 1}` : ""}</p>
                     </div>
                     {childValue > 0 && (
                       <span className="text-xs font-semibold tabular-nums shrink-0">
@@ -905,6 +1017,22 @@ function ValueRollupCard({ profile }: { profile: ProfileDetail }) {
                 <p className="text-[11px] text-muted-foreground">Net Value</p>
               </div>
             </>
+          )}
+          {rollup.monthlyExpense > 0 && (
+            <div className="rounded-lg bg-orange-500/8 border border-orange-500/20 p-2.5 text-center" data-testid="rollup-monthly-expense">
+              <p className="text-base font-bold tabular-nums text-orange-600 dark:text-orange-400">
+                {formatCurrency(rollup.monthlyExpense)}<span className="text-[10px] font-normal text-muted-foreground">/mo</span>
+              </p>
+              <p className="text-[11px] text-muted-foreground">Total Monthly</p>
+            </div>
+          )}
+          {rollup.maintenanceCost > 0 && (
+            <div className="rounded-lg bg-blue-500/8 border border-blue-500/20 p-2.5 text-center" data-testid="rollup-maintenance">
+              <p className="text-base font-bold tabular-nums text-blue-600 dark:text-blue-400">
+                {formatCurrency(rollup.maintenanceCost)}
+              </p>
+              <p className="text-[11px] text-muted-foreground">Maintenance</p>
+            </div>
           )}
         </div>
         {rollup.descendantCount > 0 && (
@@ -1426,12 +1554,15 @@ function NestedAssetSections({
 
   return (
     <div className="space-y-3" data-testid="nested-asset-sections">
-      {/* Section 1: Location (the legacy "Belongs to" parent picker has been
-          removed — ownership is now the single source of truth via the Linked
-          People section below). */}
+      {/* Section 1: Location + Belongs-to parent picker.
+          Belongs-to is back (2026-05-25) because the user explicitly needs
+          a way to nest a standalone Furniture asset under a Home, etc.
+          Ownership still flows automatically up the parent chain via the
+          resolveOwnerFromProfile walk — you don't need to re-tag people. */}
       <Card data-testid="card-location">
-        <CardContent className="p-3 space-y-1">
+        <CardContent className="p-3 space-y-1.5">
           <LocationEditor profile={profile} onSaved={onSaved} />
+          <BelongsToEditor profile={profile} allProfiles={allProfiles} onSaved={onSaved} />
         </CardContent>
       </Card>
 
@@ -2562,12 +2693,15 @@ function InfoTab({
     queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
   };
 
-  // ── Fetch all profiles for BelongsToEditor candidate list (only for asset types) ──
+  // ── Fetch all profiles for BelongsToEditor candidate list ──
+  // Now enabled for liabilities too — they need to nest under a parent asset
+  // (e.g. a service plan liability under a TV).
   const isNestedAsset = NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType);
+  const isNestableLiability = profile.type === "liability" || profile.type === "loan" || profile.type === "subscription";
   const { data: allProfilesForNesting } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-    enabled: isNestedAsset,
+    enabled: isNestedAsset || isNestableLiability,
   });
 
   return (
@@ -2593,6 +2727,23 @@ function InfoTab({
           allProfiles={allProfilesForNesting || []}
           onSaved={handleSaved}
         />
+      )}
+
+      {/* ── Belongs-to for liabilities ──
+         Lets the user nest a standalone liability under an asset
+         (e.g. "Sony TV extended warranty" under the Sony TV). When nested,
+         this liability disappears from the top-level Linked page and only
+         appears inside its parent asset's "Linked Liabilities" section. */}
+      {isNestableLiability && (
+        <Card data-testid="card-liability-belongs-to">
+          <CardContent className="p-3">
+            <BelongsToEditor
+              profile={profile}
+              allProfiles={allProfilesForNesting || []}
+              onSaved={handleSaved}
+            />
+          </CardContent>
+        </Card>
       )}
 
       {/* ── Stats Row ── Only for person/self/pet — hero already shows these stats for asset types */}
