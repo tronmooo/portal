@@ -6,8 +6,10 @@ import { formatApiError } from "@/lib/formatError";
 import {
   ProfileBreadcrumb as RebuildBreadcrumb,
   OwnershipTree as RebuildOwnershipTree,
-  AssetSummaryCard as RebuildSummary,
-  TopChildrenPreview as RebuildTopChildren,
+  // AssetSummaryCard and TopChildrenPreview removed from imports 2026-05-26 —
+  // Overview is now identity-only; their data lives on Money/Financials/Contained
+  // tabs already. The components remain exported in asset-overview.tsx in case
+  // we need them again.
   FinancialsBreakdown as RebuildFinancials,
   OwnerControl as RebuildOwnerControl,
   AdoptAsChildDialog as RebuildAdoptDialog,
@@ -840,8 +842,10 @@ function ChildAssetsCard({
   return (
     <Card data-testid="card-child-assets">
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+        {/* Mobile: title row, then action row wraps cleanly.
+            Desktop (sm+): title and actions on one row. */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap">
             <Package className="h-4 w-4 text-muted-foreground" /> Child Assets
             {hasDeepDescendants && (
               <span className="text-[10px] font-normal text-muted-foreground ml-1" data-testid="child-assets-counts">
@@ -849,7 +853,7 @@ function ChildAssetsCard({
               </span>
             )}
           </CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
             {hasDeepDescendants && assetView === "list" && (
               <div className="inline-flex rounded-md border bg-card text-[10px] font-medium" data-testid="tree-mode-toggle">
                 <button
@@ -868,21 +872,23 @@ function ChildAssetsCard({
             <Button
               size="sm"
               variant="ghost"
-              className="h-[44px] text-xs gap-1 px-3"
+              className="h-9 text-xs gap-1 px-2"
               onClick={() => setShowAdopt(true)}
               data-testid="button-adopt-as-child"
               title="Adopt an existing asset as a child of this one"
+              aria-label="Adopt as Child"
             >
-              <LinkIcon className="h-3.5 w-3.5" /> Adopt as Child
+              <LinkIcon className="h-3.5 w-3.5" /> Adopt
             </Button>
             <Button
               size="sm"
               variant="outline"
-              className="h-[44px] text-xs gap-1 px-3"
+              className="h-9 text-xs gap-1 px-2"
               onClick={() => setShowAddChild(true)}
               data-testid="button-add-child-asset"
+              aria-label="Add Child"
             >
-              <Plus className="h-3.5 w-3.5" /> Add Child
+              <Plus className="h-3.5 w-3.5" /> Add
             </Button>
           </div>
         </div>
@@ -11138,38 +11144,16 @@ export default function ProfileDetailPage() {
                       <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
                     </section>
                   )}
-                  {/* Non-person profiles — medium-Overview redesign (2026-05-26):
-                      lean header (summary card + ownership tree + owner control
-                      + top-3 children preview). Full child list lives on the new
-                      Contained tab; full rollup lives on the new Financials tab.
-                      Linked People / Linked Liabilities continue to render here
-                      because they aren't duplicated elsewhere. */}
+                  {/* Non-person profiles — identity-only Overview (2026-05-26 redo):
+                      Overview tab now answers ONE question: "what is this thing?"
+                      Money/value/liabilities  → Money tab
+                      Full rollup with kids    → Financials tab
+                      Ownership tree + owner   → Contained tab (merged)
+                      Linked Liabilities       → Money tab
+                      Only trackers stay here because they describe the asset
+                      itself (mileage, weight, value-over-time, etc.). */}
                   {!(["person", "self"].includes(profile.type)) && ["asset","vehicle","property","investment","account"].includes(profile.type) && (
-                    <div className="mt-4 space-y-3" data-testid="asset-overview-rebuild">
-                      <RebuildSummary
-                        profile={profile as any}
-                        allProfiles={allProfilesPage as any}
-                        treeData={pageTreeData as any}
-                      />
-                      <RebuildOwnershipTree
-                        profile={profile as any}
-                        allProfiles={allProfilesPage as any}
-                        treeData={pageTreeData as any}
-                      />
-                      <RebuildOwnerControl
-                        profile={profile as any}
-                        allProfiles={allProfilesPage as any}
-                        onSaved={handleSaved}
-                      />
-                      <RebuildTopChildren
-                        profile={profile as any}
-                        treeData={pageTreeData as any}
-                        onSeeAll={() => {
-                          // jump to the Contained tab
-                          const trigger = document.querySelector('[data-testid="tab-contained"]') as HTMLElement | null;
-                          trigger?.click();
-                        }}
-                      />
+                    <div className="mt-4 space-y-3" data-testid="asset-overview-identity-only">
                       {profile.relatedTrackers.length > 0 && (
                         <Card>
                           <CardContent className="p-3">
@@ -11194,10 +11178,6 @@ export default function ProfileDetailPage() {
                           </CardContent>
                         </Card>
                       )}
-                      <section>
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
-                        <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
-                      </section>
                     </div>
                   )}
                   {/* Non-asset, non-person profiles (loan/subscription/insurance/medical/etc.)
@@ -11242,6 +11222,24 @@ export default function ProfileDetailPage() {
                   Financials = ValueRollupCard + itemised per-child breakdown. */}
               {tabValues.has("contained") && (
                 <TabsContent value="contained" className="mt-4 px-1 sm:px-0 space-y-3">
+                  {/* Contained tab — merged ownership + containment (2026-05-26):
+                      Holds everything about how this asset relates to its parent,
+                      owner, and children. Overview is identity-only; this tab is
+                      "where does it sit in the hierarchy and what's inside it". */}
+                  {["asset","vehicle","property","investment","account"].includes(profile.type) && (
+                    <>
+                      <RebuildOwnershipTree
+                        profile={profile as any}
+                        allProfiles={allProfilesPage as any}
+                        treeData={pageTreeData as any}
+                      />
+                      <RebuildOwnerControl
+                        profile={profile as any}
+                        allProfiles={allProfilesPage as any}
+                        onSaved={handleSaved}
+                      />
+                    </>
+                  )}
                   <NestedAssetSections
                     profile={profile}
                     allProfiles={allProfilesPage as any}
