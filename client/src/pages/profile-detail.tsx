@@ -11224,8 +11224,9 @@ export default function ProfileDetailPage() {
                 <TabsContent value="contained" className="mt-4 px-1 sm:px-0 space-y-3">
                   {/* Contained tab — merged ownership + containment (2026-05-26):
                       Holds everything about how this asset relates to its parent,
-                      owner, and children. Overview is identity-only; this tab is
-                      "where does it sit in the hierarchy and what's inside it". */}
+                      owner, children, AND any liabilities secured against it.
+                      Overview is identity-only; this tab is "where does it sit
+                      in the hierarchy, what's inside it, and what's owed against it". */}
                   {["asset","vehicle","property","investment","account"].includes(profile.type) && (
                     <>
                       <RebuildOwnershipTree
@@ -11246,6 +11247,16 @@ export default function ProfileDetailPage() {
                     onSaved={handleSaved}
                     mode="children"
                   />
+                  {/* Linked Liabilities lives here (and on Financials) so the
+                      user can attach a mortgage/loan/credit-line to the asset.
+                      Uses AssetLinkedLiabilitiesTab which has the "+ Link
+                      Liability" affordance and posts to /api/liability-asset-links. */}
+                  {["asset","vehicle","property","investment","account"].includes(profile.type) && (
+                    <section>
+                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
+                      <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                    </section>
+                  )}
                 </TabsContent>
               )}
               {tabValues.has("financials") && (
@@ -11257,6 +11268,15 @@ export default function ProfileDetailPage() {
                     mode="financials"
                   />
                   <RebuildFinancials profile={profile as any} treeData={pageTreeData as any} />
+                  {/* Liabilities also surface on Financials — they're a core
+                      component of the rollup. Same component as Contained so the
+                      user can link/unlink from either tab. */}
+                  {["asset","vehicle","property","investment","account"].includes(profile.type) && (
+                    <section>
+                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
+                      <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                    </section>
+                  )}
                 </TabsContent>
               )}
 
