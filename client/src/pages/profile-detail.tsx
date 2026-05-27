@@ -6631,8 +6631,15 @@ const DEFAULT_TABS: TabDef[] = [
 // iPhone, refrigerator, laptop, collectible, business, even a bank account —
 // can be financed, so the Loan tab is universal.
 const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
+  // 2026-05-26 fix: every asset subtype now includes Contained + Financials
+  // so child assets and the value rollup are reachable regardless of
+  // subtype. The Money tab already exposes a "Linked liabilities" section
+  // for any asset/vehicle/property profile, so liability linking is
+  // reachable from Money on every subtype.
   bank_account: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "linked-subs", label: "Subscriptions", testId: "tab-linked-subs" },
     { value: "trackers", label: "Statements", testId: "tab-trackers" },
@@ -6641,6 +6648,8 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   credit_card: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "payments", label: "Payments", testId: "tab-payments" },
     { value: "rewards", label: "Rewards", testId: "tab-rewards" },
@@ -6649,6 +6658,8 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   digital_asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "access", label: "Access", testId: "tab-access" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6657,6 +6668,8 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   business: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "tasks", label: "Operations", testId: "tab-tasks" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6665,6 +6678,8 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   collectible: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "valuation", label: "Valuation", testId: "tab-valuation" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -6673,6 +6688,8 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   loan_receivable: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "notes", label: "Notes", testId: "tab-notes" },
@@ -6680,6 +6697,8 @@ const ASSET_SUBTYPE_TABS: Record<string, TabDef[]> = {
   ],
   high_value_item: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "warranty", label: "Warranty", testId: "tab-warranty" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
@@ -10040,6 +10059,8 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "valuation": return true;
         case "linked-subs": return true;
         case "linked-liabilities": return true;
+        case "contained": return true;
+        case "financials": return true;
         case "payments": return true;
         // New aggregate tabs for person/self profiles — always show because
         // they're the primary navigation, not optional data-driven tabs.
@@ -10054,7 +10075,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "payments", "history", "belongings", "health-trackers", "tasks-schedule"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "contained", "financials", "payments", "history", "belongings", "health-trackers", "tasks-schedule"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }

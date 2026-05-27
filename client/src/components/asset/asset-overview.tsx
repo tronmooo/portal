@@ -308,10 +308,44 @@ export function AssetSummaryCard({
     ? allProfiles.find((p) => p.id === parentId)
     : null;
   const descendants = flattenTree(treeData);
-  const rollup = computeAssetRollup(profile as any, descendants as any);
+  // "Own" rollup = THIS asset only (no descendants). "Full" rollup = with
+  // descendants. We surface OWN values on the Overview Summary so the user
+  // doesn't see Bob's whole net worth bleeding into a single asset card.
+  // The full rollup lives on the Financials tab.
+  const ownRollup = computeAssetRollup(profile as any, []);
+  const fullRollup = computeAssetRollup(profile as any, descendants as any);
   const directChildren = (treeData?.children || []).filter((c) =>
     NESTED_ASSET_TYPES.includes(c.type),
   );
+
+  // Heuristic warning: if a child is ≥5x the asset's own value, the
+  // parent→child relationship is almost certainly reversed (e.g. Home
+  // accidentally nested under a Gaming PC). Surface a banner that links
+  // the user to the Contained tab where they can fix it.
+  const reversedSuspect = useMemo(() => {
+    if (ownRollup.totalValue <= 0) return null;
+    for (const c of directChildren) {
+      const cv =
+        Number(
+          (c.fields as any)?.currentValue ??
+            (c.fields as any)?.value ??
+            (c.fields as any)?.purchasePrice ??
+            (c.fields as any)?.balance ??
+            0,
+        ) || 0;
+      if (cv >= ownRollup.totalValue * 5) {
+        return { name: c.name, id: c.id, value: cv };
+      }
+    }
+    return null;
+  }, [directChildren, ownRollup.totalValue]);
+
+  const switchToContained = () => {
+    const el = document.querySelector(
+      '[data-testid="tab-contained"]',
+    ) as HTMLButtonElement | null;
+    if (el) el.click();
+  };
 
   return (
     <Card data-testid="card-asset-summary">
@@ -358,18 +392,19 @@ export function AssetSummaryCard({
           </div>
         </div>
 
-        {/* Financials trio */}
+        {/* Financials trio — THIS asset only (not the rollup). The full
+            rollup including children lives on the Financials tab. */}
         <div className="grid grid-cols-3 gap-2 pt-2 border-t">
           <div className="text-center">
-            <p className="text-base font-bold tabular-nums text-green-600 dark:text-green-400">
-              {formatCurrency(rollup.totalValue)}
+            <p className="text-base font-bold tabular-nums text-green-600 dark:text-green-400" data-testid="summary-own-value">
+              {formatCurrency(ownRollup.totalValue)}
             </p>
             <p className="text-[10px] text-muted-foreground">Value</p>
           </div>
           <div className="text-center">
-            <p className="text-base font-bold tabular-nums text-red-500">
-              {rollup.totalLoans > 0
-                ? `-${formatCurrency(rollup.totalLoans)}`
+            <p className="text-base font-bold tabular-nums text-red-500" data-testid="summary-own-liabilities">
+              {ownRollup.totalLoans > 0
+                ? `-${formatCurrency(ownRollup.totalLoans)}`
                 : "—"}
             </p>
             <p className="text-[10px] text-muted-foreground">Liabilities</p>
@@ -377,23 +412,64 @@ export function AssetSummaryCard({
           <div className="text-center">
             <p
               className={`text-base font-bold tabular-nums ${
-                rollup.netValue >= 0
+                ownRollup.netValue >= 0
                   ? "text-green-600 dark:text-green-400"
                   : "text-red-500"
               }`}
+              data-testid="summary-own-net"
             >
-              {formatCurrency(rollup.netValue)}
+              {formatCurrency(ownRollup.netValue)}
             </p>
             <p className="text-[10px] text-muted-foreground">Net</p>
           </div>
         </div>
+        <p className="text-[10px] text-muted-foreground text-center -mt-1">
+          This asset only. See Financials tab for the full rollup including children.
+        </p>
 
-        {/* Count info */}
-        {(directChildren.length > 0 || rollup.descendantCount > 0) && (
-          <p className="text-[11px] text-muted-foreground text-center pt-1">
-            {directChildren.length} direct ·{" "}
-            {rollup.descendantCount} total nested
-          </p>
+        {/* Count info + rollup hint */}
+        {(directChildren.length > 0 || fullRollup.descendantCount > 0) && (
+          <button
+            onClick={switchToContained}
+            className="w-full text-[11px] text-muted-foreground text-center hover:underline pt-1"
+            data-testid="summary-children-count"
+          >
+            Contains {directChildren.length} direct ·{" "}
+            {fullRollup.descendantCount} total nested
+            {fullRollup.totalValue > ownRollup.totalValue && (
+              <>
+                {" · +"}
+                {formatCurrency(fullRollup.totalValue - ownRollup.totalValue)}{" "}
+                from children
+              </>
+            )}
+          </button>
+        )}
+
+        {/* Reversed-parent warning */}
+        {reversedSuspect && (
+          <div
+            className="flex items-start gap-2 p-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800"
+            data-testid="reversed-parent-warning"
+          >
+            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-semibold text-amber-900 dark:text-amber-200">
+                Possible reversed parent
+              </p>
+              <p className="text-[11px] text-amber-800 dark:text-amber-300">
+                {reversedSuspect.name} ({formatCurrency(reversedSuspect.value)}) is
+                much larger than {profile.name}. It may have been nested the wrong
+                way around. Open Contained to move it.
+              </p>
+              <button
+                onClick={switchToContained}
+                className="mt-1 text-[11px] font-semibold text-amber-900 dark:text-amber-200 hover:underline"
+              >
+                Open Contained →
+              </button>
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>
