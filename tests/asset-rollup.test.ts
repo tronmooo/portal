@@ -64,4 +64,41 @@ describe("computeAssetRollup", () => {
     expect(rollup.baseLoans).toBe(300000);
     expect(rollup.netValue).toBe(200000);
   });
+
+  it("produces a breakdown with self + sorted descendants by depth", () => {
+    const pc = mk("pc", { currentValue: 3000 });
+    const mouse = mk("mouse", { currentValue: 80 }, "pc");
+    const kb = mk("kb", { currentValue: 150 }, "pc");
+    const monitor = mk("monitor", { currentValue: 400 }, "pc");
+    const rollup = computeAssetRollup(pc, [mouse, kb, monitor]);
+    expect(rollup.breakdown.length).toBe(4);
+    expect(rollup.breakdown[0].isSelf).toBe(true);
+    expect(rollup.breakdown[0].id).toBe("pc");
+    // depth-1 children sorted alphabetically: kb < monitor < mouse
+    expect(rollup.breakdown.slice(1).map((r) => r.id)).toEqual(["kb", "monitor", "mouse"]);
+    expect(rollup.breakdown.slice(1).every((r) => r.depth === 1)).toBe(true);
+  });
+
+  it("breakdown records depth across multiple nesting levels", () => {
+    const home = mk("home", { currentValue: 500000 });
+    const furniture = mk("furn", { currentValue: 5000 }, "home");
+    const couch = mk("couch", { currentValue: 800 }, "furn");
+    const screws = mk("screws", { value: 5 }, "couch");
+    const rollup = computeAssetRollup(home, [furniture, couch, screws]);
+    const byId = Object.fromEntries(rollup.breakdown.map((r) => [r.id, r]));
+    expect(byId.home.depth).toBe(0);
+    expect(byId.furn.depth).toBe(1);
+    expect(byId.couch.depth).toBe(2);
+    expect(byId.screws.depth).toBe(3);
+  });
+
+  it("breakdown computes per-row netValue (baseValue - baseLoans)", () => {
+    const pc = mk("pc", { currentValue: 3000, remainingBalance: 1200 });
+    const mouse = mk("mouse", { currentValue: 80 }, "pc");
+    const rollup = computeAssetRollup(pc, [mouse]);
+    const self = rollup.breakdown.find((r) => r.isSelf)!;
+    expect(self.netValue).toBe(1800);
+    const m = rollup.breakdown.find((r) => r.id === "mouse")!;
+    expect(m.netValue).toBe(80);
+  });
 });

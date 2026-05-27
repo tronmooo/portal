@@ -22,6 +22,20 @@ export interface AssetRollup {
   /** Total maintenance cost recorded across this node + all descendants —
    *  reads `maintenanceCost`, `maintenance_cost`, `serviceCost`. */
   maintenanceCost: number;
+  /** Per-item breakdown — one row for self + every descendant. Used by the
+   *  Financials tab to render "Mouse $80 / Keyboard $150 / Monitor $400". */
+  breakdown: AssetRollupRow[];
+}
+
+export interface AssetRollupRow {
+  id: string;
+  name: string;
+  type: string;
+  depth: number;        // 0 = self, 1 = direct child, 2 = grandchild, ...
+  baseValue: number;
+  baseLoans: number;
+  netValue: number;     // baseValue - baseLoans for this row alone
+  isSelf: boolean;
 }
 
 /** Coerce a stringy/numeric value to a positive number, or 0. */
@@ -157,6 +171,49 @@ export function computeAssetRollup(
   const totalLoans = baseLoans + nestedLoans;
   const netValue = totalValue - totalLoans;
 
+  // Per-row breakdown — self first, then descendants ordered by depth then name.
+  // Depth is computed by walking parent links within the descendants set.
+  const depthMap = new Map<string, number>();
+  depthMap.set(profile.id, 0);
+  // Iterate up to descendantCount+1 times to handle arbitrary order.
+  for (let i = 0; i <= descendantCount; i++) {
+    let progressed = false;
+    for (const d of descendants) {
+      if (depthMap.has(d.id)) continue;
+      const pid = (d as any).parentProfileId || (d.fields as any)?._parentProfileId;
+      if (pid && depthMap.has(pid)) {
+        depthMap.set(d.id, (depthMap.get(pid) as number) + 1);
+        progressed = true;
+      }
+    }
+    if (!progressed) break;
+  }
+  const selfRow: AssetRollupRow = {
+    id: profile.id,
+    name: (profile as any).name || "(self)",
+    type: profile.type,
+    depth: 0,
+    baseValue,
+    baseLoans,
+    netValue: baseValue - baseLoans,
+    isSelf: true,
+  };
+  const descRows: AssetRollupRow[] = descendants.map((d) => {
+    const bv = extractBaseValue(d.fields);
+    const bl = extractBaseLoans(d.fields);
+    return {
+      id: d.id,
+      name: (d as any).name || "(unnamed)",
+      type: d.type,
+      depth: depthMap.get(d.id) ?? 1,
+      baseValue: bv,
+      baseLoans: bl,
+      netValue: bv - bl,
+      isSelf: false,
+    };
+  }).sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name));
+  const breakdown: AssetRollupRow[] = [selfRow, ...descRows];
+
   return {
     baseValue,
     nestedValue,
@@ -169,5 +226,6 @@ export function computeAssetRollup(
     descendantCount,
     monthlyExpense,
     maintenanceCost,
+    breakdown,
   };
 }

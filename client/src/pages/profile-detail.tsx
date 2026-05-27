@@ -1,4 +1,19 @@
 import { formatApiError } from "@/lib/formatError";
+// Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
+// profile-detail stays under control. The legacy ChildAssetsCard /
+// ValueRollupCard / MaintenanceCard below still exist and are still used for
+// non-asset profiles; for asset types we delegate to the rebuild.
+import {
+  ProfileBreadcrumb as RebuildBreadcrumb,
+  OwnershipTree as RebuildOwnershipTree,
+  AssetSummaryCard as RebuildSummary,
+  TopChildrenPreview as RebuildTopChildren,
+  FinancialsBreakdown as RebuildFinancials,
+  OwnerControl as RebuildOwnerControl,
+  AdoptAsChildDialog as RebuildAdoptDialog,
+  ChildActionsMenu as RebuildChildActions,
+  PathPreviewLine as RebuildPathPreview,
+} from "@/components/asset/asset-overview";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
@@ -550,6 +565,15 @@ function BelongsToEditor({
             <DialogDescription>Choose where this asset belongs.</DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
+            {/* Current path preview — shows where this asset currently lives */}
+            <div className="px-2 py-2 rounded-md bg-muted/40 border" data-testid="belongs-to-current-path">
+              <p className="text-[10px] text-muted-foreground mb-0.5">Currently:</p>
+              <RebuildPathPreview
+                parent={currentParent || null}
+                allProfiles={allProfiles}
+                childName={profile.name}
+              />
+            </div>
             <Input
               placeholder="Search profiles..."
               value={search}
@@ -718,13 +742,11 @@ function ChildAssetsCard({
   const [showAddChild, setShowAddChild] = useState(false);
   const [childName, setChildName] = useState("");
   const [childType, setChildType] = useState<NestedAssetType>("asset");
-  // LINK-EXISTING (2026-05-26): the user reported "It won't let me add the
-  // asset to the house" — they wanted to attach an EXISTING standalone asset
-  // as a child of the current parent (House), not just create a new one. This
-  // dialog lets them pick any asset whose parent is currently a person/self/pet
-  // (i.e. a top-level asset) and re-parent it under this profile in one step.
-  const [showLinkExisting, setShowLinkExisting] = useState(false);
-  const [linkSearch, setLinkSearch] = useState("");
+  // ADOPT-AS-CHILD (2026-05-26 redesign): the inline picker that used to live
+  // here was renamed to "Adopt as Child" and moved into a dedicated component
+  // with a preview + two-step confirm flow. That removes the reversed-parent
+  // footgun that bit the user on 2026-05-26.
+  const [showAdopt, setShowAdopt] = useState(false);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const { view: assetView, setView: setAssetView } = useLinkedView(); // Wave 15
@@ -774,87 +796,19 @@ function ChildAssetsCard({
     ? subtreeRows
     : directChildren.map((c: any) => ({ id: c.id, name: c.name, type: c.type, fields: c.fields, depth: 0 }));
 
-  // Pull every profile so we can show a picker of standalone assets.
-  const { data: allProfilesForLink } = useQuery<any[]>({
+  // ADOPT-AS-CHILD redesign (2026-05-26): the previous inline picker / mutation
+  // (allProfilesForLink, linkCandidates, filteredLinkCandidates, linkExistingMut,
+  // inline Link Existing Dialog) have been removed. The Adopt-as-Child UX now
+  // lives in the dedicated <RebuildAdoptDialog> component which provides a
+  // two-step confirm flow with path preview and cycle protection.
+
+  // Fetch all profiles for path preview inside the Add Child dialog. This was
+  // previously fetched only when the Link dialog opened — now it's used to
+  // show the path preview line inline above the Create button.
+  const { data: allProfilesForPreview } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-    enabled: showLinkExisting,
-  });
-
-  // Eligible candidates: asset-type profiles whose parent is currently a
-  // person/self/pet (top-level), AND not this profile, AND not already a
-  // descendant of this profile, AND not soft-deleted. We also exclude assets
-  // that are already nested under some other asset — if the user really wants
-  // to move them, they can use the Belongs-to picker on that asset.
-  const linkCandidates = useMemo(() => {
-    if (!allProfilesForLink) return [] as any[];
-    const descendantIds = new Set<string>();
-    const subId = subtreeData?.id;
-    if (subId) {
-      const walk = (node: TreeNode) => {
-        for (const c of node.children || []) {
-          descendantIds.add(c.id);
-          walk(c);
-        }
-      };
-      if (subtreeData) walk(subtreeData);
-    }
-    return allProfilesForLink
-      .filter((p: any) => {
-        if (!NESTED_ASSET_TYPES.includes(p.type as NestedAssetType)) return false;
-        if (p.id === profile.id) return false;
-        if (descendantIds.has(p.id)) return false;
-        if (p.fields?.deleted || p.deleted) return false;
-        const parentId = p.parentProfileId || p.fields?._parentProfileId || null;
-        // Skip items already nested under THIS profile.
-        if (parentId === profile.id) return false;
-        return true;
-      })
-      .sort((a: any, b: any) => {
-        // Surface true top-level (parent is person/self/pet) first.
-        const personTypes = new Set(["person", "self", "pet"]);
-        const aParent = allProfilesForLink.find(x => x.id === (a.parentProfileId || a.fields?._parentProfileId));
-        const bParent = allProfilesForLink.find(x => x.id === (b.parentProfileId || b.fields?._parentProfileId));
-        const aTop = aParent && personTypes.has(aParent.type) ? 0 : 1;
-        const bTop = bParent && personTypes.has(bParent.type) ? 0 : 1;
-        if (aTop !== bTop) return aTop - bTop;
-        return (a.name || "").localeCompare(b.name || "");
-      });
-  }, [allProfilesForLink, profile.id, subtreeData]);
-
-  const filteredLinkCandidates = useMemo(() => {
-    if (!linkSearch.trim()) return linkCandidates;
-    const q = linkSearch.toLowerCase();
-    return linkCandidates.filter((p: any) =>
-      (p.name || "").toLowerCase().includes(q) || (p.type || "").toLowerCase().includes(q)
-    );
-  }, [linkCandidates, linkSearch]);
-
-  const linkExistingMut = useMutation({
-    mutationFn: async (childId: string) => {
-      const res = await apiRequest("PATCH", `/api/profiles/${childId}`, {
-        parentProfileId: profile.id,
-      });
-      return res.json();
-    },
-    onSuccess: (_data, childId) => {
-      const c = (allProfilesForLink || []).find(p => p.id === childId);
-      toast({ title: `"${c?.name || "Asset"}" linked under "${profile.name}"` });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "tree"] });
-      // Old parent's detail also needs invalidating so its child list refreshes.
-      const childOldParent = c?.parentProfileId || c?.fields?._parentProfileId;
-      if (childOldParent) {
-        queryClient.invalidateQueries({ queryKey: ["/api/profiles", childOldParent, "detail"] });
-      }
-      setShowLinkExisting(false);
-      setLinkSearch("");
-      onChildAdded();
-    },
-    onError: (err: Error) => {
-      toast({ title: "Couldn't link asset", description: err.message, variant: "destructive" });
-    },
+    enabled: showAddChild,
   });
 
   const createChildMut = useMutation({
@@ -915,11 +869,11 @@ function ChildAssetsCard({
               size="sm"
               variant="ghost"
               className="h-[44px] text-xs gap-1 px-3"
-              onClick={() => setShowLinkExisting(true)}
-              data-testid="button-link-existing-asset"
-              title="Move an existing asset under this one"
+              onClick={() => setShowAdopt(true)}
+              data-testid="button-adopt-as-child"
+              title="Adopt an existing asset as a child of this one"
             >
-              <LinkIcon className="h-3.5 w-3.5" /> Link Existing
+              <LinkIcon className="h-3.5 w-3.5" /> Adopt as Child
             </Button>
             <Button
               size="sm"
@@ -957,6 +911,11 @@ function ChildAssetsCard({
                 const v = getAssetBaseValue(c.fields) - getAssetLoanValue(c.fields);
                 return <span className="tabular-nums font-semibold">{formatCurrency(v)}</span>;
               } },
+              { key: "actions", label: "", width: "48px", align: "right", render: (c: any) => (
+                <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                  <RebuildChildActions child={c as any} parent={profile as any} onChanged={onChildAdded} />
+                </div>
+              ) },
             ]}
             onRowClick={(c: any) => setLocation(`/profiles/${c.id}`)}
             emptyMessage="No child assets"
@@ -977,11 +936,19 @@ function ChildAssetsCard({
                 // card width — depth is still tracked accurately for sort.
                 const visualDepth = Math.min(child.depth, 6);
                 return (
-                  <button
+                  <div
                     key={child.id}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg border hover:bg-muted/30 transition-colors text-left min-h-[44px]"
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg border hover:bg-muted/30 transition-colors text-left min-h-[44px] cursor-pointer"
                     style={{ marginLeft: visualDepth * 14 }}
                     onClick={() => setLocation(`/profiles/${child.id}`)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setLocation(`/profiles/${child.id}`);
+                      }
+                    }}
                     data-testid={`child-asset-row-${child.id}`}
                     data-depth={child.depth}
                   >
@@ -997,8 +964,20 @@ function ChildAssetsCard({
                         {formatCurrency(childValue)}
                       </span>
                     )}
+                    <div
+                      className="shrink-0"
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      data-testid={`child-asset-actions-${child.id}`}
+                    >
+                      <RebuildChildActions
+                        child={child as any}
+                        parent={profile as any}
+                        onChanged={onChildAdded}
+                      />
+                    </div>
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  </button>
+                  </div>
                 );
               })}
           </div>
@@ -1038,6 +1017,12 @@ function ChildAssetsCard({
                 </SelectContent>
               </Select>
             </div>
+            {/* Path preview — shows the user where this new child will live */}
+            <RebuildPathPreview
+              parent={profile as any}
+              allProfiles={(allProfilesForPreview || []) as any[]}
+              childName={childName.trim() || undefined}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" className="h-[44px]" onClick={() => setShowAddChild(false)}>Cancel</Button>
@@ -1054,62 +1039,13 @@ function ChildAssetsCard({
         </DialogContent>
       </Dialog>
 
-      {/* Link Existing Asset Dialog */}
-      <Dialog open={showLinkExisting} onOpenChange={setShowLinkExisting}>
-        <DialogContent className="max-w-sm max-h-[80vh] flex flex-col" data-testid="dialog-link-existing-asset">
-          <DialogHeader>
-            <DialogTitle>Link Existing Asset</DialogTitle>
-            <DialogDescription>Move an existing asset under &quot;{profile.name}&quot;. It will disappear from the top-level Linked page and show only here.</DialogDescription>
-          </DialogHeader>
-          <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
-            <Input
-              placeholder="Search assets..."
-              value={linkSearch}
-              onChange={(e) => setLinkSearch(e.target.value)}
-              className="h-[44px] text-sm"
-              data-testid="input-link-existing-search"
-            />
-            <div className="flex-1 overflow-y-auto space-y-1 pr-1" data-testid="list-link-existing-candidates">
-              {filteredLinkCandidates.length === 0 ? (
-                <p className="text-xs text-muted-foreground text-center py-6">
-                  {allProfilesForLink ? "No standalone assets found" : "Loading..."}
-                </p>
-              ) : (
-                filteredLinkCandidates.map((p: any) => {
-                  const parentRef = (allProfilesForLink || []).find(x => x.id === (p.parentProfileId || p.fields?._parentProfileId));
-                  const isUnderAsset = parentRef && NESTED_ASSET_TYPES.includes(parentRef.type as NestedAssetType);
-                  return (
-                    <button
-                      key={p.id}
-                      className="w-full text-left px-3 py-3 rounded-lg text-xs hover:bg-muted transition-colors min-h-[44px] flex items-center gap-2"
-                      onClick={() => linkExistingMut.mutate(p.id)}
-                      disabled={linkExistingMut.isPending}
-                      data-testid={`option-link-existing-${p.id}`}
-                    >
-                      <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                        {profileIcon(p.type)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="truncate font-medium">{p.name}</p>
-                        <p className="text-[10px] text-muted-foreground capitalize">
-                          {p.type}{parentRef ? ` · currently under ${parentRef.name}` : " · top-level"}
-                          {isUnderAsset && " (will move)"}
-                        </p>
-                      </div>
-                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" size="sm" className="h-[44px]" onClick={() => setShowLinkExisting(false)}>
-              Cancel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Adopt-as-Child Dialog (replaces the legacy inline Link Existing picker) */}
+      <RebuildAdoptDialog
+        profile={profile as any}
+        open={showAdopt}
+        onOpenChange={setShowAdopt}
+        onAdopted={onChildAdded}
+      />
     </Card>
   );
 }
@@ -1702,13 +1638,42 @@ function NestedAssetSections({
   profile,
   allProfiles,
   onSaved,
+  mode = "full",
 }: {
   profile: ProfileDetail;
   allProfiles: any[];
   onSaved: () => void;
+  /** "full" — legacy stacked layout (Location + BelongsTo + Children + Rollup + Maintenance).
+   *  "location-only" — just the Location + BelongsTo card. Used on the new asset
+   *    Overview where the rest moves to dedicated tabs and child rollup is already
+   *    shown by RebuildSummary.
+   *  "children" — just the ChildAssetsCard. Used on the new Contained tab.
+   *  "financials" — just the ValueRollupCard. Used on the new Financials tab.
+   *  "maintenance" — just the MaintenanceCard. Used on the existing Maintenance tab. */
+  mode?: "full" | "location-only" | "children" | "financials" | "maintenance";
 }) {
   const isAssetType = NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType);
   if (!isAssetType) return null;
+
+  if (mode === "location-only") {
+    return (
+      <Card data-testid="card-location">
+        <CardContent className="p-3 space-y-1.5">
+          <LocationEditor profile={profile} onSaved={onSaved} />
+          <BelongsToEditor profile={profile} allProfiles={allProfiles} onSaved={onSaved} />
+        </CardContent>
+      </Card>
+    );
+  }
+  if (mode === "children") {
+    return <ChildAssetsCard profile={profile} onChildAdded={onSaved} />;
+  }
+  if (mode === "financials") {
+    return <ValueRollupCard profile={profile} />;
+  }
+  if (mode === "maintenance") {
+    return <MaintenanceCard profile={profile} />;
+  }
 
   return (
     <div className="space-y-3" data-testid="nested-asset-sections">
@@ -2878,12 +2843,16 @@ function InfoTab({
         </div>
       )}
 
-      {/* ── Nested Asset Sections (Sections 1-4) — asset/vehicle/property/investment/account only ── */}
+      {/* ── Nested Asset Sections — asset types now only render the Location +
+          Belongs-to editor here. The Children/Rollup/Maintenance moved to
+          dedicated tabs (Contained / Financials / Maintenance) so this
+          Overview stays lean per the 2026-05-26 redesign. ── */}
       {isNestedAsset && (
         <NestedAssetSections
           profile={profile}
           allProfiles={allProfilesForNesting || []}
           onSaved={handleSaved}
+          mode="location-only"
         />
       )}
 
@@ -6568,6 +6537,8 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // labeled "History" — deduped by renaming timeline to "Activity".
   vehicle: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
@@ -6587,6 +6558,8 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Investment
   investment: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "timeline", label: "Activity", testId: "tab-timeline" },
@@ -6612,6 +6585,8 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Property / Home. Loan + Costs collapsed into Money.
   property: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
@@ -6622,6 +6597,8 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   // Asset (laptop, device, etc.) — Loan + Costs collapsed into Money.
   asset: [
     { value: "info", label: "Overview", testId: "tab-info" },
+    { value: "contained", label: "Contained", testId: "tab-contained" },
+    { value: "financials", label: "Financials", testId: "tab-financials" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "history", label: "History", testId: "tab-history" },
     { value: "tasks", label: "Maintenance", testId: "tab-tasks" },
@@ -10725,6 +10702,22 @@ export default function ProfileDetailPage() {
     refetchOnMount: true,
   });
 
+  // Page-level all-profiles — powers the new breadcrumb + summary + tree.
+  // Shared across all child queries via the same queryKey so React Query
+  // dedupes the network request.
+  const { data: allProfilesPage = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: !!id,
+  });
+
+  // Tree for the current profile — used by Overview rebuild + Financials tab.
+  const { data: pageTreeData } = useQuery<any>({
+    queryKey: ["/api/profiles", id, "tree"],
+    queryFn: () => apiRequest("GET", `/api/profiles/${id}/tree`).then(r => r.json()),
+    enabled: !!id,
+  });
+
   // Once the profile loads, refine the browser-tab title so it reflects the
   // actual entity ("iPhone 15 · Asset — Portol", "Scrappy · Pet — Portol",
   // "Bob Robertson — Portol"). Resets on unmount so other pages can claim
@@ -11033,6 +11026,17 @@ export default function ProfileDetailPage() {
           </button>
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-semibold" data-testid="text-profile-detail-name">{profile.name}</h1>
+            {/* Phase 2 breadcrumb — only renders when this profile has a parent chain. */}
+            {(NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType) ||
+              ((profile.type as string) === "liability") ||
+              ((profile.type as string) === "loan") ||
+              ((profile.type as string) === "subscription")) && (
+              <RebuildBreadcrumb
+                profile={profile as any}
+                allProfiles={allProfilesPage as any}
+                className="mt-1"
+              />
+            )}
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
               <Badge variant="secondary" className="text-xs capitalize">{profile.type}</Badge>
               {profile.tags.slice().sort((a, b) => a.localeCompare(b)).map(tag => (
@@ -11113,19 +11117,73 @@ export default function ProfileDetailPage() {
                       <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
                     </section>
                   )}
-                  {/* For non-person profiles we keep the old Overview layout
-                      because their sub-type pages (vehicle/property/loan)
-                      still rely on these inline sections. */}
-                  {!(["person", "self"].includes(profile.type)) && (
-                    <>
-                      {/* Cost of ownership rollup for asset-like profiles.
-                          Self-hides when there are no linked expenses or
-                          recurring obligations to summarize. */}
-                      {["asset","vehicle","property","investment"].includes(profile.type) && (
-                        <div className="mt-4">
-                          <CostOfOwnershipCard profile={profile} />
-                        </div>
+                  {/* Non-person profiles — medium-Overview redesign (2026-05-26):
+                      lean header (summary card + ownership tree + owner control
+                      + top-3 children preview). Full child list lives on the new
+                      Contained tab; full rollup lives on the new Financials tab.
+                      Linked People / Linked Liabilities continue to render here
+                      because they aren't duplicated elsewhere. */}
+                  {!(["person", "self"].includes(profile.type)) && ["asset","vehicle","property","investment","account"].includes(profile.type) && (
+                    <div className="mt-4 space-y-3" data-testid="asset-overview-rebuild">
+                      <RebuildSummary
+                        profile={profile as any}
+                        allProfiles={allProfilesPage as any}
+                        treeData={pageTreeData as any}
+                      />
+                      <RebuildOwnershipTree
+                        profile={profile as any}
+                        allProfiles={allProfilesPage as any}
+                        treeData={pageTreeData as any}
+                      />
+                      <RebuildOwnerControl
+                        profile={profile as any}
+                        allProfiles={allProfilesPage as any}
+                        onSaved={handleSaved}
+                      />
+                      <RebuildTopChildren
+                        profile={profile as any}
+                        treeData={pageTreeData as any}
+                        onSeeAll={() => {
+                          // jump to the Contained tab
+                          const trigger = document.querySelector('[data-testid="tab-contained"]') as HTMLElement | null;
+                          trigger?.click();
+                        }}
+                      />
+                      {profile.relatedTrackers.length > 0 && (
+                        <Card>
+                          <CardContent className="p-3">
+                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Trackers ({profile.relatedTrackers.length})</p>
+                            <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
+                              {profile.relatedTrackers.map((t: any) => {
+                                const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
+                                const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
+                                const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
+                                return (
+                                  <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-medium truncate">{t.name}</p>
+                                      <p className="text-xs text-muted-foreground">{t.category} · {t.entries?.length || 0} entries</p>
+                                    </div>
+                                    <span className="text-sm font-bold tabular-nums">{displayVal}</span>
+                                    {t.unit && <span className="text-xs text-muted-foreground">{t.unit}</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </CardContent>
+                        </Card>
                       )}
+                      <section>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
+                        <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
+                      </section>
+                    </div>
+                  )}
+                  {/* Non-asset, non-person profiles (loan/subscription/insurance/medical/etc.)
+                      keep the legacy Overview layout. Their detail pages haven't
+                      been redesigned yet — future phase. */}
+                  {!(["person", "self","asset","vehicle","property","investment","account"].includes(profile.type)) && (
+                    <>
                       {profile.relatedTrackers.length > 0 && (
                         <div className="mt-4">
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>
@@ -11152,31 +11210,34 @@ export default function ProfileDetailPage() {
                         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
                         <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
                       </section>
-                      {/* Linked Assets — SIBLING cross-links between two
-                          top-level assets (e.g. a trailer tied to a truck,
-                          twin investment accounts). For vehicles this is
-                          almost never meaningful; sub-items belong under
-                          'Child Assets' above (tires, dashcam, roof rack).
-                          Hidden on vehicle to avoid the duplicate-section
-                          confusion from the previous build. */}
-                      {!["vehicle"].includes(profile.type) && (
-                        <section className="mt-6">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Assets</p>
-                          <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
-                        </section>
-                      )}
-                      {/* Linked Liabilities — surface debts/loans secured by this
-                          asset (auto loan on this Honda, mortgage on this house).
-                          Bidirectional with the Liability detail page. Uses
-                          /api/assets/:id/liabilities and supports add/remove. */}
-                      {["vehicle","property","investment","asset"].includes(profile.type) && (
-                        <section className="mt-6">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
-                          <LinkedLiabilitiesRelTab profileId={profile.id} profileType={profile.type} />
-                        </section>
-                      )}
                     </>
                   )}
+                </TabsContent>
+              )}
+
+              {/* ── Phase 3 (2026-05-26): dedicated tabs for asset profiles ──
+                  Contained = full Child Assets list (the Adopt-as-Child entry +
+                  per-row Move/Remove actions live here).
+                  Financials = ValueRollupCard + itemised per-child breakdown. */}
+              {tabValues.has("contained") && (
+                <TabsContent value="contained" className="mt-4 px-1 sm:px-0 space-y-3">
+                  <NestedAssetSections
+                    profile={profile}
+                    allProfiles={allProfilesPage as any}
+                    onSaved={handleSaved}
+                    mode="children"
+                  />
+                </TabsContent>
+              )}
+              {tabValues.has("financials") && (
+                <TabsContent value="financials" className="mt-4 px-1 sm:px-0 space-y-3">
+                  <NestedAssetSections
+                    profile={profile}
+                    allProfiles={allProfilesPage as any}
+                    onSaved={handleSaved}
+                    mode="financials"
+                  />
+                  <RebuildFinancials profile={profile as any} treeData={pageTreeData as any} />
                 </TabsContent>
               )}
 
