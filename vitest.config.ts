@@ -10,6 +10,7 @@ export default defineConfig({
       'tests/utils.test.ts',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
+      'tests/scope.test.ts',
       'tests/asset-rollup.test.ts',
       'tests/ai-parent-resolution.test.ts',
     ],

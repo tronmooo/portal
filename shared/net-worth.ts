@@ -15,6 +15,7 @@ import {
   isAssetProfile,
   isLiabilityProfile,
 } from "./asset-value";
+import { isInScope } from "./scope";
 
 export type ProfileFilterMode = "everyone" | "selected";
 
@@ -31,31 +32,60 @@ export interface NetWorthResult {
   liabilityProfiles: any[];
 }
 
-// ----- Scope check (mirrors HeroKPIPopups isInScope exactly) -----
+// ----- Scope check -----
 // A profile is "in scope" of the active filter when:
 //   - the filter is not active ("everyone" or no ids), OR
 //   - its id is selected, OR
 //   - its parent (fields._parentProfileId / parentProfileId) is selected, OR
 //   - any of its co-owners (fields.owners / fields.ownerIds /
 //     fields.linkedProfileIds) is selected.
+//
+// Stage 0 (BUG-20260528-scope-unification): the intersect decision is
+// delegated to `isInScope` in `shared/scope.ts` — the same primitive
+// `passesProfileFilter` uses. This file's responsibility is now ONLY
+// extracting the candidate owner-id set from the profile's various legacy
+// field shapes; the actual "any candidate id in selection?" answer comes
+// from one place. Orphan policy is `out_of_scope` because every profile is
+// its own owner (its `id` is always in the candidate set), so the absent-
+// candidate branch in `isInScope` is unreachable here — picking
+// `out_of_scope` makes that intent explicit and prevents a malformed
+// profile from silently landing in someone else's net worth.
+function extractCandidateOwnerIds(p: any): string[] {
+  if (!p) return [];
+  const ids: string[] = [];
+  if (typeof p.id === "string" && p.id) ids.push(p.id);
+  const parentId = p?.fields?._parentProfileId || p?.parentProfileId;
+  if (typeof parentId === "string" && parentId) ids.push(parentId);
+  if (Array.isArray(p?.fields?.owners)) {
+    for (const o of p.fields.owners) {
+      const oid = o?.profileId || o?.id || (typeof o === "string" ? o : null);
+      if (typeof oid === "string" && oid) ids.push(oid);
+    }
+  } else if (Array.isArray(p?.fields?.ownerIds)) {
+    for (const oid of p.fields.ownerIds) {
+      if (typeof oid === "string" && oid) ids.push(oid);
+    }
+  } else if (Array.isArray(p?.fields?.linkedProfileIds)) {
+    for (const oid of p.fields.linkedProfileIds) {
+      if (typeof oid === "string" && oid) ids.push(oid);
+    }
+  }
+  return ids;
+}
+
 export function isProfileInNetWorthScope(p: any, ctx: NetWorthContext): boolean {
   if (!p) return false;
-  if (ctx.mode !== "selected" || ctx.selectedIds.length === 0) return true;
-  if (ctx.selectedIds.includes(p.id)) return true;
-
-  const parentId = p?.fields?._parentProfileId || p?.parentProfileId;
-  if (parentId && ctx.selectedIds.includes(parentId)) return true;
-
-  const ownerIds: string[] = Array.isArray(p?.fields?.owners)
-    ? p.fields.owners.map((o: any) => o?.profileId || o?.id || o).filter(Boolean)
-    : Array.isArray(p?.fields?.ownerIds)
-    ? p.fields.ownerIds
-    : Array.isArray(p?.fields?.linkedProfileIds)
-    ? p.fields.linkedProfileIds
-    : [];
-  if (ownerIds.some((id) => ctx.selectedIds.includes(id))) return true;
-
-  return false;
+  // Translate the net-worth-shaped context into the canonical ScopeContext.
+  // The empty `selfIds` set is fine here because the `out_of_scope` orphan
+  // policy never consults selfIds — we keep the type-correct shape so the
+  // primitive's contract is honored.
+  const active = ctx.mode === "selected" && ctx.selectedIds.length > 0;
+  if (!active) return true;
+  return isInScope(
+    extractCandidateOwnerIds(p),
+    { selectedIds: ctx.selectedIds, selfIds: new Set<string>() },
+    "out_of_scope",
+  );
 }
 
 /**

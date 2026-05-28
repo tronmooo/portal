@@ -11,6 +11,15 @@
 // disagreed on whether orphans show up. That made finance, calendar, the
 // dashboard and individual pages return different answers for the same
 // filter — which is exactly what the user calls out as breaking trust.
+//
+// Stage 0 (BUG-20260528-scope-unification): the final intersect/orphan
+// decision is now delegated to `isInScope` in `shared/scope.ts`. This file
+// stays the entity-level entry point (it knows how to extract a candidate
+// owner-id set from an entity's `linkedProfiles`) but the actual answer
+// comes from the same primitive that `shared/net-worth.ts` uses, so the two
+// scope checks can no longer drift apart on the core question.
+
+import { isInScope, selfIdsFrom } from "./scope";
 
 export interface ProfileLike {
   id: string;
@@ -31,12 +40,15 @@ export interface ProfileFilterContext {
  * Returns true if any selected profile is a `self` profile. Used to decide
  * whether legacy/orphan items (no linkedProfiles) should show through the
  * filter. Memoize at the call site if you need to apply this hot.
+ *
+ * Kept exported for backward compatibility with existing call sites. Its
+ * answer is unchanged — it now derives `selfIds` the same way `isInScope`
+ * does internally.
  */
 export function selfInSelection(ctx: ProfileFilterContext): boolean {
   if (!ctx.selectedIds.length) return false;
-  return ctx.selectedIds.some(id =>
-    ctx.allProfiles.find(p => p.id === id)?.type === "self"
-  );
+  const selfIds = selfIdsFrom(ctx.allProfiles);
+  return ctx.selectedIds.some(id => selfIds.has(id));
 }
 
 /**
@@ -44,19 +56,18 @@ export function selfInSelection(ctx: ProfileFilterContext): boolean {
  * filter?". `linkedProfiles` is whatever the entity stores (string[] or
  * undefined for legacy rows). Pass the same `selectedIds` you'd pass to the
  * server as `?profileIds=`.
+ *
+ * Stage 0: implementation delegates to `isInScope` so this function and
+ * `isProfileInNetWorthScope` can never disagree on the core decision again.
+ * Public behavior is unchanged — see tests/profile-filter.test.ts.
  */
 export function passesProfileFilter(
   linkedProfiles: string[] | undefined | null,
   ctx: ProfileFilterContext,
 ): boolean {
-  if (!ctx.selectedIds || ctx.selectedIds.length === 0) return true;
-  const linked = Array.isArray(linkedProfiles) ? linkedProfiles : [];
-  if (linked.length === 0) {
-    // Orphan: only show when the user has explicitly chosen the self
-    // profile. Otherwise we'd leak unrelated legacy data into a filtered
-    // view (e.g. selecting only "Bob" and seeing rows that have no link to
-    // anyone).
-    return selfInSelection(ctx);
-  }
-  return linked.some(id => ctx.selectedIds.includes(id));
+  return isInScope(
+    Array.isArray(linkedProfiles) ? linkedProfiles : [],
+    { selectedIds: ctx.selectedIds, selfIds: selfIdsFrom(ctx.allProfiles) },
+    "belongs_to_self",
+  );
 }
