@@ -123,6 +123,23 @@ import from there. Adding to this set requires:
 3. Add the category to the matching test in `invariants.test.ts`
    (`HIDDEN_TRACKER_CATEGORIES` literal there).
 
+## Active ledger entries (as of 2026-05-28)
+
+| Bug ID | Surface affected | Server/Client | Test |
+|---|---|---|---|
+| BUG-20260528-finance-tracker | Trackers list | Both | `regressions.test.ts` + `invariants.test.ts` |
+| BUG-20260528-upcoming-window | /stats vs dashboard popup | Server | `regressions.test.ts` |
+| BUG-20260528-asset-resolver-duplication | profile-detail Financial Overview vs dashboard | Client | `regressions.test.ts` |
+| BUG-20260528-monthly-multipliers | /stats monthly totals vs /dashboard-enhanced | Server | `regressions.test.ts` |
+| BUG-20260528-obligation-patch-materialize | Calendar after obligation edit | Server | `regressions.test.ts` |
+| BUG-20260528-fabricated-sparkline | Net Worth tile sparkline | Client | `regressions.test.ts` |
+
+Client-only fixes (mutation onMutate/rollback, useMemo wrappers, query key
+shape consolidation) are validated indirectly through the CRUD and CACHE
+suites because their failure mode is a stale render, not a wrong API
+response. See ARCHITECTURE.md section 5.3 and section 3 for the canonical
+rules those changes were guided by.
+
 ## Known limitations of the v1 suite
 
 These are deliberate trade-offs, recorded so the next agent doesn't redo
