@@ -6,6 +6,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -1690,10 +1691,11 @@ If unsure, return "profile_fact".`,
     if (cached) return res.json(cached);
     // dedupe: concurrent identical requests share one DB query
     const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds));
-    // Bug fix: shortened from 5 min to 15 s — dashboard data must feel realtime after mutations.
-    // 15 s is enough to absorb burst deduplication at page load without keeping stale numbers
-    // around for minutes after the user adds an expense or triggers an AI extraction.
-    setCache(cacheKey, stats, 15 * 1000); // 15-second cache
+    // 60-second cache. cacheBustMiddleware drops it synchronously on any mutation
+    // (including AI-driven /api/chat and /api/upload paths), so this cannot serve
+    // stale data after a write. Longer TTL = many more page navigations served
+    // from cache without re-aggregating ~10 supabase queries each time.
+    setCache(cacheKey, stats, 60 * 1000);
     res.json(stats);
   }));
 
@@ -1707,8 +1709,8 @@ If unsure, return "profile_fact".`,
     if (cached) return res.json(cached);
     // dedupe: concurrent identical requests share one DB query
     const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
-    // Bug fix: shortened from 5 min to 15 s — same rationale as /api/stats above.
-    setCache(cacheKey, data, 15 * 1000); // 15-second cache
+    // 60-second cache (same rationale as /api/stats above).
+    setCache(cacheKey, data, 60 * 1000);
     res.json(data);
   }));
 
@@ -1754,7 +1756,7 @@ If unsure, return "profile_fact".`,
       const [stats, profiles, incomes, expensesForBudget, budgets] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           const s = await storage.getStats(undefined, filterIds);
-          setCache(statsCacheKey, s, 15 * 1000);
+          setCache(statsCacheKey, s, 60 * 1000);
           return s;
         }),
         storage.getProfiles(),
@@ -1765,7 +1767,7 @@ If unsure, return "profile_fact".`,
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
         const e = await storage.getDashboardEnhanced(undefined, filterIds);
-        setCache(enhancedCacheKey, e, 15 * 1000);
+        setCache(enhancedCacheKey, e, 60 * 1000);
         return e;
       });
 
@@ -1805,7 +1807,7 @@ If unsure, return "profile_fact".`,
       };
     });
 
-    setCache(cacheKey, data, 15 * 1000); // match /api/stats TTL
+    setCache(cacheKey, data, 60 * 1000); // match /api/stats TTL
     res.json(data);
   }));
 
@@ -1831,7 +1833,7 @@ If unsure, return "profile_fact".`,
         storage.getGoals(),
         storage.getEvents(),
       ]));
-      if (!hit) setCache(ck, dataset, 30 * 1000);
+      if (!hit) setCache(ck, dataset, 5 * 60 * 1000); // 5 min — insights aggregates 10 tables; cache-bust middleware drops it on any mutation
       const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] =
         dataset as [Awaited<ReturnType<typeof storage.getProfiles>>, Awaited<ReturnType<typeof storage.getTrackers>>, Awaited<ReturnType<typeof storage.getTasks>>, Awaited<ReturnType<typeof storage.getExpenses>>, Awaited<ReturnType<typeof storage.getHabits>>, Awaited<ReturnType<typeof storage.getObligations>>, Awaited<ReturnType<typeof storage.getJournalEntries>>, Awaited<ReturnType<typeof storage.getDocuments>>, Awaited<ReturnType<typeof storage.getGoals>>, Awaited<ReturnType<typeof storage.getEvents>>];
       // Filter by ANY of the selected profiles. If any selected ID is a 'self' profile,
@@ -1925,9 +1927,14 @@ If unsure, return "profile_fact".`,
       return res.json(paginateProfiles(hit, req, res));
     }
     const items = await dedupe(ck, () => storage.getProfiles());
-    // Short cache (5s) so newly-created profiles appear immediately after chat creates them.
-    // Profile list is small (<1k rows) so DB cost is negligible. Bug fix: was 5 min, racing with chat.
-    setCache(ck, items, 5 * 1000);
+    // 30s cache. Was 5s (over-defensive after a chat-race bug). cacheBustMiddleware
+    // (line ~339) calls clearAllCache() synchronously on every POST/PATCH/DELETE
+    // AND on /api/chat + /api/upload routes (where the AI creates profiles), so
+    // staleness is bounded by the next write — not the TTL. Bumping to 30s makes
+    // every page that calls /api/profiles on mount (every single page) feel
+    // instant on warm loads. Cold-load is still bounded by Vercel/Supabase, not
+    // by this TTL.
+    setCache(ck, items, 30 * 1000);
     res.set("X-Total-Count", String(items.length));
     res.json(paginateProfiles(items, req, res));
   }));
@@ -2020,6 +2027,86 @@ If unsure, return "profile_fact".`,
 
     const tree = buildTree(root.id, new Set(), 0);
     res.json(tree);
+  }));
+
+  // ---- Profile Bootstrap (PERF 2026-05-28) ----
+  // Single round-trip for /profiles/:id and /profile/:id pages. Each of those
+  // pages used to fire ~10+ parallel GETs on mount (profile detail, tree,
+  // /api/profiles, /api/asset-party-links, /api/liability-profile-links,
+  // /api/dashboard-enhanced, /api/stats, /api/events, /api/expenses, ...).
+  // Even with parallelism, each one pays the Vercel cold-start + auth +
+  // Supabase client init tax, so cold loads stayed in the 5-15s range.
+  //
+  // This handler folds the must-have payload (detail + tree + allProfiles +
+  // assetPartyLinks + liabilityProfileLinks) into a single response. The
+  // ambient queries the page also wants (stats, dashboard-enhanced) reuse
+  // their per-endpoint caches so they're effectively free when warm.
+  app.get("/api/profile-bootstrap/:id", asyncHandler(async (req, res) => {
+    const profileId = req.params.id;
+    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const cacheKey = `profile-bootstrap:${userId}:${profileId}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
+
+    const data = await dedupe(cacheKey, async () => {
+      // PROFILE DETAIL has its own internal Promise.all batches (junction-table
+      // lookups + entity fetch) — see supabase-storage.ts:getProfileDetail.
+      // We run it in parallel with the lightweight pieces.
+      const [detail, allProfiles, assetPartyLinks, liabilityProfileLinks] = await Promise.all([
+        storage.getProfileDetail(profileId),
+        storage.getProfiles(),
+        storage.getAssetPartyLinks ? storage.getAssetPartyLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
+        storage.getLiabilityProfileLinks ? storage.getLiabilityProfileLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
+      ]);
+      if (!detail) return null;
+      // S1: ownership guard — storage filters by user_id but be defensive.
+      if ((detail as any).userId && (detail as any).userId !== userId) return null;
+
+      // Build the tree in-process from the already-fetched allProfiles list
+      // (no extra DB round-trip, no duplicate getProfiles call).
+      const childIndex = new Map<string, typeof allProfiles>();
+      for (const p of allProfiles) {
+        if (p.deletedAt) continue;
+        const k = p.parentProfileId || "__root__";
+        const arr = childIndex.get(k);
+        if (arr) arr.push(p); else childIndex.set(k, [p]);
+      }
+      const MAX_DEPTH = 50;
+      function buildTree(pid: string, visited: Set<string>, depth: number): any {
+        const p = allProfiles.find(x => x.id === pid);
+        if (!p) return null;
+        const node: any = {
+          id: p.id, name: p.name, type: p.type, fields: p.fields,
+          parentProfileId: p.parentProfileId, children: [],
+        };
+        if (depth >= MAX_DEPTH) return node;
+        const directChildren = childIndex.get(pid) || [];
+        const nextVisited = new Set(visited);
+        nextVisited.add(pid);
+        for (const c of directChildren) {
+          if (nextVisited.has(c.id)) continue;
+          const child = buildTree(c.id, nextVisited, depth + 1);
+          if (child) node.children.push(child);
+        }
+        return node;
+      }
+      const tree = buildTree(profileId, new Set(), 0);
+
+      return {
+        detail,
+        tree,
+        profiles: allProfiles,
+        assetPartyLinks,
+        liabilityProfileLinks,
+      };
+    });
+
+    if (!data) return res.status(404).json({ error: "Not found" });
+    // 30s cache. cacheBustMiddleware drops it on any mutation. Detail data
+    // changes via mutations (chat-confirm-extraction, profile PATCH, link
+    // changes) which all bust the cache, so 30s is safe.
+    setCache(cacheKey, data, 30 * 1000);
+    res.json(data);
   }));
 
   app.post("/api/profiles", asyncHandler(async (req, res) => {
@@ -2849,6 +2936,10 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getTrackers());
     if (!hit) setCache(ck, items, 5 * 60 * 1000);
+    // BUG-20260528-finance-tracker: hide legacy rows whose category is no
+    // longer surfaced. We filter at read time so we don't have to migrate
+    // existing data (which the user wants kept intact).
+    items = items.filter((t: any) => !HIDDEN_TRACKER_CATEGORIES.has(String(t.category || "").toLowerCase().trim()));
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
       const ids = profileIdsParam.split(",").filter(Boolean);
@@ -2868,6 +2959,15 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   app.post("/api/trackers", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Tracker name is required" });
+    }
+    // BUG-20260528-finance-tracker: money lives in expenses/budgets/obligations,
+    // never in /trackers. Reject any tracker whose category resolves to a
+    // hidden group. The matching client-side filter lives in trackers.tsx.
+    if (req.body.category && HIDDEN_TRACKER_CATEGORIES.has(String(req.body.category).toLowerCase().trim())) {
+      return res.status(400).json({
+        error: `Trackers cannot use category "${req.body.category}". Use Expenses, Budgets, or Obligations for money tracking.`,
+        code: "hidden_tracker_category",
+      });
     }
     req.body.name = sanitize(req.body.name);
     // BUG-T01/CRUD01: Allow client to bypass dup check ("Create Anyway" flow)

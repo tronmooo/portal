@@ -1,20 +1,47 @@
 #!/usr/bin/env bash
-# Pre-push hook: run TypeScript check so Vercel deploys can't silently break.
-# Skipped when SKIP_TSC=1 is set (use sparingly).
+# Pre-push gate. Runs in order:
+#   1. tsc --noEmit         (matches Vercel prebuild)
+#   2. npm run test:contracts (the regression-proof smoke suite)
+#
+# Per agreement with the user (2026-05-28): both checks are STRICT.
+# Bypass an individual stage with SKIP_TSC=1 or SKIP_TESTS=1, or both with
+# SKIP_ALL=1. Bypass should be rare and noted in the commit message.
 set -e
 
-if [ "${SKIP_TSC:-0}" = "1" ]; then
-  echo "[pre-push] SKIP_TSC=1 set — skipping tsc --noEmit"
+if [ "${SKIP_ALL:-0}" = "1" ]; then
+  echo "[pre-push] SKIP_ALL=1 — skipping ALL pre-push checks"
   exit 0
 fi
 
-echo "[pre-push] Running tsc --noEmit (matches Vercel prebuild)..."
-if ! npx --no-install tsc --noEmit; then
-  echo ""
-  echo "[pre-push] ❌ TypeScript errors detected — push BLOCKED."
-  echo "[pre-push] Fix the errors above, or bypass with: SKIP_TSC=1 git push"
-  exit 1
+if [ "${SKIP_TSC:-0}" = "1" ]; then
+  echo "[pre-push] SKIP_TSC=1 set — skipping tsc --noEmit"
+else
+  echo "[pre-push] (1/2) Running tsc --noEmit (matches Vercel prebuild)..."
+  if ! npx --no-install tsc --noEmit; then
+    echo ""
+    echo "[pre-push] FAILED: TypeScript errors detected — push BLOCKED."
+    echo "[pre-push] Fix the errors above, or bypass with: SKIP_TSC=1 git push"
+    exit 1
+  fi
+  echo "[pre-push] (1/2) tsc clean."
 fi
 
-echo "[pre-push] ✅ tsc clean — push allowed."
+if [ "${SKIP_TESTS:-0}" = "1" ]; then
+  echo "[pre-push] SKIP_TESTS=1 set — skipping contract suite (USE SPARINGLY)"
+else
+  echo "[pre-push] (2/2) Running regression contract suite..."
+  echo "[pre-push]       (smoke account: portol-smoke@aol.com — ~60-120s)"
+  if ! npm run --silent test:contracts; then
+    echo ""
+    echo "[pre-push] FAILED: contract suite failed — push BLOCKED."
+    echo "[pre-push] If a failing test is expected because you intentionally"
+    echo "[pre-push] changed a documented contract, update the test alongside"
+    echo "[pre-push] the code in the same commit. Do NOT bypass without cause."
+    echo "[pre-push] Emergency bypass: SKIP_TESTS=1 git push"
+    exit 1
+  fi
+  echo "[pre-push] (2/2) Contracts passing."
+fi
+
+echo "[pre-push] All checks passed — push allowed."
 exit 0

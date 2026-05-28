@@ -13,6 +13,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "vitest run tests/api-e2e.test.ts --config vitest.config.ts",
+    "test:contracts": "vitest run --config vitest.smoke.config.ts",
+    "smoke:seed": "tsx tests/smoke/fixture/seed.ts",
+    "smoke:reset": "tsx tests/smoke/fixture/seed.ts --reset",
+    "smoke:verify": "tsx tests/smoke/fixture/seed.ts --verify",
+    "smoke:post-deploy": "tsx scripts/post-deploy-smoke.ts",
     "lint": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "prepare": "git config core.hooksPath .githooks || true"

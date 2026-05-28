@@ -10686,6 +10686,29 @@ export default function ProfileDetailPage() {
   // while loading or if the fetch fails.
   useEffect(() => { document.title = "Profile — Portol"; }, []);
 
+  // PERF (2026-05-28): single-shot bootstrap. /api/profile-bootstrap/:id returns
+  // detail + tree + allProfiles + assetPartyLinks + liabilityProfileLinks in
+  // ONE round-trip. We pre-fill the react-query cache so the individual
+  // useQuery hooks below resolve from cache without firing extra network
+  // calls. Without this, the page fired ~10 parallel network calls and the
+  // skeleton stayed up for several seconds on cold loads.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    apiRequest("GET", `/api/profile-bootstrap/${id}`)
+      .then(r => r.json())
+      .then((b: any) => {
+        if (cancelled || !b || typeof b !== "object") return;
+        if (b.detail) queryClient.setQueryData(["/api/profiles", id, "detail"], flattenProfile(b.detail));
+        if (b.tree) queryClient.setQueryData(["/api/profiles", id, "tree"], b.tree);
+        if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
+        if (b.assetPartyLinks) queryClient.setQueryData(["/api/asset-party-links"], b.assetPartyLinks);
+        if (b.liabilityProfileLinks) queryClient.setQueryData(["/api/liability-profile-links"], b.liabilityProfileLinks);
+      })
+      .catch(() => { /* non-fatal — individual queries will fetch on their own */ });
+    return () => { cancelled = true; };
+  }, [id]);
+
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
