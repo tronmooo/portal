@@ -3554,12 +3554,46 @@ function safeLC(val: any): string {
 // can surface a disambiguation error). Single longest-name preference applies
 // for the bidirectional case.
 function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: any): T | undefined {
+  const result = resolveProfileByName(profiles, rawName);
+  if (result.kind === "found") return result.profile;
+  if (result.kind === "ambiguous") {
+    // Legacy callers that don't know about ambiguity get the first match.
+    // New callers should use resolveProfileByName directly to surface
+    // ambiguity to the user.
+    logger.warn("ai", `matchProfileByName ambiguous for "${rawName}" — ${result.matches.length} matches; returning first.`);
+    return result.matches[0];
+  }
+  return undefined;
+}
+
+/**
+ * Three-way profile name resolution used when the AI needs to attach a
+ * child to a parent (e.g. "add a mouse for the computer"). Returns:
+ *   - { kind: "found",     profile }      — single unambiguous match
+ *   - { kind: "ambiguous", matches: [...] } — N ≥ 2 plausible matches; caller
+ *                                            should ask the user which
+ *   - { kind: "none" }                    — no plausible match at all
+ *
+ * Resolution rules (in order):
+ *   1. Exact case-insensitive name match (always unambiguous if found)
+ *   2. Word-boundary match in either direction; if multiple, ambiguous
+ *      — unless ONE candidate's name length is materially longer than
+ *      the rest (>=2 chars more specific), in which case we treat the
+ *      most-specific one as the resolution.
+ */
+export type ProfileResolution<T extends { name: string }> =
+  | { kind: "found"; profile: T }
+  | { kind: "ambiguous"; matches: T[] }
+  | { kind: "none" };
+
+export function resolveProfileByName<T extends { name: string }>(
+  profiles: T[],
+  rawName: any,
+): ProfileResolution<T> {
   const name = safeLC(rawName).trim();
-  if (!name) return undefined;
-  // 1. exact name match wins immediately
+  if (!name) return { kind: "none" };
   const exact = profiles.find(p => p.name.toLowerCase() === name);
-  if (exact) return exact;
-  // 2. word-boundary match: name appears as a whole word in profile.name OR vice-versa
+  if (exact) return { kind: "found", profile: exact };
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const nameRe = new RegExp(`(^|\\b)${escapedName}(\\b|$)`);
   const matches: T[] = [];
@@ -3569,15 +3603,16 @@ function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: 
     const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(name)) matches.push(p);
   }
-  if (matches.length === 0) return undefined;
-  if (matches.length === 1) return matches[0];
-  // Multiple ambiguous matches — prefer longest profile name (most specific).
-  // Caller can detect ambiguity if needed; logging here for debugging.
+  if (matches.length === 0) return { kind: "none" };
+  if (matches.length === 1) return { kind: "found", profile: matches[0] };
+  // Multiple matches — only collapse to "found" when ONE is materially more
+  // specific (its name is ≥ 2 chars longer than the next best). Otherwise
+  // expose the ambiguity so the AI can ask.
   matches.sort((a, b) => b.name.length - a.name.length);
-  if (matches[0].name.length === matches[1].name.length) {
-    logger.warn("ai", `matchProfileByName ambiguous for "${rawName}" — ${matches.length} equal-length matches; returning first.`);
+  if (matches[0].name.length - matches[1].name.length >= 2) {
+    return { kind: "found", profile: matches[0] };
   }
-  return matches[0];
+  return { kind: "ambiguous", matches };
 }
 
 
@@ -3753,11 +3788,42 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const existingProfiles = await storage.getProfiles();
       const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
       const isChildType = childTypes.includes(input.type || "");
-      // Resolve intended parent for child types
+      // Resolve intended parent for child types.
+      //   - found:     attach to that profile
+      //   - ambiguous: return a structured clarification request the AI can
+      //                turn into "Which one? A or B?" — satisfies user-spec
+      //                "two computers existing should make it ask"
+      //   - none:      return a structured "parent missing" so the AI can ask
+      //                whether to create the parent first — satisfies user-spec
+      //                "referencing a parent that doesn't exist yet"
       let intendedParentId: string | undefined;
       if (isChildType && input.forProfile) {
-        const parentMatch = matchProfileByName(existingProfiles, input.forProfile);
-        if (parentMatch) intendedParentId = parentMatch.id;
+        const resolution = resolveProfileByName(existingProfiles, input.forProfile);
+        if (resolution.kind === "ambiguous") {
+          return {
+            error: "AMBIGUOUS_PARENT",
+            message: `There are ${resolution.matches.length} profiles that match "${input.forProfile}". Which one did you mean?`,
+            forProfile: input.forProfile,
+            candidates: resolution.matches.map(p => ({
+              id: p.id,
+              name: p.name,
+              type: (p as any).type,
+              parentName: ((p as any).parentProfileId
+                ? existingProfiles.find(pp => pp.id === (p as any).parentProfileId)?.name
+                : null) ?? null,
+            })),
+          };
+        }
+        if (resolution.kind === "none") {
+          return {
+            error: "PARENT_NOT_FOUND",
+            message: `I couldn't find a profile called "${input.forProfile}" to attach "${input.name}" to. Want me to create "${input.forProfile}" first, or attach it somewhere else?`,
+            forProfile: input.forProfile,
+            childName: input.name,
+            childType: input.type,
+          };
+        }
+        intendedParentId = resolution.profile.id;
       }
       const existingProfile = existingProfiles.find(p => {
         if (p.name.toLowerCase() !== (input.name || "").toLowerCase().trim()) return false;
