@@ -1712,6 +1712,81 @@ If unsure, return "profile_fact".`,
     res.json(data);
   }));
 
+  // ---- Dashboard Bootstrap (PERF 2026-05-28) ----
+  // Single round-trip that returns everything the dashboard skeleton blocks
+  // on: stats, enhanced, profiles, incomes, budget summary. Each individual
+  // endpoint still works (and is still used after mutations), but the cold
+  // load fires *this* first and pre-fills the react-query cache so the UI
+  // skips ~9 of the 10 parallel network calls it used to make.
+  //
+  // Why one endpoint matters: on Vercel each /api/* hit is its own serverless
+  // invocation. Even though they run in parallel, each one pays the cold-start
+  // + auth-middleware + Supabase-client-init tax. Folding them into a single
+  // handler means one cold-start total and the underlying Promise.all of
+  // storage calls share data instead of re-fetching profiles/expenses/etc.
+  // multiple times across handlers.
+  app.get("/api/dashboard-bootstrap", asyncHandler(async (req, res) => {
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const profileId = req.query.profileId as string | undefined;
+    const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
+    const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
+    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const filterKey = filterIds?.join(",") || "all";
+    const cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
+
+    const data = await dedupe(cacheKey, async () => {
+      // Issue every dependent fetch in ONE parallel wave inside ONE handler.
+      const [stats, enhanced, profiles, incomes, expensesForBudget, budgets] = await Promise.all([
+        storage.getStats(undefined, filterIds),
+        storage.getDashboardEnhanced(undefined, filterIds),
+        storage.getProfiles(),
+        storage.getIncomes ? storage.getIncomes() : Promise.resolve([] as any[]),
+        storage.getExpenses(),
+        storage.getBudgets ? storage.getBudgets(month) : Promise.resolve([] as any[]),
+      ]);
+
+      // Compute budget summary in JS — same shape as /api/budgets/summary.
+      const filteredExpenses = (() => {
+        if (!filterIds || filterIds.length === 0) return expensesForBudget;
+        const selfMatch = filterIds.some(id => profiles.find((p: any) => p.id === id)?.type === "self");
+        return expensesForBudget.filter((e: any) => {
+          const arr = Array.isArray(e.linkedProfiles) ? e.linkedProfiles : [];
+          if (arr.length === 0) return selfMatch;
+          return arr.some((id: string) => filterIds.includes(id));
+        });
+      })();
+      const monthExpenses = filteredExpenses.filter((e: any) => (e.date || "").slice(0, 7) === month);
+      const totalSpent = monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0);
+      const totalBudget = (budgets || []).reduce((s: number, b: any) => s + (b.amount || 0), 0);
+      const remaining = totalBudget - totalSpent;
+
+      const filteredIncomes = (() => {
+        if (!filterIds || filterIds.length === 0) return incomes;
+        const selfMatch = filterIds.some(id => profiles.find((p: any) => p.id === id)?.type === "self");
+        return incomes.filter((i: any) => {
+          const arr = Array.isArray(i.linkedProfiles) ? i.linkedProfiles : [];
+          if (arr.length === 0) return selfMatch;
+          return arr.some((id: string) => filterIds.includes(id));
+        });
+      })();
+
+      return {
+        stats,
+        enhanced,
+        profiles,
+        incomes: filteredIncomes,
+        budgetSummary: { totalBudget, totalSpent, remaining },
+        month,
+        filterIds: filterIds || [],
+      };
+    });
+
+    setCache(cacheKey, data, 15 * 1000); // match /api/stats TTL
+    res.json(data);
+  }));
+
   // ---- Insights ----
   app.get("/api/insights", asyncHandler(async (req, res) => {
     try {

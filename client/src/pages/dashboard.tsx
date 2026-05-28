@@ -3899,6 +3899,40 @@ export default function DashboardPage() {
     setDashboardProfileFilter(resolvedFilterId, resolvedFilterId ? (allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || "") : "Everyone");
   }, [resolvedFilterId, allProfiles]);
 
+  // PERF (2026-05-28): single-shot bootstrap. /api/dashboard-bootstrap returns
+  // stats + enhanced + profiles + incomes + budget-summary in ONE round-trip.
+  // We pre-fill the react-query cache so the individual useQuery hooks below
+  // (which mutations still depend on) see a fresh cache hit and skip the
+  // network. Without this, the dashboard fired 10 parallel network calls and
+  // the skeleton stayed up for ~20-30s on cold loads with realistic data
+  // volume.
+  useEffect(() => {
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const qs = (filterMode === "selected" && filterIds.length > 0)
+      ? `?profileIds=${filterIds.join(",")}&month=${currentMonth}`
+      : `?month=${currentMonth}`;
+    let cancelled = false;
+    apiRequest("GET", `/api/dashboard-bootstrap${qs}`)
+      .then(r => r.json())
+      .then((b: any) => {
+        if (cancelled || !b || typeof b !== "object") return;
+        // Pre-fill the cache for each individual query so the existing
+        // useQuery hooks resolve from cache without an extra network round-trip.
+        if (b.stats) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], b.stats);
+        if (b.enhanced) queryClient.setQueryData(["/api/dashboard-enhanced", filterMode, ...filterIds], b.enhanced);
+        if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
+        if (b.incomes) queryClient.setQueryData(["/api/incomes", filterMode, ...filterIds, "hero"], b.incomes);
+        if (b.budgetSummary) queryClient.setQueryData(
+          ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
+          b.budgetSummary,
+        );
+      })
+      .catch(() => { /* non-fatal — individual queries will fetch on their own */ });
+    return () => { cancelled = true; };
+    // Re-run when the profile filter changes — each filter combination has
+    // its own cache buckets.
+  }, [filterMode, filterIds.join(",")]);
+
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
