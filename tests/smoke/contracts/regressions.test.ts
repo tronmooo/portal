@@ -216,5 +216,89 @@ describe("contract: regressions", () => {
     expect(enh?.netWorthTrend, "server should not project a netWorthTrend").toBeUndefined();
   });
 
+  // ─────────────────────────────────────────────────────────────────────
+  // BUG-20260528-tracker-profile-drift
+  //
+  // Report: With a profile filter applied (e.g. "only Bob"), trackers
+  //   linked exclusively to a DIFFERENT profile (Self) leaked into the
+  //   Bob-filtered Linked-tab list, rendering with the wrong owner
+  //   prefix ("Test: Lifting" instead of "Bob: Lifting").
+  //
+  // Root cause: getTrackers in supabase-storage merged two sources for
+  //   linkedProfiles — the canonical `trackers.linked_profiles` JSONB
+  //   column AND the `profile_trackers` junction table. updateTracker
+  //   wrote ONLY the JSONB column, so any tracker whose owners had
+  //   ever been edited drifted: junction kept the old profile, JSONB
+  //   had the new one, and getTrackers unioned both into a bad superset.
+  //
+  // Fix: updateTracker now diffs the new linkedProfiles set against the
+  //   current junction rows and reconciles (upsert added, delete removed).
+  //   A one-shot heal reconciled all pre-existing drift in production.
+  //
+  // Contract: after PATCHing a tracker's linkedProfiles, the server
+  //   response's linkedProfiles exactly matches the requested set —
+  //   no leaked profiles from old junction rows.
+  // ─────────────────────────────────────────────────────────────────────
+  it("BUG-20260528-tracker-profile-drift: updateTracker syncs junction table to JSONB", async () => {
+    if (!fixture.peopleIds[0]) {
+      // Seed must include at least one secondary person profile.
+      // If not, skip rather than throw — surfaced in seed.ts review.
+      return;
+    }
+    const otherProfileId = fixture.peopleIds[0];
+    const trackerId = fixture.trackerId;
+
+    // Capture original linkedProfiles so we can restore after the test.
+    const before: any = expectOk(await api("GET", `/trackers/${trackerId}`));
+    const originalLinked: string[] = before.linkedProfiles || [];
+
+    try {
+      // 1. Reassign tracker so only the OTHER profile owns it.
+      const patched: any = expectOk(
+        await api("PATCH", `/trackers/${trackerId}`, { linkedProfiles: [otherProfileId] }),
+      );
+      expect(
+        new Set(patched.linkedProfiles || []),
+        "PATCH response should reflect requested linkedProfiles exactly",
+      ).toEqual(new Set([otherProfileId]));
+
+      // 2. GET the full tracker list — the canonical merged shape.
+      //    The tracker must list exactly [otherProfileId] with no leak
+      //    from the previous junction entries.
+      const list: any[] = expectOk(await api("GET", "/trackers")) as any[];
+      const found = list.find((t: any) => t.id === trackerId);
+      expect(found, "tracker should still be returned").toBeTruthy();
+      expect(
+        new Set(found.linkedProfiles || []),
+        "linkedProfiles in /trackers list must equal requested set (no junction leak)",
+      ).toEqual(new Set([otherProfileId]));
+
+      // 3. Filtered GET by the OLD owner (selfId) must NOT return the
+      //    tracker any more — proving the junction was actually cleaned.
+      const oldOwnerId = originalLinked[0] || fixture.selfId;
+      if (oldOwnerId && oldOwnerId !== otherProfileId) {
+        const oldFiltered: any[] = expectOk(
+          await api("GET", `/trackers?profileIds=${encodeURIComponent(oldOwnerId)}`),
+        ) as any[];
+        const stillLeaks = oldFiltered.some((t: any) => t.id === trackerId);
+        expect(stillLeaks, "tracker must not appear under its OLD owner's filter").toBe(false);
+      }
+
+      // 4. Filtered GET by the NEW owner must include it (sanity check).
+      const newFiltered: any[] = expectOk(
+        await api("GET", `/trackers?profileIds=${encodeURIComponent(otherProfileId)}`),
+      ) as any[];
+      expect(
+        newFiltered.some((t: any) => t.id === trackerId),
+        "tracker must appear under its NEW owner's filter",
+      ).toBe(true);
+    } finally {
+      // Restore original linkedProfiles so the suite is idempotent.
+      if (originalLinked.length > 0) {
+        await api("PATCH", `/trackers/${trackerId}`, { linkedProfiles: originalLinked });
+      }
+    }
+  });
+
   // Add future regressions BELOW this line. Do not delete previous entries.
 });

@@ -1596,6 +1596,30 @@ export class SupabaseStorage implements IStorage {
       icon: merged.icon || null, fields: merged.fields, linked_profiles: merged.linkedProfiles,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // BUG-20260528-tracker-profile-drift: previously this only wrote linked_profiles
+    // JSONB and never touched profile_trackers junction table. getTrackers unions
+    // both sources, so stale junction rows leaked across profile filters
+    // (e.g. Bob filter showed Self's "Lifting" tracker). Sync junction here.
+    if (Array.isArray(data.linkedProfiles)) {
+      const nextSet = new Set(merged.linkedProfiles || []);
+      const { data: junctionRows } = await this.supabase
+        .from("profile_trackers").select("profile_id")
+        .eq("tracker_id", id).eq("user_id", this.userId);
+      const currentSet = new Set((junctionRows || []).map((r: any) => r.profile_id));
+      const toAdd: string[] = [...nextSet].filter((p) => !currentSet.has(p));
+      const toRemove: string[] = [...currentSet].filter((p) => !nextSet.has(p));
+      for (const pid of toAdd) {
+        await this.supabase.from("profile_trackers").upsert(
+          { profile_id: pid, tracker_id: id, user_id: this.userId },
+          { onConflict: "profile_id,tracker_id" }
+        );
+      }
+      if (toRemove.length > 0) {
+        await this.supabase.from("profile_trackers").delete()
+          .eq("tracker_id", id).eq("user_id", this.userId)
+          .in("profile_id", toRemove);
+      }
+    }
     return this.getTracker(id);
   }
 
