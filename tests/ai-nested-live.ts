@@ -138,7 +138,9 @@ async function getTreeTotal(rootName: string): Promise<{ root: any; descendants:
 
 async function cleanup() {
   console.log("\n=== Cleanup ===");
-  for (const name of [MOUSE_NAME, COMPUTER_NAME, COMPUTER2_NAME, HOME_NAME]) {
+  const allProfs = await apiGet("/profiles").catch(() => []);
+  const taggedExtras = allProfs.filter((p: any) => typeof p.name === "string" && p.name.startsWith(TAG)).map((p: any) => p.name);
+  for (const name of [...new Set([MOUSE_NAME, COMPUTER_NAME, COMPUTER2_NAME, HOME_NAME, ...taggedExtras])]) {
     const p = await findByName(name).catch(() => null);
     if (p) {
       try { await apiDelete(`/profiles/${p.id}`); console.log(`Deleted ${name}`); }
@@ -225,22 +227,41 @@ async function main() {
         `total=$${afterMoveTree.total} descendants=${afterMoveTree.descendants.length}`);
     }
 
-    // ─── 7. Ambiguous parent: create a second computer, then ask AI ───
-    await chat(`Add a computer in "${HOME_NAME}" called "${COMPUTER2_NAME}" for $3,000.`);
+    // ─── 7. Ambiguous parent: create a TRULY ambiguous second profile ──
+    // To make this genuinely ambiguous we create a second profile whose
+    // name shares the same substring with no exact match for the
+    // user-utterance. Two profiles called e.g. "nestlive_X_dell_computer"
+    // and "nestlive_X_apple_computer". The user then says "the computer".
+    const COMPUTER_DELL = `${TAG}_dell_computer`;
+    const COMPUTER_APPLE = `${TAG}_apple_computer`;
+    await chat(`Add an asset called "${COMPUTER_DELL}" in "${HOME_NAME}" for $1,200.`);
     await new Promise(r => setTimeout(r, 1500));
-    const computer2 = await findByName(COMPUTER2_NAME);
-    record("Step 7a: Second computer created", !!computer2,
-      computer2 ? `id=${computer2.id} value=$${valueOf(computer2)}` : "Not found");
-    // Now ask the AI to add a keyboard "for the computer" — ambiguous because both
-    // computers have the same word "computer" in their name. We expect the AI
-    // to either ask which one (clarifying question) OR to refuse with our
-    // structured AMBIGUOUS_PARENT error.
+    await chat(`Add an asset called "${COMPUTER_APPLE}" in "${HOME_NAME}" for $2,500.`);
+    await new Promise(r => setTimeout(r, 1500));
+    const cDell = await findByName(COMPUTER_DELL);
+    const cApple = await findByName(COMPUTER_APPLE);
+    record("Step 7a: Two same-substring profiles exist", !!cDell && !!cApple,
+      `dell=${cDell?.id} apple=${cApple?.id}`);
+    // Now utter the ambiguous phrase: there is NO profile literally
+    // named "the computer" or "computer" — only the two qualified ones.
     const ambResp = await chat(`Add a keyboard for the computer, $80.`);
     const respText = JSON.stringify(ambResp).toLowerCase();
-    const asked = respText.includes("which") || respText.includes("ambig") || respText.includes("two") ||
-                  respText.includes("clarif") || respText.includes("?");
-    record("Step 7b: AI asks for clarification when 'the computer' is ambiguous", asked,
-      `response includes question/disambig keywords? ${asked}`);
+    // Pass if the AI asked AND did not silently create the keyboard.
+    // 'actions' should be empty or only contain a question-style reply,
+    // not a create_profile that picked one of the computers.
+    const created = (ambResp.actions || []).some((a: any) => a.type === "create_profile" && /keyboard/i.test(a.data?.name || ""));
+    const asked = (respText.includes("which") || respText.includes("ambig") || respText.includes("clarif") || respText.includes("two profiles") || respText.includes("two computers") || respText.includes("?")) && !created;
+    record("Step 7b: AI asks for clarification (no silent create) when 'the computer' is ambiguous", asked,
+      `asked-question=${respText.includes("?")} silently-created=${created} response-snippet=${respText.slice(0, 200)}`);
+    // Cleanup the keyboard if AI did create one despite ambiguity
+    if (created) {
+      const allProfs = await apiGet("/profiles");
+      const kb = allProfs.find((p: any) => /keyboard/i.test(p.name) && (p.parentProfileId === cDell?.id || p.parentProfileId === cApple?.id));
+      if (kb) await apiDelete(`/profiles/${kb.id}`).catch(() => {});
+    }
+    // Cleanup the two extra computers
+    if (cDell) await apiDelete(`/profiles/${cDell.id}`).catch(() => {});
+    if (cApple) await apiDelete(`/profiles/${cApple.id}`).catch(() => {});
 
     // ─── 8. Delete a mid-tree asset ───────────────────────────
     if (computer) {
