@@ -3162,6 +3162,27 @@ PROFILE RESOLUTION:
 - "How much have I spent on Luna?" → get_summary type: "expenses" forProfile: "Luna"
 - "Show Mom's calendar" → get_summary type: "events" forProfile: "Mom"
 
+ASSET-vs-EXPENSE DISAMBIGUATION (CRITICAL — read carefully):
+When the user says "Add an X for/in/inside Y" or "X belongs to Y" and X is a TANGIBLE THING they own, use create_profile (type:"asset") with forProfile:"Y". Do NOT call create_expense for these — an expense is money flowing OUT, while a physical item is an asset that becomes a child profile.
+- Physical items = ASSETS, not expenses: mouse, keyboard, monitor, TV, sofa, lamp, fridge, microwave, washing machine, bicycle, jewelry, watch, guitar, camera, drone, tools, art, books, computer, laptop, tablet, headphones, speakers, router, printer, generator.
+- Use create_profile(type:"asset", name:"<item>", forProfile:"<parent>", fields:{ currentValue: <number>, purchasePrice: <number> })
+- ONLY use create_expense when the user describes spending/paying ("I paid", "I spent", "$X to/at", "oil change", "haircut", "groceries", "electric bill", "warranty claim", "subscription fee", "redeemed points").
+- Examples that ARE assets (use create_profile):
+  * "Add a mouse for my computer, $50" → create_profile(type:"asset", name:"Mouse", forProfile:"<computer name>", fields:{currentValue:50, purchasePrice:50})
+  * "I bought a keyboard for the office, $80" → create_profile(type:"asset", name:"Keyboard", forProfile:"Office", fields:{currentValue:80, purchasePrice:80})
+  * "Add a TV in the living room worth $1200" → create_profile(type:"asset", name:"TV", forProfile:"Living Room", fields:{currentValue:1200})
+  * "Add a Samsung fridge to my house" → create_profile(type:"asset", name:"Samsung Fridge", forProfile:"<house name>")
+- Examples that ARE expenses (use create_expense):
+  * "Spent $50 on dinner" → create_expense
+  * "Paid $30 for an Uber" → create_expense
+  * "Oil change for Tesla, $80" → create_expense (a service, not a thing)
+
+AMBIGUOUS PARENT — read-back behaviour:
+When create_profile / update_profile / create_liability / etc. returns an error with code "AMBIGUOUS_PARENT" or "PARENT_NOT_FOUND", you MUST forward that question to the user verbatim — list the candidate names from result.candidates (e.g. "I see two profiles matching 'computer': A) <name1> ($X under <parent1>) and B) <name2> ($Y under <parent2>). Which one did you mean?"). NEVER pick one silently. NEVER retry the call with a guessed parent. Wait for the user's reply.
+
+VALUE FIDELITY — never overwrite user-stated amounts:
+When the user gives a specific dollar value ("$400,000", "$2,000", "$50"), ALWAYS pass that EXACT number into fields.currentValue and fields.purchasePrice. Do not round, summarize, or substitute a market estimate. If the user says "worth $400,000" the persisted currentValue must be 400000 — not 368198, not 412000. Same for any amount with a comma ("$2,000" = 2000, not 1300 or 750).
+
 ACTION EXAMPLES:
 - "Create a task for Max to get groomed" → create_task with forProfile: "Max"
 - "Log $50 expense for Tesla oil change" → create_expense with forProfile: "Tesla"
@@ -3931,6 +3952,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const _autoValType = input.type || "asset";
       if (!isValuableType(_autoValType)) {
         logger.info("ai", `Skipping auto-valuation for non-valuable type "${_autoValType}" (profile: ${input.name})`);
+        return newProfile;
+      }
+      // BUG FIX 2026-05-28: do NOT overwrite a user-stated value with an AI/web
+      // market estimate. If the user said "the house is worth $400,000" or
+      // "the computer cost $2,000", that exact figure must persist. The auto-
+      // valuation enrichment is ONLY for when the user gave no value at all.
+      // Without this guard, the user's $400k house gets clobbered with a
+      // Redfin estimate and the recursive net-worth rollup is wrong by
+      // tens of thousands of dollars.
+      const userProvidedValue = Number(
+        (finalFields as any).currentValue ?? (finalFields as any).purchasePrice ??
+        (finalFields as any).value ?? (finalFields as any).balance ??
+        (finalFields as any).amount ?? (finalFields as any).cost ?? (finalFields as any).price ?? 0,
+      ) > 0;
+      if (userProvidedValue) {
+        logger.info("ai", `Skipping auto-valuation for "${input.name}" — user provided an exact value`);
         return newProfile;
       }
       try {
