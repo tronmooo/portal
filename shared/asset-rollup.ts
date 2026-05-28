@@ -126,12 +126,57 @@ function extractMaintenanceCost(fields: Record<string, any>): number {
 }
 
 /**
+ * Collect all descendants of `rootId` from a flat profile list, depth-first.
+ *
+ * Cycle-safe: a `visited` set guards against profiles that mistakenly point
+ * back at an ancestor. Depth-capped at 50 to stop runaway trees.
+ *
+ * Scope-safe: only profiles supplied in `allProfiles` are walked. Because the
+ * server's storage layer returns user-scoped profiles only, the descendant
+ * set inherits that scope — there is no path for a profile from another user
+ * to leak into the rollup.
+ *
+ * @returns the list of descendants (NOT including the root itself).
+ */
+export function collectDescendants(
+  rootId: string,
+  allProfiles: Pick<Profile, "id" | "parentProfileId" | "fields">[],
+  opts: { maxDepth?: number } = {},
+): Profile[] {
+  const maxDepth = opts.maxDepth ?? 50;
+  // Build a parent→children index once for O(N) traversal.
+  const childIndex = new Map<string, Profile[]>();
+  for (const p of allProfiles as Profile[]) {
+    const parent = p.parentProfileId || (p.fields as any)?._parentProfileId;
+    if (!parent) continue;
+    const arr = childIndex.get(parent);
+    if (arr) arr.push(p); else childIndex.set(parent, [p]);
+  }
+  const out: Profile[] = [];
+  const visited = new Set<string>([rootId]);
+  const stack: Array<{ id: string; depth: number }> = [{ id: rootId, depth: 0 }];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    if (cur.depth >= maxDepth) continue;
+    const kids = childIndex.get(cur.id) || [];
+    for (const k of kids) {
+      if (visited.has(k.id)) continue; // cycle skip
+      visited.add(k.id);
+      out.push(k);
+      stack.push({ id: k.id, depth: cur.depth + 1 });
+    }
+  }
+  return out;
+}
+
+/**
  * Compute rollup metrics for a profile given its full descendant list.
  *
  * @param profile   The root profile to compute the rollup for.
  * @param descendants All descendant profiles (any depth). They must all truly
  *                    be descendants of `profile` — the caller is responsible for
- *                    providing the correct set (e.g. from the /tree endpoint).
+ *                    providing the correct set (e.g. from the /tree endpoint
+ *                    or `collectDescendants`).
  */
 export function computeAssetRollup(
   profile: Profile,

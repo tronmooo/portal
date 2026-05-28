@@ -1847,7 +1847,25 @@ If unsure, return "profile_fact".`,
     // Fetch all profiles once (user-scoped) then build tree in memory
     const allProfiles = await storage.getProfiles();
 
-    // Helper: build a TreeNode for a given profile, depth-first
+    // Index parent→children once so the depth-first walk is O(N) instead of
+    // O(N²). For a corpus of 1000 profiles this drops the rollup-tree-fetch
+    // from ~4M comparisons to ~1000.
+    const childIndex = new Map<string, typeof allProfiles>();
+    for (const p of allProfiles) {
+      if (p.deletedAt) continue;
+      const k = p.parentProfileId || "__root__";
+      const arr = childIndex.get(k);
+      if (arr) arr.push(p); else childIndex.set(k, [p]);
+    }
+
+    // Helper: build a TreeNode for a given profile, depth-first.
+    // CYCLE GUARD: `visited` tracks every ancestor on the current path. If a
+    // child's id is already in `visited` we have a loop (A→B→A), so we drop
+    // that child instead of recursing forever. This protects against bad
+    // data (manual SQL edits, race conditions in parent-reparenting) and
+    // keeps the server from stack-overflowing.
+    // DEPTH GUARD: a hard cap of 50 levels stops pathological trees while
+    // still being far deeper than any realistic ownership chain.
     interface TreeNode {
       id: string;
       name: string;
@@ -1856,23 +1874,33 @@ If unsure, return "profile_fact".`,
       parentProfileId?: string;
       children: TreeNode[];
     }
+    const MAX_DEPTH = 50;
 
-    function buildTree(profileId: string): TreeNode {
+    function buildTree(profileId: string, visited: Set<string>, depth: number): TreeNode {
       const p = allProfiles.find(x => x.id === profileId)!;
-      const directChildren = allProfiles.filter(
-        c => c.parentProfileId === profileId && !c.deletedAt
-      );
-      return {
+      const node: TreeNode = {
         id: p.id,
         name: p.name,
         type: p.type,
         fields: p.fields,
         parentProfileId: p.parentProfileId,
-        children: directChildren.map(c => buildTree(c.id)),
+        children: [],
       };
+      if (depth >= MAX_DEPTH) return node; // guard against runaway trees
+      const directChildren = childIndex.get(profileId) || [];
+      const nextVisited = new Set(visited);
+      nextVisited.add(profileId);
+      for (const c of directChildren) {
+        if (nextVisited.has(c.id)) {
+          // cycle detected — skip this edge instead of recursing
+          continue;
+        }
+        node.children.push(buildTree(c.id, nextVisited, depth + 1));
+      }
+      return node;
     }
 
-    const tree = buildTree(root.id);
+    const tree = buildTree(root.id, new Set(), 0);
     res.json(tree);
   }));
 
@@ -1957,6 +1985,37 @@ If unsure, return "profile_fact".`,
     const { skipDupCheck: _skip, ...profileBody } = req.body;
     const parsed = insertProfileSchema.safeParse(profileBody);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+
+    // ---- parentProfileId validation on CREATE ----
+    // Matches the rigour of PATCH: parent must exist, belong to this user,
+    // and the resulting nesting depth must stay under 32 levels. Cycle
+    // detection isn't strictly needed on create (the new profile has no id
+    // yet so it can't be its own ancestor), but the depth check still is.
+    if (parsed.data.parentProfileId) {
+      const parentProfile = await storage.getProfile(parsed.data.parentProfileId);
+      if (!parentProfile) {
+        return res.status(404).json({ error: "Parent profile not found" });
+      }
+      // getProfile is user-scoped — if it returned, the parent belongs to us.
+      // Defence-in-depth: depth walk.
+      let depth = 1;
+      let walkId: string | null = parsed.data.parentProfileId;
+      const seen = new Set<string>();
+      while (walkId && depth < 64) {
+        if (seen.has(walkId)) break;
+        seen.add(walkId);
+        const wp = await storage.getProfile(walkId);
+        if (!wp) break;
+        const wpid: string | null = wp.parentProfileId || (wp.fields as any)?._parentProfileId || null;
+        if (!wpid) break;
+        depth++;
+        walkId = wpid;
+      }
+      if (depth > 32) {
+        return res.status(400).json({ error: "Cannot create: nesting depth would exceed 32 levels" });
+      }
+    }
+
     const created = await storage.createProfile(parsed.data);
     bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
 

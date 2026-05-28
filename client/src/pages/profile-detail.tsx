@@ -427,26 +427,32 @@ function getMaintenanceCost(fields: any): number {
   );
 }
 
+// computeAssetRollup is the SINGLE source of truth for asset value rollups
+// across the entire app. Imported from shared/ so server, hooks, dashboard,
+// detail page, and Financials tab all compute identical numbers. Previously
+// there was an inline copy here that could drift from the shared version —
+// removed 2026-05-27.
+import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
-  const baseValue = getAssetBaseValue(profile.fields);
-  const baseLoans = getAssetLoanValue(profile.fields);
-  const directChildren = descendants.filter((d) => d.parentProfileId === profile.id);
-  const nestedValue = descendants.reduce((s, d) => s + getAssetBaseValue(d.fields), 0);
-  const nestedLoans = descendants.reduce((s, d) => s + getAssetLoanValue(d.fields), 0);
-  const monthlyExpense = getMonthlyExpense(profile.fields) + descendants.reduce((s, d) => s + getMonthlyExpense(d.fields), 0);
-  const maintenanceCost = getMaintenanceCost(profile.fields) + descendants.reduce((s, d) => s + getMaintenanceCost(d.fields), 0);
+  // The shared function ignores everything except `fields` and
+  // `parentProfileId`, which is exactly what TreeNode carries, so we can
+  // pass them through as-is.
+  const result = sharedComputeAssetRollup(profile, descendants as any);
+  // Strip `breakdown` from the result — the local AssetRollup interface
+  // doesn't declare it and the page doesn't render it (the new Financials
+  // tab does, via asset-overview.tsx which has its own rollup call).
   return {
-    baseValue,
-    nestedValue,
-    totalValue: baseValue + nestedValue,
-    baseLoans,
-    nestedLoans,
-    totalLoans: baseLoans + nestedLoans,
-    netValue: baseValue + nestedValue - baseLoans - nestedLoans,
-    childCount: directChildren.length,
-    descendantCount: descendants.length,
-    monthlyExpense,
-    maintenanceCost,
+    baseValue: result.baseValue,
+    nestedValue: result.nestedValue,
+    totalValue: result.totalValue,
+    baseLoans: result.baseLoans,
+    nestedLoans: result.nestedLoans,
+    totalLoans: result.totalLoans,
+    netValue: result.netValue,
+    childCount: result.childCount,
+    descendantCount: result.descendantCount,
+    monthlyExpense: result.monthlyExpense,
+    maintenanceCost: result.maintenanceCost,
   };
 }
 
