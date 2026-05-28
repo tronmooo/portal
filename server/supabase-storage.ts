@@ -1375,6 +1375,49 @@ export class SupabaseStorage implements IStorage {
   }
 
   /**
+   * Reconcile a profile-junction table with the canonical linked-profile set.
+   *
+   * BUG-20260528-ownership-isolation: every updateX method writes the
+   * linked_profiles JSONB column on the entity row but historically forgot to
+   * sync the profile_<entity> junction table. getX reads union junction+JSONB,
+   * so the stale junction kept entities visible under profiles they no longer
+   * belong to (and invisible under newly-linked ones). This fix mirrors the
+   * inline block that landed in updateTracker (commit dd9f64a) — extracted so
+   * the other five updateX methods don't drift again.
+   *
+   * Callers must pass `nextProfiles` ONLY when the caller actually re-wrote
+   * linked_profiles. If linked_profiles wasn't part of the PATCH, pass
+   * undefined and we skip the diff (no junction changes).
+   */
+  private async syncEntityJunction(
+    entityType: string,
+    entityId: string,
+    nextProfiles: string[] | undefined,
+  ): Promise<void> {
+    if (!Array.isArray(nextProfiles)) return;
+    const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
+    if (!jt) return;
+    const nextSet = new Set(nextProfiles);
+    const { data: rows } = await this.supabase
+      .from(jt.table).select("profile_id")
+      .eq(jt.entityCol, entityId).eq("user_id", this.userId);
+    const currentSet = new Set((rows || []).map((r: any) => r.profile_id));
+    const toAdd = [...nextSet].filter(p => !currentSet.has(p));
+    const toRemove = [...currentSet].filter(p => !nextSet.has(p));
+    for (const pid of toAdd) {
+      await this.supabase.from(jt.table).upsert(
+        { profile_id: pid, [jt.entityCol]: entityId, user_id: this.userId },
+        { onConflict: `profile_id,${jt.entityCol}` }
+      );
+    }
+    if (toRemove.length > 0) {
+      await this.supabase.from(jt.table).delete()
+        .eq(jt.entityCol, entityId).eq("user_id", this.userId)
+        .in("profile_id", toRemove);
+    }
+  }
+
+  /**
    * Auto-propagate a document link up the profile chain.
    * When a document is linked to a child profile (e.g., Tesla Model S),
    * also link it to the parent profile (e.g., Me/self) so documents
@@ -1851,6 +1894,10 @@ export class SupabaseStorage implements IStorage {
       linked_profiles: merged.linkedProfiles, tags: merged.tags,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // BUG-20260528-ownership-isolation: keep profile_tasks junction in lock-step
+    // with linked_profiles JSONB so /api/tasks?profileIds= and the profile-detail
+    // task lists agree. See syncEntityJunction docs above.
+    await this.syncEntityJunction("task", id, (data as any).linkedProfiles);
     return this.getTask(id);
   }
 
@@ -1939,6 +1986,8 @@ export class SupabaseStorage implements IStorage {
       linked_profiles: merged.linkedProfiles, tags: merged.tags, date: merged.date,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // BUG-20260528-ownership-isolation: sync profile_expenses junction.
+    await this.syncEntityJunction("expense", id, (data as any).linkedProfiles);
     return this.getExpense(id);
   }
 
@@ -2083,6 +2132,8 @@ export class SupabaseStorage implements IStorage {
       tags: merged.tags, source: merged.source,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // BUG-20260528-ownership-isolation: sync profile_events junction.
+    await this.syncEntityJunction("event", id, (data as any).linkedProfiles);
     return this.getEvent(id);
   }
 
@@ -2984,6 +3035,8 @@ export class SupabaseStorage implements IStorage {
       updated_at: new Date().toISOString(),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // BUG-20260528-ownership-isolation: sync profile_obligations junction.
+    await this.syncEntityJunction("obligation", id, (data as any).linkedProfiles);
     // Re-materialize when cadence or due date changes — keeps calendar correct.
     if (data.frequency !== undefined || data.nextDueDate !== undefined || data.recurrenceEnd !== undefined) {
       try {
@@ -3221,6 +3274,8 @@ export class SupabaseStorage implements IStorage {
       updated_at: now,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // BUG-20260528-ownership-isolation: sync profile_artifacts junction.
+    await this.syncEntityJunction("artifact", id, (data as any).linkedProfiles);
     return this.getArtifact(id);
   }
 

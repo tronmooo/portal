@@ -300,5 +300,121 @@ describe("contract: regressions", () => {
     }
   });
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG-20260528-ownership-isolation
+  //
+  // Report: "Cash flow is the same for everybody … Recent activity mixing for
+  //   all of them when filtered on Bob … This stuff cannot keep going on this is
+  //   how it is throughout my entire dashboard. Everybody has their own data."
+  //
+  // Audit: tasks/expenses/events/obligations/artifacts all had the same drift
+  //   shape as the tracker bug (BUG-20260528-tracker-profile-drift). updateX
+  //   wrote linked_profiles JSONB but never synced the profile_<entity> junction
+  //   table, while getX union-merges both — stale junction rows or missing
+  //   junction rows caused entities to appear under the wrong profile filter or
+  //   disappear under the right one. 19 of 39 tasks were drifting on the
+  //   production account when the bug was reported.
+  //
+  // Contract: PATCH /:entity/:id { linkedProfiles: [newOwner] } must clean the
+  //   junction so GET /:entity?profileIds=oldOwner no longer returns the row,
+  //   and GET /:entity?profileIds=newOwner does.
+  // ──────────────────────────────────────────────────────────────────────────
+  const ENTITIES = [
+    { name: "task", path: "/tasks", idKey: "taskId" as const },
+    { name: "event", path: "/events", idKey: "eventId" as const },
+    { name: "obligation", path: "/obligations", idKey: "obligationId" as const },
+  ];
+
+  for (const ent of ENTITIES) {
+    it(`BUG-20260528-ownership-isolation: PATCH ${ent.name}.linkedProfiles cleans junction`, async () => {
+      if (!fixture.peopleIds || fixture.peopleIds.length === 0) return;
+      const newOwnerId = fixture.peopleIds[0];
+      const oldOwnerId = fixture.selfId;
+      const entityId = (fixture as any)[ent.idKey] as string;
+      if (!entityId) return;
+
+      // Snapshot original linkedProfiles so we can restore.
+      const before: any = expectOk(await api("GET", `${ent.path}/${entityId}`));
+      const originalLinked: string[] = before.linkedProfiles || [];
+
+      try {
+        // 1. Reassign so only newOwner is linked.
+        const patched: any = expectOk(
+          await api("PATCH", `${ent.path}/${entityId}`, { linkedProfiles: [newOwnerId] }),
+        );
+        expect(
+          new Set(patched.linkedProfiles || []),
+          `PATCH /${ent.name} response should reflect requested linkedProfiles`,
+        ).toEqual(new Set([newOwnerId]));
+
+        // 2. Filtered GET by OLD owner must NOT include this row.
+        const oldList: any[] = expectOk(
+          await api("GET", `${ent.path}?profileIds=${encodeURIComponent(oldOwnerId)}`),
+        ) as any[];
+        const leakedToOld = oldList.some((r: any) => r.id === entityId);
+        expect(
+          leakedToOld,
+          `${ent.name} must not appear under OLD owner's filter after reassignment (junction not cleaned)`,
+        ).toBe(false);
+
+        // 3. Filtered GET by NEW owner must include it.
+        const newList: any[] = expectOk(
+          await api("GET", `${ent.path}?profileIds=${encodeURIComponent(newOwnerId)}`),
+        ) as any[];
+        expect(
+          newList.some((r: any) => r.id === entityId),
+          `${ent.name} must appear under NEW owner's filter after reassignment`,
+        ).toBe(true);
+      } finally {
+        if (originalLinked.length > 0) {
+          await api("PATCH", `${ent.path}/${entityId}`, { linkedProfiles: originalLinked });
+        }
+      }
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG-20260528-networth-filter-leakage
+  //
+  // Report: With "Bob" filter selected, Net Worth tile showed $367,895 while
+  //   the popup and the server-canonical financeSnapshot showed $175,145.
+  //   Cash Flow + Budget tiles were correct — only Net Worth diverged.
+  //
+  // Root cause: dashboard.tsx had a client-side `matchesProfileFilter` that
+  //   only matched direct parent_profile_id, missing grandparents and
+  //   asset_party_links co-ownership. We now trust the server snapshot when
+  //   any filter is active.
+  //
+  // Contract: financeSnapshot.totalAssetValue under a single-profile filter
+  //   must be <= the no-filter total (assets are partitioned across profiles)
+  //   and >= 0.
+  // ──────────────────────────────────────────────────────────────────────────
+  it("BUG-20260528-networth-filter-leakage: filtered totalAssetValue is server-canonical", async () => {
+    const unfiltered: any = expectOk(await api("GET", "/dashboard-enhanced"));
+    const filtered: any = expectOk(
+      await api("GET", `/dashboard-enhanced?profileIds=${encodeURIComponent(fixture.selfId)}`),
+    );
+    const unfilteredTotal = unfiltered?.financeSnapshot?.totalAssetValue ?? 0;
+    const filteredTotal = filtered?.financeSnapshot?.totalAssetValue ?? 0;
+    expect(
+      filteredTotal,
+      "filtered totalAssetValue must be non-negative",
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      filteredTotal,
+      "filtered totalAssetValue must be <= unfiltered (assets partitioned across profiles, not duplicated)",
+    ).toBeLessThanOrEqual(unfilteredTotal + 0.01);
+    // monthlySpend tile and stats must agree on the same filter.
+    const statsFiltered: any = expectOk(
+      await api("GET", `/stats?profileIds=${encodeURIComponent(fixture.selfId)}`),
+    );
+    const enhSpend = filtered?.financeSnapshot?.totalMonthlySpend ?? 0;
+    const statsSpend = statsFiltered?.monthlySpend ?? 0;
+    expect(
+      Math.abs(enhSpend - statsSpend) < 0.5,
+      `enhanced.totalMonthlySpend (${enhSpend}) and stats.monthlySpend (${statsSpend}) must agree for the same filter`,
+    ).toBe(true);
+  });
+
   // Add future regressions BELOW this line. Do not delete previous entries.
 });

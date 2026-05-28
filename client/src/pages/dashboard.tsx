@@ -520,12 +520,25 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
     () => (allProfiles || []).filter((p: any) => resolveLiabilityBalance(p) > 0 && matchesProfileFilter(p)),
     [allProfiles, filterMode, filterIds.join(",")]
   );
-  const totalAssetValue = allProfiles
-    ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
-    : (enhanced?.financeSnapshot?.totalAssetValue ?? 0);
-  const totalLiabilities = allProfiles
-    ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
-    : (enhanced?.financeSnapshot?.totalLiabilities ?? 0);
+  // BUG-20260528-networth-filter-leakage: when a profile filter is active,
+  // trust the server's authoritative finance snapshot. The client-side
+  // matchesProfileFilter above only checks DIRECT parent_profile_id; it
+  // misses grandparents (e.g. Bob → Home → MacBook) and ignores asset_party_links
+  // co-ownership, so the roll-up showed Bob's Net Worth as $367k while the
+  // server's getDashboardEnhanced (which walks the same tables the popup uses)
+  // correctly returned $175k. The Everyone case keeps the client roll-up so
+  // we can show an animated number before /api/dashboard-enhanced resolves.
+  const filterActive = filterMode === "selected" && filterIds.length > 0;
+  const totalAssetValue = filterActive
+    ? (enhanced?.financeSnapshot?.totalAssetValue ?? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0))
+    : allProfiles
+      ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
+      : (enhanced?.financeSnapshot?.totalAssetValue ?? 0);
+  const totalLiabilities = filterActive
+    ? (enhanced?.financeSnapshot?.totalLiabilities ?? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0))
+    : allProfiles
+      ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
+      : (enhanced?.financeSnapshot?.totalLiabilities ?? 0);
   const netWorth = totalAssetValue - totalLiabilities;
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
