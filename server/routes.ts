@@ -406,6 +406,23 @@ function paginate<T>(items: T[], req: any, res: any): T[] {
   return items.slice(offset, offset + limit);
 }
 
+// Specialised pagination for /api/profiles.
+//   - Profile lists are bounded (~thousands max), small per-row, and required
+//     in FULL for the recursive net-worth rollup. The generic paginate() above
+//     hard-caps at 500/page, which silently truncates the dashboard rollup
+//     when a user crosses 500 profiles — we measured this against a 551-node
+//     seed and the rollup was wrong by 50%.
+//   - We still honour explicit ?limit= / ?offset= for UI pagers that opt in,
+//     and still set X-Total-Count, but default to returning every profile so
+//     downstream callers (rollup, AI engine snapshot) see the whole tree.
+function paginateProfiles<T>(items: T[], req: any, res: any): T[] {
+  const hasLimit = typeof req.query.limit === "string" || typeof req.query.offset === "string";
+  if (!hasLimit) return items;
+  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || items.length, 1), 10000);
+  const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+  return items.slice(offset, offset + limit);
+}
+
 // Wrap async route handlers to catch unhandled errors and send 500 instead of crashing
 type AsyncHandler = (req: any, res: any, next?: any) => Promise<any>;
 function asyncHandler(fn: AsyncHandler): AsyncHandler {
@@ -1806,12 +1823,16 @@ If unsure, return "profile_fact".`,
     const uid = (req as AuthenticatedRequest).userId || "anon";
     const ck = `profiles:${uid}`;
     const hit = getCached(ck);
-    if (hit) return res.json(paginate(hit, req, res));
+    if (hit) {
+      res.set("X-Total-Count", String(hit.length));
+      return res.json(paginateProfiles(hit, req, res));
+    }
     const items = await dedupe(ck, () => storage.getProfiles());
     // Short cache (5s) so newly-created profiles appear immediately after chat creates them.
     // Profile list is small (<1k rows) so DB cost is negligible. Bug fix: was 5 min, racing with chat.
     setCache(ck, items, 5 * 1000);
-    res.json(paginate(items, req, res));
+    res.set("X-Total-Count", String(items.length));
+    res.json(paginateProfiles(items, req, res));
   }));
   app.get("/api/profiles/:id", asyncHandler(async (req, res) => {
     const profile = await storage.getProfile(req.params.id);
