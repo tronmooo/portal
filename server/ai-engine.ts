@@ -8335,22 +8335,45 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   const initialModel = chatModel;
 
   try {
-    // Build the tool_use conversation loop — prepend up to 5 history pairs for multi-step context
+    // Build the tool_use conversation loop.
+    // BUG-20260528-ai-history-replay: previously we appended the last 6 messages
+    // (user + assistant) of history. The assistant's prior text replies contain
+    // phrases like "Logged Groceries $50, Hockey 50 min, Ice Cream 270 cal" —
+    // Claude was interpreting those as a TODO list on the NEXT turn and
+    // re-emitting tool_use blocks for every entity mentioned, duplicating data.
+    // Fix: pass ONLY prior user turns as history (they convey intent context).
+    // Assistant replies are dropped — the DB already reflects what happened, and
+    // the system prompt's EXISTING DATA section provides fresh state.
     let messages: Anthropic.Messages.MessageParam[] = [];
     if (conversationHistory && conversationHistory.length > 0) {
-      const recent = conversationHistory.slice(-6); // last 6 messages (3 pairs) to control token usage
+      const recent = conversationHistory.slice(-6);
       for (const msg of recent) {
-        // Drop entries with non-conforming roles — Claude API requires 'user' | 'assistant' strict.
-        if (msg?.role !== "user" && msg?.role !== "assistant") continue;
+        // Only carry forward USER turns. Assistant turns are the bug vector.
+        if (msg?.role !== "user") continue;
         if (typeof msg.content !== "string") continue;
-        // Sanitize history content (client-supplied — prompt injection vector) and truncate.
         const cleaned = sanitize(msg.content);
         const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
         if (!content) continue;
-        messages.push({ role: msg.role, content });
+        // We need to keep messages strictly alternating user/assistant/user for
+        // Claude API compliance. Two user turns in a row are not allowed inside
+        // the messages array prior to the new user turn appended below. Merge
+        // consecutive user turns with a separator instead.
+        const last = messages[messages.length - 1];
+        if (last && last.role === "user") {
+          last.content = `${last.content}\n---\n${content}`;
+        } else {
+          messages.push({ role: "user", content });
+        }
       }
     }
-    messages.push({ role: "user", content: userMessage });
+    // Append the current user message. If the last carried-forward message is
+    // also a user turn, merge so we don't violate alternation.
+    const lastCarried = messages[messages.length - 1];
+    if (lastCarried && lastCarried.role === "user") {
+      lastCarried.content = `${lastCarried.content}\n---\n${userMessage}`;
+    } else {
+      messages.push({ role: "user", content: userMessage });
+    }
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
     const richCharts: ChartSpec[] = [];
@@ -8438,17 +8461,33 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
         // Dedup: skip duplicate create calls for the same entity within this response
         const inp = toolUse.input as Record<string, any>;
-        const createToolNames = ["create_obligation", "create_expense", "create_event", "create_task", "create_profile"];
+        const createToolNames = ["create_obligation", "create_expense", "create_event", "create_task", "create_profile", "create_habit", "create_tracker", "create_goal", "log_tracker_entry", "log_income"];
         if (createToolNames.includes(toolUse.name)) {
           // A9 fix: include forProfile in per-response dedup key so the same
           // task/expense title across two profiles isn't suppressed.
-          const key = `${toolUse.name}:${String(inp.forProfile || "").toLowerCase().trim()}:${(inp.name || inp.title || inp.description || "").toLowerCase().trim()}`;
+          const key = `${toolUse.name}:${String(inp.forProfile || "").toLowerCase().trim()}:${(inp.name || inp.title || inp.description || inp.trackerName || "").toLowerCase().trim()}`;
           if (seenCreates.has(key)) {
             logger.info("ai", `Deduped tool call: ${key}`);
             toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify({ skipped: true, reason: "duplicate call" }) });
             continue;
           }
           seenCreates.add(key);
+
+          // BUG-20260528-ai-history-replay: belt-and-suspenders. Reject any
+          // create whose key matches an entity created within the last 60s
+          // for this user — catches AI replays of prior-turn actions even if
+          // the history-stripping above is bypassed somehow.
+          try {
+            const uid = userId || "_anon";
+            if (isDuplicateCreation(uid, key, 60_000)) {
+              logger.warn("ai", `Blocked recent-duplicate create: ${key}`);
+              toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify({ skipped: true, reason: "duplicate of recent action" }) });
+              continue;
+            }
+            markCreation(uid, key);
+          } catch {
+            // Defensive: never let the guard itself break the tool loop.
+          }
         }
         try {
           // Validate input before executing
