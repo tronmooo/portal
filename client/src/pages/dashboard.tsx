@@ -4,6 +4,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
+import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import { goalsQueryKey } from "@shared/query-keys";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setDashboardProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -45,7 +47,7 @@ import {
   Wallet, PieChart as PieChartIcon, Settings2, AlertCircle, Bell, BellOff,
   Scale, Activity as ActivityIcon, Moon,
 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
@@ -108,85 +110,12 @@ function daysUntilStr(days: number): string {
   return `in ${days}d`;
 }
 
-// Walks both top-level and legacy nested storage paths so assets/liabilities
-// stored under fields.housing.* / fields.finance.* / fields.other.* are picked
-// up by the Net Worth tile and the Net Worth popup. Without this, profiles
-// with nested storage report $0 even though their values render in the
-// Trackers grid via the field-resolution logic in trackers.tsx.
-// Round-6 fix: this resolver MUST stay byte-for-byte equivalent to the
-// server-side resolveAssetValue in portal/server/supabase-storage.ts. The
-// dashboard renders three Net Worth surfaces (Hero KPI tile, Net Worth popup,
-// Finance section tile) and they must agree to the dollar. Previous version
-// was missing fields.cost / fields.amount / fields.price / fields.accountBalance
-// / vehicle.cost paths, causing $10–$11K drift between tiles.
-function resolveAssetValue(p: any): number {
-  if (!p || !p.fields) return 0;
-  const fields = p.fields;
-  const housing = fields.housing || {};
-  const other = fields.other || {};
-  const finance = fields.finance || {};
-  const vehicle = fields.vehicle || {};
-  const vehicles = fields.vehicles || {};
-  const investment = fields.investment || {};
-  const candidates: any[] = [
-    fields.currentValue, fields.current_value, housing.currentValue, housing.current_value, other.currentValue, other.current_value,
-    fields.marketValue, fields.market_value, housing.marketValue, housing.market_value, other.marketValue, other.market_value,
-    fields.estimatedValue, fields.estimated_value,
-    fields.value, other.value,
-    fields.purchasePrice, fields.purchase_price, other.purchasePrice, other.purchase_price, housing.purchasePrice, housing.purchase_price,
-    fields.cost, other.cost,
-    fields.amount, other.amount,
-    fields.price, other.price,
-    fields.balance, finance.balance, finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
-    fields.accountBalance, finance.accountBalance, finance.account_balance,
-    vehicle.purchasePrice, vehicle.purchase_price, vehicle.currentValue, vehicle.current_value, vehicle.value,
-    vehicles.purchasePrice, vehicles.purchase_price, vehicles.currentValue, vehicles.current_value, vehicles.value,
-    investment.balance, investment.value, investment.currentValue, investment.current_value,
-  ];
-  for (const c of candidates) {
-    const n = parseMoney(c);
-    if (n > 0) return n;
-  }
-  return 0;
-}
+// resolveAssetValue / resolveLiabilityBalance now live in shared/asset-value.ts
+// (BUG-20260528-asset-resolver-duplication). Imported at top of file. Must stay
+// byte-for-byte equivalent across client + server because the Dashboard renders
+// three Net Worth surfaces (Hero KPI tile, Net Worth popup, Finance section
+// tile) that must agree to the dollar.
 
-// Round-6 fix: also mirrored against server resolveLiabilityValue. Adds
-// nested finance.loans[] summing so AI-extracted multi-loan profiles surface.
-function resolveLiabilityBalance(p: any): number {
-  if (!p || !p.fields) return 0;
-  const fields = p.fields;
-  const finance = fields.finance || {};
-  const loan = fields.loan || {};
-  const other = fields.other || {};
-  const candidates: any[] = [
-    // Phase 2 canonical liability field (writes from LiabilityProfilePage)
-    fields.currentBalance, fields.current_balance,
-    finance.currentBalance, finance.current_balance,
-    loan.currentBalance, loan.current_balance,
-    // Registry snake_case shape (CreateProfileDialog with auto_loan/mortgage/etc.)
-    fields.balance,
-    fields.remainingBalance, fields.remaining_balance,
-    fields.loanBalance, fields.loan_balance,
-    fields.outstandingBalance, fields.outstanding_balance,
-    finance.remainingBalance, finance.remaining_balance,
-    finance.loanBalance, finance.loan_balance,
-    finance.outstandingBalance, finance.outstanding_balance, finance.balance,
-    loan.remainingBalance, loan.remaining_balance,
-    loan.balance, loan.outstandingBalance, loan.outstanding_balance,
-    other.remainingBalance, other.remaining_balance, other.balance,
-  ];
-  for (const c of candidates) {
-    const n = parseMoney(c);
-    if (n > 0) return n;
-  }
-  // Sum nested loans[] balances if present
-  const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
-  if (loans.length > 0) {
-    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
-    if (sum > 0) return sum;
-  }
-  return 0;
-}
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
   amazing:   { icon: Sparkles, label: "Amazing",   color: "#6DAA45", bg: "bg-green-500/10" },
@@ -2294,8 +2223,13 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
   // Multi-profile aware: prefer profileIds (array) when present, fall back to single profileId.
   const ids = profileIds.length > 0 ? profileIds : (profileId ? [profileId] : []);
   const profileParam = ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
+  // Canonical key: ["/api/goals", filterMode, ...sortedIds] — see
+  // shared/query-keys.ts and ARCHITECTURE.md §3. Both dashboard and
+  // trackers must use this so their caches share one slot.
+  // BUG-20260528-goals-key-shape
+  const goalsKey = goalsQueryKey(ids);
   const { data: goals = [], isLoading, error: goalsError } = useQuery<GoalItem[]>({
-    queryKey: ["/api/goals", ids.join(",") || "all"],
+    queryKey: goalsKey,
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
   const [editGoal, setEditGoal] = useState<GoalItem | null>(null);
@@ -2334,8 +2268,8 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/goals"] });
-      const prev = queryClient.getQueryData(["/api/goals", ids.join(",") || "all"]);
-      queryClient.setQueryData(["/api/goals", ids.join(",") || "all"], (old: any[]) => (old || []).filter((g: any) => g.id !== id));
+      const prev = queryClient.getQueryData(goalsKey);
+      queryClient.setQueryData(goalsKey, (old: any[] | undefined) => (old || []).filter((g: any) => g.id !== id));
       return { prev };
     },
     onSuccess: (_data, variables) => {
@@ -2346,7 +2280,7 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
     onError: (_err: Error, variables, ctx: any) => {
-      if (ctx?.prev) queryClient.setQueryData(["/api/goals", ids.join(",") || "all"], ctx.prev);
+      if (ctx?.prev) queryClient.setQueryData(goalsKey, ctx.prev);
       toast({ title: `Failed to delete "${variables.title || "goal"}"`, variant: "destructive" });
     },
   });
@@ -3082,29 +3016,11 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
-            {/* Net Worth trend sparkline — uses estimated monthly snapshots */}
-            {netWorth > 0 && (() => {
-              const baseNW = netWorth;
-              const mSpend = data?.totalMonthlySpend || monthlySpend || 0;
-              const nwData = Array.from({length: 6}, (_, i) => ({
-                month: new Date(Date.now() - (5-i) * 30 * 86400000).toLocaleDateString('en-US', {month:'short'}),
-                value: Math.max(0, baseNW - mSpend * (5 - i) * 0.8)
-              }));
-              const isUp = nwData[5].value >= nwData[0].value;
-              return (
-                <div className="mt-2 px-1" onClick={stopProp()}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">6-Month Trend</span>
-                    <span className={`text-[10px] font-bold ${isUp ? 'text-green-500' : 'text-red-400'}`}>{isUp ? '↑' : '↓'} Trending</span>
-                  </div>
-                  <ResponsiveContainer width="100%" height={40}>
-                    <LineChart data={nwData} margin={{top:2,right:2,left:2,bottom:2}}>
-                      <Line type="monotone" dataKey="value" stroke={isUp ? '#10b981' : '#ef4444'} strokeWidth={2} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              );
-            })()}
+            {/* 6-Month Trend sparkline removed 2026-05-28 — it was synthesizing
+                historical net worth from `current NW - mSpend * monthsAgo * 0.8`,
+                which always trended upward regardless of reality. We have no
+                stored historical snapshots yet, so showing nothing is correct.
+                See audit finding 7.7 and BUG-20260528-fabricated-sparkline. */}
           </button>
           <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <div className="flex items-center justify-center gap-2">

@@ -4,6 +4,7 @@ import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
+import { goalsQueryKey } from "@shared/query-keys";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { CreateProfileDialog } from "@/pages/profiles";
@@ -3310,8 +3311,11 @@ function InsightsTabContent({ tracker, primaryField }: { tracker: Tracker; prima
 
 // -- Goals Tab Content (inside tracker detail)
 function GoalsTabContent({ tracker }: { tracker: Tracker }) {
+  // Canonical key shared with dashboard.tsx GoalsSection — see
+  // shared/query-keys.ts and ARCHITECTURE.md §3. BUG-20260528-goals-key-shape
+  const goalsKey = goalsQueryKey([]);
   const { data: allGoals = [] } = useQuery<any[]>({
-    queryKey: ["/api/goals"],
+    queryKey: goalsKey,
     queryFn: () => apiRequest("GET", "/api/goals").then(r => r.json()),
   });
   const trackerGoals = allGoals.filter(g => g.trackerId === tracker.id);
@@ -3363,8 +3367,8 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
     onMutate: async (variables) => {
       await queryClient.cancelQueries({ queryKey: ["/api/goals"] });
-      const prev = queryClient.getQueryData<any[]>(["/api/goals"]);
-      queryClient.setQueryData<any[]>(["/api/goals"], (old) => old?.filter((g: any) => g.id !== variables.id));
+      const prev = queryClient.getQueryData<any[]>(goalsKey);
+      queryClient.setQueryData<any[]>(goalsKey, (old) => old?.filter((g: any) => g.id !== variables.id));
       return { prev };
     },
     onSuccess: (_data, variables) => {
@@ -3376,7 +3380,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
     onError: (e: Error, _v: any, ctx: any) => {
-      if (ctx?.prev) queryClient.setQueryData(["/api/goals"], ctx.prev);
+      if (ctx?.prev) queryClient.setQueryData(goalsKey, ctx.prev);
       toast({ title: "Failed to delete goal", description: formatApiError(e), variant: "destructive" });
     },
   });

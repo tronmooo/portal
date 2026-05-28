@@ -2,6 +2,8 @@ import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { resolveAssetValue } from "@shared/asset-value";
+import { toMonthlyAmount } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -802,46 +804,23 @@ export default function FinancePage() {
           // F150 directly should still surface its value).
           return filterIds.includes(p.id);
         });
-        // Robust value resolver — reads camelCase, snake_case, and nested namespaces
-        // (fields.finance.balance, fields.other.purchase_price, etc.). Without this
-        // the top KPI would silently report $0 even though the live data has values.
-        const toNumLocal = (c: any): number => {
-          if (c == null || c === '') return 0;
-          const n = typeof c === 'number' ? c : parseFloat(String(c).replace(/[^0-9.\-]/g, ''));
-          return Number.isFinite(n) && n > 0 ? n : 0;
-        };
-        const NS = ['', 'finance', 'other', 'housing', 'vehicle', 'vehicles', 'investment', 'investments', 'asset', 'assets', 'property', 'properties', 'account', 'accounts'];
-        const KEYS = ['currentValue', 'current_value', 'value', 'purchasePrice', 'purchase_price', 'balance', 'amount', 'cost', 'price'];
-        const readVal = (fields: any): number => {
-          if (!fields || typeof fields !== 'object') return 0;
-          for (const ns of NS) {
-            const root = ns ? fields[ns] : fields;
-            if (!root || typeof root !== 'object') continue;
-            for (const k of KEYS) {
-              const n = toNumLocal((root as any)[k]);
-              if (n > 0) return n;
-            }
-          }
-          return 0;
-        };
-        const totalAssetValue = assetProfiles.reduce((s, p) => s + readVal(p.fields), 0);
+        // BUG-20260528-asset-resolver-duplication: previously used a local
+        // readVal()/NS/KEYS resolver that diverged from the canonical one
+        // (different namespace + key list, no parseMoney). Now uses the
+        // shared resolveAssetValue so this tile matches the dashboard.
+        const totalAssetValue = assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0);
 
         // Liabilities from obligations. Use the unified rule so this view
         // matches expense filtering (previously this lane silently included
         // every orphan obligation when filtering, which inflated
         // "Bob's monthly bills" with bills that weren't linked to anyone).
         const oblData = (obligations || []).filter((o: any) => passesProfileFilter(o.linkedProfiles, filterCtx));
-        const monthlyLiabilities = oblData.reduce((s: number, o: any) => {
-          const amt = Number(o.amount) || 0;
-          switch (o.frequency) {
-            case "weekly": return s + amt * 52 / 12;
-            case "biweekly": return s + amt * 26 / 12;
-            case "monthly": return s + amt;
-            case "quarterly": return s + amt * 4 / 12;
-            case "yearly": return s + amt / 12;
-            default: return s + amt; // assume monthly
-          }
-        }, 0);
+        // BUG-20260528-monthly-multipliers: use shared toMonthlyAmount so
+        // this matches getStats() / getDashboardEnhanced() to the cent.
+        const monthlyLiabilities = oblData.reduce(
+          (s: number, o: any) => s + toMonthlyAmount(o.amount, o.frequency),
+          0,
+        );
         
         return (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -869,23 +848,17 @@ export default function FinancePage() {
       {(() => {
         const assetValue = enhanced?.financeSnapshot?.totalAssetValue || 0;
         const liabilities = enhanced?.financeSnapshot?.totalLiabilities || 0;
-        // Proper monthly bills with frequency conversion + profile filtering
-        const filteredObl = (obligations || []).filter((o: any) => {
-          if (filterMode === "everyone" || filterIds.length === 0) return true;
-          const linked = o.linkedProfiles || [];
-          return linked.length === 0 || linked.some((id: string) => filterIds.includes(id));
-        });
-        const monthlyBills = filteredObl.reduce((s: number, o: any) => {
-          const amt = Number(o.amount) || 0;
-          switch (o.frequency) {
-            case "weekly": return s + amt * 52 / 12;
-            case "biweekly": return s + amt * 26 / 12;
-            case "monthly": return s + amt;
-            case "quarterly": return s + amt * 4 / 12;
-            case "yearly": return s + amt / 12;
-            default: return s + amt;
-          }
-        }, 0);
+        // BUG-20260528-profile-filter-leakage: previously inline orphan rule
+        // always passed empty-linked obligations regardless of self-profile
+        // selection. Now uses canonical passesProfileFilter from
+        // shared/profile-filter.ts. Multipliers use toMonthlyAmount.
+        const filteredObl = (obligations || []).filter((o: any) =>
+          passesProfileFilter(o.linkedProfiles, filterCtx),
+        );
+        const monthlyBills = filteredObl.reduce(
+          (s: number, o: any) => s + toMonthlyAmount(o.amount, o.frequency),
+          0,
+        );
         const netWorth = assetValue - liabilities;
         const now = new Date();
         const thisMonthExpenses = filtered.filter(e => {

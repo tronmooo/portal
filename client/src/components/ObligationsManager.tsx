@@ -11,6 +11,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
+import { passesProfileFilter } from "@shared/profile-filter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -994,17 +995,36 @@ export default function ObligationsManager({ showHeader = true, compact = false,
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
 
+  // BUG-20260528-profile-filter-leakage: previously inline `linkedProfiles.some(id => filterIds.includes(id))`
+  // which dropped orphan obligations (no linkedProfiles) even when a
+  // self-profile was selected and the server correctly returned them.
+  // Now uses canonical passesProfileFilter so client and server agree.
   const obligations = useMemo(() => filterMode === "selected" && filterIds.length > 0
-    ? allObligations.filter(o => o.linkedProfiles.some(id => filterIds.includes(id)))
-    : allObligations, [allObligations, filterMode, filterIds]);
+    ? allObligations.filter(o => passesProfileFilter(o.linkedProfiles, {
+        selectedIds: filterIds,
+        allProfiles: profilesList,
+      }))
+    : allObligations, [allObligations, filterMode, filterIds, profilesList]);
 
   // BUG-OBL-001/002/PRF-003: Filter tab counts MUST agree with the live
   // "Overdue / Due today / Upcoming" panel above. Both must source from
   // occurrences (per-instance) — using obligation.nextDueDate diverges when
   // a monthly bill has an overdue back-occurrence but its nextDueDate has
   // already advanced to the future.
-  const occStartIso = useMemo(() => new Date(Date.now() - 60 * 86400000).toLocaleDateString("en-CA"), []);
-  const occEndIso = useMemo(() => new Date(Date.now() + 30 * 86400000).toLocaleDateString("en-CA"), []);
+  // BUG-20260528-calendar-window-stale: previously useMemo([], []) meant the
+  // occurrence window was computed once on mount and never updated. If the
+  // user left the app open overnight, "today" drifted out of range and
+  // overdue/upcoming counts went wrong. Now tied to a daily tick.
+  const [todayKey, setTodayKey] = useState(() => new Date().toLocaleDateString("en-CA"));
+  useEffect(() => {
+    const id = setInterval(() => {
+      const next = new Date().toLocaleDateString("en-CA");
+      if (next !== todayKey) setTodayKey(next);
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [todayKey]);
+  const occStartIso = useMemo(() => new Date(Date.now() - 60 * 86400000).toLocaleDateString("en-CA"), [todayKey]);
+  const occEndIso = useMemo(() => new Date(Date.now() + 30 * 86400000).toLocaleDateString("en-CA"), [todayKey]);
   const occProfileParam = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
   const { data: rawWindowOccurrences = [] } = useQuery<any[]>({
     queryKey: ["/api/obligation-occurrences", "window", occStartIso, occEndIso, filterMode, ...filterIds],

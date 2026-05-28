@@ -433,6 +433,7 @@ function getMaintenanceCost(fields: any): number {
 // there was an inline copy here that could drift from the shared version —
 // removed 2026-05-27.
 import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
+import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
   // The shared function ignores everything except `fields` and
   // `parentProfileId`, which is exactly what TreeNode carries, so we can
@@ -3364,18 +3365,25 @@ function DocumentsTab({
     },
   });
 
+  // BUG-20260528-mutation-onmutate-rollback: setQueryData moved to onMutate
+  // with snapshot/rollback. See ARCHITECTURE.md §5.3.
   const deleteMutation = useMutation({
     mutationFn: async (docId: string) => {
       await apiRequest("DELETE", `/api/documents/${docId}`);
     },
-    onSuccess: (_data, docId) => {
-      queryClient.setQueryData(["/api/documents"], (old: any[]) =>
-        old?.filter((d: any) => d.id !== docId) || []
-      );
-      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+    onMutate: async (docId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const prevDocs = queryClient.getQueryData<any[]>(["/api/documents"]);
+      const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
+      queryClient.setQueryData<any[]>(["/api/documents"], (old) => (old || []).filter((d: any) => d.id !== docId));
+      queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.documents) return old;
         return { ...old, documents: old.documents.filter((d: any) => d.id !== docId) };
       });
+      return { prevDocs, prevDetail };
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -3383,7 +3391,9 @@ function DocumentsTab({
       setDeletingDocId(null);
       onUploaded();
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _docId, ctx: any) => {
+      if (ctx?.prevDocs !== undefined) queryClient.setQueryData(["/api/documents"], ctx.prevDocs);
+      if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
       toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -3737,27 +3747,40 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     enabled: isPersonOrSelf && sharedLiabilityLinks.length > 0,
   });
   // Resolve links to liability profiles, dedupe with childProfiles to avoid double-counting.
-  const childProfileIds = new Set((profile.childProfiles || []).map((c: any) => c.id));
-  const sharedLiabilities = (sharedLiabilityLinks || [])
-    .map((link: any) => {
-      const lp = (allProfilesForLinks || []).find((p: any) => p.id === link.liabilityProfileId);
-      if (!lp) return null;
-      const ownership = Number(link.ownershipPercentage ?? 100);
-      return { link, profile: lp, ownership };
-    })
-    .filter((x: any) => x && !childProfileIds.has(x.profile.id));
-  const sharedLiabilitiesUserShare = sharedLiabilities.reduce((s: number, x: any) => {
-    const f = x.profile.fields || {};
-    const fin = f.finance || {};
-    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
-    return s + (bal * (x.ownership / 100));
-  }, 0);
-  const sharedMonthlyShare = sharedLiabilities.reduce((s: number, x: any) => {
-    const f = x.profile.fields || {};
-    const fin = f.finance || {};
-    const m = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
-    return s + (m * (x.ownership / 100));
-  }, 0);
+  // BUG-20260528-perf-memo: wrapped in useMemo so unrelated FinancesTab state updates
+  // don't re-run these reduces. Resolver uses canonical shared resolveLiabilityBalance
+  // so balance extraction matches every other surface.
+  const childProfileIds = useMemo(
+    () => new Set((profile.childProfiles || []).map((c: any) => c.id)),
+    [profile.childProfiles],
+  );
+  const sharedLiabilities = useMemo(
+    () => (sharedLiabilityLinks || [])
+      .map((link: any) => {
+        const lp = (allProfilesForLinks || []).find((p: any) => p.id === link.liabilityProfileId);
+        if (!lp) return null;
+        const ownership = Number(link.ownershipPercentage ?? 100);
+        return { link, profile: lp, ownership };
+      })
+      .filter((x: any) => x && !childProfileIds.has(x.profile.id)),
+    [sharedLiabilityLinks, allProfilesForLinks, childProfileIds],
+  );
+  const sharedLiabilitiesUserShare = useMemo(
+    () => sharedLiabilities.reduce((s: number, x: any) => {
+      const bal = resolveLiabilityBalance(x.profile.fields || {});
+      return s + (bal * (x.ownership / 100));
+    }, 0),
+    [sharedLiabilities],
+  );
+  const sharedMonthlyShare = useMemo(
+    () => sharedLiabilities.reduce((s: number, x: any) => {
+      const f = x.profile.fields || {};
+      const fin = f.finance || {};
+      const m = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
+      return s + (m * (x.ownership / 100));
+    }, 0),
+    [sharedLiabilities],
+  );
 
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ProfileDetail["relatedExpenses"][number] | null>(null);
@@ -3990,20 +4013,28 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     onError: (err: Error) => toast({ title: "Failed to update expense", description: formatApiError(err), variant: "destructive" }),
   });
 
+  // BUG-20260528-mutation-onmutate-rollback: previously did setQueryData in
+  // onSuccess, which races with concurrent refetches. Moving to onMutate +
+  // snapshot/rollback per ARCHITECTURE.md §5.3.
   const deleteExpenseMutation = useMutation({
     mutationFn: async ({ id, desc }: { id: string; desc?: string }) => {
       await apiRequest("DELETE", `/api/expenses/${id}`);
       await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "expense", entityId: id });
       return { desc };
     },
-    onSuccess: (_data, variables) => {
-      queryClient.setQueryData(["/api/expenses"], (old: any[]) =>
-        old?.filter((e: any) => e.id !== variables.id) || []
-      );
-      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+    onMutate: async ({ id }: { id: string; desc?: string }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/expenses"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const prevExpenses = queryClient.getQueryData<any[]>(["/api/expenses"]);
+      const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
+      queryClient.setQueryData<any[]>(["/api/expenses"], (old) => (old || []).filter((e: any) => e.id !== id));
+      queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.relatedExpenses) return old;
-        return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== variables.id) };
+        return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
       });
+      return { prevExpenses, prevDetail };
+    },
+    onSuccess: (_data, variables) => {
       toast({ title: `"${variables.desc || "Expense"}" deleted` });
       setDeleteExpenseId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
@@ -4013,7 +4044,11 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _vars, ctx: any) => {
+      if (ctx?.prevExpenses !== undefined) queryClient.setQueryData(["/api/expenses"], ctx.prevExpenses);
+      if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
+      toast({ title: "Failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   function openEdit(expense: ProfileDetail["relatedExpenses"][number]) {
@@ -4061,19 +4096,18 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       {/* ═══════════════════════════════════════════════════════ */}
       {["self","person"].includes(profile.type) && (() => {
         const children = (profile as any).childProfiles || [];
-        // Assets: vehicles, property, investments, banking with a value field
+        // BUG-20260528-asset-resolver-duplication: previous inline reducer
+        // missed nested namespace paths (fields.housing.*, fields.finance.*,
+        // fields.other.*, fields.estimatedValue, fields.cost, etc.), causing
+        // this card's net worth to differ from the Dashboard. Now uses the
+        // canonical resolveAssetValue / resolveLiabilityBalance from
+        // shared/asset-value.ts.
         const assetTypes = ["vehicle","property","investment","asset","account","banking"];
         const assets = children.filter((c: any) => assetTypes.includes(c.type));
-        const totalAssets = assets.reduce((s: number, c: any) => {
-          const val = Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || c.fields?.accountBalance || 0);
-          return s + val;
-        }, 0);
+        const totalAssets = assets.reduce((s: number, c: any) => s + resolveAssetValue(c), 0);
         // Liabilities: loans with a balance (parent-child)
-        const loans = children.filter((c: any) => c.type === "loan" || c.type === "liability" || c.fields?.loanBalance || c.fields?.remainingBalance);
-        const childLiabilitiesTotal = loans.reduce((s: number, c: any) => {
-          const bal = Number(c.fields?.remainingBalance || c.fields?.loanBalance || c.fields?.balance || 0);
-          return s + bal;
-        }, 0);
+        const loans = children.filter((c: any) => c.type === "loan" || c.type === "liability" || resolveLiabilityBalance(c) > 0);
+        const childLiabilitiesTotal = loans.reduce((s: number, c: any) => s + resolveLiabilityBalance(c), 0);
         // Shared liabilities (linked via liability_profile_links, e.g. co-owned mortgage).
         // Use the user's ownership share, not the full balance.
         const totalLiabilities = childLiabilitiesTotal + sharedLiabilitiesUserShare;
@@ -6039,20 +6073,30 @@ function TasksTab({
     onError: (err: Error) => toast({ title: "Failed to create task", description: formatApiError(err), variant: "destructive" }),
   });
 
+  // BUG-20260528-mutation-onmutate-rollback: setQueryData moved to onMutate
+  // with snapshot/rollback. See ARCHITECTURE.md §5.3.
   const deleteTaskMutation = useMutation({
     mutationFn: async ({ id, title }: { id: string; title?: string }) => {
       await apiRequest("DELETE", `/api/tasks/${id}`);
       await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "task", entityId: id });
       return { title };
     },
-    onSuccess: (_data, variables) => {
+    onMutate: async ({ id }: { id: string; title?: string }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      // Snapshot all /api/tasks query slots since we use setQueriesData
+      const prevTasksAll = queryClient.getQueriesData<any>({ queryKey: ["/api/tasks"] });
+      const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
       queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
-        Array.isArray(old) ? old.filter((t: any) => t.id !== variables.id) : old
+        Array.isArray(old) ? old.filter((t: any) => t.id !== id) : old
       );
-      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+      queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.tasks) return old;
-        return { ...old, tasks: old.tasks.filter((t: any) => t.id !== variables.id) };
+        return { ...old, tasks: old.tasks.filter((t: any) => t.id !== id) };
       });
+      return { prevTasksAll, prevDetail };
+    },
+    onSuccess: (_data, variables) => {
       toast({ title: `"${variables.title || "Task"}" deleted` });
       setDeleteTaskId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
@@ -6061,7 +6105,13 @@ function TasksTab({
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _vars, ctx: any) => {
+      if (ctx?.prevTasksAll) {
+        for (const [key, val] of ctx.prevTasksAll) queryClient.setQueryData(key, val);
+      }
+      if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
+      toast({ title: "Failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   // Default to "open" so completed tasks don't clutter the main view.

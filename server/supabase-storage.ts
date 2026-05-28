@@ -21,6 +21,12 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { passesProfileFilter } from "../shared/profile-filter";
 import {
+  parseMoney as _sharedParseMoney,
+  resolveAssetValue as _sharedResolveAssetValue,
+  resolveLiabilityBalance as _sharedResolveLiabilityBalance,
+} from "../shared/asset-value";
+import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
+import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
   type Task, type InsertTask,
@@ -181,105 +187,12 @@ export function stripFromNestedGroups(fields: Record<string, any>, keys: string[
   }
 }
 
-/**
- * Parse a money-ish value into a number. Handles strings like "$25,000", "40k", "1.2m".
- * Number("$25,000") returns NaN — this is the root cause of asset values showing $0.
- */
-function parseMoney(input: any): number {
-  if (input == null) return 0;
-  if (typeof input === "number") return Number.isFinite(input) ? input : 0;
-  const s = String(input).trim();
-  if (!s) return 0;
-  const cleaned = s.replace(/[^0-9.\-kKmMbB]/g, "").trim();
-  if (!cleaned) return 0;
-  const m = cleaned.match(/^(-?\d*\.?\d+)([kKmMbB])?$/);
-  if (!m) {
-    const n = Number(cleaned);
-    return Number.isFinite(n) ? n : 0;
-  }
-  const base = Number(m[1]);
-  if (!Number.isFinite(base)) return 0;
-  const suffix = (m[2] || "").toLowerCase();
-  const mult = suffix === "k" ? 1_000 : suffix === "m" ? 1_000_000 : suffix === "b" ? 1_000_000_000 : 1;
-  return base * mult;
-}
-
-// Resolve the asset's current market value across all known historical storage paths.
-// Different code paths (form save, AI extraction, find-value, legacy migrations) wrote
-// to different nested keys; this checks every known location and returns the first
-// positive number.
-export function resolveAssetValue(fields: any): number {
-  if (!fields || typeof fields !== "object") return 0;
-  const housing = fields.housing || {};
-  const other = fields.other || {};
-  const finance = fields.finance || {};
-  const vehicle = fields.vehicle || {};
-  const vehicles = fields.vehicles || {};
-  const investment = fields.investment || {};
-  // Walk every known nested + snake_case storage path. Different code paths
-  // (form save, AI extraction, find-value, legacy migrations) wrote to different
-  // keys; this checks them all and returns the first positive number. Must stay
-  // in sync with client/src/pages/dashboard.tsx resolveAssetValue.
-  const candidates = [
-    fields.currentValue, fields.current_value, housing.currentValue, housing.current_value, other.currentValue, other.current_value,
-    fields.marketValue, fields.market_value, housing.marketValue, housing.market_value, other.marketValue, other.market_value,
-    fields.estimatedValue, fields.estimated_value,
-    fields.value, other.value,
-    fields.purchasePrice, fields.purchase_price, other.purchasePrice, other.purchase_price, housing.purchasePrice, housing.purchase_price,
-    fields.cost, other.cost,
-    fields.amount, other.amount,
-    fields.price, other.price,
-    fields.balance, finance.balance, finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
-    fields.accountBalance, finance.accountBalance, finance.account_balance,
-    vehicle.purchasePrice, vehicle.purchase_price, vehicle.currentValue, vehicle.current_value, vehicle.value,
-    vehicles.purchasePrice, vehicles.purchase_price, vehicles.currentValue, vehicles.current_value, vehicles.value,
-    investment.balance, investment.value, investment.currentValue, investment.current_value,
-  ];
-  for (const c of candidates) {
-    const n = parseMoney(c);
-    if (n > 0) return n;
-  }
-  return 0;
-}
-
-// Resolve any outstanding loan/debt balance for liability calculations. Includes
-// nested finance.loans[] entries which were created by AI extraction.
-export function resolveLiabilityValue(fields: any): number {
-  if (!fields || typeof fields !== "object") return 0;
-  const finance = fields.finance || {};
-  const loan = fields.loan || {};
-  const other = fields.other || {};
-  // Walk every known camelCase + snake_case + nested storage path. Must stay
-  // in sync with client/src/pages/dashboard.tsx resolveLiabilityBalance.
-  const candidates = [
-    // Phase 2 canonical liability field (writes from LiabilityProfilePage)
-    fields.currentBalance, fields.current_balance,
-    finance.currentBalance, finance.current_balance,
-    loan.currentBalance, loan.current_balance,
-    // Registry snake_case shape (CreateProfileDialog with auto_loan/mortgage/etc.)
-    fields.balance,
-    fields.remainingBalance, fields.remaining_balance,
-    fields.loanBalance, fields.loan_balance,
-    fields.outstandingBalance, fields.outstanding_balance,
-    finance.remainingBalance, finance.remaining_balance,
-    finance.loanBalance, finance.loan_balance,
-    finance.outstandingBalance, finance.outstanding_balance, finance.balance,
-    loan.remainingBalance, loan.remaining_balance,
-    loan.balance, loan.outstandingBalance, loan.outstanding_balance,
-    other.remainingBalance, other.remaining_balance, other.balance,
-  ];
-  for (const c of candidates) {
-    const n = parseMoney(c);
-    if (n > 0) return n;
-  }
-  // Sum nested loans[] balances if present
-  const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
-  if (loans.length > 0) {
-    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
-    if (sum > 0) return sum;
-  }
-  return 0;
-}
+// parseMoney / resolveAssetValue / resolveLiabilityValue moved to
+// shared/asset-value.ts (BUG-20260528-asset-resolver-duplication).
+// Re-exported here for backwards compatibility with existing imports.
+const parseMoney = _sharedParseMoney;
+export const resolveAssetValue = _sharedResolveAssetValue;
+export const resolveLiabilityValue = _sharedResolveLiabilityBalance;
 
 // Resolve the monthly payment $ for a liability/loan profile across all known
 // nested storage paths. Used by server endpoints that enrich liability rows
@@ -3876,19 +3789,21 @@ export class SupabaseStorage implements IStorage {
     }).length;
     const habitCompletionRate = allActiveHabits.length > 0 ? Math.round((todayCompleted / allActiveHabits.length) * 100) : 0;
 
-    const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
-    // Include overdue bills (past due) + bills due in next 7 days
-    const upcomingObs = obligations.filter(o => { const due = new Date(o.nextDueDate); return due <= sevenDaysOut; });
-    const monthlyObTotal = obligations.reduce((s, o) => {
-      switch (o.frequency) {
-        case 'weekly': return s + o.amount * 4.33;
-        case 'biweekly': return s + o.amount * 2.17;
-        case 'monthly': return s + o.amount;
-        case 'quarterly': return s + o.amount / 3;
-        case 'yearly': return s + o.amount / 12;
-        default: return s;
-      }
-    }, 0);
+    // BUG-20260528-upcoming-window: getStats() used a 7-day window while
+    // getDashboardEnhanced() used 30 days. Tile count permanently differed
+    // from popup count. Unified to 30 days via UPCOMING_BILL_WINDOW_DAYS.
+    const upcomingCutoff = new Date(now.getTime() + UPCOMING_BILL_WINDOW_DAYS * MS_PER_DAY);
+    const upcomingObs = obligations.filter(o => {
+      const due = new Date(o.nextDueDate);
+      return due <= upcomingCutoff;
+    });
+    // BUG-20260528-monthly-multipliers: previously used truncated 4.33/2.17.
+    // Now uses exact fractions via shared toMonthlyAmount so this total
+    // matches the Finance page and dashboard-enhanced.
+    const monthlyObTotal = obligations.reduce(
+      (s, o) => s + toMonthlyAmount(o.amount, o.frequency),
+      0,
+    );
 
     // Journal streak: walk backwards from today in the user's timezone.
     // Bug #23: even with parseLocalDate(today), the inner setDate/-i +
@@ -4106,16 +4021,11 @@ export class SupabaseStorage implements IStorage {
 
     const upcomingBills = allObligations.filter(o => { const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => ({ id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil: Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000), autopay: o.autopay, category: o.category }));
 
-    const monthlyObligationTotal = allObligations.reduce((s, o) => {
-      switch (o.frequency) {
-        case 'weekly': return s + o.amount * 4.33;
-        case 'biweekly': return s + o.amount * 2.17;
-        case 'monthly': return s + o.amount;
-        case 'quarterly': return s + o.amount / 3;
-        case 'yearly': return s + o.amount / 12;
-        default: return s;
-      }
-    }, 0);
+    // BUG-20260528-monthly-multipliers: unify to exact 52/12, 26/12 via shared toMonthlyAmount.
+    const monthlyObligationTotal = allObligations.reduce(
+      (s, o) => s + toMonthlyAmount(o.amount, o.frequency),
+      0,
+    );
 
     const overdueTasks = allTasks.filter(t => { if (t.status === 'done' || !t.dueDate) return false; return new Date(t.dueDate) < now; }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 

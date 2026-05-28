@@ -40,6 +40,7 @@ import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
+import { passesProfileFilter } from "@shared/profile-filter";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1061,12 +1062,15 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
       if (filterType !== "all" && normalizeFilter(item.type) !== normalizeFilter(filterType)) continue;
-      // Profile filter
+      // BUG-20260528-profile-filter-leakage: previously inline orphan rule
+      // here used `effectiveHasSelf` which only checked `selfProfile.id`,
+      // missing other self-type profiles. Now uses canonical
+      // passesProfileFilter from shared/profile-filter.ts.
       if (effectiveFilterMode === "selected" && effectiveFilterIds.length > 0) {
-        const linked = item.linkedProfiles || [];
-        const matchesProfile = linked.some(id => effectiveFilterIds.includes(id));
-        const isOrphan = effectiveHasSelf && linked.length === 0;
-        if (!matchesProfile && !isOrphan) continue;
+        if (!passesProfileFilter(item.linkedProfiles, {
+          selectedIds: effectiveFilterIds,
+          allProfiles: filterProfiles,
+        })) continue;
       }
       // Normalize date key to YYYY-MM-DD to handle any timestamp suffixes
       const dateKey = item.date?.slice(0, 10);
@@ -1075,7 +1079,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       map[dateKey].push(item);
     }
     return map;
-  }, [timelineItems, filterType, effectiveFilterMode, effectiveFilterIds, effectiveHasSelf]);
+  }, [timelineItems, filterType, effectiveFilterMode, effectiveFilterIds, filterProfiles]);
 
   const days = useMemo(
     () => getMonthDays(viewYear, viewMonth),

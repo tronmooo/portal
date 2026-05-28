@@ -1771,30 +1771,25 @@ If unsure, return "profile_fact".`,
         return e;
       });
 
-      // Compute budget summary in JS — same shape as /api/budgets/summary.
-      const filteredExpenses = (() => {
-        if (!filterIds || filterIds.length === 0) return expensesForBudget;
-        const selfMatch = filterIds.some(id => profiles.find((p: any) => p.id === id)?.type === "self");
-        return expensesForBudget.filter((e: any) => {
-          const arr = Array.isArray(e.linkedProfiles) ? e.linkedProfiles : [];
-          if (arr.length === 0) return selfMatch;
-          return arr.some((id: string) => filterIds.includes(id));
-        });
-      })();
+      // BUG-20260528-profile-filter-leakage: previously inline orphan check
+      // diverged from canonical passesProfileFilter. Replaced with shared
+      // function so /api/dashboard-bootstrap matches /api/expenses exactly.
+      const filteredExpenses = (!filterIds || filterIds.length === 0)
+        ? expensesForBudget
+        : expensesForBudget.filter((e: any) =>
+            passesProfileFilter(e.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles })
+          );
       const monthExpenses = filteredExpenses.filter((e: any) => (e.date || "").slice(0, 7) === month);
       const totalSpent = monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0);
       const totalBudget = (budgets || []).reduce((s: number, b: any) => s + (b.amount || 0), 0);
       const remaining = totalBudget - totalSpent;
 
-      const filteredIncomes = (() => {
-        if (!filterIds || filterIds.length === 0) return incomes;
-        const selfMatch = filterIds.some(id => profiles.find((p: any) => p.id === id)?.type === "self");
-        return incomes.filter((i: any) => {
-          const arr = Array.isArray(i.linkedProfiles) ? i.linkedProfiles : [];
-          if (arr.length === 0) return selfMatch;
-          return arr.some((id: string) => filterIds.includes(id));
-        });
-      })();
+      // BUG-20260528-profile-filter-leakage: same fix for incomes path.
+      const filteredIncomes = (!filterIds || filterIds.length === 0)
+        ? incomes
+        : incomes.filter((i: any) =>
+            passesProfileFilter(i.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles })
+          );
 
       return {
         stats,
@@ -1836,17 +1831,15 @@ If unsure, return "profile_fact".`,
       if (!hit) setCache(ck, dataset, 5 * 60 * 1000); // 5 min — insights aggregates 10 tables; cache-bust middleware drops it on any mutation
       const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] =
         dataset as [Awaited<ReturnType<typeof storage.getProfiles>>, Awaited<ReturnType<typeof storage.getTrackers>>, Awaited<ReturnType<typeof storage.getTasks>>, Awaited<ReturnType<typeof storage.getExpenses>>, Awaited<ReturnType<typeof storage.getHabits>>, Awaited<ReturnType<typeof storage.getObligations>>, Awaited<ReturnType<typeof storage.getJournalEntries>>, Awaited<ReturnType<typeof storage.getDocuments>>, Awaited<ReturnType<typeof storage.getGoals>>, Awaited<ReturnType<typeof storage.getEvents>>];
-      // Filter by ANY of the selected profiles. If any selected ID is a 'self' profile,
-      // legacy items with an empty linkedProfiles list also match.
+      // BUG-20260528-profile-filter-leakage: previously inline mp() that
+      // mirrored passesProfileFilter logic but wasn't the canonical call,
+      // so future changes to passesProfileFilter wouldn't propagate. Now
+      // delegates to the shared function.
       const filterActive = ids.length > 0;
-      const selfMatch = filterActive && ids.some(id => allProfiles.find(p => p.id === id)?.type === 'self');
       const fp = ids.length === 1 ? ids[0] : undefined; // back-compat for downstream code below
-      const mp = (linked: string[]) => {
-        if (!filterActive) return true;
-        const arr = Array.isArray(linked) ? linked : [];
-        if (arr.length === 0) return selfMatch;
-        return arr.some(id => ids.includes(id));
-      };
+      const filterCtx = { selectedIds: ids, allProfiles };
+      const mp = (linked: string[] | null | undefined) =>
+        !filterActive || passesProfileFilter(linked, filterCtx);
       const profiles = allProfiles;
       const trackers = allTrackers.filter(t => mp(t.linkedProfiles));
       const tasks = allTasks.filter(t => mp(t.linkedProfiles));
@@ -4182,6 +4175,25 @@ Rules:
     const updated = await storage.updateObligation(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_o2 = (req as AuthenticatedRequest).userId || "anon";
+    // BUG-20260528-obligation-patch-materialize: previously the PATCH handler
+    // never re-materialized occurrences, so edits to frequency or nextDueDate
+    // wouldn't show on the calendar/obligations list until /materialize was
+    // explicitly called. Now best-effort regenerate so calendar reflects edit.
+    if (
+      req.body.frequency !== undefined ||
+      req.body.nextDueDate !== undefined ||
+      req.body.amount !== undefined ||
+      req.body.startDate !== undefined ||
+      req.body.endDate !== undefined
+    ) {
+      try {
+        const { materializeOccurrences } = await import("./obligation-engine");
+        const supabase = (storage as any).supabase;
+        if (supabase) await materializeOccurrences(supabase, uid_o2, req.params.id);
+      } catch (e: any) {
+        log.warn("[obligation PATCH] materialize failed", e?.message || e);
+      }
+    }
     bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`); bustCache(`notifications:${uid_o2}`);
     res.json(updated);
   }));
