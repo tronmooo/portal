@@ -1737,15 +1737,37 @@ If unsure, return "profile_fact".`,
     if (cached) return res.json(cached);
 
     const data = await dedupe(cacheKey, async () => {
-      // Issue every dependent fetch in ONE parallel wave inside ONE handler.
-      const [stats, enhanced, profiles, incomes, expensesForBudget, budgets] = await Promise.all([
-        storage.getStats(undefined, filterIds),
-        storage.getDashboardEnhanced(undefined, filterIds),
+      // PERF: reuse the per-endpoint server caches so bootstrap is cheap when
+      // /api/stats or /api/dashboard-enhanced have been hit in the last 15s.
+      const statsCacheKey = `stats:${userId}:${filterKey}`;
+      const enhancedCacheKey = `enhanced:${userId}:${filterKey}`;
+
+      // Each of getStats() and getDashboardEnhanced() internally fans out to
+      // ~10 Supabase queries. Running them parallel inside one handler doubles
+      // in-flight load and saturates the connection pool, making the bootstrap
+      // SLOWER than calling them separately. Instead: fetch the lightweight
+      // pieces (profiles/incomes/expenses/budgets) in parallel with stats,
+      // then enhanced serially. Total wall = max(stats, lightweight) + enhanced.
+      const cachedStats = getCached(statsCacheKey);
+      const cachedEnhanced = getCached(enhancedCacheKey);
+
+      const [stats, profiles, incomes, expensesForBudget, budgets] = await Promise.all([
+        cachedStats ?? dedupe(statsCacheKey, async () => {
+          const s = await storage.getStats(undefined, filterIds);
+          setCache(statsCacheKey, s, 15 * 1000);
+          return s;
+        }),
         storage.getProfiles(),
         storage.getIncomes ? storage.getIncomes() : Promise.resolve([] as any[]),
         storage.getExpenses(),
         storage.getBudgets ? storage.getBudgets(month) : Promise.resolve([] as any[]),
       ]);
+
+      const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
+        const e = await storage.getDashboardEnhanced(undefined, filterIds);
+        setCache(enhancedCacheKey, e, 15 * 1000);
+        return e;
+      });
 
       // Compute budget summary in JS — same shape as /api/budgets/summary.
       const filteredExpenses = (() => {
