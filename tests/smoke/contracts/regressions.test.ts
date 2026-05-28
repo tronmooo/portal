@@ -416,5 +416,41 @@ describe("contract: regressions", () => {
     ).toBe(true);
   });
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG-20260528-budget-keep-previous-leak
+  //   When the user switches the dashboard filter to a freshly-created profile
+  //   that owns no budgets, the hero "Budget" tile briefly rendered the prior
+  //   filter's total (e.g. "2% of $2,650" when Lexi owns nothing). Root cause
+  //   was the React Query default `placeholderData: keepPreviousData` which
+  //   carries forward the previous filter's data during a key swap. The server
+  //   already correctly returns budgets=[] for non-self filters; this test
+  //   pins that contract so the server invariant doesn't regress.
+  //
+  // Contract: GET /api/budgets?month=YYYY-MM&profileIds=<non-self profile>
+  //   must return { budgets: [] } regardless of how many budgets exist on the
+  //   account, because budgets are a self-only concept.
+  // ──────────────────────────────────────────────────────────────────────────
+  it("BUG-20260528-budget-keep-previous-leak: non-self profile filter returns empty budgets", async () => {
+    const month = new Date().toISOString().slice(0, 7);
+    // Create a brand-new non-self profile we know owns nothing.
+    const created: any = expectOk(await api("POST", "/profiles", {
+      name: `BudgetLeakProbe-${Date.now()}`,
+      type: "person",
+      relationship: "family",
+      isFamily: true,
+      skipDupCheck: true,
+    }));
+    const probeId = created?.id || created?.profile?.id;
+    expect(probeId, "probe profile id").toBeTruthy();
+    const filtered: any = expectOk(
+      await api("GET", `/budgets?month=${month}&profileIds=${encodeURIComponent(probeId)}`),
+    );
+    expect(filtered?.month, "month echoed").toBe(month);
+    expect(
+      Array.isArray(filtered?.budgets) && filtered.budgets.length === 0,
+      "budgets must be empty for a fresh non-self profile filter",
+    ).toBe(true);
+  });
+
   // Add future regressions BELOW this line. Do not delete previous entries.
 });

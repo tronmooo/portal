@@ -476,6 +476,13 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
+  // BUG-20260528-budget-keep-previous-leak: budgetSummary must NOT inherit the
+  // previous filter's totals during a filter swap. Default queryClient has
+  // placeholderData: keepPreviousData which made a fresh profile (Lexi, no
+  // budgets, no expenses except $50) show "2% of $2,650" — the $2,650 came
+  // from the prior Everyone/Self filter that was still cached. Setting
+  // placeholderData: undefined here forces budgetSummary to show the loading
+  // state during swap and snap to the correct $0 when the new query lands.
   const { data: budgetSummary } = useQuery<{ totalBudget: number; totalSpent: number; remaining: number }>({
     queryKey: ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
     queryFn: async () => {
@@ -491,13 +498,18 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
       return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
     },
     staleTime: 30_000,
+    placeholderData: undefined,
   });
 
   // Income query for cash flow
+  // BUG-20260528-budget-keep-previous-leak: same fix as budgetSummary so the
+  // Cash Flow "In $X" doesn't carry the previous filter's incomes when swapping
+  // to a fresh profile.
   const { data: incomesRaw } = useQuery<any[]>({
     queryKey: ["/api/incomes", filterMode, ...filterIds, "hero"],
     queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()),
     staleTime: 60_000,
+    placeholderData: undefined,
   });
   const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw as any)?.items || [];
 
@@ -2883,6 +2895,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   const budgetSummaryProfileTrailing = filterMode === "selected" && filterIds.length > 0
     ? `&profileIds=${filterIds.join(",")}`
     : "";
+  // BUG-20260528-budget-keep-previous-leak: same fix as the hero budgetSummary
+  // — the Finance Money section budget panel must not carry the previous
+  // filter's $2,650 forward when swapping to a fresh profile like Lexi.
   const { data: budgetData } = useQuery<{month: string; totalBudget: number; totalSpent: number; remaining: number; categories: any[]}>({
     queryKey: ["/api/budgets/summary", currentMonth, filterMode, ...filterIds],
     queryFn: async () => {
@@ -2910,6 +2925,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         })),
       };
     },
+    placeholderData: undefined,
   });
 
   // Bug fix: prefer financeSnapshot.totalMonthlySpend (from /api/dashboard-enhanced, same
