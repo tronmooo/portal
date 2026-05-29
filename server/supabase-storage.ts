@@ -2048,8 +2048,14 @@ export class SupabaseStorage implements IStorage {
   async deleteTask(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this task */
     await this.cleanupEntityLinks("task", id);
+    // Clear both ownership representations together so soft-deleted rows don't
+    //   leave a JSONB↔junction drift on the whole-DB invariant sweep. The
+    //   public diagnostic filters deleted_at IS NULL so it already returns 0,
+    //   but keeping the columns honest keeps the graveyard clean too.
     await this.supabase.from("profile_tasks").delete().eq("task_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("tasks").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("tasks")
+      .update({ deleted_at: new Date().toISOString(), linked_profiles: [] })
+      .eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -2148,8 +2154,11 @@ export class SupabaseStorage implements IStorage {
   async deleteExpense(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this expense */
     await this.cleanupEntityLinks("expense", id);
+    // Clear both ownership representations together — see deleteTask note.
     await this.supabase.from("profile_expenses").delete().eq("expense_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("expenses").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("expenses")
+      .update({ deleted_at: new Date().toISOString(), linked_profiles: [] })
+      .eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -2890,8 +2899,10 @@ export class SupabaseStorage implements IStorage {
     // Clean junction table
     await this.supabase.from("profile_documents").delete().eq("document_id", id).eq("user_id", this.userId);
     // Soft delete the document. Clear file_data to remove residual base64 PII
-    // from the row (the underlying Storage blob is removed below).
-    const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString(), file_data: '' }).eq("id", id).eq("user_id", this.userId);
+    // from the row (the underlying Storage blob is removed below). Also clear
+    // linked_profiles so the soft-deleted row's two ownership representations
+    // stay in lockstep with the wiped junction — same pattern as deleteExpense.
+    const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString(), file_data: '', linked_profiles: [] }).eq("id", id).eq("user_id", this.userId);
     if (error) {
       console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
       return false;
