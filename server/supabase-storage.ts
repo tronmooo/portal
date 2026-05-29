@@ -632,66 +632,52 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(id);
     if (!profile) return undefined;
 
-    // OPTIMIZED: 2 parallel batches instead of 5 sequential ones (24→15 queries, 5→2 sequential waits)
-    // Batch 1: Junction table lookups + allProfiles (source of truth for entity→profile links)
-    const [ptRows, peRows, pkRows, pvRows, pdRows, poRows, allProfiles] = await Promise.all([
-      this.supabase.from("profile_trackers").select("tracker_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_expenses").select("expense_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_tasks").select("task_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_events").select("event_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_documents").select("document_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.supabase.from("profile_obligations").select("obligation_id").eq("profile_id", id).eq("user_id", this.userId),
-      this.getProfiles(),
-    ]);
-
-    const trackerIds = (ptRows.data || []).map(r => r.tracker_id);
-    const expenseIds = (peRows.data || []).map(r => r.expense_id);
-    const taskIds = (pkRows.data || []).map(r => r.task_id);
-    const eventIds = (pvRows.data || []).map(r => r.event_id);
-    const documentIds = (pdRows.data || []).map(r => r.document_id);
-    const obligationIds = (poRows.data || []).map(r => r.obligation_id);
-
-    // Batch 2: Fetch ALL entities + entries + payments in one parallel batch
-    // (Previously this was 3 separate sequential batches)
+    // FIX 4 Phase 2: query entity rows directly by JSONB containment — the
+    // profile_<type> junction tables were dropped. `linked_profiles @> [id]`
+    // (via PostgREST `.contains`) returns rows that link to this profile.
+    // Trackers/entries/payments are pulled in the same parallel batch.
     const [
+      allProfiles,
       trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
-      trackerEntryRows, obligationPaymentRows, journalRows,
+      journalRows,
     ] = await Promise.all([
-      trackerIds.length > 0
-        ? this.supabase.from("trackers").select("*").eq("user_id", this.userId).in("id", trackerIds).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      expenseIds.length > 0
-        ? this.supabase.from("expenses").select("*").eq("user_id", this.userId).in("id", expenseIds).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      taskIds.length > 0
-        ? this.supabase.from("tasks").select("*").eq("user_id", this.userId).in("id", taskIds).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      eventIds.length > 0
-        ? this.supabase.from("events").select("*").eq("user_id", this.userId).in("id", eventIds).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      documentIds.length > 0
-        ? this.supabase.from("documents")
-            .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
-            .eq("user_id", this.userId).in("id", documentIds).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      obligationIds.length > 0
-        ? this.supabase.from("obligations").select("*").eq("user_id", this.userId).in("id", obligationIds).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      trackerIds.length > 0
-        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).order("timestamp", { ascending: false }).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      obligationIds.length > 0
-        ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIds).order("date", { ascending: false }).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
-      // Pull journal entries linked to this profile. Journal has no junction
-      // table (yet) — we filter by linked_profiles array containment so
-      // "Journal entries about Bob" actually appear on Bob's profile page.
+      this.getProfiles(),
+      this.supabase.from("trackers").select("*")
+        .eq("user_id", this.userId).contains("linked_profiles", [id])
+        .then(r => r.data || []),
+      this.supabase.from("expenses").select("*")
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", [id])
+        .then(r => r.data || []),
+      this.supabase.from("tasks").select("*")
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", [id])
+        .then(r => r.data || []),
+      this.supabase.from("events").select("*")
+        .eq("user_id", this.userId).contains("linked_profiles", [id])
+        .then(r => r.data || []),
+      this.supabase.from("documents")
+        .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", [id])
+        .then(r => r.data || []),
+      this.supabase.from("obligations").select("*")
+        .eq("user_id", this.userId).contains("linked_profiles", [id])
+        .then(r => r.data || []),
       this.supabase.from("journal_entries")
         .select("*")
         .eq("user_id", this.userId)
         .contains("linked_profiles", [id])
         .order("created_at", { ascending: false })
         .then(r => r.data || []),
+    ]);
+
+    const trackerIds = (trackersRes as any[]).map((r: any) => r.id);
+    const obligationIds = (obligationsRes as any[]).map((r: any) => r.id);
+    const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
+      trackerIds.length > 0
+        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).order("timestamp", { ascending: false }).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      obligationIds.length > 0
+        ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIds).order("date", { ascending: false }).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
     ]);
 
     // Build lookup maps for entries/payments
@@ -1039,7 +1025,6 @@ export class SupabaseStorage implements IStorage {
         if (!tracker.linkedProfiles.includes(id)) continue;
         // Delete ALL entries for this tracker (not just ones with profile_id)
         await this.supabase.from("tracker_entries").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
-        await this.supabase.from("profile_trackers").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
         await this.supabase.from("trackers").delete().eq("id", tracker.id).eq("user_id", this.userId);
       }
       // Also catch any orphaned entries with this profile_id on trackers not directly linked
@@ -1063,12 +1048,8 @@ export class SupabaseStorage implements IStorage {
         const lp = exp.linkedProfiles || [];
         if (!lp.includes(id)) continue;
         if (lp.length <= 1) {
-          await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("user_id", this.userId);
           await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
         } else {
-          // Remove the deleted profile from the junction row AND strip from
-          // the JSONB array on the entity row so both stay consistent.
-          await this.supabase.from("profile_expenses").delete().eq("expense_id", exp.id).eq("profile_id", id).eq("user_id", this.userId);
           await this.supabase.from("expenses").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", exp.id).eq("user_id", this.userId);
         }
       }
@@ -1080,10 +1061,8 @@ export class SupabaseStorage implements IStorage {
         const lp = task.linkedProfiles || [];
         if (!lp.includes(id)) continue;
         if (lp.length <= 1) {
-          await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("user_id", this.userId);
           await this.supabase.from("tasks").delete().eq("id", task.id).eq("user_id", this.userId);
         } else {
-          await this.supabase.from("profile_tasks").delete().eq("task_id", task.id).eq("profile_id", id).eq("user_id", this.userId);
           await this.supabase.from("tasks").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", task.id).eq("user_id", this.userId);
         }
       }
@@ -1109,10 +1088,8 @@ export class SupabaseStorage implements IStorage {
         const lp = ob.linkedProfiles || [];
         if (!lp.includes(id)) continue;
         if (lp.length <= 1) {
-          await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("user_id", this.userId);
           await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
         } else {
-          await this.supabase.from("profile_obligations").delete().eq("obligation_id", ob.id).eq("profile_id", id).eq("user_id", this.userId);
           await this.supabase.from("obligations").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", ob.id).eq("user_id", this.userId);
         }
       }
@@ -1124,10 +1101,8 @@ export class SupabaseStorage implements IStorage {
         const lp = ev.linkedProfiles || [];
         if (!lp.includes(id)) continue;
         if (lp.length <= 1) {
-          await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("user_id", this.userId);
           await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
         } else {
-          await this.supabase.from("profile_events").delete().eq("event_id", ev.id).eq("profile_id", id).eq("user_id", this.userId);
           await this.supabase.from("events").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
         }
       }
@@ -1139,10 +1114,8 @@ export class SupabaseStorage implements IStorage {
         const lp = (doc.linkedProfiles || []) as string[];
         if (!lp.includes(id)) continue;
         if (lp.length <= 1) {
-          await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("user_id", this.userId);
           await this.supabase.from("documents").delete().eq("id", doc.id).eq("user_id", this.userId);
         } else {
-          await this.supabase.from("profile_documents").delete().eq("document_id", doc.id).eq("profile_id", id).eq("user_id", this.userId);
           await this.supabase.from("documents").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", doc.id).eq("user_id", this.userId);
         }
       }
@@ -1154,10 +1127,8 @@ export class SupabaseStorage implements IStorage {
         const lp = (art.linkedProfiles || []) as string[];
         if (!lp.includes(id)) continue;
         if (lp.length <= 1) {
-          await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("user_id", this.userId);
           await this.supabase.from("artifacts").delete().eq("id", art.id).eq("user_id", this.userId);
         } else {
-          await this.supabase.from("profile_artifacts").delete().eq("artifact_id", art.id).eq("profile_id", id).eq("user_id", this.userId);
           await this.supabase.from("artifacts").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", art.id).eq("user_id", this.userId);
         }
       }
@@ -1244,81 +1215,68 @@ export class SupabaseStorage implements IStorage {
     return !error && errors.length === 0;
   }
 
-  // Junction table name mapping for each entity type
-  private static JUNCTION_TABLES: Record<string, { table: string; entityCol: string }> = {
-    tracker: { table: "profile_trackers", entityCol: "tracker_id" },
-    expense: { table: "profile_expenses", entityCol: "expense_id" },
-    task: { table: "profile_tasks", entityCol: "task_id" },
-    event: { table: "profile_events", entityCol: "event_id" },
-    document: { table: "profile_documents", entityCol: "document_id" },
-    obligation: { table: "profile_obligations", entityCol: "obligation_id" },
-    artifact: { table: "profile_artifacts", entityCol: "artifact_id" },
-  };
+  // FIX 4 Phase 2: junction-table map removed — every profile_<type> table was
+  //   dropped after the JSONB-vs-junction audit showed 0/17,299 disagreements.
+  //   The `linked_profiles` JSONB column on each entity row is now the sole
+  //   source of truth for non-fractional ownership.
+
 
   // Profile-exclusive entity types: ONE owner only. Adding a second profile is BLOCKED.
   private static readonly PROFILE_EXCLUSIVE: Set<string> = new Set(["tracker", "habit", "goal", "journal"]);
 
   /**
-   * Stage 2/6 invariant: for every entity row this user owns, the JSONB
-   * linked_profiles must equal the set of profile_ids in the matching
-   * junction table. The Stage 2 backfill made this true everywhere; this
-   * method gives the contract test (and future ops dashboards) a cheap
-   * way to assert it stays true.
+   * Ownership invariant — FIX 4 Phase 2 (post-junction-drop).
+   *
+   * The original invariant (JSONB vs. profile_<type> junction) is gone because
+   * the junctions were dropped. The new invariant is: every id in any entity
+   * row's `linked_profiles` array must resolve to an existing profile owned
+   * by the same user. A dangling id means a profile was deleted out from
+   * under an entity, or a write inserted a bogus id.
+   *
+   * Response shape is preserved for backward compat with the existing
+   * contract test and dashboards — `disagreementCount` now counts dangling
+   * references, `jsonbOnlyCount` stays at 0 (legacy slot).
    */
   async getOwnershipConsistency(): Promise<{
     disagreementCount: number;
     jsonbOnlyCount: number;
-    /** Stage 5: assets/liabilities where fields.ownerProfileId points to a profile NOT in the relational link table. */
     financeDisagreementCount: number;
     perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }>;
   }> {
-    const types = [
-      { et: "expense", entityTable: "expenses", junctionTable: "profile_expenses", junctionCol: "expense_id" },
-      { et: "tracker", entityTable: "trackers", junctionTable: "profile_trackers", junctionCol: "tracker_id" },
-      { et: "task", entityTable: "tasks", junctionTable: "profile_tasks", junctionCol: "task_id" },
-      { et: "event", entityTable: "events", junctionTable: "profile_events", junctionCol: "event_id" },
-      { et: "obligation", entityTable: "obligations", junctionTable: "profile_obligations", junctionCol: "obligation_id" },
-      { et: "document", entityTable: "documents", junctionTable: "profile_documents", junctionCol: "document_id" },
-      { et: "artifact", entityTable: "artifacts", junctionTable: "profile_artifacts", junctionCol: "artifact_id" },
+    const entityTables: { et: string; table: string; softDelete: boolean }[] = [
+      { et: "expense", table: "expenses", softDelete: true },
+      { et: "tracker", table: "trackers", softDelete: false },
+      { et: "task", table: "tasks", softDelete: true },
+      { et: "event", table: "events", softDelete: false },
+      { et: "obligation", table: "obligations", softDelete: false },
+      { et: "document", table: "documents", softDelete: true },
+      { et: "artifact", table: "artifacts", softDelete: false },
     ];
+
+    // Build the set of valid profile ids once.
+    const { data: profileRows } = await this.supabase
+      .from("profiles").select("id").eq("user_id", this.userId);
+    const validIds = new Set<string>((profileRows || []).map((r: any) => r.id));
+
     let totalDisagree = 0;
-    let totalJsonbOnly = 0;
     const perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }> = {};
 
-    for (const t of types) {
-      // Pull entity rows (linked_profiles only) and junction rows in parallel,
-      // then compare in JS. For the smoke-fixture-sized accounts this is
-      // cheap; large accounts pay one paginated read per type.
-      const [entities, junctions] = await Promise.all([
-        this.supabase.from(t.entityTable).select("id, linked_profiles").eq("user_id", this.userId).is("deleted_at", null),
-        this.supabase.from(t.junctionTable).select(`${t.junctionCol}, profile_id`).eq("user_id", this.userId),
-      ]);
-      const juncMap = new Map<string, Set<string>>();
-      for (const j of (junctions.data || []) as any[]) {
-        const eid = j[t.junctionCol];
-        const set = juncMap.get(eid) || new Set<string>();
-        set.add(j.profile_id);
-        juncMap.set(eid, set);
+    for (const t of entityTables) {
+      let q = this.supabase.from(t.table).select("id, linked_profiles").eq("user_id", this.userId);
+      if (t.softDelete) q = q.is("deleted_at", null);
+      const { data } = await q;
+      let disagree = 0, agree = 0;
+      const total = (data || []).length;
+      for (const e of (data || []) as any[]) {
+        const lp: string[] = Array.isArray(e.linked_profiles)
+          ? e.linked_profiles.filter((x: any) => typeof x === "string")
+          : [];
+        if (lp.length === 0) continue; // empty arrays don't count toward agree/disagree.
+        const allResolve = lp.every(pid => validIds.has(pid));
+        if (allResolve) agree += 1; else disagree += 1;
       }
-      let disagree = 0, jsonbOnly = 0, agree = 0;
-      const total = (entities.data || []).length;
-      for (const e of (entities.data || []) as any[]) {
-        const lp: string[] = Array.isArray(e.linked_profiles) ? e.linked_profiles.filter((x: any) => typeof x === "string") : [];
-        const junc = juncMap.get(e.id);
-        if (lp.length === 0 && (!junc || junc.size === 0)) continue; // empty/self-only — not counted in agree
-        if (!junc) {
-          if (lp.length > 0) jsonbOnly += 1;
-          continue;
-        }
-        const lpSet = new Set(lp);
-        const sameSize = lpSet.size === junc.size;
-        let allMatch = sameSize;
-        if (allMatch) for (const id of lpSet) if (!junc.has(id)) { allMatch = false; break; }
-        if (allMatch) agree += 1; else disagree += 1;
-      }
-      perType[t.et] = { disagree, jsonbOnly, agree, total };
+      perType[t.et] = { disagree, jsonbOnly: 0, agree, total };
       totalDisagree += disagree;
-      totalJsonbOnly += jsonbOnly;
     }
 
     // Stage 5 invariant: for asset/liability profiles, the relational link
@@ -1367,7 +1325,7 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    return { disagreementCount: totalDisagree, jsonbOnlyCount: totalJsonbOnly, financeDisagreementCount: financeDisagreement, perType };
+    return { disagreementCount: totalDisagree, jsonbOnlyCount: 0, financeDisagreementCount: financeDisagreement, perType };
   }
 
   async linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void> {
@@ -1490,75 +1448,6 @@ export class SupabaseStorage implements IStorage {
   }
 
   /**
-   * Reconcile a profile-junction table with the canonical linked-profile set.
-   *
-   * BUG-20260528-ownership-isolation: every updateX method writes the
-   * linked_profiles JSONB column on the entity row but historically forgot to
-   * sync the profile_<entity> junction table. getX reads union junction+JSONB,
-   * so the stale junction kept entities visible under profiles they no longer
-   * belong to (and invisible under newly-linked ones). This fix mirrors the
-   * inline block that landed in updateTracker (commit dd9f64a) — extracted so
-   * the other five updateX methods don't drift again.
-   *
-   * Callers must pass `nextProfiles` ONLY when the caller actually re-wrote
-   * linked_profiles. If linked_profiles wasn't part of the PATCH, pass
-   * undefined and we skip the diff (no junction changes).
-   */
-  private async syncEntityJunction(
-    entityType: string,
-    entityId: string,
-    nextProfiles: string[] | undefined,
-  ): Promise<void> {
-    if (!Array.isArray(nextProfiles)) return;
-    const spec = (OWNERSHIP_TABLES as any)[entityType];
-    if (!spec || !spec.junctionTable) return;
-    // Stage 1b: delegate to setOwners so JSONB and junction are always written
-    //   together. The caller has already written linked_profiles JSONB —
-    //   setOwners no-ops the JSONB update when the sets match and syncs the
-    //   junction in one diff pass.
-    const self = await this.getSelfProfile();
-    const selfId = self?.id;
-    if (!selfId) {
-      // Fall back to legacy direct junction write only when self is missing
-      //   (very early account setup). Same path as before.
-      const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
-      if (!jt) return;
-      const nextSet = new Set(nextProfiles);
-      const { data: rows } = await this.supabase
-        .from(jt.table).select("profile_id")
-        .eq(jt.entityCol, entityId).eq("user_id", this.userId);
-      const currentSet = new Set((rows || []).map((r: any) => r.profile_id));
-      const toAdd = [...nextSet].filter(p => !currentSet.has(p));
-      const toRemove = [...currentSet].filter(p => !nextSet.has(p));
-      for (const pid of toAdd) {
-        await this.supabase.from(jt.table).upsert(
-          { profile_id: pid, [jt.entityCol]: entityId, user_id: this.userId },
-          { onConflict: `profile_id,${jt.entityCol}` }
-        );
-      }
-      if (toRemove.length > 0) {
-        await this.supabase.from(jt.table).delete()
-          .eq(jt.entityCol, entityId).eq("user_id", this.userId)
-          .in("profile_id", toRemove);
-      }
-      return;
-    }
-    try {
-      await setOwners(
-        this.supabase,
-        this.userId,
-        entityType as OwnedEntityType,
-        entityId,
-        nextProfiles,
-        selfId,
-        { defaultToSelf: false },
-      );
-    } catch (e: any) {
-      console.error(`[syncEntityJunction] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
-    }
-  }
-
-  /**
    * Auto-propagate a document link up the profile chain.
    * When a document is linked to a child profile (e.g., Tesla Model S),
    * also link it to the parent profile (e.g., Me/self) so documents
@@ -1578,15 +1467,9 @@ export class SupabaseStorage implements IStorage {
       if (!parentId || visited.has(parentId)) break;
       visited.add(parentId);
 
-      // Link document to parent profile via junction table + JSONB (dual-write)
+      // FIX 4 Phase 2: junction dropped; use profile.documents JSONB only.
       const parent = await this.getProfile(parentId);
       if (parent) {
-        // Junction table
-        await this.supabase.from("profile_documents").upsert(
-          { profile_id: parentId, document_id: documentId, user_id: this.userId },
-          { onConflict: "profile_id,document_id" }
-        );
-        // JSONB backward compat
         if (!parent.documents.includes(documentId)) {
           parent.documents.push(documentId);
           await this.supabase.from("profiles").update({ documents: parent.documents }).eq("id", parentId).eq("user_id", this.userId);
@@ -1686,13 +1569,12 @@ export class SupabaseStorage implements IStorage {
   // TRACKERS
   // ============================================================
   async getTrackers(daysBack = 120): Promise<Tracker[]> {
-    // Fetch trackers, entries, AND junction table links in 3 parallel queries
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
     // Limit entries to recent data (default 120 days) to avoid slow full-history scans
     const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString();
-    const [trackersResult, entriesResult, junctionResult] = await Promise.all([
+    const [trackersResult, entriesResult] = await Promise.all([
       this.supabase.from("trackers").select("*").eq("user_id", this.userId),
       this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).gte("timestamp", cutoff).order("timestamp", { ascending: true }),
-      this.supabase.from("profile_trackers").select("tracker_id, profile_id").eq("user_id", this.userId),
     ]);
     if (trackersResult.error) throw trackersResult.error;
     // Group entries by tracker_id
@@ -1702,34 +1584,19 @@ export class SupabaseStorage implements IStorage {
       arr.push(e);
       entriesByTracker.set(e.tracker_id, arr);
     }
-    // Build tracker→profile map from junction table
-    const profilesByTracker = new Map<string, string[]>();
-    for (const j of junctionResult.data || []) {
-      const arr = profilesByTracker.get(j.tracker_id) || [];
-      arr.push(j.profile_id);
-      profilesByTracker.set(j.tracker_id, arr);
-    }
-    return (trackersResult.data || []).map(r => {
-      // Merge junction table profiles into linked_profiles (junction is source of truth)
-      const junctionProfiles = profilesByTracker.get(r.id) || [];
-      const jsonbProfiles: string[] = r.linked_profiles || [];
-      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
-      return this.rowToTracker({ ...r, linked_profiles: mergedProfiles }, (entriesByTracker.get(r.id) || []).map(e => this.rowToTrackerEntry(e)));
-    });
+    return (trackersResult.data || []).map(r =>
+      this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map(e => this.rowToTrackerEntry(e))),
+    );
   }
 
   async getTracker(id: string): Promise<Tracker | undefined> {
-    const [{ data, error }, entriesResult, junctionResult] = await Promise.all([
+    const [{ data, error }, entriesResult] = await Promise.all([
       this.supabase.from("trackers").select("*").eq("id", id).eq("user_id", this.userId).single(),
       this.supabase.from("tracker_entries").select("*").eq("tracker_id", id).eq("user_id", this.userId).order("timestamp", { ascending: true }),
-      this.supabase.from("profile_trackers").select("profile_id").eq("tracker_id", id).eq("user_id", this.userId),
     ]);
     if (error || !data) return undefined;
-    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
-    const jsonbProfiles: string[] = data.linked_profiles || [];
-    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
     return this.rowToTracker(
-      { ...data, linked_profiles: mergedProfiles },
+      data,
       (entriesResult.data || []).map(e => this.rowToTrackerEntry(e)),
     );
   }
@@ -1780,30 +1647,7 @@ export class SupabaseStorage implements IStorage {
       icon: merged.icon || null, fields: merged.fields, linked_profiles: merged.linkedProfiles,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // BUG-20260528-tracker-profile-drift: previously this only wrote linked_profiles
-    // JSONB and never touched profile_trackers junction table. getTrackers unions
-    // both sources, so stale junction rows leaked across profile filters
-    // (e.g. Bob filter showed Self's "Lifting" tracker). Sync junction here.
-    if (Array.isArray(data.linkedProfiles)) {
-      const nextSet = new Set(merged.linkedProfiles || []);
-      const { data: junctionRows } = await this.supabase
-        .from("profile_trackers").select("profile_id")
-        .eq("tracker_id", id).eq("user_id", this.userId);
-      const currentSet = new Set((junctionRows || []).map((r: any) => r.profile_id));
-      const toAdd: string[] = [...nextSet].filter((p) => !currentSet.has(p));
-      const toRemove: string[] = [...currentSet].filter((p) => !nextSet.has(p));
-      for (const pid of toAdd) {
-        await this.supabase.from("profile_trackers").upsert(
-          { profile_id: pid, tracker_id: id, user_id: this.userId },
-          { onConflict: "profile_id,tracker_id" }
-        );
-      }
-      if (toRemove.length > 0) {
-        await this.supabase.from("profile_trackers").delete()
-          .eq("tracker_id", id).eq("user_id", this.userId)
-          .in("profile_id", toRemove);
-      }
-    }
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
     return this.getTracker(id);
   }
 
@@ -1956,7 +1800,6 @@ export class SupabaseStorage implements IStorage {
   async deleteTracker(id: string): Promise<boolean> {
     // Delete entries first, then the tracker
     await this.supabase.from("tracker_entries").delete().eq("tracker_id", id).eq("user_id", this.userId);
-    await this.supabase.from("profile_trackers").delete().eq("tracker_id", id).eq("user_id", this.userId);
     /* D1: clean up entity_links rows that reference this tracker */
     await this.cleanupEntityLinks("tracker", id);
     const { error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId);
@@ -1967,38 +1810,19 @@ export class SupabaseStorage implements IStorage {
   // TASKS
   // ============================================================
   async getTasks(): Promise<Task[]> {
-    // Fetch tasks AND junction table links in parallel (junction is source of truth for profile links)
-    const [tasksResult, junctionResult] = await Promise.all([
-      this.supabase.from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null).order("created_at", { ascending: false }),
-      this.supabase.from("profile_tasks").select("task_id, profile_id").eq("user_id", this.userId),
-    ]);
-    if (tasksResult.error) throw tasksResult.error;
-    const profilesByTask = new Map<string, string[]>();
-    for (const j of junctionResult.data || []) {
-      const arr = profilesByTask.get(j.task_id) || [];
-      arr.push(j.profile_id);
-      profilesByTask.set(j.task_id, arr);
-    }
-    return (tasksResult.data || []).map(r => {
-      const junctionProfiles = profilesByTask.get(r.id) || [];
-      const jsonbProfiles: string[] = r.linked_profiles || [];
-      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
-      return this.rowToTask({ ...r, linked_profiles: mergedProfiles });
-    });
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
+    const { data, error } = await this.supabase
+      .from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(r => this.rowToTask(r));
   }
 
   async getTask(id: string): Promise<Task | undefined> {
-    const [{ data, error }, junctionResult] = await Promise.all([
-      this.supabase.from("tasks").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single(),
-      this.supabase.from("profile_tasks").select("profile_id").eq("task_id", id).eq("user_id", this.userId),
-    ]);
+    const { data, error } = await this.supabase
+      .from("tasks").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
-    // Merge junction-table profiles with JSONB column — junction is the source of truth
-    // for list views, so single-item fetch must agree to avoid stale edit modals.
-    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
-    const jsonbProfiles: string[] = data.linked_profiles || [];
-    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
-    return this.rowToTask({ ...data, linked_profiles: mergedProfiles });
+    return this.rowToTask(data);
   }
 
   async createTask(data: InsertTask): Promise<Task> {
@@ -2041,21 +1865,13 @@ export class SupabaseStorage implements IStorage {
       linked_profiles: merged.linkedProfiles, tags: merged.tags,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // BUG-20260528-ownership-isolation: keep profile_tasks junction in lock-step
-    // with linked_profiles JSONB so /api/tasks?profileIds= and the profile-detail
-    // task lists agree. See syncEntityJunction docs above.
-    await this.syncEntityJunction("task", id, (data as any).linkedProfiles);
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
     return this.getTask(id);
   }
 
   async deleteTask(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this task */
     await this.cleanupEntityLinks("task", id);
-    // Clear both ownership representations together so soft-deleted rows don't
-    //   leave a JSONB↔junction drift on the whole-DB invariant sweep. The
-    //   public diagnostic filters deleted_at IS NULL so it already returns 0,
-    //   but keeping the columns honest keeps the graveyard clean too.
-    await this.supabase.from("profile_tasks").delete().eq("task_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("tasks")
       .update({ deleted_at: new Date().toISOString(), linked_profiles: [] })
       .eq("id", id).eq("user_id", this.userId);
@@ -2071,36 +1887,19 @@ export class SupabaseStorage implements IStorage {
   // EXPENSES
   // ============================================================
   async getExpenses(): Promise<Expense[]> {
-    // Fetch expenses AND junction table links in parallel (junction is source of truth)
-    const [expensesResult, junctionResult] = await Promise.all([
-      this.supabase.from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null).order("date", { ascending: false }),
-      this.supabase.from("profile_expenses").select("expense_id, profile_id").eq("user_id", this.userId),
-    ]);
-    if (expensesResult.error) throw expensesResult.error;
-    const profilesByExpense = new Map<string, string[]>();
-    for (const j of junctionResult.data || []) {
-      const arr = profilesByExpense.get(j.expense_id) || [];
-      arr.push(j.profile_id);
-      profilesByExpense.set(j.expense_id, arr);
-    }
-    return (expensesResult.data || []).map(r => {
-      const junctionProfiles = profilesByExpense.get(r.id) || [];
-      const jsonbProfiles: string[] = r.linked_profiles || [];
-      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
-      return this.rowToExpense({ ...r, linked_profiles: mergedProfiles });
-    });
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
+    const { data, error } = await this.supabase
+      .from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null)
+      .order("date", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(r => this.rowToExpense(r));
   }
 
   async getExpense(id: string): Promise<Expense | undefined> {
-    const [{ data, error }, junctionResult] = await Promise.all([
-      this.supabase.from("expenses").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single(),
-      this.supabase.from("profile_expenses").select("profile_id").eq("expense_id", id).eq("user_id", this.userId),
-    ]);
+    const { data, error } = await this.supabase
+      .from("expenses").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
-    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
-    const jsonbProfiles: string[] = data.linked_profiles || [];
-    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
-    return this.rowToExpense({ ...data, linked_profiles: mergedProfiles });
+    return this.rowToExpense(data);
   }
 
   async createExpense(data: InsertExpense): Promise<Expense> {
@@ -2149,16 +1948,13 @@ export class SupabaseStorage implements IStorage {
       linked_profiles: merged.linkedProfiles, tags: merged.tags, date: merged.date,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // BUG-20260528-ownership-isolation: sync profile_expenses junction.
-    await this.syncEntityJunction("expense", id, (data as any).linkedProfiles);
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
     return this.getExpense(id);
   }
 
   async deleteExpense(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this expense */
     await this.cleanupEntityLinks("expense", id);
-    // Clear both ownership representations together — see deleteTask note.
-    await this.supabase.from("profile_expenses").delete().eq("expense_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("expenses")
       .update({ deleted_at: new Date().toISOString(), linked_profiles: [] })
       .eq("id", id).eq("user_id", this.userId);
@@ -2224,36 +2020,19 @@ export class SupabaseStorage implements IStorage {
   // EVENTS
   // ============================================================
   async getEvents(): Promise<CalendarEvent[]> {
-    // Fetch events AND junction table links in parallel (junction is source of truth)
-    const [eventsResult, junctionResult] = await Promise.all([
-      this.supabase.from("events").select("*").eq("user_id", this.userId).order("date", { ascending: false }),
-      this.supabase.from("profile_events").select("event_id, profile_id").eq("user_id", this.userId),
-    ]);
-    if (eventsResult.error) throw eventsResult.error;
-    const profilesByEvent = new Map<string, string[]>();
-    for (const j of junctionResult.data || []) {
-      const arr = profilesByEvent.get(j.event_id) || [];
-      arr.push(j.profile_id);
-      profilesByEvent.set(j.event_id, arr);
-    }
-    return (eventsResult.data || []).map(r => {
-      const junctionProfiles = profilesByEvent.get(r.id) || [];
-      const jsonbProfiles: string[] = r.linked_profiles || [];
-      const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
-      return this.rowToEvent({ ...r, linked_profiles: mergedProfiles });
-    });
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
+    const { data, error } = await this.supabase
+      .from("events").select("*").eq("user_id", this.userId)
+      .order("date", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(r => this.rowToEvent(r));
   }
 
   async getEvent(id: string): Promise<CalendarEvent | undefined> {
-    const [{ data, error }, junctionResult] = await Promise.all([
-      this.supabase.from("events").select("*").eq("id", id).eq("user_id", this.userId).single(),
-      this.supabase.from("profile_events").select("profile_id").eq("event_id", id).eq("user_id", this.userId),
-    ]);
+    const { data, error } = await this.supabase
+      .from("events").select("*").eq("id", id).eq("user_id", this.userId).single();
     if (error || !data) return undefined;
-    const junctionProfiles: string[] = (junctionResult.data || []).map((j: any) => j.profile_id);
-    const jsonbProfiles: string[] = data.linked_profiles || [];
-    const mergedProfiles = [...new Set([...junctionProfiles, ...jsonbProfiles])];
-    return this.rowToEvent({ ...data, linked_profiles: mergedProfiles });
+    return this.rowToEvent(data);
   }
 
   async createEvent(data: InsertEvent): Promise<CalendarEvent> {
@@ -2298,15 +2077,13 @@ export class SupabaseStorage implements IStorage {
       tags: merged.tags, source: merged.source,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // BUG-20260528-ownership-isolation: sync profile_events junction.
-    await this.syncEntityJunction("event", id, (data as any).linkedProfiles);
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
     return this.getEvent(id);
   }
 
   async deleteEvent(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this event */
     await this.cleanupEntityLinks("event", id);
-    await this.supabase.from("profile_events").delete().eq("event_id", id).eq("user_id", this.userId);
     // Hard delete — events table doesn't have deleted_at column
     const { error } = await this.supabase.from("events").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
@@ -2899,8 +2676,7 @@ export class SupabaseStorage implements IStorage {
     } catch (e: any) {
       console.error(`[deleteDocument] Profile cleanup error for ${id}:`, e.message);
     }
-    // Clean junction table
-    await this.supabase.from("profile_documents").delete().eq("document_id", id).eq("user_id", this.userId);
+    // FIX 4 Phase 2: profile_documents junction dropped.
     // Soft delete the document. Clear file_data to remove residual base64 PII
     // from the row (the underlying Storage blob is removed below). Also clear
     // linked_profiles so the soft-deleted row's two ownership representations
@@ -3203,8 +2979,7 @@ export class SupabaseStorage implements IStorage {
       updated_at: new Date().toISOString(),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // BUG-20260528-ownership-isolation: sync profile_obligations junction.
-    await this.syncEntityJunction("obligation", id, (data as any).linkedProfiles);
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
     // Re-materialize when cadence or due date changes — keeps calendar correct.
     if (data.frequency !== undefined || data.nextDueDate !== undefined || data.recurrenceEnd !== undefined) {
       try {
@@ -3309,7 +3084,6 @@ export class SupabaseStorage implements IStorage {
     /* D1: clean up entity_links rows that reference this obligation */
     await this.cleanupEntityLinks("obligation", id);
     await this.supabase.from("obligation_payments").delete().eq("obligation_id", id).eq("user_id", this.userId);
-    await this.supabase.from("profile_obligations").delete().eq("obligation_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("obligations").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
@@ -3442,8 +3216,7 @@ export class SupabaseStorage implements IStorage {
       updated_at: now,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // BUG-20260528-ownership-isolation: sync profile_artifacts junction.
-    await this.syncEntityJunction("artifact", id, (data as any).linkedProfiles);
+    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
     return this.getArtifact(id);
   }
 
@@ -4758,11 +4531,9 @@ export class SupabaseStorage implements IStorage {
     const deleted: Record<string, number> = {};
     const uid = this.userId;
 
-    // Order matters: delete junction/child tables first, then parent tables
+    // Order matters: delete child tables first, then parent tables
+    // FIX 4 Phase 2: profile_<type> junction tables have been dropped.
     const tables = [
-      // Junction tables
-      "profile_expenses", "profile_tasks", "profile_events", "profile_documents",
-      "profile_obligations", "profile_trackers",
       // Child tables
       "tracker_entries", "habit_checkins", "obligation_payments", "domain_entries",
       "entity_links", "audit_log",

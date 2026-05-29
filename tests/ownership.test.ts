@@ -105,14 +105,15 @@ describe("OWNERSHIP_TABLES — the canonical schema map", () => {
     ]);
   });
 
-  it("matches the live junction-table set surveyed on 2026-05-28", () => {
-    // These are the seven entity types whose junction tables exist in prod.
+  it("has no junction tables after FIX 4 Phase 2 — linked_profiles is the only source of truth", () => {
+    // FIX 4 Phase 2 (2026-05-28): the seven profile_<type> junction tables
+    // were dropped. Every entity now uses linked_profiles JSONB exclusively.
+    // Fractional ownership for assets/liabilities still uses
+    // asset_party_links / liability_profile_links, which are not in this map.
     const withJunction = (Object.entries(OWNERSHIP_TABLES) as [string, any][])
       .filter(([, v]) => v.junctionTable !== null)
       .map(([k]) => k).sort();
-    expect(withJunction).toEqual([
-      "artifact", "document", "event", "expense", "obligation", "task", "tracker",
-    ]);
+    expect(withJunction).toEqual([]);
   });
 
   it("uses snake_case junction table names matching `profile_<plural>`", () => {

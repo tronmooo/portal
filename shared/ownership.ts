@@ -45,19 +45,27 @@ export interface OwnershipTableSpec {
 
 /**
  * Single source of truth for which tables back each entity type.
- * If a junction column is `null`, the JSONB is the only storage and there's
- * nothing to sync.
+ *
+ * FIX 4 Phase 2 (2026-05-28): every junctionTable is `null`. The 7
+ * `profile_<type>` junction tables were dropped — the `linked_profiles` JSONB
+ * column on each entity row is now the sole source of ownership truth for
+ * non-fractional linkage, per the user's original spec
+ * ("exactly ONE source, ONE reader, ONE writer"). Fractional ownership for
+ * assets and liabilities lives in `asset_party_links` /
+ * `liability_profile_links` and is read directly by the finance code path —
+ * those tables are deliberately NOT part of OWNERSHIP_TABLES because they
+ * carry percentages that a flat array cannot express.
  */
 export const OWNERSHIP_TABLES: Record<OwnedEntityType, OwnershipTableSpec> = {
-  expense: { entityTable: "expenses", junctionTable: "profile_expenses", junctionEntityColumn: "expense_id" },
-  tracker: { entityTable: "trackers", junctionTable: "profile_trackers", junctionEntityColumn: "tracker_id" },
-  task: { entityTable: "tasks", junctionTable: "profile_tasks", junctionEntityColumn: "task_id" },
-  event: { entityTable: "events", junctionTable: "profile_events", junctionEntityColumn: "event_id" },
-  obligation: { entityTable: "obligations", junctionTable: "profile_obligations", junctionEntityColumn: "obligation_id" },
+  expense: { entityTable: "expenses", junctionTable: null, junctionEntityColumn: null },
+  tracker: { entityTable: "trackers", junctionTable: null, junctionEntityColumn: null },
+  task: { entityTable: "tasks", junctionTable: null, junctionEntityColumn: null },
+  event: { entityTable: "events", junctionTable: null, junctionEntityColumn: null },
+  obligation: { entityTable: "obligations", junctionTable: null, junctionEntityColumn: null },
   habit: { entityTable: "habits", junctionTable: null, junctionEntityColumn: null },
   goal: { entityTable: "goals", junctionTable: null, junctionEntityColumn: null },
-  artifact: { entityTable: "artifacts", junctionTable: "profile_artifacts", junctionEntityColumn: "artifact_id" },
-  document: { entityTable: "documents", junctionTable: "profile_documents", junctionEntityColumn: "document_id" },
+  artifact: { entityTable: "artifacts", junctionTable: null, junctionEntityColumn: null },
+  document: { entityTable: "documents", junctionTable: null, junctionEntityColumn: null },
   income: { entityTable: "incomes", junctionTable: null, junctionEntityColumn: null },
   journal_entry: { entityTable: "journal_entries", junctionTable: null, junctionEntityColumn: null },
 };
