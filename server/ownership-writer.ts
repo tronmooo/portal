@@ -208,7 +208,7 @@ export async function setOwners(
       }));
       const { error: insErr } = await sb
         .from(spec.junctionTable)
-        .upsert(rows, { onConflict: `${spec.junctionEntityColumn},profile_id` });
+        .upsert(rows, { onConflict: `profile_id,${spec.junctionEntityColumn}` });
       if (insErr) throw new Error(`setOwners insert junction ${spec.junctionTable} failed: ${insErr.message}`);
       junctionChanged = true;
     }
