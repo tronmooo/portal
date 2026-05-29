@@ -4066,7 +4066,10 @@ export default function DashboardPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-semibold text-foreground/90 tracking-tight">
-              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+              {/* Part D: render the header date in the user's timezone, not the
+                  JS engine's local zone. BROWSER_TIMEZONE falls back to
+                  America/Los_Angeles, matching the server's _timezone default. */}
+              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: BROWSER_TIMEZONE })}
             </p>
             <span className="text-xs text-muted-foreground/60">·</span>
             <MultiProfileFilter
