@@ -8332,38 +8332,49 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
   try {
     // Build the tool_use conversation loop.
-    // BUG-20260528-ai-history-replay: previously we appended the last 6 messages
-    // (user + assistant) of history. The assistant's prior text replies contain
-    // phrases like "Logged Groceries $50, Hockey 50 min, Ice Cream 270 cal" —
-    // Claude was interpreting those as a TODO list on the NEXT turn and
-    // re-emitting tool_use blocks for every entity mentioned, duplicating data.
-    // Fix: pass ONLY prior user turns as history (they convey intent context).
-    // Assistant replies are dropped — the DB already reflects what happened, and
-    // the system prompt's EXISTING DATA section provides fresh state.
+    //
+    // BUG-20260529-ai-history-execute (this fix): commit 3d9d17f tried to
+    // stop history replay by DROPPING all assistant turns and merging old
+    // user turns into the new one with "---" separators. That caused a far
+    // worse bug: Claude saw [user A] --- [user B] as ONE pending request
+    // with multiple unfulfilled action items, and fired tool calls for both.
+    // Repro: with history=[{user:"chicken sandwich + 2mi run"},{assistant:"logged"}]
+    // and message="dentist tomorrow at 10pm", the agent logged a chicken
+    // sandwich + a run instead of (or alongside) the dentist event.
+    //
+    // The original replay bug commit 3d9d17f was trying to fix is already
+    // defended by the per-tool dedup guards added in layer 2 of that commit
+    // plus the "NEVER ASSUME PAST ACTIONS STILL EXIST" system-prompt rule.
+    // So the correct shape is: keep proper user/assistant alternation, just
+    // like a normal chat. The model can then see prior requests were already
+    // resolved by prior assistant turns and won't re-fire their tool calls.
     let messages: Anthropic.Messages.MessageParam[] = [];
     if (conversationHistory && conversationHistory.length > 0) {
+      // Walk the last 6 turns and emit them, enforcing strict user/assistant
+      // alternation. Drop malformed entries. Merge consecutive same-role
+      // turns (rare — client should already alternate) so the API doesn't
+      // 400 on us. Drop a leading assistant turn since Claude requires the
+      // conversation to start with a user message.
       const recent = conversationHistory.slice(-6);
       for (const msg of recent) {
-        // Only carry forward USER turns. Assistant turns are the bug vector.
-        if (msg?.role !== "user") continue;
+        if (msg?.role !== "user" && msg?.role !== "assistant") continue;
         if (typeof msg.content !== "string") continue;
         const cleaned = sanitize(msg.content);
         const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
         if (!content) continue;
-        // We need to keep messages strictly alternating user/assistant/user for
-        // Claude API compliance. Two user turns in a row are not allowed inside
-        // the messages array prior to the new user turn appended below. Merge
-        // consecutive user turns with a separator instead.
         const last = messages[messages.length - 1];
-        if (last && last.role === "user") {
+        if (last && last.role === msg.role) {
           last.content = `${last.content}\n---\n${content}`;
         } else {
-          messages.push({ role: "user", content });
+          // Claude requires the messages array to start with a user turn.
+          if (messages.length === 0 && msg.role === "assistant") continue;
+          messages.push({ role: msg.role, content });
         }
       }
     }
-    // Append the current user message. If the last carried-forward message is
-    // also a user turn, merge so we don't violate alternation.
+    // Append the current user message. If the last carried-forward turn is
+    // also a user turn (e.g. history ended on a user message with no
+    // assistant reply persisted yet), merge so we don't break alternation.
     const lastCarried = messages[messages.length - 1];
     if (lastCarried && lastCarried.role === "user") {
       lastCarried.content = `${lastCarried.content}\n---\n${userMessage}`;
