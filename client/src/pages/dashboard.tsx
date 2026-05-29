@@ -2968,14 +2968,14 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     if (filterIds.includes(p.id)) return true;
     return false;
   }), [allProfiles, filterMode, filterIds]);
-  const totalAssetValue = useMemo(
-    () => allProfiles ? assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0) : (data?.totalAssetValue || 0),
-    [allProfiles, assetProfiles, data?.totalAssetValue]
-  );
-  const totalLiabilities = useMemo(
-    () => allProfiles ? tileLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0) : (data?.totalLiabilities || 0),
-    [allProfiles, tileLiabilityProfiles, data?.totalLiabilities]
-  );
+  // SCOPE CONTRACT: the server's financeSnapshot (data.totalAssetValue /
+  // data.totalLiabilities) is the single source of truth for roll-up numbers.
+  // It is party_links + parent-residual aware; the client-side walk over
+  // allProfiles is parent-only and diverges on co-ownership/wrong-link data.
+  // Prefer the server numbers; fall back to the client walk only for the brief
+  // window before /api/dashboard-enhanced resolves.
+  const totalAssetValue = data?.totalAssetValue ?? (assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0));
+  const totalLiabilities = data?.totalLiabilities ?? (tileLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0));
   const netWorth = totalAssetValue - totalLiabilities;
 
   if (!data && !stats) {
@@ -3228,6 +3228,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         // Compute the popup total from the SAME items rendered below — guarantees
         // the headline figure always matches the sum of the breakdown rows under
         // every filter (Everyone, single profile, multi-select).
+        // SCOPE CONTRACT: headline total comes from the server financeSnapshot
+        // (party_links + parent-residual aware), matching the Hero KPI and the
+        // Finance card. The per-line breakdown rows below still come from the
+        // client profile walk for display; the headline does not sum them.
         const filteredAssetTotal = assetProfiles.reduce(
           (s: number, p: any) => s + resolveAssetValue(p),
           0
@@ -3236,7 +3240,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           (s: number, p: any) => s + resolveLiabilityBalance(p),
           0
         );
-        const filteredNetWorth = filteredAssetTotal - filteredLiabilityTotal;
+        const netAssetTotal = data?.totalAssetValue ?? filteredAssetTotal;
+        const netLiabilityTotal = data?.totalLiabilities ?? filteredLiabilityTotal;
+        const filteredNetWorth = netAssetTotal - netLiabilityTotal;
         return (
           <DrillDownDialog
             open={drill === "networth"}

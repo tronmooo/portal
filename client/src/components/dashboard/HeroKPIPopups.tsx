@@ -184,6 +184,18 @@ export function NetWorthPopup({
     enabled: open,
   });
 
+  // SCOPE CONTRACT: the server financeSnapshot is the single source of truth for
+  // the headline/tab totals (party_links + parent-residual aware). The client
+  // walk below still drives the per-line breakdown rows; only the displayed
+  // totals are pinned to the server so this popup agrees with the Hero KPI tile
+  // and the Finance card to the dollar.
+  const param = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: enhancedRes } = useQuery<any>({
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds, "networth"],
+    queryFn: async () => (await apiRequest("GET", `/api/dashboard-enhanced${param}`)).json(),
+    enabled: open,
+  });
+
   // FIX 2: route through the canonical `isInScope` primitive so this popup
   //   answers the same question with the same logic as every other surface.
   //   Candidates come from one place only: the profile's own id and its
@@ -222,7 +234,12 @@ export function NetWorthPopup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allProfiles, filterMode, filterIds.join(",")]);
 
-  const netWorth = totalA - totalL;
+  // Pin displayed totals to the server financeSnapshot; fall back to the client
+  // walk only until /api/dashboard-enhanced resolves.
+  const snap = enhancedRes?.financeSnapshot;
+  const displayTotalA = snap?.totalAssetValue ?? totalA;
+  const displayTotalL = snap?.totalLiabilities ?? totalL;
+  const netWorth = displayTotalA - displayTotalL;
 
   return (
     <MetricPopupShell
@@ -241,16 +258,16 @@ export function NetWorthPopup({
         <Tabs defaultValue="assets" className="w-full">
           <TabsList className="grid w-full grid-cols-2 rounded-none border-b">
             <TabsTrigger value="assets" className="text-xs">
-              Assets <span className="ml-1.5 text-muted-foreground tabular-nums">${fmt(totalA)}</span>
+              Assets <span className="ml-1.5 text-muted-foreground tabular-nums">${fmt(displayTotalA)}</span>
             </TabsTrigger>
             <TabsTrigger value="liabilities" className="text-xs">
-              Liabilities <span className="ml-1.5 text-muted-foreground tabular-nums">${fmt(totalL)}</span>
+              Liabilities <span className="ml-1.5 text-muted-foreground tabular-nums">${fmt(displayTotalL)}</span>
             </TabsTrigger>
           </TabsList>
           <TabsContent value="assets" className="m-0">
             <EntityList
               items={assets}
-              total={totalA}
+              total={displayTotalA}
               emptyLabel="No assets yet"
               addLabel="Add asset"
               onAdd={() => navigate("/editor/new/asset")}
@@ -260,7 +277,7 @@ export function NetWorthPopup({
           <TabsContent value="liabilities" className="m-0">
             <EntityList
               items={liabilities}
-              total={totalL}
+              total={displayTotalL}
               emptyLabel="No liabilities yet"
               addLabel="Add liability"
               onAdd={() => navigate("/editor/new/liability")}
