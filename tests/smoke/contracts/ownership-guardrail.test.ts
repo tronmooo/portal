@@ -138,7 +138,15 @@ describe("contract: ownership guardrail (BUG-20260528-ownership-three-systems)",
     expect(r.ok, `diagnostics endpoint failed: ${r.status}`).toBe(true);
     const d = r.data as any;
     expect(d.disagreementCount, `smoke user has ${d.disagreementCount} JSONB↔junction disagreements`).toBe(0);
-    expect(d.jsonbOnlyCount, `smoke user has ${d.jsonbOnlyCount} JSONB rows missing junction entries`).toBe(0);
+    expect(d.jsonbOnlyCount, `smoke user has ${d.jsonbOnlyCount} JSONB rows missing junction entries`).toBe(0);
+    // Stage 5: relational asset/liability link table is the source of truth.
+    //   The legacy fields.ownerProfileId hint must never disagree with it.
+    //   `financeDisagreementCount` is optional in the response so older
+    //   deployments don't fail this check.
+    if (typeof d.financeDisagreementCount === "number") {
+      expect(d.financeDisagreementCount,
+        `smoke user has ${d.financeDisagreementCount} asset/liability rows where fields.ownerProfileId disagrees with the relational link table`).toBe(0);
+    }
   });
 
   it("GUARDRAIL-4: dashboard totals respect ownership filters end-to-end", async () => {

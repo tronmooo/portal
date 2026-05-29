@@ -1265,6 +1265,8 @@ export class SupabaseStorage implements IStorage {
   async getOwnershipConsistency(): Promise<{
     disagreementCount: number;
     jsonbOnlyCount: number;
+    /** Stage 5: assets/liabilities where fields.ownerProfileId points to a profile NOT in the relational link table. */
+    financeDisagreementCount: number;
     perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }>;
   }> {
     const types = [
@@ -1316,7 +1318,53 @@ export class SupabaseStorage implements IStorage {
       totalJsonbOnly += jsonbOnly;
     }
 
-    return { disagreementCount: totalDisagree, jsonbOnlyCount: totalJsonbOnly, perType };
+    // Stage 5 invariant: for asset/liability profiles, the relational link
+    //   table is the source of truth. Any legacy `fields.ownerProfileId` value
+    //   that disagrees with the link table is a drift.
+    let financeDisagreement = 0;
+    const { data: financeProfiles } = await this.supabase
+      .from("profiles")
+      .select("id, type, type_key, fields")
+      .eq("user_id", this.userId);
+    const assetIds: string[] = [];
+    const liaIds: string[] = [];
+    const isAsset = (p: any) => ["asset", "vehicle", "property", "investment"].includes(p.type)
+      || ["asset", "vehicle", "property", "electronics", "jewelry", "collectible", "art", "high_value_item"].includes(p.type_key);
+    const isLia = (p: any) => ["liability", "loan"].includes(p.type);
+    for (const p of (financeProfiles || []) as any[]) {
+      if (isAsset(p)) assetIds.push(p.id);
+      else if (isLia(p)) liaIds.push(p.id);
+    }
+    const [assetLinks, liaLinks] = await Promise.all([
+      assetIds.length > 0
+        ? this.supabase.from("asset_party_links").select("asset_profile_id, party_profile_id").in("asset_profile_id", assetIds)
+        : Promise.resolve({ data: [] as any[] }),
+      liaIds.length > 0
+        ? this.supabase.from("liability_profile_links").select("liability_profile_id, party_profile_id").in("liability_profile_id", liaIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const assetLinkMap = new Map<string, Set<string>>();
+    for (const l of (assetLinks.data || []) as any[]) {
+      const s = assetLinkMap.get(l.asset_profile_id) || new Set<string>();
+      s.add(l.party_profile_id);
+      assetLinkMap.set(l.asset_profile_id, s);
+    }
+    const liaLinkMap = new Map<string, Set<string>>();
+    for (const l of (liaLinks.data || []) as any[]) {
+      const s = liaLinkMap.get(l.liability_profile_id) || new Set<string>();
+      s.add(l.party_profile_id);
+      liaLinkMap.set(l.liability_profile_id, s);
+    }
+    for (const p of (financeProfiles || []) as any[]) {
+      const fieldOwner: string | undefined = p?.fields?.ownerProfileId;
+      if (!fieldOwner || typeof fieldOwner !== "string") continue;
+      const linkSet = isAsset(p) ? assetLinkMap.get(p.id) : isLia(p) ? liaLinkMap.get(p.id) : undefined;
+      if (!linkSet || !linkSet.has(fieldOwner)) {
+        financeDisagreement += 1;
+      }
+    }
+
+    return { disagreementCount: totalDisagree, jsonbOnlyCount: totalJsonbOnly, financeDisagreementCount: financeDisagreement, perType };
   }
 
   async linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void> {
@@ -1347,31 +1395,32 @@ export class SupabaseStorage implements IStorage {
 
     // Stage 1b: route the ownership write through the single writer. setOwners
     //   atomically updates the JSONB column and syncs the junction table.
+    //   We deliberately call setOwners even when the profile is already in
+    //   the JSONB list — setOwners reconciles the junction too, so this is
+    //   what catches createX paths that wrote linked_profiles inline before
+    //   calling here. If everything is already in sync, setOwners no-ops.
     if (entityTable && (OWNERSHIP_TABLES as any)[entityType]) {
-      // Read current owners, append this profile, defer to setOwners which
-      //   skips no-op writes when the set is unchanged.
       const { data: entityRow } = await this.supabase
         .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).maybeSingle();
       if (entityRow) {
         const current: string[] = Array.isArray(entityRow.linked_profiles)
           ? entityRow.linked_profiles.filter((x: any) => typeof x === "string")
           : [];
-        if (!current.includes(profileId)) {
-          const self = await this.getSelfProfile();
-          const selfId = self?.id || profileId; // Worst case, default to the new owner.
-          try {
-            await setOwners(
-              this.supabase,
-              this.userId,
-              entityType as OwnedEntityType,
-              entityId,
-              [...current, profileId],
-              selfId,
-              { defaultToSelf: false },
-            );
-          } catch (e: any) {
-            console.error(`[linkProfileTo] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
-          }
+        const next = current.includes(profileId) ? current : [...current, profileId];
+        const self = await this.getSelfProfile();
+        const selfId = self?.id || profileId; // Worst case, default to the new owner.
+        try {
+          await setOwners(
+            this.supabase,
+            this.userId,
+            entityType as OwnedEntityType,
+            entityId,
+            next,
+            selfId,
+            { defaultToSelf: false },
+          );
+        } catch (e: any) {
+          console.error(`[linkProfileTo] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
         }
       }
     }

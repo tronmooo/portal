@@ -236,6 +236,8 @@ export interface IStorage {
   getOwnershipConsistency?(): Promise<{
     disagreementCount: number;
     jsonbOnlyCount: number;
+    /** Stage 5: assets/liabilities where fields.ownerProfileId disagrees with relational link table. */
+    financeDisagreementCount: number;
     perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }>;
   }>;
 }

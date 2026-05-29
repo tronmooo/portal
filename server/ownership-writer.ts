@@ -57,10 +57,12 @@ export async function addOwner(
   const current: string[] = Array.isArray(row.linked_profiles)
     ? row.linked_profiles.filter((x: unknown): x is string => typeof x === "string")
     : [];
-  if (current.includes(profileId)) {
-    return { ownerIds: current, defaultedToSelf: false, changed: false };
-  }
-  return setOwners(sb, userId, entityType, entityId, [...current, profileId], selfId, { defaultToSelf: false });
+  // Always defer to setOwners (which reconciles the junction even when the
+  //   JSONB is unchanged). The early `includes` short-circuit would skip
+  //   the junction reconciliation when a prior writer set the JSONB inline
+  //   but didn't touch the junction.
+  const next = current.includes(profileId) ? current : [...current, profileId];
+  return setOwners(sb, userId, entityType, entityId, next, selfId, { defaultToSelf: false });
 }
 
 /**
@@ -160,23 +162,34 @@ export async function setOwners(
 
   const beforeSet = new Set(before);
   const afterSet = new Set(after);
-  const changed = before.length !== after.length || after.some(id => !beforeSet.has(id)) || before.some(id => !afterSet.has(id));
+  const jsonbChanged = before.length !== after.length || after.some(id => !beforeSet.has(id)) || before.some(id => !afterSet.has(id));
 
-  if (!changed) {
-    return { ownerIds: after, defaultedToSelf, changed: false };
+  // Write JSONB if it changed. Skipping a no-op write saves a roundtrip on
+  //   the hot path (most setOwners calls leave the JSONB column alone).
+  if (jsonbChanged) {
+    const { error: updErr } = await sb
+      .from(spec.entityTable)
+      .update({ linked_profiles: after })
+      .eq("id", entityId)
+      .eq("user_id", userId);
+    if (updErr) throw new Error(`setOwners update ${spec.entityTable} failed: ${updErr.message}`);
   }
 
-  // Write JSONB first.
-  const { error: updErr } = await sb
-    .from(spec.entityTable)
-    .update({ linked_profiles: after })
-    .eq("id", entityId)
-    .eq("user_id", userId);
-  if (updErr) throw new Error(`setOwners update ${spec.entityTable} failed: ${updErr.message}`);
-
-  // Sync junction table if this entity type has one.
+  // Always reconcile the junction — even when JSONB was already correct, the
+  //   junction may be stale (e.g. an upstream createX wrote linked_profiles
+  //   inline before calling into this writer). We read the junction's
+  //   current row set and diff against `after` so unrelated rows aren't
+  //   touched.
+  let junctionChanged = false;
   if (spec.junctionTable && spec.junctionEntityColumn) {
-    const { toInsert, toDelete } = diffOwners(before, after);
+    const { data: jrows, error: readJErr } = await sb
+      .from(spec.junctionTable)
+      .select("profile_id")
+      .eq(spec.junctionEntityColumn, entityId)
+      .eq("user_id", userId);
+    if (readJErr) throw new Error(`setOwners read junction ${spec.junctionTable} failed: ${readJErr.message}`);
+    const currentJunction = (jrows || []).map((r: any) => r.profile_id as string);
+    const { toInsert, toDelete } = diffOwners(currentJunction, after);
     if (toDelete.length > 0) {
       const { error: delErr } = await sb
         .from(spec.junctionTable)
@@ -185,6 +198,7 @@ export async function setOwners(
         .eq("user_id", userId)
         .in("profile_id", toDelete);
       if (delErr) throw new Error(`setOwners delete junction ${spec.junctionTable} failed: ${delErr.message}`);
+      junctionChanged = true;
     }
     if (toInsert.length > 0) {
       const rows = toInsert.map(pid => ({
@@ -196,7 +210,13 @@ export async function setOwners(
         .from(spec.junctionTable)
         .upsert(rows, { onConflict: `${spec.junctionEntityColumn},profile_id` });
       if (insErr) throw new Error(`setOwners insert junction ${spec.junctionTable} failed: ${insErr.message}`);
+      junctionChanged = true;
     }
+  }
+
+  const changed = jsonbChanged || junctionChanged;
+  if (!changed) {
+    return { ownerIds: after, defaultedToSelf, changed: false };
   }
 
   // Audit (fire-and-forget — failure here doesn't roll back the data write,

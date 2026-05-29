@@ -1,14 +1,15 @@
 /**
- * Stage 4 — build-time guard for the ownership single-writer.
+ * Stage 3 + 4 — build-time guard for the ownership single-writer/reader.
  *
  * Premise: `linked_profiles` (JSONB owner array on entity rows) and the
  * `profile_<type>` junction tables must only be written by the centralized
- * writer (`server/ownership-writer.ts` and its delegates). Any other code
- * path that writes them risks bringing back the three-systems disagreement
- * the Stage 0\u20136 plan is removing.
+ * writer (`server/ownership-writer.ts` and its delegates), and must only
+ * be read inside the storage layer that exposes them through the `isInScope`
+ * filter. Any other code path that touches them risks bringing back the
+ * three-systems disagreement the Stage 0-6 plan is removing.
  *
  * This test runs as part of the pre-push contracts gate, so a violating
- * commit fails before it can ship. To add a new legitimate writer, add the
+ * commit fails before it can ship. To add a new legitimate caller, add the
  * file path to ALLOWED_WRITERS below and explain why.
  */
 import { describe, it, expect } from "vitest";
@@ -39,13 +40,14 @@ const ALLOWED_WRITERS = new Set<string>([
 
 const FORBIDDEN_PATTERNS: { pattern: RegExp; name: string }[] = [
   // Any update / insert that names `linked_profiles` as a target column.
-  // We deliberately accept reads (selects, filters) \u2014 those are fine; this
-  // is about writes only.
   { pattern: /\.update\s*\(\s*\{[^}]*linked_profiles\s*:/, name: "update({ linked_profiles: ... })" },
   { pattern: /\.upsert\s*\(\s*\{[^}]*linked_profiles\s*:/, name: "upsert({ linked_profiles: ... })" },
   { pattern: /\.insert\s*\(\s*\{[^}]*linked_profiles\s*:/, name: "insert({ linked_profiles: ... })" },
-  // Any write into a profile_<x> junction table.
-  { pattern: /\.from\s*\(\s*["'`]profile_(expenses|trackers|tasks|events|obligations|documents|artifacts)["'`]\s*\)\s*[\s\S]*?\.(insert|upsert|update|delete)\b/, name: "write to profile_<type> junction" },
+  // Any reference to a profile_<x> junction table — read or write. Stage 3
+  //   says list endpoints filter through `isInScope`, never by reading the
+  //   junction directly. Stage 4 says writes go through `setOwners`. Both
+  //   collapse to: only the storage layer mentions these tables.
+  { pattern: /\.from\s*\(\s*["'`]profile_(expenses|trackers|tasks|events|obligations|documents|artifacts)["'`]\s*\)/, name: "reference to profile_<type> junction" },
 ];
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -63,8 +65,8 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-describe("contract: ownership single-writer guard (Stage 4)", () => {
-  it("no file outside the allow-list directly writes linked_profiles or profile_<type> junctions", () => {
+describe("contract: ownership single-writer / single-reader guard (Stages 3+4)", () => {
+  it("no file outside the allow-list directly writes linked_profiles or reads/writes profile_<type> junctions", () => {
     const files = [...walk(SERVER_DIR), ...walk(SHARED_DIR)];
     const violations: { file: string; pattern: string; snippet: string }[] = [];
 
