@@ -31,6 +31,72 @@ export interface SetOwnersResult {
 }
 
 /**
+ * Add a single profile to an entity's owner set without touching the others.
+ *
+ * Thin wrapper over `setOwners` so additive call sites (the old
+ * `linkProfileTo`) can route through the same chokepoint. Returns the
+ * updated owner list. No-op if the profile is already an owner.
+ */
+export async function addOwner(
+  sb: SupabaseClient,
+  userId: string,
+  entityType: OwnedEntityType,
+  entityId: string,
+  profileId: string,
+  selfId: string,
+): Promise<SetOwnersResult> {
+  const spec = OWNERSHIP_TABLES[entityType];
+  const { data: row, error } = await sb
+    .from(spec.entityTable)
+    .select("linked_profiles")
+    .eq("id", entityId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(`addOwner read failed: ${error.message}`);
+  if (!row) throw new Error(`addOwner: ${spec.entityTable}/${entityId} not found`);
+  const current: string[] = Array.isArray(row.linked_profiles)
+    ? row.linked_profiles.filter((x: unknown): x is string => typeof x === "string")
+    : [];
+  if (current.includes(profileId)) {
+    return { ownerIds: current, defaultedToSelf: false, changed: false };
+  }
+  return setOwners(sb, userId, entityType, entityId, [...current, profileId], selfId, { defaultToSelf: false });
+}
+
+/**
+ * Remove a single profile from an entity's owner set. If removing the last
+ * owner would leave the row orphaned, the row becomes owned by `selfId`
+ * instead (matching the historic default-to-self behavior of every other
+ * write path).
+ */
+export async function removeOwner(
+  sb: SupabaseClient,
+  userId: string,
+  entityType: OwnedEntityType,
+  entityId: string,
+  profileId: string,
+  selfId: string,
+): Promise<SetOwnersResult> {
+  const spec = OWNERSHIP_TABLES[entityType];
+  const { data: row, error } = await sb
+    .from(spec.entityTable)
+    .select("linked_profiles")
+    .eq("id", entityId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(`removeOwner read failed: ${error.message}`);
+  if (!row) throw new Error(`removeOwner: ${spec.entityTable}/${entityId} not found`);
+  const current: string[] = Array.isArray(row.linked_profiles)
+    ? row.linked_profiles.filter((x: unknown): x is string => typeof x === "string")
+    : [];
+  if (!current.includes(profileId)) {
+    return { ownerIds: current, defaultedToSelf: false, changed: false };
+  }
+  const next = current.filter(id => id !== profileId);
+  return setOwners(sb, userId, entityType, entityId, next, selfId);
+}
+
+/**
  * Set the owners of a single entity row atomically.
  *
  * - Reads the current `linked_profiles` so we can compute the junction diff
