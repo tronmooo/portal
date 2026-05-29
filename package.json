@@ -12,7 +12,7 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "vitest run tests/api-e2e.test.ts --config vitest.config.ts",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:contracts": "vitest run --config vitest.smoke.config.ts",
     "smoke:seed": "tsx tests/smoke/fixture/seed.ts",
     "smoke:reset": "tsx tests/smoke/fixture/seed.ts --reset",

@@ -19,7 +19,7 @@ export default defineConfig({
       'tests/dashboard-filter-perf.test.ts',
       'tests/dashboard-timezone.test.ts',
     ],
-    exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
   },
   resolve: {
