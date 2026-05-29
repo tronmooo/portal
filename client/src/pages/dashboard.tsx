@@ -3825,6 +3825,20 @@ export default function DashboardPage() {
     return unsub;
   }, []);
 
+  // PERF (Part C): gate behind ?perfLog=1 — measure how long a filter switch
+  // takes to surface dashboard-enhanced data. A cached filter should resolve in
+  // <500ms (the keepPreviousData + 30s staleTime + persisted-cache path). The
+  // mark is set the instant the filter changes; the elapsed time is logged when
+  // the next render carries enhanced data for that filter.
+  const perfLogEnabled = typeof window !== "undefined" && /(?:\?|&)perfLog=1\b/.test(window.location.search + window.location.hash);
+  const filterSwitchMarkRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!perfLogEnabled) return;
+    filterSwitchMarkRef.current = performance.now();
+    // eslint-disable-next-line no-console
+    console.log(`[perfLog] filter switch → ${filterMode} [${filterIds.join(",") || "everyone"}] @ ${Math.round(filterSwitchMarkRef.current)}ms`);
+  }, [perfLogEnabled, filterMode, filterIds.join(",")]);
+
   // Fetch profiles for filter
   const { data: allProfiles = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
@@ -3913,6 +3927,16 @@ export default function DashboardPage() {
     // PERF (2026-05-24): see /api/stats note above. Removed `"always"` so
     // returning to the dashboard renders from cache instantly.
   });
+
+  // PERF (Part C): log elapsed time once enhanced data is present after a
+  // filter switch. Cached filters should land well under 500ms.
+  useEffect(() => {
+    if (!perfLogEnabled || !enhanced || filterSwitchMarkRef.current == null) return;
+    const elapsed = performance.now() - filterSwitchMarkRef.current;
+    filterSwitchMarkRef.current = null;
+    // eslint-disable-next-line no-console
+    console.log(`[perfLog] dashboard-enhanced ready for ${filterMode} [${filterIds.join(",") || "everyone"}] in ${Math.round(elapsed)}ms`);
+  }, [perfLogEnabled, enhanced, filterMode, filterIds.join(",")]);
 
   // Load saved dashboard layout from preferences API
   const { data: savedLayoutData } = useQuery<{ value: string } | null>({
