@@ -148,13 +148,23 @@ export async function setOwners(
       })();
 
   // Read current state so we can compute the diff and audit accurately.
-  const { data: row, error: readErr } = await sb
-    .from(spec.entityTable)
-    .select("linked_profiles")
-    .eq("id", entityId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (readErr) throw new Error(`setOwners read failed: ${readErr.message}`);
+  //   We retry the read once on a null result — Supabase has read replicas
+  //   and a SELECT immediately after the INSERT of the same row can hit a
+  //   replica that hasn't caught up yet. Without the retry, callers that
+  //   create+setOwners back-to-back occasionally fail and leave the row
+  //   with an empty owner set.
+  let row: { linked_profiles: unknown } | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data, error: readErr } = await sb
+      .from(spec.entityTable)
+      .select("linked_profiles")
+      .eq("id", entityId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (readErr) throw new Error(`setOwners read failed: ${readErr.message}`);
+    if (data) { row = data; break; }
+    if (attempt < 2) await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
+  }
   if (!row) throw new Error(`setOwners: ${spec.entityTable}/${entityId} not found for user ${userId}`);
   const before: string[] = Array.isArray(row.linked_profiles)
     ? row.linked_profiles.filter((x: unknown): x is string => typeof x === "string")

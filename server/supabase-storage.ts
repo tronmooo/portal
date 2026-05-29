@@ -2007,16 +2007,22 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
+    // Insert empty; setOwners handles both JSONB and junction. See createExpense.
     const { error } = await this.supabase.from("tasks").insert({
       id, user_id: this.userId, title: data.title, description: data.description || null,
       status: (data as any).status || "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
-      linked_profiles: linkedProfiles, tags: data.tags || [],
+      linked_profiles: [], tags: data.tags || [],
       source: (data as any).source || "manual", created_at: now,
     });
     if (error) throw error;
-    // Link to profiles via junction table
-    for (const pId of linkedProfiles) {
-      await this.linkProfileTo(pId, "task", id);
+    if (linkedProfiles.length > 0) {
+      const self = await this.getSelfProfile();
+      const selfId = self?.id || linkedProfiles[0];
+      try {
+        await setOwners(this.supabase, this.userId, "task", id, linkedProfiles, selfId, { defaultToSelf: false });
+      } catch (e: any) {
+        console.error(`[createTask] setOwners failed for ${id.slice(0,8)}: ${e?.message || e}`);
+      }
     }
     this.logActivity("task", `Created task: ${data.title}`);
     return (await this.getTask(id))!;
@@ -2098,17 +2104,27 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
+    // Insert with EMPTY linked_profiles — setOwners writes both the JSONB and
+    //   the junction in one place. Inserting with the populated array and then
+    //   relying on linkProfileTo to fix the junction is racy under replication
+    //   lag: linkProfileTo's read-back can come from a stale replica and skip
+    //   the junction write entirely. Going through setOwners avoids that.
     const { error } = await this.supabase.from("expenses").insert({
       id, user_id: this.userId, amount: data.amount, category: data.category || "general",
       description: data.description, vendor: data.vendor || null,
-      is_recurring: data.isRecurring || false, linked_profiles: linkedProfiles,
+      is_recurring: data.isRecurring || false, linked_profiles: [],
       tags: data.tags || [], date: data.date || now,
       source: (data as any).source || "manual", created_at: now,
     });
     if (error) throw error;
-    // Link to profiles via junction table
-    for (const pId of linkedProfiles) {
-      await this.linkProfileTo(pId, "expense", id);
+    if (linkedProfiles.length > 0) {
+      const self = await this.getSelfProfile();
+      const selfId = self?.id || linkedProfiles[0];
+      try {
+        await setOwners(this.supabase, this.userId, "expense", id, linkedProfiles, selfId, { defaultToSelf: false });
+      } catch (e: any) {
+        console.error(`[createExpense] setOwners failed for ${id.slice(0,8)}: ${e?.message || e}`);
+      }
     }
     this.logActivity("expense", `${data.description} - $${data.amount}`, "create", id);
     return (await this.getExpense(id))!;
