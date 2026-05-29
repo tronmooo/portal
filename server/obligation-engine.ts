@@ -17,6 +17,7 @@
  *     past due. Cheap; bounded by (status='pending' AND due_at < today).
  */
 import { randomUUID } from "crypto";
+import { setOwners } from "./ownership-writer";
 
 // Local-date helper (avoids UTC drift around midnight).
 function parseLocalDate(s: string): Date {
@@ -186,16 +187,39 @@ export async function markOccurrence(
       if (!payErr) update.payment_id = paymentId;
 
       // 2) Auto-log as expense if configured (subscriptions, bills usually).
+      //    Insert the row first, then route ownership through `setOwners` so the
+      //    JSONB column and the `profile_expenses` junction stay in lockstep —
+      //    Stage 1/4 of docs/ownership_consolidation_plan.md.
       if (ob.auto_log_expense) {
-        await supabase.from("expenses").insert({
-          id: randomUUID(), user_id: userId,
+        const expenseId = randomUUID();
+        // NOTE: we intentionally do NOT set `linked_profiles` here. The column
+        //   defaults to '[]'::jsonb, and `setOwners` below is the single writer
+        //   that fills it in alongside the `profile_expenses` junction.
+        const { error: expErr } = await supabase.from("expenses").insert({
+          id: expenseId, user_id: userId,
           amount, category: ob.category || "general",
           description: ob.name, date: today,
-          linked_profiles: ob.linked_profiles || [],
           source: "obligation",
-        }).then(({ error }: any) => {
-          if (error) console.error("[obligation-engine] expense insert failed:", error.message);
         });
+        if (expErr) {
+          console.error("[obligation-engine] expense insert failed:", expErr.message);
+        } else {
+          // Look up self profile so setOwners can default empty owner sets.
+          const { data: selfRow } = await supabase
+            .from("profiles")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("type", "self")
+            .maybeSingle();
+          const selfId = selfRow?.id || "";
+          try {
+            await setOwners(supabase, userId, "expense", expenseId,
+              Array.isArray(ob.linked_profiles) ? ob.linked_profiles : [],
+              selfId);
+          } catch (e: any) {
+            console.error("[obligation-engine] setOwners failed for auto-expense:", e?.message || e);
+          }
+        }
       }
 
       // 3) If this is a loan payment, decrement liability remaining balance.

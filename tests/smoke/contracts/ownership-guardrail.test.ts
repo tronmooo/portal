@@ -127,6 +127,20 @@ describe("contract: ownership guardrail (BUG-20260528-ownership-three-systems)",
     }
   });
 
+  it("GUARDRAIL-INV: smoke account has zero entities where JSONB linked_profiles disagrees with junction", async () => {
+    // The global invariant Stage 2 backfill enforced on the whole DB. We
+    // assert it here for the smoke fixture user via /api/diagnostics/ownership.
+    // If this endpoint isn't available the test soft-skips (returns ok) so
+    // it doesn't block deploys before the endpoint ships, but it WILL detect
+    // any divergence the moment the endpoint is live.
+    const r = await api<any>("GET", "/diagnostics/ownership-consistency");
+    if (r.status === 404) return; // endpoint not yet deployed — soft pass
+    expect(r.ok, `diagnostics endpoint failed: ${r.status}`).toBe(true);
+    const d = r.data as any;
+    expect(d.disagreementCount, `smoke user has ${d.disagreementCount} JSONB↔junction disagreements`).toBe(0);
+    expect(d.jsonbOnlyCount, `smoke user has ${d.jsonbOnlyCount} JSONB rows missing junction entries`).toBe(0);
+  });
+
   it("GUARDRAIL-4: dashboard totals respect ownership filters end-to-end", async () => {
     // After the test above, our guardrail expense (now owned by self only) is
     // an expense, not an asset — but the same invariant applies: filtering

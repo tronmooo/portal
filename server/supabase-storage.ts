@@ -1253,6 +1253,70 @@ export class SupabaseStorage implements IStorage {
   // Profile-exclusive entity types: ONE owner only. Adding a second profile is BLOCKED.
   private static readonly PROFILE_EXCLUSIVE: Set<string> = new Set(["tracker", "habit", "goal", "journal"]);
 
+  /**
+   * Stage 2/6 invariant: for every entity row this user owns, the JSONB
+   * linked_profiles must equal the set of profile_ids in the matching
+   * junction table. The Stage 2 backfill made this true everywhere; this
+   * method gives the contract test (and future ops dashboards) a cheap
+   * way to assert it stays true.
+   */
+  async getOwnershipConsistency(): Promise<{
+    disagreementCount: number;
+    jsonbOnlyCount: number;
+    perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }>;
+  }> {
+    const types = [
+      { et: "expense", entityTable: "expenses", junctionTable: "profile_expenses", junctionCol: "expense_id" },
+      { et: "tracker", entityTable: "trackers", junctionTable: "profile_trackers", junctionCol: "tracker_id" },
+      { et: "task", entityTable: "tasks", junctionTable: "profile_tasks", junctionCol: "task_id" },
+      { et: "event", entityTable: "events", junctionTable: "profile_events", junctionCol: "event_id" },
+      { et: "obligation", entityTable: "obligations", junctionTable: "profile_obligations", junctionCol: "obligation_id" },
+      { et: "document", entityTable: "documents", junctionTable: "profile_documents", junctionCol: "document_id" },
+      { et: "artifact", entityTable: "artifacts", junctionTable: "profile_artifacts", junctionCol: "artifact_id" },
+    ];
+    let totalDisagree = 0;
+    let totalJsonbOnly = 0;
+    const perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }> = {};
+
+    for (const t of types) {
+      // Pull entity rows (linked_profiles only) and junction rows in parallel,
+      // then compare in JS. For the smoke-fixture-sized accounts this is
+      // cheap; large accounts pay one paginated read per type.
+      const [entities, junctions] = await Promise.all([
+        this.supabase.from(t.entityTable).select("id, linked_profiles").eq("user_id", this.userId).is("deleted_at", null),
+        this.supabase.from(t.junctionTable).select(`${t.junctionCol}, profile_id`).eq("user_id", this.userId),
+      ]);
+      const juncMap = new Map<string, Set<string>>();
+      for (const j of (junctions.data || []) as any[]) {
+        const eid = j[t.junctionCol];
+        const set = juncMap.get(eid) || new Set<string>();
+        set.add(j.profile_id);
+        juncMap.set(eid, set);
+      }
+      let disagree = 0, jsonbOnly = 0, agree = 0;
+      const total = (entities.data || []).length;
+      for (const e of (entities.data || []) as any[]) {
+        const lp: string[] = Array.isArray(e.linked_profiles) ? e.linked_profiles.filter((x: any) => typeof x === "string") : [];
+        const junc = juncMap.get(e.id);
+        if (lp.length === 0 && (!junc || junc.size === 0)) continue; // empty/self-only — not counted in agree
+        if (!junc) {
+          if (lp.length > 0) jsonbOnly += 1;
+          continue;
+        }
+        const lpSet = new Set(lp);
+        const sameSize = lpSet.size === junc.size;
+        let allMatch = sameSize;
+        if (allMatch) for (const id of lpSet) if (!junc.has(id)) { allMatch = false; break; }
+        if (allMatch) agree += 1; else disagree += 1;
+      }
+      perType[t.et] = { disagree, jsonbOnly, agree, total };
+      totalDisagree += disagree;
+      totalJsonbOnly += jsonbOnly;
+    }
+
+    return { disagreementCount: totalDisagree, jsonbOnlyCount: totalJsonbOnly, perType };
+  }
+
   async linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void> {
     const profile = await this.getProfile(profileId);
     if (!profile) return;

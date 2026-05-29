@@ -207,7 +207,7 @@ export async function setOwners(
       action: "set_owners",
       entity_type: entityType,
       entity_id: entityId,
-      description: `owners changed from ${JSON.stringify(before)} to ${JSON.stringify(after)}`,
+      details: { before, after },
       source: "ownership-writer",
     })).catch(() => { /* non-blocking */ });
   }

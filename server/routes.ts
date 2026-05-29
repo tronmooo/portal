@@ -1681,6 +1681,18 @@ If unsure, return "profile_fact".`,
   }));
 
   // ---- Dashboard ----
+  // Ownership consolidation invariant probe (Stage 6 guardrail). Returns the
+  // count of entity rows for this user whose JSONB linked_profiles disagrees
+  // with the matching profile_<type> junction table. After Stage 2 backfill
+  // this is 0 everywhere; the smoke contract asserts it stays 0.
+  app.get("/api/diagnostics/ownership-consistency", asyncHandler(async (req, res) => {
+    if (typeof (storage as any).getOwnershipConsistency !== "function") {
+      return res.status(501).json({ error: "not implemented" });
+    }
+    const result = await (storage as any).getOwnershipConsistency();
+    res.json(result);
+  }));
+
   app.get("/api/stats", asyncHandler(async (req, res) => {
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;

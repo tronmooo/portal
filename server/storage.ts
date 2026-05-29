@@ -231,6 +231,13 @@ export interface IStorage {
   getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<import("@shared/schema").OwnershipHistoryEntry[]>;
   recordOwnershipHistory(entry: Omit<import("@shared/schema").OwnershipHistoryEntry, "id" | "changedAt">): Promise<import("@shared/schema").OwnershipHistoryEntry>;
   deleteOwnershipHistoryEntry(id: string): Promise<boolean>;
+
+  // Ownership-consolidation invariant probe (Stage 6 guardrail).
+  getOwnershipConsistency?(): Promise<{
+    disagreementCount: number;
+    jsonbOnlyCount: number;
+    perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }>;
+  }>;
 }
 
 // ---- Human-readable tracker value formatting ----
