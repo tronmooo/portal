@@ -136,3 +136,48 @@ export function diffOwners(
   for (const id of before) if (!afterSet.has(id)) toDelete.push(id);
   return { toInsert, toDelete };
 }
+
+/**
+ * Minimal profile shape needed to resolve an asset/liability's auto-owner.
+ * Only the id, type, and parent pointer matter.
+ */
+export interface AutoOwnerProfile {
+  id: string;
+  type: string;
+  parentProfileId?: string | null;
+}
+
+/**
+ * Resolve the party profile that should own a newly-created asset/liability
+ * when the caller did NOT send explicit ownership (partyLinks/owners/etc).
+ *
+ * The AI expresses ownership by parenting the new entity to a person (or to
+ * one of the person's child profiles, e.g. a house). This walks the parent
+ * chain to the first person/self ancestor:
+ *   - no parent, or the chain is rooted at the Self profile → Self owns it
+ *   - the parent (or an ancestor) is a person          → that person owns it
+ *   - no person/self ancestor (orphan tree)            → null (do NOT claim Self)
+ *
+ * Pure: takes the full profile list so it can walk ancestors with no I/O.
+ * Cycle-safe.
+ */
+export function resolveAutoOwner(
+  parentProfileId: string | null | undefined,
+  allProfiles: readonly AutoOwnerProfile[],
+  selfId: string | null,
+): string | null {
+  if (!parentProfileId) return selfId; // no parent → Self
+  const byId = new Map(allProfiles.map(p => [p.id, p] as const));
+  let cur = byId.get(parentProfileId);
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    if (cur.type === "self") return cur.id;
+    if (cur.type === "person") return cur.id;
+    const nextId = cur.parentProfileId;
+    if (!nextId) break;
+    cur = byId.get(nextId);
+  }
+  // Parent chain has no person/self owner (orphan) → don't auto-claim Self.
+  return null;
+}

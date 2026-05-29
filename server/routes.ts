@@ -6,6 +6,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { resolveAutoOwner } from "@shared/ownership";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 
 /** Extract user timezone from request header, with fallback */
@@ -2246,17 +2247,33 @@ If unsure, return "profile_fact".`,
         Array.isArray((req.body as any).owners) ||
         (req.body as any).partyProfileId ||
         (req.body as any).ownerProfileId;
+      const selfProfile = existing.find(p => p.type === "self");
+      // OWNERSHIP RESOLUTION (Jane Doe fix): the AI creates a person's asset by
+      // setting parentProfileId to the person (or one of the person's child
+      // profiles, e.g. a house), NOT by sending partyLinks/owners. The old hook
+      // ignored parentProfileId and force-linked Self 100%, so every person's
+      // asset/liability was claimed by Self and their net worth read $0.
+      //
+      // A non-Self parent is therefore EXPLICIT ownership. Resolve the owning
+      // party by walking the parent chain up to the first person/self ancestor:
+      //   - no parent, or parent IS Self / chain rooted at Self → link Self (old behavior)
+      //   - parent (or an ancestor) is a person → link that person
+      //   - no person/self ancestor (orphan tree) → skip; don't claim Self
       if ((isAsset || isLiability) && !hasExplicitOwnership) {
-        const selfProfile = existing.find(p => p.type === "self");
-        if (selfProfile) {
+        const ownerProfileId = resolveAutoOwner(
+          (created as any).parentProfileId,
+          existing as any,
+          selfProfile?.id ?? null,
+        );
+        if (ownerProfileId) {
           if (isAsset) {
             // Idempotent: skip if a link already exists
             const existingLinks = await storage.getAssetPartyLinks(created.id).catch(() => []);
-            const already = (existingLinks || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            const already = (existingLinks || []).some((l: any) => l.partyProfileId === ownerProfileId);
             if (!already) {
               await storage.createAssetPartyLink({
                 assetProfileId: created.id,
-                partyProfileId: selfProfile.id,
+                partyProfileId: ownerProfileId,
                 ownershipPercentage: 100,
                 role: "owner",
               } as any).catch((e: any) => {
@@ -2265,11 +2282,11 @@ If unsure, return "profile_fact".`,
             }
           } else if (isLiability) {
             const existingLinks = await storage.getLiabilityProfileLinks(created.id).catch(() => []);
-            const already = (existingLinks || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            const already = (existingLinks || []).some((l: any) => l.partyProfileId === ownerProfileId);
             if (!already) {
               await storage.createLiabilityProfileLink({
                 liabilityProfileId: created.id,
-                partyProfileId: selfProfile.id,
+                partyProfileId: ownerProfileId,
                 ownershipPercentage: 100,
                 role: "owner",
               } as any).catch((e: any) => {

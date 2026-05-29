@@ -15,6 +15,7 @@ export default defineConfig({
       'tests/asset-rollup.test.ts',
       'tests/ai-parent-resolution.test.ts',
       'tests/dashboard-card-consistency.test.ts',
+      'tests/auto-ownership-hook.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts'],
     testTimeout: 30000,
