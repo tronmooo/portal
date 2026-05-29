@@ -529,7 +529,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     enabled: !!profile.id,
   });
   const personOptions = (ownerCandidates || []).filter((p: any) =>
-    ["self", "person"].includes(p.type) && !p.fields?._parentProfileId
+    ["self", "person"].includes(p.type) && !p.parentProfileId
   );
 
   // Fetch current liability party links

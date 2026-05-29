@@ -767,10 +767,7 @@ export class MemStorage implements IStorage {
 
     // Find child profiles (assets, subscriptions, loans nested under this profile)
     const allProfiles = await this.getProfiles();
-    const childProfiles = allProfiles.filter(p => {
-      const parentId = p.fields && typeof p.fields === 'object' ? (p.fields as any)._parentProfileId : null;
-      return parentId === profile.id;
-    });
+    const childProfiles = allProfiles.filter(p => p.parentProfileId === profile.id);
 
     return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, childProfiles, timeline };
   }
@@ -966,7 +963,7 @@ export class MemStorage implements IStorage {
     while (current) {
       if (visited.has(current.id)) break; // guard against existing cycles
       visited.add(current.id);
-      const parentId = current.parentProfileId || (current.fields as any)?._parentProfileId;
+      const parentId = current.parentProfileId;
       if (!parentId) break;
       if (parentId === profileId) return true;
       current = this.profiles.get(parentId);

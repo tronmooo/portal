@@ -519,10 +519,7 @@ function BelongsToEditor({
     );
   }, [candidates, search]);
 
-  const currentParentId =
-    profile.parentProfileId ||
-    (profile as any).fields?._parentProfileId ||
-    null;
+  const currentParentId = profile.parentProfileId || null;
   const currentParent = allProfiles.find((p: any) => p.id === currentParentId);
 
   const patchParent = useMutation({
@@ -826,7 +823,6 @@ function ChildAssetsCard({
       const res = await apiRequest("POST", "/api/profiles", {
         name: childName.trim(),
         type: childType,
-        fields: { _parentProfileId: profile.id },
         parentProfileId: profile.id,
         tags: [],
       });
@@ -10884,7 +10880,7 @@ export default function ProfileDetailPage() {
     enabled: isAssetProfile,
   });
   const personOptions = (ownerCandidates || []).filter((p: any) =>
-    ["self","person"].includes(p.type) && !p.fields?._parentProfileId
+    ["self","person"].includes(p.type) && !p.parentProfileId
   );
 
   // Fetch current asset-party links so we know who is already linked
@@ -10948,7 +10944,7 @@ export default function ProfileDetailPage() {
           ownershipPercentage: pct,
         });
       }
-      // Also update fields.ownerName / _parentProfileId for backward-compat display.
+      // Update ownerName display fallback and parent column for single-owner case.
       // Note: ownerProfileId is intentionally NOT written — no reader consumes it
       // (party-link rows are the source of truth). ownerName is still kept as a
       // display fallback at line ~10533 when no party links exist yet.
@@ -10959,8 +10955,8 @@ export default function ProfileDetailPage() {
         fields: {
           ...(profile?.fields || {}),
           ownerName: firstName,
-          _parentProfileId: selectedIds.length === 1 ? selectedIds[0] : (profile?.fields?._parentProfileId || null),
         },
+        parentProfileId: selectedIds.length === 1 ? selectedIds[0] : (profile?.parentProfileId || null),
       });
       // Return the union of old + new owners so onSuccess can invalidate each
       // affected person's caches (their assets list must refresh too).

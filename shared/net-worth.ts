@@ -36,44 +36,51 @@ export interface NetWorthResult {
 // A profile is "in scope" of the active filter when:
 //   - the filter is not active ("everyone" or no ids), OR
 //   - its id is selected, OR
-//   - its parent (fields._parentProfileId / parentProfileId) is selected, OR
-//   - any of its co-owners (fields.owners / fields.ownerIds /
-//     fields.linkedProfileIds) is selected.
+//   - its parent (parentProfileId column) is selected, OR
+//   - any of its co-owners is selected.
 //
 // Stage 0 (BUG-20260528-scope-unification): the intersect decision is
 // delegated to `isInScope` in `shared/scope.ts` — the same primitive
 // `passesProfileFilter` uses. This file's responsibility is now ONLY
-// extracting the candidate owner-id set from the profile's various legacy
-// field shapes; the actual "any candidate id in selection?" answer comes
-// from one place. Orphan policy is `out_of_scope` because every profile is
-// its own owner (its `id` is always in the candidate set), so the absent-
-// candidate branch in `isInScope` is unreachable here — picking
-// `out_of_scope` makes that intent explicit and prevents a malformed
-// profile from silently landing in someone else's net worth.
-function extractCandidateOwnerIds(p: any): string[] {
+// extracting the candidate owner-id set; the actual "any candidate id in
+// selection?" answer comes from one place.
+//
+// Stage 7 (FIX 2 of the divergence elimination): co-owner candidates for
+// asset/liability profiles come exclusively from the relational link tables
+// (`asset_party_links`, `liability_profile_links`). They must be supplied by
+// the caller via `coOwnerIds`. The legacy in-JSON shapes (`fields.owners`,
+// `fields.ownerIds`, `fields.linkedProfileIds`) are no longer consulted —
+// they were extinct in production (0 rows) and their presence in the reader
+// made the data path quietly accept stale ghost-state.
+//
+// Orphan policy is `out_of_scope` because every profile is its own owner
+// (its `id` is always in the candidate set), so the absent-candidate branch
+// in `isInScope` is unreachable here — picking `out_of_scope` makes that
+// intent explicit and prevents a malformed profile from silently landing in
+// someone else's net worth.
+function extractCandidateOwnerIds(p: any, coOwnerIds?: readonly string[]): string[] {
   if (!p) return [];
   const ids: string[] = [];
   if (typeof p.id === "string" && p.id) ids.push(p.id);
-  const parentId = p?.fields?._parentProfileId || p?.parentProfileId;
+  // Parent pointer: the `parentProfileId` column is the source of truth.
+  //   The legacy `fields._parentProfileId` JSON shadow disagreed with the
+  //   column on 3 production rows (column null, JSON set) before the Stage 7
+  //   backfill that mirrored every JSON pointer back to the column.
+  const parentId = p?.parentProfileId;
   if (typeof parentId === "string" && parentId) ids.push(parentId);
-  if (Array.isArray(p?.fields?.owners)) {
-    for (const o of p.fields.owners) {
-      const oid = o?.profileId || o?.id || (typeof o === "string" ? o : null);
-      if (typeof oid === "string" && oid) ids.push(oid);
-    }
-  } else if (Array.isArray(p?.fields?.ownerIds)) {
-    for (const oid of p.fields.ownerIds) {
-      if (typeof oid === "string" && oid) ids.push(oid);
-    }
-  } else if (Array.isArray(p?.fields?.linkedProfileIds)) {
-    for (const oid of p.fields.linkedProfileIds) {
+  if (coOwnerIds && coOwnerIds.length > 0) {
+    for (const oid of coOwnerIds) {
       if (typeof oid === "string" && oid) ids.push(oid);
     }
   }
   return ids;
 }
 
-export function isProfileInNetWorthScope(p: any, ctx: NetWorthContext): boolean {
+export function isProfileInNetWorthScope(
+  p: any,
+  ctx: NetWorthContext,
+  coOwnerIds?: readonly string[],
+): boolean {
   if (!p) return false;
   // Translate the net-worth-shaped context into the canonical ScopeContext.
   // The empty `selfIds` set is fine here because the `out_of_scope` orphan
@@ -82,7 +89,7 @@ export function isProfileInNetWorthScope(p: any, ctx: NetWorthContext): boolean 
   const active = ctx.mode === "selected" && ctx.selectedIds.length > 0;
   if (!active) return true;
   return isInScope(
-    extractCandidateOwnerIds(p),
+    extractCandidateOwnerIds(p, coOwnerIds),
     { selectedIds: ctx.selectedIds, selfIds: new Set<string>() },
     "out_of_scope",
   );

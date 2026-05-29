@@ -8,6 +8,7 @@
  * Filter-aware. All endpoints already exist on the server.
  */
 import { useMemo, useState } from "react";
+import { isInScope as scopeIsInScope, selfIdsFrom } from "@shared/scope";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -183,18 +184,20 @@ export function NetWorthPopup({
     enabled: open,
   });
 
+  // FIX 2: route through the canonical `isInScope` primitive so this popup
+  //   answers the same question with the same logic as every other surface.
+  //   Candidates come from one place only: the profile's own id and its
+  //   `parentProfileId` column. Legacy in-JSON shapes (`fields.owners`,
+  //   `fields.ownerIds`, `fields.linkedProfileIds`, `fields._parentProfileId`)
+  //   are NOT consulted — they had 0 rows in production and their presence
+  //   here let two readers silently agree on stale ghost-state.
+  const selfIds = useMemo(() => selfIdsFrom(allProfiles as any[]), [allProfiles]);
   const isInScope = (p: any): boolean => {
-    if (filterMode !== "selected" || filterIds.length === 0) return true; // "everyone" / "all"
-    if (filterIds.includes(p.id)) return true;
-    const parentId = p.fields?._parentProfileId || p.parentProfileId;
-    if (parentId && filterIds.includes(parentId)) return true;
-    // Check owners array (multi-owner support) — fields.owners or fields.ownerIds
-    const ownerIds: string[] = Array.isArray(p.fields?.owners) ? p.fields.owners.map((o: any) => o?.profileId || o?.id || o).filter(Boolean)
-      : Array.isArray(p.fields?.ownerIds) ? p.fields.ownerIds
-      : Array.isArray(p.fields?.linkedProfileIds) ? p.fields.linkedProfileIds
-      : [];
-    if (ownerIds.some((id) => filterIds.includes(id))) return true;
-    return false;
+    if (filterMode !== "selected" || filterIds.length === 0) return true;
+    const candidates: string[] = [];
+    if (p?.id) candidates.push(p.id);
+    if (p?.parentProfileId) candidates.push(p.parentProfileId);
+    return scopeIsInScope(candidates, { selectedIds: filterIds, selfIds }, "out_of_scope");
   };
 
   const { assets, liabilities, totalA, totalL } = useMemo(() => {

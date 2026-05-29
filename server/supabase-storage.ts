@@ -422,7 +422,9 @@ export class SupabaseStorage implements IStorage {
       documents: r.documents || [], linkedTrackers: r.linked_trackers || [],
       linkedExpenses: r.linked_expenses || [], linkedTasks: r.linked_tasks || [],
       linkedEvents: r.linked_events || [],
-      parentProfileId: r.parent_profile_id || fields._parentProfileId || undefined,
+      // FIX 2: read ONLY from the `parent_profile_id` column. The legacy JSON
+      //   fallback is gone — it allowed a silently divergent shadow.
+      parentProfileId: r.parent_profile_id || undefined,
       linkedObligationId: r.linked_obligation_id || undefined,
       createdAt: r.created_at, updatedAt: r.updated_at,
     };
@@ -787,11 +789,12 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) parentProfileId = selfProfile.id;
     }
-    // Store parentProfileId both in the real column AND in fields JSON (backward compat)
+    // Parent is stored ONLY in the `parent_profile_id` column. The legacy
+    //   `fields._parentProfileId` JSON shadow is no longer written — it caused
+    //   silent disagreement when the column and JSON drifted (3 such rows
+    //   existed in production before the FIX 2 backfill).
     const fields = { ...(data.fields || {}) };
-    if (parentProfileId) {
-      fields._parentProfileId = parentProfileId;
-    }
+    if ("_parentProfileId" in fields) delete fields._parentProfileId;
     const insertData: any = {
       id, user_id: this.userId, type: data.type, name: data.name,
       fields, tags: data.tags || [], notes: data.notes || "",
@@ -1017,7 +1020,7 @@ export class SupabaseStorage implements IStorage {
     // Each child profile deletion triggers its own cascade, so their data goes away too.
     const allProfiles = await this.getProfiles();
     const childProfiles = allProfiles.filter(p => 
-      p.parentProfileId === id || p.fields?._parentProfileId === id
+      p.parentProfileId === id
     );
     for (const child of childProfiles) {
       console.log(`[deleteProfile] Cascade-deleting child profile: ${child.name} (${child.type}, id:${child.id})`);
@@ -1571,7 +1574,7 @@ export class SupabaseStorage implements IStorage {
       const profile = await this.getProfile(currentId);
       if (!profile) break;
 
-      const parentId = profile.parentProfileId || profile.fields?._parentProfileId;
+      const parentId = profile.parentProfileId;
       if (!parentId || visited.has(parentId)) break;
       visited.add(parentId);
 
@@ -1616,7 +1619,7 @@ export class SupabaseStorage implements IStorage {
       const profile = await this.getProfile(currentId);
       if (!profile) break;
 
-      const parentId = profile.parentProfileId || profile.fields?._parentProfileId;
+      const parentId = profile.parentProfileId;
       if (!parentId || visited.has(parentId)) break;
       visited.add(parentId);
 
@@ -1653,7 +1656,7 @@ export class SupabaseStorage implements IStorage {
       visited.add(currentId);
       const current = await this.getProfile(currentId);
       if (!current) break;
-      const parentId: string | null = current.parentProfileId || current.fields?._parentProfileId || null;
+      const parentId: string | null = current.parentProfileId || null;
       if (!parentId) break;
       if (parentId === profileId) return true;
       currentId = parentId;
@@ -4296,7 +4299,7 @@ export class SupabaseStorage implements IStorage {
           //  - directly selected (asset itself) → 100%
           const shareFor = (p: any): number => {
             if (noFilter) return 100;
-            const pParent = p.parentProfileId || p.fields?._parentProfileId;
+            const pParent = p.parentProfileId;
             let pct = 0;
             for (const fid of fpIds!) {
               if (fid === p.id) { pct = Math.max(pct, 100); continue; }
@@ -4334,7 +4337,7 @@ export class SupabaseStorage implements IStorage {
           const noFilter = !fpIds || fpIds.length === 0;
           const shareFor = (p: any): number => {
             if (noFilter) return 100;
-            const pParent = p.parentProfileId || p.fields?._parentProfileId;
+            const pParent = p.parentProfileId;
             let pct = 0;
             for (const fid of fpIds!) {
               if (fid === p.id) { pct = Math.max(pct, 100); continue; }

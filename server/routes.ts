@@ -2216,7 +2216,7 @@ If unsure, return "profile_fact".`,
         seen.add(walkId);
         const wp = await storage.getProfile(walkId);
         if (!wp) break;
-        const wpid: string | null = wp.parentProfileId || (wp.fields as any)?._parentProfileId || null;
+        const wpid: string | null = wp.parentProfileId || null;
         if (!wpid) break;
         depth++;
         walkId = wpid;
@@ -2327,11 +2327,10 @@ If unsure, return "profile_fact".`,
               ? sibling.fields.location.trim().toLowerCase()
               : null;
             if (loc && loc === newNameNorm) {
-              // Re-attach sibling: set parentProfileId to new profile's id
-              const updatedFields = { ...sibling.fields, _parentProfileId: created.id };
+              // Re-attach sibling: set parentProfileId on the column only — the
+              //   legacy JSON shadow is no longer written.
               await storage.updateProfile(sibling.id, {
                 parentProfileId: created.id,
-                fields: updatedFields,
               });
             }
           }
@@ -2387,8 +2386,10 @@ If unsure, return "profile_fact".`,
       }
     }
 
-    // ---- parentProfileId validation (top-level or legacy fields._parentProfileId) ----
-    // Determine if caller is setting parentProfileId
+    // ---- parentProfileId validation ----
+    // FIX 2: `parentProfileId` is the only accepted shape. Callers that still
+    //   send the legacy `fields._parentProfileId` shadow get its value lifted
+    //   to the top level (transitional courtesy), and the shadow is stripped.
     const hasTopLevel = "parentProfileId" in req.body;
     const hasLegacy = req.body.fields && typeof req.body.fields === "object" && "_parentProfileId" in req.body.fields;
     if (hasTopLevel || hasLegacy) {
@@ -2428,7 +2429,7 @@ If unsure, return "profile_fact".`,
           seen.add(walkId);
           const walkP = await storage.getProfile(walkId);
           if (!walkP) break;
-          const wpid: string | null = walkP.parentProfileId || (walkP.fields as any)?._parentProfileId || null;
+          const wpid: string | null = walkP.parentProfileId || null;
           if (!wpid) break;
           depthFromParent++;
           walkId = wpid;
@@ -2438,13 +2439,13 @@ If unsure, return "profile_fact".`,
         }
       }
 
-      // Persist: set top-level parentProfileId and mirror to fields._parentProfileId
+      // Persist: set top-level parentProfileId. The legacy `fields._parentProfileId`
+      //   shadow is no longer written — the column is the single source of truth.
+      //   If the caller sent the shadow, strip it so it can't slip in.
       req.body.parentProfileId = newParentId;
-      // Mirror into fields so legacy reads still work
-      if (!req.body.fields || typeof req.body.fields !== "object") {
-        req.body.fields = {};
+      if (req.body.fields && typeof req.body.fields === "object" && "_parentProfileId" in req.body.fields) {
+        delete req.body.fields._parentProfileId;
       }
-      req.body.fields._parentProfileId = newParentId;
     }
 
     const updated = await storage.updateProfile(req.params.id, req.body);

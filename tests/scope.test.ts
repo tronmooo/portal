@@ -95,9 +95,14 @@ describe("BUG-20260528-scope-unification — isProfileInNetWorthScope delegates 
   // optional parent and co-owner field shapes. Verify the same answer comes
   // out of the primitive when called with the extracted candidate set.
 
-  const carOwnedByAlice = { id: "car", type: "asset", fields: { _parentProfileId: "alice" } };
-  const carOwnedByBoth = { id: "car", type: "asset", fields: { owners: [{ profileId: "alice" }, { profileId: "bob" }] } };
+  // FIX 2: parent comes from the `parentProfileId` column — NOT from a
+  //   JSON shadow. Co-owner candidates are supplied by the caller from the
+  //   `asset_party_links` / `liability_profile_links` tables. This file
+  //   never inspects `fields.owners` / `fields.ownerIds` /
+  //   `fields.linkedProfileIds` again.
+  const carOwnedByAlice = { id: "car", type: "asset", parentProfileId: "alice", fields: {} };
   const carNoOwner = { id: "car", type: "asset", fields: {} };
+  const carCoOwners = ["alice", "bob"]; // would come from asset_party_links
 
   it("filter inactive ('everyone' mode): always in scope", () => {
     expect(isProfileInNetWorthScope(carOwnedByAlice, { mode: "everyone", selectedIds: [] })).toBe(true);
@@ -109,16 +114,34 @@ describe("BUG-20260528-scope-unification — isProfileInNetWorthScope delegates 
     expect(isProfileInNetWorthScope(carNoOwner, { mode: "selected", selectedIds: ["alice"] })).toBe(false);
   });
 
-  it("parent-linked: passes when parent selected", () => {
+  it("parent-linked: passes when parent (from column) selected", () => {
     expect(isProfileInNetWorthScope(carOwnedByAlice, { mode: "selected", selectedIds: ["alice"] })).toBe(true);
     expect(isProfileInNetWorthScope(carOwnedByAlice, { mode: "selected", selectedIds: ["bob"] })).toBe(false);
   });
 
-  it("co-owners: passes when any co-owner selected", () => {
-    expect(isProfileInNetWorthScope(carOwnedByBoth, { mode: "selected", selectedIds: ["bob"] })).toBe(true);
-    expect(isProfileInNetWorthScope(carOwnedByBoth, { mode: "selected", selectedIds: ["alice"] })).toBe(true);
-    // out-of-scope when neither owner is selected, even though car id exists
-    expect(isProfileInNetWorthScope(carOwnedByBoth, { mode: "selected", selectedIds: ["other"] })).toBe(false);
+  it("legacy fields._parentProfileId is IGNORED (column is the only source)", () => {
+    const legacyOnly = { id: "truck", type: "asset", fields: { _parentProfileId: "alice" } };
+    // With no parentProfileId column and no co-owner list, only own id matches.
+    expect(isProfileInNetWorthScope(legacyOnly, { mode: "selected", selectedIds: ["alice"] })).toBe(false);
+    expect(isProfileInNetWorthScope(legacyOnly, { mode: "selected", selectedIds: ["truck"] })).toBe(true);
+  });
+
+  it("co-owners: passes when any co-owner (supplied by caller) selected", () => {
+    expect(isProfileInNetWorthScope(carNoOwner, { mode: "selected", selectedIds: ["bob"] }, carCoOwners)).toBe(true);
+    expect(isProfileInNetWorthScope(carNoOwner, { mode: "selected", selectedIds: ["alice"] }, carCoOwners)).toBe(true);
+    expect(isProfileInNetWorthScope(carNoOwner, { mode: "selected", selectedIds: ["other"] }, carCoOwners)).toBe(false);
+  });
+
+  it("legacy fields.owners / ownerIds / linkedProfileIds are IGNORED", () => {
+    // These shapes had 0 rows in production but had to be allowed by the reader
+    // until this fix. Now: explicitly ignored. Pass only via the relational
+    // link table (caller supplies coOwnerIds) or via the parentProfileId column.
+    const ghostOwners = { id: "boat", type: "asset", fields: { owners: [{ profileId: "alice" }] } };
+    const ghostOwnerIds = { id: "plane", type: "asset", fields: { ownerIds: ["alice"] } };
+    const ghostLinked = { id: "yacht", type: "asset", fields: { linkedProfileIds: ["alice"] } };
+    expect(isProfileInNetWorthScope(ghostOwners, { mode: "selected", selectedIds: ["alice"] })).toBe(false);
+    expect(isProfileInNetWorthScope(ghostOwnerIds, { mode: "selected", selectedIds: ["alice"] })).toBe(false);
+    expect(isProfileInNetWorthScope(ghostLinked, { mode: "selected", selectedIds: ["alice"] })).toBe(false);
   });
 
   it("cross-check vs isInScope primitive with the same candidate set", () => {

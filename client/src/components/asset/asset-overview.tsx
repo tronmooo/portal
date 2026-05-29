@@ -135,7 +135,7 @@ function walkAncestry(
   let cur: AnyProfile | undefined = profile;
   let depth = 0;
   while (cur && depth < maxDepth) {
-    const pid = cur.parentProfileId || (cur.fields as any)?._parentProfileId;
+    const pid = cur.parentProfileId;
     if (!pid) break;
     const parent = byId.get(pid);
     if (!parent) break;
@@ -303,7 +303,7 @@ export function AssetSummaryCard({
   const [, setLocation] = useLocation();
   const owner = findOwner(profile, allProfiles);
   const parentId =
-    profile.parentProfileId || (profile.fields as any)?._parentProfileId;
+    profile.parentProfileId;
   const parent = parentId
     ? allProfiles.find((p) => p.id === parentId)
     : null;
@@ -911,7 +911,7 @@ export function AdoptAsChildDialog({
         if (descendantIds.has(p.id)) return false;          // would create cycle
         if ((p.fields as any)?.deleted) return false;
         const parentId =
-          p.parentProfileId || (p.fields as any)?._parentProfileId;
+          p.parentProfileId;
         if (parentId === profile.id) return false;          // already child
         return true;
       })
@@ -949,7 +949,7 @@ export function AdoptAsChildDialog({
         queryKey: ["/api/profiles", profile.id, "tree"],
       });
       const oldParent =
-        c?.parentProfileId || (c?.fields as any)?._parentProfileId;
+        c?.parentProfileId;
       if (oldParent) {
         queryClient.invalidateQueries({
           queryKey: ["/api/profiles", oldParent, "detail"],
@@ -1003,7 +1003,7 @@ export function AdoptAsChildDialog({
               ) : (
                 candidates.map((p) => {
                   const parentRef = (allProfiles || []).find(
-                    (x) => x.id === (p.parentProfileId || (p.fields as any)?._parentProfileId),
+                    (x) => x.id === (p.parentProfileId),
                   );
                   return (
                     <button

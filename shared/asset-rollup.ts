@@ -147,7 +147,7 @@ export function collectDescendants(
   // Build a parent→children index once for O(N) traversal.
   const childIndex = new Map<string, Profile[]>();
   for (const p of allProfiles as Profile[]) {
-    const parent = p.parentProfileId || (p.fields as any)?._parentProfileId;
+    const parent = p.parentProfileId;
     if (!parent) continue;
     const arr = childIndex.get(parent);
     if (arr) arr.push(p); else childIndex.set(parent, [p]);
@@ -225,7 +225,7 @@ export function computeAssetRollup(
     let progressed = false;
     for (const d of descendants) {
       if (depthMap.has(d.id)) continue;
-      const pid = (d as any).parentProfileId || (d.fields as any)?._parentProfileId;
+      const pid = (d as any).parentProfileId;
       if (pid && depthMap.has(pid)) {
         depthMap.set(d.id, (depthMap.get(pid) as number) + 1);
         progressed = true;

@@ -519,7 +519,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
   // back to financeSnapshot to avoid a $0 flash.
   const matchesProfileFilter = (p: any): boolean => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const pParent = p?.fields?._parentProfileId || p?.parentProfileId;
+    const pParent = p?.parentProfileId;
     if (pParent && filterIds.includes(pParent)) return true;
     if (filterIds.includes(p?.id)) return true;
     return false;
@@ -2948,7 +2948,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
     if (resolveAssetValue(p) <= 0) return false;
     // Apply the same profile filter as everything else
     if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const pParent = p.fields?._parentProfileId || p.parentProfileId;
+    const pParent = p.parentProfileId;
     if (pParent && filterIds.includes(pParent)) return true;
     // Also include the filtered profile itself (an asset can be linked directly,
     // not just as a child of a parent profile). Without this, switching to e.g. Bob
@@ -2963,7 +2963,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   const tileLiabilityProfiles = useMemo(() => (allProfiles || []).filter((p: any) => {
     if (resolveLiabilityBalance(p) <= 0) return false;
     if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const pParent = p.fields?._parentProfileId || p.parentProfileId;
+    const pParent = p.parentProfileId;
     if (pParent && filterIds.includes(pParent)) return true;
     if (filterIds.includes(p.id)) return true;
     return false;
@@ -3220,7 +3220,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           const bal = resolveLiabilityBalance(p);
           if (bal <= 0) return false;
           if (filterMode === "everyone" || filterIds.length === 0) return true;
-          const pParent = p.fields?._parentProfileId || p.parentProfileId;
+          const pParent = p.parentProfileId;
           if (pParent && filterIds.includes(pParent)) return true;
           if (filterIds.includes(p.id)) return true;
           return false;
@@ -3301,7 +3301,7 @@ function ExpiringWarrantiesCard({
       if (!ASSET_TYPES_WITH_WARRANTY.has(p.type)) return false;
       // Apply profile filter — mirrors assetProfiles pattern from FinanceWidget
       if (filterMode !== "everyone" && filterIds.length > 0) {
-        const pParent = p.fields?._parentProfileId || p.parentProfileId;
+        const pParent = p.parentProfileId;
         if (!filterIds.includes(p.id) && !(pParent && filterIds.includes(pParent))) return false;
       }
       // Check warranty field variants

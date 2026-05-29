@@ -798,7 +798,7 @@ export default function FinancePage() {
         const assetProfiles = (profiles || []).filter(p => {
           if (!["vehicle", "asset", "investment", "property"].includes(p.type)) return false;
           if (filterMode === "everyone" || filterIds.length === 0) return true;
-          const pParent = p.fields?._parentProfileId || p.parentProfileId;
+          const pParent = p.parentProfileId;
           if (pParent && filterIds.includes(pParent)) return true;
           // Allow direct selection of the asset itself (e.g. selecting the
           // F150 directly should still surface its value).

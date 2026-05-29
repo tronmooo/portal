@@ -4045,7 +4045,7 @@ export default function TrackersPage() {
     const visible = (profiles || []).filter(p => {
       if (!childTypeSet.has(p.type)) return false;
       if (isShowAll) return true;
-      const pParent = p.fields?._parentProfileId || (p as any).parentProfileId;
+      const pParent = (p as any).parentProfileId;
       // Visible if directly selected, parented to selected profile, OR
       // co-owned via asset_party_links (Home shows under Jane even though
       // it's parented to Test).
@@ -4086,7 +4086,7 @@ export default function TrackersPage() {
       if (isShowAll) return true;
       // Visible if directly selected, parented to selected profile, OR
       // co-owned via liability_profile_links.
-      const pParent = (p.fields as any)?._parentProfileId || (p as any).parentProfileId;
+      const pParent = (p as any).parentProfileId;
       return isLiabilityVisible(p.id, pParent);
     });
     const counts: Record<string, number> = {};
@@ -4279,7 +4279,7 @@ export default function TrackersPage() {
             const _hasAssetAncestorChip = (p: any): boolean => {
               let cur: any = p;
               for (let i = 0; i < 32 && cur; i++) {
-                const pid = cur.fields?._parentProfileId || cur.parentProfileId;
+                const pid = cur.parentProfileId;
                 if (!pid) return false;
                 const par = _profileByIdChip.get(pid);
                 if (!par) return false;
@@ -4290,7 +4290,7 @@ export default function TrackersPage() {
             };
             const filteredAssetCount = (profiles || []).filter(p => {
               if (!childTypeSet.has(p.type)) return false;
-              const pParent = p.fields?._parentProfileId || p.parentProfileId;
+              const pParent = p.parentProfileId;
               const parentIsAsset = _hasAssetAncestorChip(p);
               // Profile-filter scope — include co-owners via asset_party_links.
               const inScope = isShowAllForCounts || isAssetVisible(p.id, pParent as string | null | undefined);
@@ -4302,7 +4302,7 @@ export default function TrackersPage() {
               if (nestingFilter === "all" || nestingFilter === "topLevel") {
                 if (parentIsAsset) return false;
               } else if (nestingFilter === "hasChildren") {
-                const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
+                const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
                 if (!hasAssetChild) return false;
               } else if (nestingFilter === "nested") {
                 if (!parentIsAsset) return false;
@@ -4318,7 +4318,7 @@ export default function TrackersPage() {
               // the parent asset's detail page, not at top-level Linked.
               if (_hasAssetAncestorChip(p)) return false;
               if (isShowAllForCounts) return true;
-              const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
+              const pParent = p.parentProfileId;
               return isLiabilityVisible(p.id, pParent);
             }).length;
             return (["all", "trackers", "documents", "profiles", "liabilities"] as const).map(s => {
@@ -4509,7 +4509,7 @@ export default function TrackersPage() {
         const hasAssetAncestor = (p: any): boolean => {
           let cur: any = p;
           for (let i = 0; i < 32 && cur; i++) {
-            const parentId = cur.fields?._parentProfileId || cur.parentProfileId;
+            const parentId = cur.parentProfileId;
             if (!parentId) return false;
             const parent = profileById.get(parentId);
             if (!parent) return false;
@@ -4537,7 +4537,7 @@ export default function TrackersPage() {
         const resolveOwnerFromProfile = (p: any): string | null => {
           let cur: any = p;
           for (let i = 0; i < 8 && cur; i++) {
-            const parentId = cur.fields?._parentProfileId || cur.parentProfileId;
+            const parentId = cur.parentProfileId;
             if (!parentId) break;
             const parent = (profiles || []).find(x => x.id === parentId);
             if (!parent) break;
@@ -4552,7 +4552,7 @@ export default function TrackersPage() {
         if (sectionFilter === "all" || sectionFilter === "profiles") {
           (profiles || []).forEach(p => {
             if (!childTypeSet.has(p.type)) return;
-            const pParent = p.fields?._parentProfileId || p.parentProfileId;
+            const pParent = p.parentProfileId;
             // Include co-owners via asset_party_links (Home shows for Jane).
             if (!isShowAll && !isAssetVisible(p.id, pParent)) return;
             // Hide nested assets unless the user explicitly chose the
@@ -4563,7 +4563,7 @@ export default function TrackersPage() {
             } else if (nestingFilterList === "nested") {
               if (!hasAssetAncestor(p)) return;
             } else if (nestingFilterList === "hasChildren") {
-              const hasChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
+              const hasChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
               if (!hasChild) return;
             }
             const f = p.fields || {}; const fin = f.finance || {}; const housing = f.housing || {}; const other = f.other || {};
@@ -4577,7 +4577,7 @@ export default function TrackersPage() {
         if (sectionFilter === "all" || sectionFilter === "liabilities") {
           (profiles || []).forEach(p => {
             if (!isLiabilityLikeProfile(p)) return;
-            const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
+            const pParent = p.parentProfileId;
             // Include co-owners via liability_profile_links.
             if (!isShowAll && !isLiabilityVisible(p.id, pParent)) return;
             // Hide liabilities nested under an asset (e.g. "Service plan for
@@ -4754,7 +4754,7 @@ export default function TrackersPage() {
         const _hasAssetAncestorCards = (p: any): boolean => {
           let cur: any = p;
           for (let i = 0; i < 32 && cur; i++) {
-            const pid = cur.fields?._parentProfileId || cur.parentProfileId;
+            const pid = cur.parentProfileId;
             if (!pid) return false;
             const par = _profileByIdCards.get(pid);
             if (!par) return false;
@@ -4765,7 +4765,7 @@ export default function TrackersPage() {
         };
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
-          if (isShowAll || (p.fields?._parentProfileId || p.parentProfileId) && filterIds.includes((p.fields?._parentProfileId || p.parentProfileId) as string)) {
+          if (isShowAll || (p.parentProfileId) && filterIds.includes((p.parentProfileId) as string)) {
             // Asset type chip filter — only applies on the Assets tab.
             // "all" means no chip-level filter; everything passes.
             if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
@@ -4775,7 +4775,7 @@ export default function TrackersPage() {
             if (nestingFilter === "all" || nestingFilter === "topLevel") {
               if (parentIsAssetChain) return false;
             } else if (nestingFilter === "hasChildren") {
-              const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.fields?._parentProfileId || x.parentProfileId) === p.id);
+              const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
               if (!hasAssetChild) return false;
             } else if (nestingFilter === "nested") {
               if (!parentIsAssetChain) return false;
@@ -4986,7 +4986,7 @@ export default function TrackersPage() {
         const _liabHasAssetAncestor = (p: any): boolean => {
           let cur: any = p;
           for (let i = 0; i < 32 && cur; i++) {
-            const pid = cur.fields?._parentProfileId || cur.parentProfileId;
+            const pid = cur.parentProfileId;
             if (!pid) return false;
             const par = _profileByIdLiab.get(pid);
             if (!par) return false;
@@ -5005,7 +5005,7 @@ export default function TrackersPage() {
           let inScope = isShowAll;
           if (!inScope) {
             if (filterIds.includes(p.id)) inScope = true;
-            const pParent = (p.fields as any)?._parentProfileId || p.parentProfileId;
+            const pParent = p.parentProfileId;
             if (pParent && filterIds.includes(pParent)) inScope = true;
           }
           if (!inScope) return false;

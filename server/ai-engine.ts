@@ -4049,8 +4049,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (input.parentProfileName === "") {
           // Detach: make top-level
           changes.parentProfileId = null;
-          if (!changes.fields) changes.fields = { ...(profile.fields || {}) };
-          changes.fields._parentProfileId = null;
         } else {
           // Resolve new parent by name
           const parentNameLC = input.parentProfileName.toLowerCase().trim();
@@ -4065,8 +4063,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             return { error: "Cannot move: would create a cycle." };
           }
           changes.parentProfileId = newParent.id;
-          if (!changes.fields) changes.fields = { ...(profile.fields || {}) };
-          changes.fields._parentProfileId = newParent.id;
         }
       }
 
@@ -6869,7 +6865,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (visited.has(pid)) continue;
           visited.add(pid);
           const children = allProfiles.filter(p => {
-            const pParentId = p.parentProfileId || (p.fields as any)?._parentProfileId;
+            const pParentId = p.parentProfileId;
             return pParentId === pid;
           });
           result.push(...children);
@@ -6879,7 +6875,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       };
 
       const directChildren = allProfiles.filter(p => {
-        const pParentId = p.parentProfileId || (p.fields as any)?._parentProfileId;
+        const pParentId = p.parentProfileId;
         return pParentId === rootProfile.id;
       });
       const allDescendants = getAllDescendants(rootProfile.id);
@@ -6928,7 +6924,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (visitedDocs.has(pid)) continue;
           visitedDocs.add(pid);
           const kids = allProfiles.filter(p => {
-            const pParentId = p.parentProfileId || (p.fields as any)?._parentProfileId;
+            const pParentId = p.parentProfileId;
             return pParentId === pid;
           });
           for (const k of kids) {
@@ -8148,7 +8144,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => {
       const fields = p.fields || {};
       const keyFields = Object.entries(fields).filter(([k, v]) => v && !k.startsWith('_') && k !== 'notes').slice(0, 10).map(([k, v]) => `${k}: ${isSensitiveKey(k) ? REDACTED : String(v).slice(0, 50)}`).join(', ');
-      const childCount = profiles.filter((c: any) => c.fields?._parentProfileId === p.id).length;
+      const childCount = profiles.filter((c: any) => c.parentProfileId === p.id).length;
       return `${p.name} (${p.type}, id:${p.id.slice(0,8)}${keyFields ? `, ${keyFields}` : ''}${childCount > 0 ? `, ${childCount} sub-profiles` : ''})`;
     }).join("; ") || "none"}`,
     `Trackers (${trackers.length}): ${trackers.slice(0, 25).map(t => {
@@ -8260,7 +8256,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     (() => {
       const selfProf = profiles.find((p: any) => p.type === "self");
       if (!selfProf) return "";
-      const children = profiles.filter((p: any) => p.fields?._parentProfileId === selfProf.id);
+      const children = profiles.filter((p: any) => p.parentProfileId === selfProf.id);
       const assetTypes = ["vehicle","property","investment","asset","account","banking"];
       const totalAssets = children.filter((c: any) => assetTypes.includes(c.type))
         .reduce((s, c) => s + Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || 0), 0);
