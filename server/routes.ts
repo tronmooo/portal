@@ -6,7 +6,6 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
-import { resolveAutoOwner } from "@shared/ownership";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 
 /** Extract user timezone from request header, with fallback */
@@ -2230,75 +2229,11 @@ If unsure, return "profile_fact".`,
     const created = await storage.createProfile(parsed.data);
     bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
 
-    // ---- Default-ownership-to-self hook ----
-    // When a new asset/liability is created without explicit ownership info,
-    // auto-link the account holder's self profile at 100% ownership.
-    // Best-effort — never blocks/fails the create response.
-    try {
-      // Subscriptions, investments, insurance, account also use the
-      // asset_party_links table for ownership tracking.
-      const assetTypes = new Set(["asset", "vehicle", "property", "subscription", "investment", "insurance", "account"]);
-      const liabilityTypes = new Set(["liability", "loan"]);
-      const isAsset = assetTypes.has(created.type);
-      const isLiability = liabilityTypes.has(created.type);
-      // Skip if caller explicitly provided ownership info
-      const hasExplicitOwnership =
-        Array.isArray((req.body as any).partyLinks) ||
-        Array.isArray((req.body as any).owners) ||
-        (req.body as any).partyProfileId ||
-        (req.body as any).ownerProfileId;
-      const selfProfile = existing.find(p => p.type === "self");
-      // OWNERSHIP RESOLUTION (Jane Doe fix): the AI creates a person's asset by
-      // setting parentProfileId to the person (or one of the person's child
-      // profiles, e.g. a house), NOT by sending partyLinks/owners. The old hook
-      // ignored parentProfileId and force-linked Self 100%, so every person's
-      // asset/liability was claimed by Self and their net worth read $0.
-      //
-      // A non-Self parent is therefore EXPLICIT ownership. Resolve the owning
-      // party by walking the parent chain up to the first person/self ancestor:
-      //   - no parent, or parent IS Self / chain rooted at Self → link Self (old behavior)
-      //   - parent (or an ancestor) is a person → link that person
-      //   - no person/self ancestor (orphan tree) → skip; don't claim Self
-      if ((isAsset || isLiability) && !hasExplicitOwnership) {
-        const ownerProfileId = resolveAutoOwner(
-          (created as any).parentProfileId,
-          existing as any,
-          selfProfile?.id ?? null,
-        );
-        if (ownerProfileId) {
-          if (isAsset) {
-            // Idempotent: skip if a link already exists
-            const existingLinks = await storage.getAssetPartyLinks(created.id).catch(() => []);
-            const already = (existingLinks || []).some((l: any) => l.partyProfileId === ownerProfileId);
-            if (!already) {
-              await storage.createAssetPartyLink({
-                assetProfileId: created.id,
-                partyProfileId: ownerProfileId,
-                ownershipPercentage: 100,
-                role: "owner",
-              } as any).catch((e: any) => {
-                console.warn("[auto-ownership] asset link failed:", e?.message || e);
-              });
-            }
-          } else if (isLiability) {
-            const existingLinks = await storage.getLiabilityProfileLinks(created.id).catch(() => []);
-            const already = (existingLinks || []).some((l: any) => l.partyProfileId === ownerProfileId);
-            if (!already) {
-              await storage.createLiabilityProfileLink({
-                liabilityProfileId: created.id,
-                partyProfileId: ownerProfileId,
-                ownershipPercentage: 100,
-                role: "owner",
-              } as any).catch((e: any) => {
-                console.warn("[auto-ownership] liability link failed:", e?.message || e);
-              });
-            }
-          }
-        }
-      }
-    } catch (autoOwnErr: any) {
-      console.warn("[auto-ownership] hook failed:", autoOwnErr?.message || autoOwnErr);
-    }
+    // Auto-ownership now lives in a single place: storage.createProfile resolves
+    // the owning party from the parent chain (resolveAutoOwner) and links it at
+    // 100%. A second hook here force-linked Self, producing a competing 100% link
+    // that the SUM>100 DB trigger then split 50/50 — see
+    // docs/dashboard-scope-contract.md. Keeping one writer keeps SUM == 100.
 
     // ---- Auto-bill: create a backing obligation for liabilities ----
     // If a liability/loan is created with a monthlyPayment, ensure a

@@ -55,7 +55,7 @@ import {
 import { type IStorage, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
-import { OWNERSHIP_TABLES, type OwnedEntityType } from "../shared/ownership";
+import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -805,10 +805,15 @@ export class SupabaseStorage implements IStorage {
     // Auto-generate calendar events from profile date fields
     await this.autoGenerateProfileEvents(id, data.type, data.name, data.fields || {});
 
-    // ---- Default-ownership-to-self hook ----
-    // For new asset/liability profiles, auto-link the user's self profile at 100%
-    // ownership when no explicit ownership is provided. Best-effort — must not
-    // break the create response if it fails.
+    // ---- Default-ownership hook ----
+    // For new asset/liability profiles with no explicit ownership, auto-link the
+    // OWNING party at 100%. The owner is resolved from the parent chain
+    // (resolveAutoOwner): a non-Self person parent means that person owns it; a
+    // Self parent (or no parent) means Self owns it. Linking Self unconditionally
+    // was the Jane Doe bug — it claimed every person's asset for Self (net worth
+    // $0) and, once a competing person link was added, the SUM>100 DB trigger
+    // (migrations/20260511_ownership_invariant.sql) split both to 50/50.
+    // Best-effort — must not break the create response if it fails.
     try {
       const assetTypes = new Set(["asset", "vehicle", "property"]);
       const liabilityTypes = new Set(["liability", "loan"]);
@@ -816,14 +821,16 @@ export class SupabaseStorage implements IStorage {
       const isLiability = liabilityTypes.has(data.type);
       if (isAsset || isLiability) {
         const selfProfile = await this.getSelfProfile();
-        if (selfProfile && selfProfile.id !== id) {
+        const allProfiles = await this.getProfiles().catch(() => [] as any[]);
+        const ownerProfileId = resolveAutoOwner(parentProfileId, allProfiles as any, selfProfile?.id ?? null);
+        if (ownerProfileId && ownerProfileId !== id) {
           if (isAsset) {
             const existing = await this.getAssetPartyLinks(id).catch(() => [] as any[]);
-            const already = (existing || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            const already = (existing || []).some((l: any) => l.partyProfileId === ownerProfileId);
             if (!already) {
               await this.createAssetPartyLink({
                 assetProfileId: id,
-                partyProfileId: selfProfile.id,
+                partyProfileId: ownerProfileId,
                 ownershipPercentage: 100,
                 role: "owner",
               } as any).catch((e: any) => {
@@ -832,11 +839,11 @@ export class SupabaseStorage implements IStorage {
             }
           } else if (isLiability) {
             const existing = await this.getLiabilityProfileLinks(id).catch(() => [] as any[]);
-            const already = (existing || []).some((l: any) => l.partyProfileId === selfProfile.id);
+            const already = (existing || []).some((l: any) => l.partyProfileId === ownerProfileId);
             if (!already) {
               await this.createLiabilityProfileLink({
                 liabilityProfileId: id,
-                partyProfileId: selfProfile.id,
+                partyProfileId: ownerProfileId,
                 ownershipPercentage: 100,
                 role: "owner",
               } as any).catch((e: any) => {

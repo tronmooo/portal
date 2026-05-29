@@ -61,12 +61,25 @@ and is intentionally left as-is.
 ## Related fix: server-side ownership data
 
 The contract only holds if the server snapshot has correct ownership data. The
-auto-ownership hook in `server/routes.ts` (profile create) previously ignored
-`parentProfileId` and force-linked every new asset/liability to Self at 100%,
-which is what made one person's net worth read `$0`. It now treats a non-Self
-parent chain as explicit ownership and links the owning person
-(`resolveAutoOwner` in `shared/ownership.ts`). Existing wrong rows are not
-backfilled; only new creates are correct.
+auto-ownership hook previously ignored `parentProfileId` and force-linked every
+new asset/liability to Self at 100%, which is what made one person's net worth
+read `$0`. It now treats a non-Self parent chain as explicit ownership and links
+the owning person (`resolveAutoOwner` in `shared/ownership.ts`).
+
+There is exactly ONE auto-ownership writer: `storage.createProfile`
+(`server/supabase-storage.ts`). Every create path — the REST `POST /api/profiles`
+handler and the AI engine's many `storage.createProfile` calls — funnels through
+it, so resolving the owner there covers them all. A second hook used to run in
+the `POST /api/profiles` route on top of the storage one. With the storage hook
+fixed to link the person, the two writers raced: the storage hook linked the
+person at 100% and the route hook linked Self at 100%, so the asset briefly had
+two 100% owners. The DB trigger `trg_asset_party_ownership_sum`
+(`migrations/20260511_ownership_invariant.sql`) fires on insert when
+`SUM(ownership_percentage) > 100` and equalizes the rows, turning 100/100 into
+50/50 — which is why a filtered person showed half their net worth instead of
+zero or the full amount. The route hook was removed so SUM stays 100 and the
+trigger never rebalances. Existing wrong rows are not backfilled; only new
+creates are correct.
 
 ## How this is guarded
 

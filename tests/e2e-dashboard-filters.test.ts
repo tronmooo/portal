@@ -91,6 +91,13 @@ let SELF_ID = "";
 let JANE_ID = "";
 let BOB_ID = "";
 
+// The live account may already own self-attached assets, so we can't assert
+// Self == 0. Instead we snapshot Self BEFORE seeding and assert seeding a
+// person's items doesn't change Self's totals (i.e. the Part B fix no longer
+// force-links new person-owned items to Self).
+let selfBaselineAssets = 0;
+let selfBaselineLiabilities = 0;
+
 const JANE_ASSET = 600_000;
 const JANE_DEBT = 400_000;
 const BOB_ASSET = 30_000;
@@ -104,13 +111,18 @@ describe("Part E — dashboard filter scope (live)", () => {
     expect(TOKEN).toBeTruthy();
 
     // The self profile already exists for this account; find it (do not create
-    // a second self). Net worth filtered to Self alone must be 0 because we
-    // attach nothing to it.
+    // a second self).
     const profs = await api("GET", "/profiles");
     expect(profs.status).toBe(200);
     const self = (profs.data as any[]).find((p) => p.type === "self");
     expect(self, "account has no self profile").toBeTruthy();
     SELF_ID = self.id;
+
+    // Baseline Self totals BEFORE we seed anything, so the Self test can assert
+    // our person-owned seed doesn't leak onto Self.
+    const selfBase = await snapshotFor([SELF_ID]);
+    selfBaselineAssets = selfBase.assets;
+    selfBaselineLiabilities = selfBase.liabilities;
 
     // Jane Doe (person) with a house + mortgage hung under her, and 2 expenses.
     JANE_ID = await createProfile({ name: `${RUN} Jane Doe`, type: "person" });
@@ -195,13 +207,14 @@ describe("Part E — dashboard filter scope (live)", () => {
     expect(s.liabilities).toBeGreaterThanOrEqual(JANE_DEBT + BOB_DEBT);
   });
 
-  it("Self filter: net worth is 0 (nothing attached to self)", async () => {
+  it("Self filter: seeding a person's items does not leak onto Self", async () => {
     const t0 = Date.now();
     const s = await snapshotFor([SELF_ID]);
     expect(Date.now() - t0, "Self snapshot under 2s").toBeLessThan(2000);
-    expect(s.assets).toBe(0);
-    expect(s.liabilities).toBe(0);
-    expect(s.netWorth).toBe(0);
+    // Part B: a new asset/liability parented to a person must NOT be
+    // force-linked to Self, so Self's totals are unchanged from the baseline.
+    expect(s.assets).toBe(selfBaselineAssets);
+    expect(s.liabilities).toBe(selfBaselineLiabilities);
   });
 
   it("expenses endpoint partitions by filter (Bob filter excludes Jane's expenses)", async () => {
