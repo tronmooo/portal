@@ -54,6 +54,8 @@ import {
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
+import { setOwners } from "./ownership-writer";
+import { OWNERSHIP_TABLES, type OwnedEntityType } from "../shared/ownership";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -1327,12 +1329,8 @@ export class SupabaseStorage implements IStorage {
     // This is the single architectural boundary that prevents all
     // cross-profile data leakage. No code path can bypass this.
     // ════════════════════════════════════════════════════════════════
-    const tableMap: Record<string, string> = {
-      tracker: "trackers", expense: "expenses", task: "tasks",
-      event: "events", obligation: "obligations", document: "documents",
-      habit: "habits", goal: "goals",
-    };
-    const entityTable = tableMap[entityType];
+    const spec = (OWNERSHIP_TABLES as any)[entityType] as { entityTable: string } | undefined;
+    const entityTable = spec?.entityTable;
 
     if (SupabaseStorage.PROFILE_EXCLUSIVE.has(entityType) && entityTable) {
       const { data: entityRow } = await this.supabase
@@ -1347,45 +1345,43 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    // Write to junction table
-    const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
-    if (jt) {
-      await this.supabase.from(jt.table).upsert(
-        { profile_id: profileId, [jt.entityCol]: entityId, user_id: this.userId },
-        { onConflict: `profile_id,${jt.entityCol}` }
-      );
+    // Stage 1b: route the ownership write through the single writer. setOwners
+    //   atomically updates the JSONB column and syncs the junction table.
+    if (entityTable && (OWNERSHIP_TABLES as any)[entityType]) {
+      // Read current owners, append this profile, defer to setOwners which
+      //   skips no-op writes when the set is unchanged.
+      const { data: entityRow } = await this.supabase
+        .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).maybeSingle();
+      if (entityRow) {
+        const current: string[] = Array.isArray(entityRow.linked_profiles)
+          ? entityRow.linked_profiles.filter((x: any) => typeof x === "string")
+          : [];
+        if (!current.includes(profileId)) {
+          const self = await this.getSelfProfile();
+          const selfId = self?.id || profileId; // Worst case, default to the new owner.
+          try {
+            await setOwners(
+              this.supabase,
+              this.userId,
+              entityType as OwnedEntityType,
+              entityId,
+              [...current, profileId],
+              selfId,
+              { defaultToSelf: false },
+            );
+          } catch (e: any) {
+            console.error(`[linkProfileTo] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
+          }
+        }
+      }
     }
 
-    // Documents still use profile JSONB `documents` array
+    // Documents still use profile JSONB `documents` array — side effect outside
+    //   the ownership-writer's responsibility, so we keep it here.
     if (entityType === "document") {
       if (!profile.documents.includes(entityId)) {
         profile.documents.push(entityId);
         await this.supabase.from("profiles").update({ documents: profile.documents }).eq("id", profileId).eq("user_id", this.userId);
-      }
-    }
-
-    // Sync entity's linked_profiles JSONB.
-    // Race-safer pattern: re-read AFTER the junction-table upsert above, then
-    // also union with the full junction set so we don't lose a sibling write
-    // that happened between two concurrent linkProfileTo calls. Junction is
-    // the source of truth, so we mirror it.
-    if (entityTable) {
-      const [entityResult, junctionAll] = await Promise.all([
-        this.supabase.from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single(),
-        jt
-          ? this.supabase.from(jt.table).select("profile_id").eq(jt.entityCol, entityId).eq("user_id", this.userId)
-          : Promise.resolve({ data: [] as any[] }),
-      ]);
-      const entityRow = entityResult.data;
-      if (entityRow) {
-        const current: string[] = entityRow.linked_profiles || [];
-        const fromJunction: string[] = (junctionAll.data || []).map((j: any) => j.profile_id);
-        const merged = [...new Set([...current, ...fromJunction, profileId])];
-        // Only write if the set actually changed (saves a roundtrip in the common no-op case)
-        if (merged.length !== current.length || merged.some((p, i) => p !== current[i])) {
-          await this.supabase.from(entityTable).update({ linked_profiles: merged })
-            .eq("id", entityId).eq("user_id", this.userId);
-        }
       }
     }
   }
@@ -1394,48 +1390,51 @@ export class SupabaseStorage implements IStorage {
     const profile = await this.getProfile(profileId);
     if (!profile) return;
 
-    // Remove from junction table (new source of truth)
-    const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
-    if (jt) {
-      await this.supabase.from(jt.table).delete()
-        .eq("profile_id", profileId)
-        .eq(jt.entityCol, entityId)
-        .eq("user_id", this.userId);
+    // Stage 1b: route the ownership write through the single writer. We pass
+    //   `defaultToSelf: false` so removing the last owner leaves the row
+    //   un-owned (matches historic unlinkProfileFrom behavior).
+    const spec = (OWNERSHIP_TABLES as any)[entityType] as { entityTable: string } | undefined;
+    if (spec) {
+      const { data: entityRow } = await this.supabase
+        .from(spec.entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).maybeSingle();
+      if (entityRow) {
+        const current: string[] = Array.isArray(entityRow.linked_profiles)
+          ? entityRow.linked_profiles.filter((x: any) => typeof x === "string")
+          : [];
+        if (current.includes(profileId)) {
+          const next = current.filter(id => id !== profileId);
+          const self = await this.getSelfProfile();
+          const selfId = self?.id || profileId; // Only used if next is empty in default-to-self mode; we opt out.
+          try {
+            await setOwners(
+              this.supabase,
+              this.userId,
+              entityType as OwnedEntityType,
+              entityId,
+              next,
+              selfId,
+              { defaultToSelf: false },
+            );
+          } catch (e: any) {
+            console.error(`[unlinkProfileFrom] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
+          }
+        }
+      }
     }
 
-    // JSONB arrays on profiles are deprecated — junction tables are the sole source of truth.
     // Documents still use the profile JSONB `documents` array (no junction table yet)
     if (entityType === "document") {
       profile.documents = profile.documents.filter(id => id !== entityId);
       await this.supabase.from("profiles").update({ documents: profile.documents }).eq("id", profileId).eq("user_id", this.userId);
     }
-    // Also remove from entity_links table
+    // Also remove from entity_links table — generic graph cleanup, outside
+    //   the ownership-writer's responsibility.
     await this.supabase.from("entity_links").delete()
       .eq("user_id", this.userId)
       .eq("source_type", "profile")
       .eq("source_id", profileId)
       .eq("target_type", entityType)
       .eq("target_id", entityId);
-
-    // Sync entity's linked_profiles JSONB (remove profile)
-    const tableMap: Record<string, string> = {
-      tracker: "trackers", expense: "expenses", task: "tasks",
-      event: "events", obligation: "obligations", document: "documents",
-      habit: "habits", goal: "goals",
-    };
-    const entityTable = tableMap[entityType];
-    if (entityTable) {
-      const { data: entityRow } = await this.supabase
-        .from(entityTable).select("linked_profiles").eq("id", entityId).eq("user_id", this.userId).single();
-      if (entityRow) {
-        const current: string[] = entityRow.linked_profiles || [];
-        const updated = current.filter(id => id !== profileId);
-        if (updated.length !== current.length) {
-          await this.supabase.from(entityTable).update({ linked_profiles: updated })
-            .eq("id", entityId).eq("user_id", this.userId);
-        }
-      }
-    }
   }
 
   /**
@@ -1459,25 +1458,51 @@ export class SupabaseStorage implements IStorage {
     nextProfiles: string[] | undefined,
   ): Promise<void> {
     if (!Array.isArray(nextProfiles)) return;
-    const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
-    if (!jt) return;
-    const nextSet = new Set(nextProfiles);
-    const { data: rows } = await this.supabase
-      .from(jt.table).select("profile_id")
-      .eq(jt.entityCol, entityId).eq("user_id", this.userId);
-    const currentSet = new Set((rows || []).map((r: any) => r.profile_id));
-    const toAdd = [...nextSet].filter(p => !currentSet.has(p));
-    const toRemove = [...currentSet].filter(p => !nextSet.has(p));
-    for (const pid of toAdd) {
-      await this.supabase.from(jt.table).upsert(
-        { profile_id: pid, [jt.entityCol]: entityId, user_id: this.userId },
-        { onConflict: `profile_id,${jt.entityCol}` }
-      );
+    const spec = (OWNERSHIP_TABLES as any)[entityType];
+    if (!spec || !spec.junctionTable) return;
+    // Stage 1b: delegate to setOwners so JSONB and junction are always written
+    //   together. The caller has already written linked_profiles JSONB —
+    //   setOwners no-ops the JSONB update when the sets match and syncs the
+    //   junction in one diff pass.
+    const self = await this.getSelfProfile();
+    const selfId = self?.id;
+    if (!selfId) {
+      // Fall back to legacy direct junction write only when self is missing
+      //   (very early account setup). Same path as before.
+      const jt = SupabaseStorage.JUNCTION_TABLES[entityType];
+      if (!jt) return;
+      const nextSet = new Set(nextProfiles);
+      const { data: rows } = await this.supabase
+        .from(jt.table).select("profile_id")
+        .eq(jt.entityCol, entityId).eq("user_id", this.userId);
+      const currentSet = new Set((rows || []).map((r: any) => r.profile_id));
+      const toAdd = [...nextSet].filter(p => !currentSet.has(p));
+      const toRemove = [...currentSet].filter(p => !nextSet.has(p));
+      for (const pid of toAdd) {
+        await this.supabase.from(jt.table).upsert(
+          { profile_id: pid, [jt.entityCol]: entityId, user_id: this.userId },
+          { onConflict: `profile_id,${jt.entityCol}` }
+        );
+      }
+      if (toRemove.length > 0) {
+        await this.supabase.from(jt.table).delete()
+          .eq(jt.entityCol, entityId).eq("user_id", this.userId)
+          .in("profile_id", toRemove);
+      }
+      return;
     }
-    if (toRemove.length > 0) {
-      await this.supabase.from(jt.table).delete()
-        .eq(jt.entityCol, entityId).eq("user_id", this.userId)
-        .in("profile_id", toRemove);
+    try {
+      await setOwners(
+        this.supabase,
+        this.userId,
+        entityType as OwnedEntityType,
+        entityId,
+        nextProfiles,
+        selfId,
+        { defaultToSelf: false },
+      );
+    } catch (e: any) {
+      console.error(`[syncEntityJunction] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
     }
   }
 
