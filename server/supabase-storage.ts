@@ -1985,17 +1985,22 @@ export class SupabaseStorage implements IStorage {
   async createIncome(data: InsertIncome): Promise<Income> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    let linkedProfiles = data.linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("incomes").insert({
       id, user_id: this.userId, description: data.description,
       amount: data.amount, category: data.category || "salary",
       frequency: data.frequency || "monthly", date: data.date || null,
-      linked_profiles: data.linkedProfiles || [], tags: data.tags || [],
+      linked_profiles: linkedProfiles, tags: data.tags || [],
       source: "manual", created_at: now,
     });
     if (error) throw error;
     this.logActivity("income", `Created income: ${data.description} $${data.amount}`, "create", id);
     return { id, ...data, amount: data.amount, category: data.category || "salary",
-      frequency: data.frequency || "monthly", linkedProfiles: data.linkedProfiles || [],
+      frequency: data.frequency || "monthly", linkedProfiles,
       tags: data.tags || [], createdAt: now };
   }
 
@@ -2594,18 +2599,23 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
+    let linkedProfiles = data.linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("documents").insert({
       id, user_id: this.userId, name: data.name, type: data.type || "other",
       mime_type: data.mimeType || "image/jpeg", file_data: fileDataForDB,
       storage_path: storagePath,
-      extracted_data: data.extractedData || {}, linked_profiles: data.linkedProfiles || [],
+      extracted_data: data.extractedData || {}, linked_profiles: linkedProfiles,
       tags: data.tags || [], created_at: now,
     });
     if (error) throw error;
     // PERF FIX: was sequential linkProfileTo per profile — N round trips for
     // a multi-profile upload. Parallelize so a 5-profile link is one burst.
     await Promise.all(
-      (data.linkedProfiles || []).map((pid: string) =>
+      linkedProfiles.map((pid: string) =>
         this.linkProfileTo(pid, "document", id).catch((e: any) => {
           console.warn(`[createDocument] linkProfileTo failed for ${pid}:`, e?.message);
         })
@@ -3260,11 +3270,16 @@ export class SupabaseStorage implements IStorage {
   async createJournalEntry(data: InsertJournalEntry): Promise<JournalEntry> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    let linkedProfiles = (data as any).linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
     const { error } = await this.supabase.from("journal_entries").insert({
       id, user_id: this.userId, date: data.date || getUserToday(this._timezone), mood: data.mood,
       content: data.content || "", tags: data.tags || [], energy: data.energy ?? null,
       gratitude: data.gratitude || null, highlights: data.highlights || null,
-      linked_profiles: (data as any).linkedProfiles || [],
+      linked_profiles: linkedProfiles,
       created_at: now,
     });
     if (error) throw error;
