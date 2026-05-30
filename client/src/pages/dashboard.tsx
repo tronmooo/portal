@@ -2260,6 +2260,11 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
   const { data: goals = [], isPending: isLoading, error: goalsError } = useQuery<GoalItem[]>({
     queryKey: goalsKey,
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
+    // BUG-20260530-filter-stale-stats-leak: during a filter swap, react-query
+    // was returning the previous filter's goals (e.g. Test's Hawaii Savings,
+    // QAMULTI389053) while looking at Craig (who has none). Forcing undefined
+    // makes the section show its empty state until the new fetch lands.
+    placeholderData: undefined,
   });
   const [editGoal, setEditGoal] = useState<GoalItem | null>(null);
   const [creating, setCreating] = useState(false);
@@ -3497,6 +3502,13 @@ function AISummaryWidget({
     if (!stats) return;
     if (lastKey.current === filterKey) return;
     lastKey.current = filterKey;
+    // BUG-20260530-filter-stale-stats-leak: clear the stale summary + scope
+    // immediately on filter change so the user never sees "SCOPE: TEST" while
+    // looking at Craig. The skeleton will replace it until the new fetch lands.
+    setSummary(null);
+    setScope(null);
+    setLastGenerated(null);
+    setLoading(true);
     const schedule: (cb: () => void) => number = (cb) => {
       const w = window as any;
       if (typeof w.requestIdleCallback === "function") {
@@ -3926,6 +3938,14 @@ export default function DashboardPage() {
   const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
+    // BUG-20260530-filter-stale-stats-leak: without placeholderData: undefined,
+    // react-query returned the PREVIOUS filter's stats during a filter swap
+    // (Everyone -> Craig). That left the dashboard rendering Test's
+    // monthlySpend $698k, 6 open tasks, 8 bills due, etc. when Craig (who has
+    // no data) was selected, because the new server response (all zeros) was
+    // still in flight. Forcing undefined makes the cards show skeleton/zero
+    // during swap and snap to the correct values when the fetch lands.
+    placeholderData: undefined,
     // PERF (2026-05-24): was `refetchOnMount: "always"`, which made every
     // dashboard mount feel like a cold load. With persisted cache + the
     // global onMutate invalidation hook (see queryClient.ts) we get fresh
@@ -3949,6 +3969,12 @@ export default function DashboardPage() {
       } catch (err) { console.error("[dashboard-enhanced] fetch failed:", err); return null; }
     },
     retry: false,
+    // BUG-20260530-filter-stale-stats-leak: same fix as /api/stats above.
+    // enhanced.financeSnapshot is what drives Net Worth / Cash Flow / Asset /
+    // Liability roll-ups; without this the dashboard kept rendering the
+    // previous filter's $223k net worth and -$698k cash flow when swapping
+    // to a profile with no data.
+    placeholderData: undefined,
     // PERF (2026-05-24): see /api/stats note above. Removed `"always"` so
     // returning to the dashboard renders from cache instantly.
   });
