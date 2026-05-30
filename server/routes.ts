@@ -1751,6 +1751,14 @@ If unsure, return "profile_fact".`,
     if (cached) return res.json(cached);
 
     const data = await dedupe(cacheKey, async () => {
+      // PERF: enable per-request memoization on the scoped storage so that
+      // getStats() + getDashboardEnhanced() + the lightweight Promise.all
+      // share a single Supabase fetch per table (profiles/expenses/trackers/
+      // tasks/events/obligations/etc) instead of refetching each one 2-3x.
+      // Safe because storage is request-scoped via createScopedStorage and
+      // memo is opt-in (default OFF).
+      try { (storage as any).enableRequestMemo?.(); } catch {}
+
       // PERF: reuse the per-endpoint server caches so bootstrap is cheap when
       // /api/stats or /api/dashboard-enhanced have been hit in the last 15s.
       const statsCacheKey = `stats:${userId}:${filterKey}`;
@@ -1815,6 +1823,7 @@ If unsure, return "profile_fact".`,
     });
 
     setCache(cacheKey, data, 60 * 1000); // match /api/stats TTL
+    try { (storage as any).disableRequestMemo?.(); } catch {}
     res.json(data);
   }));
 
@@ -1923,6 +1932,28 @@ If unsure, return "profile_fact".`,
   }));
 
   // ---- Profiles ----
+  // PERF: slim variant for the MultiProfileFilter chip and other nav UI that
+  // only needs id/type/name/avatar/parent. Skips heavy jsonb columns. MUST be
+  // registered before /api/profiles/:id so "lite" isn't matched as an id.
+  app.get("/api/profiles/lite", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const ck = `profiles-lite:${uid}`;
+    const hit = getCached(ck);
+    if (hit) {
+      res.set("X-Total-Count", String(hit.length));
+      return res.json(hit);
+    }
+    const items = await dedupe(ck, async () => {
+      if (typeof (storage as any).getProfilesLite === "function") {
+        return await (storage as any).getProfilesLite();
+      }
+      return await storage.getProfiles();
+    });
+    setCache(ck, items, 30 * 1000);
+    res.set("X-Total-Count", String(items.length));
+    res.json(items);
+  }));
+
   app.get("/api/profiles", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || "anon";
     const ck = `profiles:${uid}`;

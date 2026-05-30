@@ -384,6 +384,28 @@ export class SupabaseStorage implements IStorage {
   private userId: string;
   _timezone: string = 'America/Los_Angeles'; // user's timezone for date calculations
 
+  // PERF (2026-05-29): per-instance in-flight Promise cache for heavy list
+  // methods. The bootstrap handler (and other multi-aggregate endpoints)
+  // calls getProfiles/getExpenses/getEvents etc. several times across
+  // getStats() and getDashboardEnhanced() — each call paid a full Supabase
+  // round-trip. Caching the in-flight Promise on this per-request instance
+  // collapses duplicate fetches to a single network call without changing
+  // any call sites. enableMemo() turns it on; methods check the cache.
+  // Default OFF so cross-request reuse never happens (instance is also
+  // per-request, but defensive).
+  private memoEnabled = false;
+  private memoCache: Map<string, Promise<any>> = new Map();
+  enableRequestMemo(): void { this.memoEnabled = true; this.memoCache.clear(); }
+  disableRequestMemo(): void { this.memoEnabled = false; this.memoCache.clear(); }
+  private memo<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    if (!this.memoEnabled) return fn();
+    const hit = this.memoCache.get(key);
+    if (hit) return hit as Promise<T>;
+    const p = fn().catch(err => { this.memoCache.delete(key); throw err; });
+    this.memoCache.set(key, p);
+    return p;
+  }
+
   constructor(supabaseUrl: string, supabaseServiceKey: string, userId: string) {
     // PERF (2026-05-28): reuse a single Supabase client across warm container
     // requests instead of constructing a new one per scoped storage instance.
@@ -617,9 +639,45 @@ export class SupabaseStorage implements IStorage {
   // PROFILES
   // ============================================================
   async getProfiles(): Promise<Profile[]> {
-    const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId);
+    return this.memo("getProfiles", async () => {
+      const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId);
+      if (error) throw error;
+      return (data || []).map(r => this.rowToProfile(r));
+    });
+  }
+
+  /**
+   * PERF: slim variant used by the MultiProfileFilter chip and any nav UI
+   * that only needs id/type/name/avatar/parent. Skips heavy jsonb columns
+   * (fields, documents, linked_*, tags, notes). Returned shape is a strict
+   * subset of Profile so callers can treat it as Profile-compatible — extra
+   * fields default to empty arrays/strings to keep the Profile contract.
+   */
+  async getProfilesLite(): Promise<Profile[]> {
+    const { data, error } = await this.supabase
+      .from("profiles")
+      .select("id, type, type_key, name, avatar, parent_profile_id, linked_obligation_id, created_at, updated_at")
+      .eq("user_id", this.userId);
     if (error) throw error;
-    return (data || []).map(r => this.rowToProfile(r));
+    return (data || []).map((r: any): Profile => ({
+      id: r.id,
+      type: r.type,
+      type_key: r.type_key || undefined,
+      name: r.name,
+      avatar: r.avatar || undefined,
+      fields: {},
+      tags: [],
+      notes: "",
+      documents: [],
+      linkedTrackers: [],
+      linkedExpenses: [],
+      linkedTasks: [],
+      linkedEvents: [],
+      parentProfileId: r.parent_profile_id || undefined,
+      linkedObligationId: r.linked_obligation_id || undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
   }
 
   async getProfile(id: string): Promise<Profile | undefined> {
@@ -1576,6 +1634,9 @@ export class SupabaseStorage implements IStorage {
   // TRACKERS
   // ============================================================
   async getTrackers(daysBack = 120): Promise<Tracker[]> {
+    return this.memo(`getTrackers:${daysBack}`, () => this._getTrackersImpl(daysBack));
+  }
+  private async _getTrackersImpl(daysBack = 120): Promise<Tracker[]> {
     // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
     // Limit entries to recent data (default 120 days) to avoid slow full-history scans
     const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString();
@@ -1817,12 +1878,14 @@ export class SupabaseStorage implements IStorage {
   // TASKS
   // ============================================================
   async getTasks(): Promise<Task[]> {
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
-    const { data, error } = await this.supabase
-      .from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null)
-      .order("created_at", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToTask(r));
+    return this.memo("getTasks", async () => {
+      // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
+      const { data, error } = await this.supabase
+        .from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(r => this.rowToTask(r));
+    });
   }
 
   async getTask(id: string): Promise<Task | undefined> {
@@ -1894,12 +1957,14 @@ export class SupabaseStorage implements IStorage {
   // EXPENSES
   // ============================================================
   async getExpenses(): Promise<Expense[]> {
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
-    const { data, error } = await this.supabase
-      .from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null)
-      .order("date", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToExpense(r));
+    return this.memo("getExpenses", async () => {
+      // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
+      const { data, error } = await this.supabase
+        .from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null)
+        .order("date", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(r => this.rowToExpense(r));
+    });
   }
 
   async getExpense(id: string): Promise<Expense | undefined> {
@@ -1972,14 +2037,16 @@ export class SupabaseStorage implements IStorage {
   // INCOME
   // ============================================================
   async getIncomes(): Promise<Income[]> {
-    const { data, error } = await this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null);
-    if (error) throw error;
-    return (data || []).map(r => ({
-      id: r.id, description: r.description, amount: Number(r.amount),
-      category: r.category || "salary", frequency: r.frequency || "monthly",
-      date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
-      tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
-    }));
+    return this.memo("getIncomes", async () => {
+      const { data, error } = await this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null);
+      if (error) throw error;
+      return (data || []).map(r => ({
+        id: r.id, description: r.description, amount: Number(r.amount),
+        category: r.category || "salary", frequency: r.frequency || "monthly",
+        date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
+        tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
+      }));
+    });
   }
 
   async createIncome(data: InsertIncome): Promise<Income> {
@@ -2032,12 +2099,14 @@ export class SupabaseStorage implements IStorage {
   // EVENTS
   // ============================================================
   async getEvents(): Promise<CalendarEvent[]> {
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
-    const { data, error } = await this.supabase
-      .from("events").select("*").eq("user_id", this.userId)
-      .order("date", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToEvent(r));
+    return this.memo("getEvents", async () => {
+      // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
+      const { data, error } = await this.supabase
+        .from("events").select("*").eq("user_id", this.userId)
+        .order("date", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(r => this.rowToEvent(r));
+    });
   }
 
   async getEvent(id: string): Promise<CalendarEvent | undefined> {
@@ -2517,16 +2586,18 @@ export class SupabaseStorage implements IStorage {
   // DOCUMENTS
   // ============================================================
   async getDocuments(): Promise<Document[]> {
-    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
-    // PERF: Exclude file_data from list queries — base64 blobs can be 10MB+ each.
-    // Only getDocument(id) returns file_data when specifically needed.
-    const { data, error } = await this.supabase.from("documents")
-      .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
-      .eq("user_id", this.userId)
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
+    return this.memo("getDocuments", async () => {
+      if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+      // PERF: Exclude file_data from list queries — base64 blobs can be 10MB+ each.
+      // Only getDocument(id) returns file_data when specifically needed.
+      const { data, error } = await this.supabase.from("documents")
+        .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
+        .eq("user_id", this.userId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
+    });
   }
 
   async getDocument(id: string): Promise<Document | undefined> {
@@ -2765,21 +2836,23 @@ export class SupabaseStorage implements IStorage {
   // HABITS
   // ============================================================
   async getHabits(): Promise<Habit[]> {
-    // Fetch all habits and ALL checkins in 2 parallel queries (not N+1)
-    const [habitsResult, checkinsResult] = await Promise.all([
-      this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null),
-      this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
-    ]);
-    if (habitsResult.error) throw habitsResult.error;
-    const checkinsByHabit = new Map<string, any[]>();
-    for (const c of checkinsResult.data || []) {
-      const arr = checkinsByHabit.get(c.habit_id) || [];
-      arr.push(c);
-      checkinsByHabit.set(c.habit_id, arr);
-    }
-    return (habitsResult.data || []).map(r =>
-      this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map(c => this.rowToHabitCheckin(c)))
-    );
+    return this.memo("getHabits", async () => {
+      // Fetch all habits and ALL checkins in 2 parallel queries (not N+1)
+      const [habitsResult, checkinsResult] = await Promise.all([
+        this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null),
+        this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
+      ]);
+      if (habitsResult.error) throw habitsResult.error;
+      const checkinsByHabit = new Map<string, any[]>();
+      for (const c of checkinsResult.data || []) {
+        const arr = checkinsByHabit.get(c.habit_id) || [];
+        arr.push(c);
+        checkinsByHabit.set(c.habit_id, arr);
+      }
+      return (habitsResult.data || []).map(r =>
+        this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map(c => this.rowToHabitCheckin(c)))
+      );
+    });
   }
 
   async getHabit(id: string): Promise<Habit | undefined> {
@@ -2892,21 +2965,23 @@ export class SupabaseStorage implements IStorage {
   // OBLIGATIONS
   // ============================================================
   async getObligations(): Promise<Obligation[]> {
-    // Fetch all obligations and ALL payments in 2 parallel queries (not N+1)
-    const [obligationsResult, paymentsResult] = await Promise.all([
-      this.supabase.from("obligations").select("*").eq("user_id", this.userId),
-      this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
-    ]);
-    if (obligationsResult.error) throw obligationsResult.error;
-    const paymentsByObligation = new Map<string, any[]>();
-    for (const p of paymentsResult.data || []) {
-      const arr = paymentsByObligation.get(p.obligation_id) || [];
-      arr.push(p);
-      paymentsByObligation.set(p.obligation_id, arr);
-    }
-    return (obligationsResult.data || []).map(r =>
-      this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map(p => this.rowToPayment(p)))
-    );
+    return this.memo("getObligations", async () => {
+      // Fetch all obligations and ALL payments in 2 parallel queries (not N+1)
+      const [obligationsResult, paymentsResult] = await Promise.all([
+        this.supabase.from("obligations").select("*").eq("user_id", this.userId),
+        this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
+      ]);
+      if (obligationsResult.error) throw obligationsResult.error;
+      const paymentsByObligation = new Map<string, any[]>();
+      for (const p of paymentsResult.data || []) {
+        const arr = paymentsByObligation.get(p.obligation_id) || [];
+        arr.push(p);
+        paymentsByObligation.set(p.obligation_id, arr);
+      }
+      return (obligationsResult.data || []).map(r =>
+        this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map(p => this.rowToPayment(p)))
+      );
+    });
   }
 
   async getObligation(id: string): Promise<Obligation | undefined> {
@@ -3109,9 +3184,11 @@ export class SupabaseStorage implements IStorage {
   // ARTIFACTS
   // ============================================================
   async getArtifacts(): Promise<Artifact[]> {
-    const { data, error } = await this.supabase.from("artifacts").select("*").eq("user_id", this.userId);
-    if (error) throw error;
-    return (data || []).map(r => this.rowToArtifact(r));
+    return this.memo("getArtifacts", async () => {
+      const { data, error } = await this.supabase.from("artifacts").select("*").eq("user_id", this.userId);
+      if (error) throw error;
+      return (data || []).map(r => this.rowToArtifact(r));
+    });
   }
 
   async getArtifact(id: string): Promise<Artifact | undefined> {
@@ -3256,9 +3333,11 @@ export class SupabaseStorage implements IStorage {
   // JOURNAL
   // ============================================================
   async getJournalEntries(): Promise<JournalEntry[]> {
-    const { data, error } = await this.supabase.from("journal_entries").select("*").eq("user_id", this.userId).order("created_at", { ascending: false });
-    if (error) throw error;
-    return (data || []).map(r => this.rowToJournalEntry(r));
+    return this.memo("getJournalEntries", async () => {
+      const { data, error } = await this.supabase.from("journal_entries").select("*").eq("user_id", this.userId).order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(r => this.rowToJournalEntry(r));
+    });
   }
 
   private async getJournalEntry(id: string): Promise<JournalEntry | undefined> {
@@ -3318,9 +3397,11 @@ export class SupabaseStorage implements IStorage {
   // MEMORY
   // ============================================================
   async getMemories(): Promise<MemoryItem[]> {
-    const { data, error } = await this.supabase.from("memories").select("*").eq("user_id", this.userId);
-    if (error) throw error;
-    return (data || []).map(r => this.rowToMemory(r));
+    return this.memo("getMemories", async () => {
+      const { data, error } = await this.supabase.from("memories").select("*").eq("user_id", this.userId);
+      if (error) throw error;
+      return (data || []).map(r => this.rowToMemory(r));
+    });
   }
 
   async saveMemory(data: InsertMemory): Promise<MemoryItem> {
@@ -4744,11 +4825,13 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getLiabilityProfileLinks(liabilityProfileId?: string): Promise<LiabilityProfileLink[]> {
-    let q = this.supabase.from("liability_profile_links").select("*").eq("user_id", this.userId);
-    if (liabilityProfileId) q = q.eq("liability_profile_id", liabilityProfileId);
-    const { data, error } = await q;
-    if (error) throw error;
-    return (data || []).map(r => this.rowToLiabilityProfileLink(r));
+    return this.memo(`getLiabilityProfileLinks:${liabilityProfileId || ""}`, async () => {
+      let q = this.supabase.from("liability_profile_links").select("*").eq("user_id", this.userId);
+      if (liabilityProfileId) q = q.eq("liability_profile_id", liabilityProfileId);
+      const { data, error } = await q;
+      if (error) throw error;
+      return (data || []).map(r => this.rowToLiabilityProfileLink(r));
+    });
   }
 
   async getLiabilityProfileLinksForParty(partyProfileId: string): Promise<LiabilityProfileLink[]> {
@@ -4936,11 +5019,13 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getAssetPartyLinks(assetProfileId?: string): Promise<AssetPartyLink[]> {
-    let q = this.supabase.from("asset_party_links").select("*").eq("user_id", this.userId);
-    if (assetProfileId) q = q.eq("asset_profile_id", assetProfileId);
-    const { data, error } = await q;
-    if (error) throw error;
-    return (data || []).map((r: any) => this.rowToAssetPartyLink(r));
+    return this.memo(`getAssetPartyLinks:${assetProfileId || ""}`, async () => {
+      let q = this.supabase.from("asset_party_links").select("*").eq("user_id", this.userId);
+      if (assetProfileId) q = q.eq("asset_profile_id", assetProfileId);
+      const { data, error } = await q;
+      if (error) throw error;
+      return (data || []).map((r: any) => this.rowToAssetPartyLink(r));
+    });
   }
 
   async getAssetPartyLinksForParty(partyProfileId: string): Promise<AssetPartyLink[]> {

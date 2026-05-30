@@ -33,6 +33,7 @@ import { randomUUID } from "crypto";
 export interface IStorage {
   // Profiles
   getProfiles(): Promise<Profile[]>;
+  getProfilesLite?(): Promise<Profile[]>;
   getProfile(id: string): Promise<Profile | undefined>;
   getProfileDetail(id: string): Promise<ProfileDetail | undefined>;
   createProfile(data: InsertProfile): Promise<Profile>;

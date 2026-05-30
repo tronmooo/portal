@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -43,7 +44,23 @@ interface Props {
 }
 
 export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryone }: Props) {
-  const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // PERF (2026-05-29): use the slim /api/profiles/lite endpoint — the chip
+  // only renders id/type/name/avatar, so we drop the heavy jsonb columns
+  // (fields, documents, linked_*) the full endpoint returns. Falls back to
+  // the full endpoint's cache via initialData when it's already populated
+  // so we don't double-fetch on pages that already loaded /api/profiles.
+  // Key shape ["/api/profiles", "lite"] so scoped invalidations of ["/api/profiles"]
+  // (prefix match) also refresh the chip after any mutation.
+  const fullProfilesCache = queryClient.getQueryData<any[]>(["/api/profiles"]);
+  const { data: profiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles", "lite"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/profiles/lite");
+      return res.json();
+    },
+    initialData: fullProfilesCache,
+    staleTime: 30_000,
+  });
   // CRITICAL: separate state per UI — shared state causes the Sheet overlay to
   // mount on desktop and block ALL page clicks, making tabs unresponsive.
   const [desktopOpen, setDesktopOpen] = useState(false);
