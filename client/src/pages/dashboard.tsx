@@ -541,13 +541,22 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
   // correctly returned $175k. The Everyone case keeps the client roll-up so
   // we can show an animated number before /api/dashboard-enhanced resolves.
   const filterActive = filterMode === "selected" && filterIds.length > 0;
+  // BUG-20260530-hero-flash: during a filter swap there's a sub-second window
+  // where `enhanced` (the new profile's server-computed snapshot) is still
+  // in flight. The previous logic fell back to a client-side roll-up off
+  // `heroAssetProfiles`, which could briefly compute a non-zero value for a
+  // profile that should be $0 (e.g. shared-ownership rounding, lingering
+  // co-owner pointers). When a filter is active, prefer 0 over the client
+  // roll-up so the hero card never flashes a stale-looking number while the
+  // authoritative server response is pending — it'll snap to the correct
+  // value in <300ms.
   const totalAssetValue = filterActive
-    ? (enhanced?.financeSnapshot?.totalAssetValue ?? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0))
+    ? (enhanced?.financeSnapshot?.totalAssetValue ?? 0)
     : allProfiles
       ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
       : (enhanced?.financeSnapshot?.totalAssetValue ?? 0);
   const totalLiabilities = filterActive
-    ? (enhanced?.financeSnapshot?.totalLiabilities ?? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0))
+    ? (enhanced?.financeSnapshot?.totalLiabilities ?? 0)
     : allProfiles
       ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
       : (enhanced?.financeSnapshot?.totalLiabilities ?? 0);
