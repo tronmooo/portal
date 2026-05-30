@@ -36,9 +36,13 @@ interface Props {
   profileTypes?: string[];
   /** Compact mode for inline placement */
   compact?: boolean;
+  /** Hide the "Everyone" option entirely (and the Clear shortcut that maps to it).
+   *  Used by the Dashboard where global/unfiltered view is disallowed. Other pages
+   *  leave this unset so their Everyone behavior is preserved. */
+  hideEveryone?: boolean;
 }
 
-export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
+export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryone }: Props) {
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   // CRITICAL: separate state per UI — shared state causes the Sheet overlay to
   // mount on desktop and block ALL page clicks, making tabs unresponsive.
@@ -150,7 +154,8 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
   // ── Shared list content ──────────────────────────────────
   const listContent = (
     <div className="space-y-0.5">
-      {/* Everyone option */}
+      {/* Everyone option — hidden when `hideEveryone` (e.g. Dashboard). */}
+      {!hideEveryone && (<>
       <button
         className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-sm transition-all active:scale-[0.97] ${
           isEveryone ? 'bg-primary/10 text-primary font-medium border border-primary/30' : 'hover:bg-accent active:bg-accent border border-transparent'
@@ -171,6 +176,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
       </button>
 
       <div className="h-px bg-border my-1.5 mx-3" />
+      </>)}
 
       {sorted.length === 0 && (
         <p className="text-xs text-muted-foreground text-center py-3 px-3">No profiles to filter by</p>
@@ -227,7 +233,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
             <div className="flex items-center justify-between mb-2 px-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Filter by Person</span>
               <div className="flex items-center gap-1">
-                {!isEveryone && (
+                {!isEveryone && !hideEveryone && (
                   <Button variant="ghost" size="sm" className="h-6 text-xs px-1.5 gap-1" onClick={() => { handleEveryone(); setDesktopOpen(false); }}>
                     <X className="h-3 w-3" /> Clear
                   </Button>
@@ -268,7 +274,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact }: Props) {
             <SheetHeader className="px-2 pb-2 shrink-0">
               <div className="flex items-center justify-between">
                 <SheetTitle className="text-sm">Filter by Profile</SheetTitle>
-                {!isEveryone && (
+                {!isEveryone && !hideEveryone && (
                   <Button variant="ghost" size="sm" className="h-7 text-xs px-2 gap-1" onClick={handleEveryone}>
                     <X className="h-3 w-3" /> Clear
                   </Button>

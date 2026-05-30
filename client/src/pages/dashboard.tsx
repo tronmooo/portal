@@ -3845,6 +3845,19 @@ export default function DashboardPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
+  // Dashboard-only: "Everyone" mode is disallowed here. When the page mounts
+  // with the global filter in everyone mode (or with no selection), switch to
+  // the Self profile so every widget renders the logged-in user's data instead
+  // of the unfiltered global rollup. Other pages keep their Everyone behavior
+  // because they don't run this effect.
+  useEffect(() => {
+    if (filterMode !== "everyone" && filterIds.length > 0) return;
+    if (!allProfiles || allProfiles.length === 0) return;
+    const self = allProfiles.find((p: any) => p.type === "self");
+    if (!self) return;
+    setDashboardProfileFilter(self.id, self.name || "Self");
+  }, [allProfiles, filterMode, filterIds.length]);
+
   // Compute stats profile param for API calls.
   // Bug fix: gate on filterMode === "selected" so that when the user is in
   // "everyone" mode but filterIds still has stale ids during a transition,
@@ -4075,6 +4088,7 @@ export default function DashboardPage() {
             <MultiProfileFilter
               onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
               compact
+              hideEveryone
             />
           </div>
         </div>
