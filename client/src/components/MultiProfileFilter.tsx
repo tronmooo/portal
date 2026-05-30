@@ -171,37 +171,25 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
   // ── Shared list content ──────────────────────────────────
   const listContent = (
     <div className="space-y-0.5">
-      {/* Everyone option — hidden when `hideEveryone`. Styled distinctly from
-          individual profile rows because in Dashboard it means "portfolio
-          rollup" (assets + liabilities only), not "sum of every personal
-          finance bucket". Amber accent + Users icon set it apart from the
-          per-person User icons below. */}
+      {/* Everyone option — hidden when `hideEveryone` (e.g. Dashboard). */}
       {!hideEveryone && (<>
       <button
         className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-sm transition-all active:scale-[0.97] ${
-          isEveryone
-            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 font-semibold border border-amber-500/40'
-            : 'hover:bg-amber-500/5 active:bg-amber-500/10 border border-amber-500/15'
+          isEveryone ? 'bg-primary/10 text-primary font-medium border border-primary/30' : 'hover:bg-accent active:bg-accent border border-transparent'
         }`}
         onClick={handleEveryone}
         style={{ minHeight: '52px', WebkitTapHighlightColor: 'transparent' }}
         data-testid="filter-everyone"
       >
-        <div className={`h-5 w-5 rounded border-2 flex items-center justify-center shrink-0 ${isEveryone ? "bg-amber-500 border-amber-500" : "border-amber-500/40"}`}>
+        <div className={`h-5 w-5 rounded border-2 flex items-center justify-center shrink-0 ${isEveryone ? "bg-primary border-primary" : "border-muted-foreground/30"}`}>
           {isEveryone && (
-            <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <svg className="h-3 w-3 text-primary-foreground" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M2 6l3 3 5-5" />
             </svg>
           )}
         </div>
-        <Users className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span>Everyone</span>
-            <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-semibold">Portfolio</span>
-          </div>
-          <p className="text-[10px] text-muted-foreground/70 font-normal mt-0.5">Assets + liabilities only</p>
-        </div>
+        <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+        <span className="flex-1">Everyone</span>
       </button>
 
       <div className="h-px bg-border my-1.5 mx-3" />
@@ -247,18 +235,10 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
             <Button
               variant="outline"
               size={compact ? "sm" : "default"}
-              className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${
-                isEveryone
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                  : "border-primary/50 bg-primary/5"
-              }`}
+              className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
               data-testid="button-profile-filter"
             >
-              {isEveryone ? (
-                <Users className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} text-amber-600 dark:text-amber-400`} />
-              ) : (
-                <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} text-primary`} />
-              )}
+              <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
               <span className="truncate max-w-[100px]">{label}</span>
               {selectedCount > 0 && (
                 <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">{selectedCount}</Badge>
@@ -295,19 +275,11 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
         <Button
           variant="outline"
           size={compact ? "sm" : "default"}
-          className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${
-            isEveryone
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-              : "border-primary/50 bg-primary/5"
-          }`}
+          className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
           onClick={() => setMobileOpen(true)}
           data-testid="button-profile-filter-mobile"
         >
-          {isEveryone ? (
-            <Users className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} text-amber-600 dark:text-amber-400`} />
-          ) : (
-            <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} text-primary`} />
-          )}
+          <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
           <span className="truncate max-w-[100px]">{label}</span>
           {selectedCount > 0 && (
             <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">{selectedCount}</Badge>
