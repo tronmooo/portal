@@ -938,11 +938,13 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   // Force refetch when popup opens — prevents stale cache after AI chat mutations
   useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); } }, [open]);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: tasks = [], isLoading } = useQuery<any[]>({
+  // PERF: isPending (not isLoading) so placeholderData keepPreviousData keeps prior list visible on filter switch.
+  const { data: tasks = [], isPending } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
     enabled: open,
   });
+  const isLoading = isPending;
 
   const createMutation = useMutation({
     mutationFn: (title: string) => apiRequest("POST", "/api/tasks", { title, priority: "medium", status: "todo" }),
@@ -1249,11 +1251,13 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
   });
 
   const habitsProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: habits = [], isLoading } = useQuery<any[]>({
+  // PERF: isPending (not isLoading) so placeholderData keeps prior habits visible on filter switch.
+  const { data: habits = [], isPending: habitsLoading } = useQuery<any[]>({
     queryKey: ["/api/habits", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/habits${habitsProfileParam}`).then(r => r.json()),
     enabled: open,
   });
+  const isLoading = habitsLoading;
 
   // Optimistically bump stats.habitCompletionRate so the dashboard
   // donut ring jumps to 100% the instant the user marks every habit
@@ -2253,7 +2257,7 @@ function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; prof
   // trackers must use this so their caches share one slot.
   // BUG-20260528-goals-key-shape
   const goalsKey = goalsQueryKey(ids);
-  const { data: goals = [], isLoading, error: goalsError } = useQuery<GoalItem[]>({
+  const { data: goals = [], isPending: isLoading, error: goalsError } = useQuery<GoalItem[]>({
     queryKey: goalsKey,
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
