@@ -3639,7 +3639,15 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   // 3) Secondary KPI chip row (tasks, spend, habits, journal, docs)
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
   // === 💰 Money swimlane ===
-  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: true, column: "full" },
+  // BUG-20260529-finance-section-leak: the Finance section aggregates spending/
+  // budget/cash-flow across every profile (Bob, Jane, shared budgets, etc.)
+  // and renders the inflated "Budget exceeded by \$703,210 · 28228% of \$2,500"
+  // banner that the user reported. The hero KPIs already cover Net Worth /
+  // Budget / Cash Flow in a profile-aware way; the FinanceWidget duplicates
+  // those numbers without the same filtering discipline. Hidden by default
+  // until the per-profile budgeting fix lands. LAYOUT_VERSION bumped below
+  // so existing saved layouts reset and pick up the new default.
+  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: false, column: "full" },
   { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
   // === 📅 Today swimlane ===
   { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
@@ -3656,7 +3664,7 @@ const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: s
   { key: "health", label: "Health", emoji: "❤️", ids: ["health", "activity"] },
 ];
 
-const LAYOUT_VERSION = 6; // Bump: AI Summary → top hero; hero-kpis introduced; swimlane reorder
+const LAYOUT_VERSION = 7; // Bump: hide Finance section by default (cross-profile leak)
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
