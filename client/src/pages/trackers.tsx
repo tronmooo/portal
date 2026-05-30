@@ -3704,17 +3704,20 @@ export default function TrackersPage() {
     return unsub;
   }, []);
   const trackerProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: trackers, isLoading } = useQuery<Tracker[]>({
+  // PERF: use isPending (no data ever) instead of isLoading. With
+  // placeholderData:keepPreviousData on the global client, a filter switch
+  // keeps prior data while refetching — isPending stays false, the skeleton
+  // never flashes, and the page updates in place when the new response arrives.
+  const { data: trackers, isPending } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/trackers${trackerProfileParam}`).then(r => r.json()),
   });
-  // Delay skeleton — if data loads from cache in <200ms the skeleton never flashes
   const [showTrackerSkeleton, setShowTrackerSkeleton] = useState(false);
   useEffect(() => {
-    if (!isLoading) { setShowTrackerSkeleton(false); return; }
+    if (!isPending || trackers) { setShowTrackerSkeleton(false); return; }
     const tid = setTimeout(() => setShowTrackerSkeleton(true), 200);
     return () => clearTimeout(tid);
-  }, [isLoading]);
+  }, [isPending, trackers]);
 
   const { data: profiles } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -4147,7 +4150,7 @@ export default function TrackersPage() {
   const countForProfile = (profileId: string) => profileCounts[profileId] || 0;
 
   // Skeleton loading state — MUST be after all hooks
-  if (showTrackerSkeleton && !trackers) {
+  if (showTrackerSkeleton && !trackers && isPending) {
     return (
       <div className="p-3 md:p-5 space-y-3">
         <div className="h-7 w-32 rounded skeleton-shimmer" />

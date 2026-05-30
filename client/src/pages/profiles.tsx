@@ -1225,7 +1225,7 @@ export default function ProfilesPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const { data: profiles, isLoading } = useQuery<Profile[]>({
+  const { data: profiles, isPending: isLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
     refetchOnMount: true,
   });

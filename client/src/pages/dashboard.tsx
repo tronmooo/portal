@@ -3911,7 +3911,7 @@ export default function DashboardPage() {
     // its own cache buckets.
   }, [filterMode, filterIds.join(",")]);
 
-  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
+  const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
     // PERF (2026-05-24): was `refetchOnMount: "always"`, which made every
