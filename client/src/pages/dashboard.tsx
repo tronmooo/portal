@@ -731,30 +731,45 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
     return (enhanced?.expiringDocuments || []).filter((d: any) => !docSnoozeMap[d.documentId]);
   }, [enhanced, docSnoozeMap]);
 
-  if (!stats) return null;
+  // BUG-20260530-stats-slow-blank-tiles: when /api/stats is slow (8-12s cold
+  // for sparse profiles like Craig because the server iterates all storage
+  // tables anyway), `stats` is undefined for that whole window. Returning
+  // null left the entire KPI grid as 4 empty skeleton boxes — looked broken.
+  // Instead render with zero defaults so the user sees "0 tasks, $0 spend,
+  // 0 bills" immediately; values update in place when stats lands.
+  const safeStats: any = stats || {
+    activeTasks: 0,
+    monthlySpend: 0,
+    habitCompletionRate: 0,
+    totalHabits: 0,
+    journalStreak: 0,
+    currentMood: null,
+    upcomingObligations: 0,
+    monthlyObligationTotal: 0,
+  };
 
   const finSnap = enhanced?.financeSnapshot;
   const spendTrend: "up" | "down" | "flat" = finSnap?.spendTrend > 0 ? "up" : finSnap?.spendTrend < 0 ? "down" : "flat";
 
-  const moodConf = stats.currentMood ? MOOD_CONFIG[stats.currentMood] : null;
+  const moodConf = safeStats.currentMood ? MOOD_CONFIG[safeStats.currentMood as keyof typeof MOOD_CONFIG] : null;
 
   return (
     <>
       <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
         <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
-          <KPITaskCard count={stats.activeTasks} onClick={() => setPopup("tasks")} />
+          <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
-          <KPISpendCard amount={enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
-          <KPIHabitsCard completionPct={stats.habitCompletionRate} totalHabits={stats.totalHabits} onClick={() => setPopup("habits")} />
-          <KPIJournalCard streak={stats.journalStreak} mood={stats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
+          <KPISpendCard amount={enhanced?.financeSnapshot?.totalMonthlySpend ?? safeStats?.monthlySpend ?? 0} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
+          <KPIHabitsCard completionPct={safeStats.habitCompletionRate} totalHabits={safeStats.totalHabits} onClick={() => setPopup("habits")} />
+          <KPIJournalCard streak={safeStats.journalStreak} mood={safeStats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
           {/* Bug fix: derive bill count from the same enhanced.financeSnapshot.upcomingBills
                array the popup renders, so the count on the KPI card always matches the
                number of rows shown in the drilldown. Falls back to the legacy stats field
                for the brief window before /api/dashboard-enhanced resolves. */}
           <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
-            value={enhanced?.financeSnapshot?.upcomingBills?.length ?? stats.upcomingObligations}
-            sub={formatMoney(stats.monthlyObligationTotal) + "/mo"}
+            value={enhanced?.financeSnapshot?.upcomingBills?.length ?? safeStats.upcomingObligations}
+            sub={formatMoney(safeStats.monthlyObligationTotal) + "/mo"}
             onClick={() => setPopup("bills")} />
           <KPIDocsCard docs={visibleDocs} onClick={() => setPopup("docs")} />
         </div>

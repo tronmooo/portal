@@ -1701,8 +1701,14 @@ If unsure, return "profile_fact".`,
     const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
+    // PERF 2026-05-30: enable per-request memo so getStats's internal ~10
+    // Supabase fanouts share fetched tables (profiles/expenses/trackers/...).
+    // Cold /api/stats?profileIds=Craig was measured at 8-12s before; with
+    // memo it should match the bootstrap path's ~1.5s.
+    try { (storage as any).enableRequestMemo?.(); } catch {}
     // dedupe: concurrent identical requests share one DB query
     const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds));
+    try { (storage as any).disableRequestMemo?.(); } catch {}
     // 60-second cache. cacheBustMiddleware drops it synchronously on any mutation
     // (including AI-driven /api/chat and /api/upload paths), so this cannot serve
     // stale data after a write. Longer TTL = many more page navigations served
@@ -1719,8 +1725,12 @@ If unsure, return "profile_fact".`,
     const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
+    // PERF 2026-05-30: same memo treatment as /api/stats so getDashboardEnhanced's
+    // internal fanouts share fetched tables.
+    try { (storage as any).enableRequestMemo?.(); } catch {}
     // dedupe: concurrent identical requests share one DB query
     const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
+    try { (storage as any).disableRequestMemo?.(); } catch {}
     // 60-second cache (same rationale as /api/stats above).
     setCache(cacheKey, data, 60 * 1000);
     res.json(data);
