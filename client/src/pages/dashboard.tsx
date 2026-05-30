@@ -566,8 +566,16 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
 
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 
+  // BUG-20260529-dashboard-everyone-leak: in everyone mode the dashboard is a
+  // portfolio rollup, not a personal-finance view. Hide Budget + Cash Flow
+  // because they aggregate across every profile (the BUDGET card was showing
+  // "2% of $2,500" — the sum of Bob's, Jane's, and shared budgets — even
+  // though the main user had created no budget). Net Worth is the only card
+  // whose roll-up across profiles makes sense (total assets + total liab).
+  const isEveryone = filterMode === "everyone";
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-2">
+    <div className={`grid grid-cols-1 ${isEveryone ? "" : "sm:grid-cols-3"} gap-2.5 mb-2`}>
       {/* NET WORTH */}
       <button
         type="button"
@@ -595,7 +603,8 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
         </div>
       </button>
 
-      {/* BUDGET */}
+      {/* BUDGET (hidden in Everyone mode — see comment above) */}
+      {!isEveryone && (
       <button
         type="button"
         onClick={() => setHeroPopup("budget")}
@@ -634,8 +643,10 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
           />
         </div>
       </button>
+      )}
 
-      {/* CASH FLOW */}
+      {/* CASH FLOW (hidden in Everyone mode — see comment above) */}
+      {!isEveryone && (
       <button
         type="button"
         onClick={() => setHeroPopup("cashflow")}
@@ -667,6 +678,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
           <span>Out ${fmt(Math.round(monthlySpend))}</span>
         </div>
       </button>
+      )}
 
       {/* Hero KPI Popups */}
       <NetWorthPopup
@@ -4029,6 +4041,12 @@ export default function DashboardPage() {
         content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} />;
         break;
       case "kpis":
+        // BUG-20260529-dashboard-everyone-leak: hide the secondary KPI grid in
+        // everyone mode — it contains Monthly Spend, Bills Due, Open Tasks,
+        // Habits, Journal, Expiring Docs which are all personal-life metrics
+        // and don't make sense aggregated across every profile. Net Worth on
+        // the hero row is the only Everyone-appropriate KPI.
+        if (filterMode === "everyone") { content = null; break; }
         content = (showDashSkeleton && !stats) ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
           stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
         break;
@@ -4089,10 +4107,17 @@ export default function DashboardPage() {
               {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: BROWSER_TIMEZONE })}
             </p>
             <span className="text-xs text-muted-foreground/60">·</span>
+            {/* BUG-20260529-dashboard-everyone-leak: Everyone is allowed back on
+                the Dashboard chip, but its semantic is a portfolio rollup, not a
+                personal-finance view. HeroKPISection + renderSection branch on
+                filterMode === "everyone" to hide Budget / Cash Flow / Monthly
+                Spend / Bills (all personal) and show only Net Worth (assets +
+                liabilities aggregated across every profile). Selecting a
+                specific profile restores the full personal dashboard for that
+                profile. */}
             <MultiProfileFilter
               onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
               compact
-              hideEveryone
             />
           </div>
         </div>
