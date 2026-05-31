@@ -1,6 +1,7 @@
 import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { queryClient } from "./lib/queryClient";
+import { queryClient, apiRequest } from "./lib/queryClient";
+import { getProfileFilter } from "@/lib/profileFilter";
 import { hashNavigate } from "./lib/hashNavigate";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -431,34 +432,54 @@ function KeepAlive() {
   return null;
 }
 
-// Prefetch all main page data immediately after login.
-// This eliminates skeleton loading states when switching tabs —
-// by the time the user navigates anywhere, data is already in the React Query cache.
-const ALL_PREFETCH_KEYS = [
-  '/api/trackers',
-  '/api/profiles',
-  '/api/events',
-  '/api/stats',
-  '/api/dashboard-enhanced',
-  '/api/habits',
-  '/api/goals',
-  '/api/expenses',
-  '/api/obligations',
-  // PERF 2026-05-24: notifications uses a filtered queryKey ['/api/notifications', mode, ...ids]
-  // so prefetching the unfiltered key never satisfies the bell's query and just doubles the
-  // request count. Bell fetches lazily when the topbar mounts — that's fine.
-];
-
+// Prefetch shared data immediately after login.
+//
+// PERF (2026-05-31): rewritten. Was firing 9 unfiltered, parallel useQuery
+// prefetches on every login (/api/trackers, /api/profiles, /api/events,
+// /api/stats, /api/dashboard-enhanced, /api/habits, /api/goals,
+// /api/expenses, /api/obligations). Each unfiltered call took ~6 s cold on
+// the worst path and they all ran in parallel, saturating the serverless
+// instance and producing a ~7 s skeleton on cold app open.
+//
+// New strategy: a single /api/dashboard-bootstrap call scoped to the user's
+// saved profile filter. The bootstrap endpoint already aggregates
+// stats + enhanced + profiles + incomes + budget summary in ~300 ms warm
+// and ~600 ms cold (verified at portol.me, see perf wave 2026-05-31). The
+// individual pages still own their own list fetches when mounted; we just
+// stop the upfront 9-call broadside.
 function DataPrefetch() {
   const { user } = useAuth();
   const prefetched = useRef(false);
   useEffect(() => {
     if (!user || prefetched.current) return;
     prefetched.current = true;
-    // Fire all queries in parallel — no await, best-effort
-    for (const key of ALL_PREFETCH_KEYS) {
-      queryClient.prefetchQuery({ queryKey: [key] }).catch(() => {});
-    }
+    const { mode, selectedIds: ids } = getProfileFilter();
+    const month = new Date().toISOString().slice(0, 7);
+    const qs = (mode === 'selected' && ids.length > 0)
+      ? `?profileIds=${ids.join(',')}&month=${month}`
+      : `?month=${month}`;
+    // Use prefetchQuery so the response also lands in the cache under the
+    // bootstrap key the dashboard hook reads, AND so the side-effect inside
+    // bootstrap's queryFn (setQueryData for stats/enhanced/profiles/incomes/
+    // budgetSummary) runs once instead of being duplicated by the dashboard.
+    queryClient.prefetchQuery({
+      queryKey: ['/api/dashboard-bootstrap', mode, ...ids, month],
+      queryFn: async () => {
+        const r = await apiRequest('GET', `/api/dashboard-bootstrap${qs}`);
+        const b = await r.json();
+        if (b && typeof b === 'object') {
+          if (b.stats) queryClient.setQueryData(['/api/stats', mode, ...ids], b.stats);
+          if (b.enhanced) queryClient.setQueryData(['/api/dashboard-enhanced', mode, ...ids], b.enhanced);
+          if (b.profiles) queryClient.setQueryData(['/api/profiles'], b.profiles);
+          if (b.incomes) queryClient.setQueryData(['/api/incomes', mode, ...ids, 'hero'], b.incomes);
+          if (b.budgetSummary) queryClient.setQueryData(
+            ['/api/budgets/summary', month, mode, ...ids, 'hero'],
+            b.budgetSummary,
+          );
+        }
+        return b ?? null;
+      },
+    }).catch(() => { /* best-effort */ });
   }, [user]);
   return null;
 }
