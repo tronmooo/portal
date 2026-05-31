@@ -418,17 +418,32 @@ export class SupabaseStorage implements IStorage {
 
   /**
    * PERF (durable-fix-phase1): apply the linked_profiles filter as a chain of
-   * `cs` (jsonb @>) checks OR'd together. Each `@>` lookup hits the GIN index
+   * `cs` (@>) checks OR'd together. Each `@>` lookup hits the GIN index
    * (idx_<table>_linked_profiles_gin); the planner unions the bitmap scans.
-   * Verified with EXPLAIN: single-id ~3ms, multi-id all-GIN. The previous
-   * `.overlaps()` translated to `&&` which Postgres rejects against jsonb.
-   * Pass the table column name (always 'linked_profiles' for our tables).
+   *
+   * IMPORTANT: linked_profiles is JSONB on most tables but PG ARRAY on
+   * `incomes` and `journal_entries`. The `cs.` operator works for both, but
+   * the literal syntax differs:
+   *   JSONB:  cs.["id"]    → jsonb @> '["id"]'
+   *   ARRAY:  cs.{id}      → array @> '{id}'
+   * Passing JSONB syntax to an ARRAY column returns SQL error
+   *   "malformed array literal" (regression caught in production after the
+   *   first deploy of Phase 1).
    */
-  private _applyProfileFilter<Q extends { or: (clause: string) => Q }>(q: Q, profileIds?: string[]): Q {
+  private _applyProfileFilter<Q extends { or: (clause: string) => Q }>(
+    q: Q,
+    profileIds?: string[],
+    columnKind: "jsonb" | "array" = "jsonb",
+  ): Q {
     if (!profileIds || profileIds.length === 0) return q;
-    // Build: linked_profiles.cs.["id1"],linked_profiles.cs.["id2"]
     const orClause = profileIds
-      .map(id => `linked_profiles.cs.${JSON.stringify([id])}`)
+      .map(id => {
+        if (columnKind === "array") {
+          // PG array literal: {uuid}. UUIDs are quote-safe (hex + dashes).
+          return `linked_profiles.cs.{${id}}`;
+        }
+        return `linked_profiles.cs.${JSON.stringify([id])}`;
+      })
       .join(",");
     return q.or(orClause);
   }
@@ -2074,8 +2089,10 @@ export class SupabaseStorage implements IStorage {
   async getIncomes(profileIds?: string[]): Promise<Income[]> {
     return this.memo(`getIncomes${this._fk(profileIds)}`, async () => {
       // PERF (durable-fix-phase1): DB pushdown via idx_incomes_linked_profiles_gin.
+      // incomes.linked_profiles is a PG ARRAY (text[]), not jsonb — see
+      // _applyProfileFilter doc for the syntax difference.
       let q = this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds);
+      q = this._applyProfileFilter(q, profileIds, "array");
       const { data, error } = await q;
       if (error) throw error;
       return (data || []).map(r => ({
@@ -3386,8 +3403,10 @@ export class SupabaseStorage implements IStorage {
   async getJournalEntries(profileIds?: string[]): Promise<JournalEntry[]> {
     return this.memo(`getJournalEntries${this._fk(profileIds)}`, async () => {
       // PERF (durable-fix-phase1): DB pushdown via idx_journal_entries_linked_profiles_gin.
+      // journal_entries.linked_profiles is a PG ARRAY (text[]), not jsonb —
+      // see _applyProfileFilter doc for syntax.
       let q = this.supabase.from("journal_entries").select("*").eq("user_id", this.userId);
-      q = this._applyProfileFilter(q, profileIds);
+      q = this._applyProfileFilter(q, profileIds, "array");
       const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToJournalEntry(r));
