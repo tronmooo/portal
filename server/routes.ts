@@ -4757,8 +4757,21 @@ Rules:
         return Math.round((a.getTime() - b.getTime()) / 86400000);
       };
 
+      // PERF (2026-05-31): fetch every list this endpoint needs in parallel.
+      // Previously each section did `await storage.getX()` sequentially, so a
+      // cold notifications request paid the Supabase round-trip latency 5x
+      // back-to-back. Measured at portol.me: /api/notifications cold = 9.3s.
+      // Five-way Promise.all collapses the wave to a single round-trip wide.
+      // Each fetch is independent so this is safe.
+      const [documents, _profilesForNotif, _tasksForNotif, _obligationsForNotif, _habitsForNotif] = await Promise.all([
+        storage.getDocuments(),
+        storage.getProfiles(),
+        storage.getTasks(),
+        storage.getObligations(),
+        storage.getHabits(),
+      ]);
+
       // --- Document Expirations ---
-      const documents = await storage.getDocuments();
       const expirationKeywords = ["expir", "exp date", "exp_date", "expdate", "valid until", "valid through", "valid_until", "valid_through", "expires", "expiration"];
 
       for (const doc of documents) {
@@ -4810,7 +4823,7 @@ Rules:
       }
 
       // --- Also scan profile fields for expiration dates ---
-      const profiles = await storage.getProfiles();
+      const profiles = _profilesForNotif;
       for (const profile of profiles) {
         if (!profile.fields || typeof profile.fields !== "object") continue;
         for (const [key, value] of Object.entries(profile.fields as Record<string, any>)) {
@@ -4859,7 +4872,7 @@ Rules:
       }
 
       // --- Task Due Dates ---
-      const tasks = await storage.getTasks();
+      const tasks = _tasksForNotif;
       for (const task of tasks) {
         if (task.status === "done" || !task.dueDate) continue;
         const due = parseDate(task.dueDate);
@@ -4902,7 +4915,7 @@ Rules:
       }
 
       // --- Bills/Obligations ---
-      const obligations = await storage.getObligations();
+      const obligations = _obligationsForNotif;
       for (const ob of obligations) {
         if (!ob.nextDueDate) continue;
         const due = parseDate(ob.nextDueDate);
@@ -4945,7 +4958,7 @@ Rules:
       }
 
       // --- Habit Streak Risk & Milestones ---
-      const habits = await storage.getHabits();
+      const habits = _habitsForNotif;
       const streakMilestones = [7, 14, 30, 60, 90, 100, 365];
       for (const habit of habits) {
         // Streak risk: hasn't checked in today and has streak >= 3
