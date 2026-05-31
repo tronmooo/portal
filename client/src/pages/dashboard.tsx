@@ -3898,6 +3898,16 @@ export default function DashboardPage() {
   // the Self profile so every widget renders the logged-in user's data instead
   // of the unfiltered global rollup. Other pages keep their Everyone behavior
   // because they don't run this effect.
+  //
+  // PERF (2026-05-30 Phase 3): track whether this auto-redirect is still
+  // pending. If it is, we suppress the bootstrap fetch below so the dashboard
+  // doesn't fire bootstrap once for everyone-mode then immediately again for
+  // the redirected self-mode (the "auto-redirect feedback loop" that caused
+  // 2 round-trips per cold load).
+  const needsSelfRedirect =
+    (filterMode === "everyone" || filterIds.length === 0) &&
+    !!allProfiles && allProfiles.length > 0 &&
+    !!allProfiles.find((p: any) => p.type === "self");
   useEffect(() => {
     if (filterMode !== "everyone" && filterIds.length > 0) return;
     if (!allProfiles || allProfiles.length === 0) return;
@@ -3932,18 +3942,27 @@ export default function DashboardPage() {
   // network. Without this, the dashboard fired 10 parallel network calls and
   // the skeleton stayed up for ~20-30s on cold loads with realistic data
   // volume.
-  useEffect(() => {
-    const currentMonth = new Date().toISOString().slice(0, 7);
-    const qs = (filterMode === "selected" && filterIds.length > 0)
-      ? `?profileIds=${filterIds.join(",")}&month=${currentMonth}`
-      : `?month=${currentMonth}`;
-    let cancelled = false;
-    apiRequest("GET", `/api/dashboard-bootstrap${qs}`)
-      .then(r => r.json())
-      .then((b: any) => {
-        if (cancelled || !b || typeof b !== "object") return;
-        // Pre-fill the cache for each individual query so the existing
-        // useQuery hooks resolve from cache without an extra network round-trip.
+  //
+  // PERF (2026-05-30 Phase 2): converted from a fire-and-forget useEffect to a
+  // proper useQuery so the dependent stats/enhanced hooks can gate on
+  // `bootstrapFetched`. Previously the dependent hooks would fire their own
+  // /api/stats and /api/dashboard-enhanced requests in parallel with bootstrap,
+  // causing 3 round-trips per filter swap. Now bootstrap fires once and the
+  // dependent hooks read from the pre-filled cache.
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const bootstrapQs = (filterMode === "selected" && filterIds.length > 0)
+    ? `?profileIds=${filterIds.join(",")}&month=${currentMonth}`
+    : `?month=${currentMonth}`;
+  const bootstrapQuery = useQuery<any>({
+    queryKey: ["/api/dashboard-bootstrap", filterMode, ...filterIds, currentMonth],
+    // Phase 3: don't fetch the everyone-mode bootstrap if we're about to
+    // redirect to Self anyway — saves one full round-trip per cold load.
+    enabled: !needsSelfRedirect,
+    queryFn: async () => {
+      const r = await apiRequest("GET", `/api/dashboard-bootstrap${bootstrapQs}`);
+      const b = await r.json();
+      if (b && typeof b === "object") {
+        // Pre-fill the cache so dependent hooks resolve from cache instantly.
         if (b.stats) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], b.stats);
         if (b.enhanced) queryClient.setQueryData(["/api/dashboard-enhanced", filterMode, ...filterIds], b.enhanced);
         if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
@@ -3952,16 +3971,27 @@ export default function DashboardPage() {
           ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
           b.budgetSummary,
         );
-      })
-      .catch(() => { /* non-fatal — individual queries will fetch on their own */ });
-    return () => { cancelled = true; };
-    // Re-run when the profile filter changes — each filter combination has
-    // its own cache buckets.
-  }, [filterMode, filterIds.join(",")]);
+      }
+      return b ?? null;
+    },
+    placeholderData: undefined,
+    retry: false,
+  });
+  // Gate dependent hooks on bootstrap settling (success or error). Using
+  // isFetched (not isSuccess) means a bootstrap failure still releases the
+  // dependent hooks to fetch their own data — graceful degradation.
+  // Also keep them disabled while the self-redirect is pending so they don't
+  // fetch with stale everyone-mode params and immediately refetch with the
+  // redirected self filter (Phase 3 loop fix).
+  const bootstrapSettled = bootstrapQuery.isFetched && !needsSelfRedirect;
 
   const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
+    // PERF (2026-05-30 Phase 2): only fetch if bootstrap didn't pre-fill the
+    // cache. Bootstrap returns stats inline so this hook becomes a no-op on
+    // the happy path. Falls back to a direct fetch if bootstrap fails.
+    enabled: bootstrapSettled,
     // BUG-20260530-filter-stale-stats-leak: without placeholderData: undefined,
     // react-query returned the PREVIOUS filter's stats during a filter swap
     // (Everyone -> Craig). That left the dashboard rendering Test's
@@ -3993,6 +4023,9 @@ export default function DashboardPage() {
       } catch (err) { console.error("[dashboard-enhanced] fetch failed:", err); return null; }
     },
     retry: false,
+    // PERF (2026-05-30 Phase 2): see /api/stats hook above. Bootstrap
+    // pre-fills this cache entry; this hook becomes a no-op on the happy path.
+    enabled: bootstrapSettled,
     // BUG-20260530-filter-stale-stats-leak: same fix as /api/stats above.
     // enhanced.financeSnapshot is what drives Net Worth / Cash Flow / Asset /
     // Liability roll-ups; without this the dashboard kept rendering the

@@ -20,6 +20,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { passesProfileFilter } from "../shared/profile-filter";
+import { selfIdsFrom } from "../shared/scope";
 import {
   parseMoney as _sharedParseMoney,
   resolveAssetValue as _sharedResolveAssetValue,
@@ -404,6 +405,32 @@ export class SupabaseStorage implements IStorage {
     const p = fn().catch(err => { this.memoCache.delete(key); throw err; });
     this.memoCache.set(key, p);
     return p;
+  }
+
+  /**
+   * PERF (durable-fix-phase1, 2026-05-30): build a memo-key suffix for the
+   * optional profileIds filter on every list method. Deterministic (sorted)
+   * so that two equivalent filters hit the same memo entry.
+   */
+  private _fk(profileIds?: string[]): string {
+    return profileIds && profileIds.length > 0 ? `:${[...profileIds].sort().join(",")}` : "";
+  }
+
+  /**
+   * PERF (durable-fix-phase1): apply the linked_profiles filter as a chain of
+   * `cs` (jsonb @>) checks OR'd together. Each `@>` lookup hits the GIN index
+   * (idx_<table>_linked_profiles_gin); the planner unions the bitmap scans.
+   * Verified with EXPLAIN: single-id ~3ms, multi-id all-GIN. The previous
+   * `.overlaps()` translated to `&&` which Postgres rejects against jsonb.
+   * Pass the table column name (always 'linked_profiles' for our tables).
+   */
+  private _applyProfileFilter<Q extends { or: (clause: string) => Q }>(q: Q, profileIds?: string[]): Q {
+    if (!profileIds || profileIds.length === 0) return q;
+    // Build: linked_profiles.cs.["id1"],linked_profiles.cs.["id2"]
+    const orClause = profileIds
+      .map(id => `linked_profiles.cs.${JSON.stringify([id])}`)
+      .join(",");
+    return q.or(orClause);
   }
 
   constructor(supabaseUrl: string, supabaseServiceKey: string, userId: string) {
@@ -1633,15 +1660,19 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // TRACKERS
   // ============================================================
-  async getTrackers(daysBack = 120): Promise<Tracker[]> {
-    return this.memo(`getTrackers:${daysBack}`, () => this._getTrackersImpl(daysBack));
+  async getTrackers(daysBack = 120, profileIds?: string[]): Promise<Tracker[]> {
+    return this.memo(`getTrackers:${daysBack}${this._fk(profileIds)}`, () => this._getTrackersImpl(daysBack, profileIds));
   }
-  private async _getTrackersImpl(daysBack = 120): Promise<Tracker[]> {
+  private async _getTrackersImpl(daysBack = 120, profileIds?: string[]): Promise<Tracker[]> {
     // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
     // Limit entries to recent data (default 120 days) to avoid slow full-history scans
     const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString();
+    // PERF (durable-fix-phase1): push profileIds filter into Postgres using the
+    // existing idx_trackers_linked_profiles_gin index.
+    let trackersQuery = this.supabase.from("trackers").select("*").eq("user_id", this.userId);
+    trackersQuery = this._applyProfileFilter(trackersQuery, profileIds);
     const [trackersResult, entriesResult] = await Promise.all([
-      this.supabase.from("trackers").select("*").eq("user_id", this.userId),
+      trackersQuery,
       this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).gte("timestamp", cutoff).order("timestamp", { ascending: true }),
     ]);
     if (trackersResult.error) throw trackersResult.error;
@@ -1877,12 +1908,14 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // TASKS
   // ============================================================
-  async getTasks(): Promise<Task[]> {
-    return this.memo("getTasks", async () => {
+  async getTasks(profileIds?: string[]): Promise<Task[]> {
+    return this.memo(`getTasks${this._fk(profileIds)}`, async () => {
       // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
-      const { data, error } = await this.supabase
-        .from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null)
-        .order("created_at", { ascending: false });
+      // PERF (durable-fix-phase1): DB pushdown via idx_tasks_linked_profiles_gin.
+      let q = this.supabase
+        .from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToTask(r));
     });
@@ -1956,12 +1989,14 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // EXPENSES
   // ============================================================
-  async getExpenses(): Promise<Expense[]> {
-    return this.memo("getExpenses", async () => {
+  async getExpenses(profileIds?: string[]): Promise<Expense[]> {
+    return this.memo(`getExpenses${this._fk(profileIds)}`, async () => {
       // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
-      const { data, error } = await this.supabase
-        .from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null)
-        .order("date", { ascending: false });
+      // PERF (durable-fix-phase1): DB pushdown via idx_expenses_linked_profiles_gin.
+      let q = this.supabase
+        .from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q.order("date", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToExpense(r));
     });
@@ -2036,9 +2071,12 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // INCOME
   // ============================================================
-  async getIncomes(): Promise<Income[]> {
-    return this.memo("getIncomes", async () => {
-      const { data, error } = await this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null);
+  async getIncomes(profileIds?: string[]): Promise<Income[]> {
+    return this.memo(`getIncomes${this._fk(profileIds)}`, async () => {
+      // PERF (durable-fix-phase1): DB pushdown via idx_incomes_linked_profiles_gin.
+      let q = this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q;
       if (error) throw error;
       return (data || []).map(r => ({
         id: r.id, description: r.description, amount: Number(r.amount),
@@ -2098,12 +2136,14 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // EVENTS
   // ============================================================
-  async getEvents(): Promise<CalendarEvent[]> {
-    return this.memo("getEvents", async () => {
+  async getEvents(profileIds?: string[]): Promise<CalendarEvent[]> {
+    return this.memo(`getEvents${this._fk(profileIds)}`, async () => {
       // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
-      const { data, error } = await this.supabase
-        .from("events").select("*").eq("user_id", this.userId)
-        .order("date", { ascending: false });
+      // PERF (durable-fix-phase1): DB pushdown via idx_events_linked_profiles_gin.
+      let q = this.supabase
+        .from("events").select("*").eq("user_id", this.userId);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q.order("date", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToEvent(r));
     });
@@ -2585,16 +2625,18 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // DOCUMENTS
   // ============================================================
-  async getDocuments(): Promise<Document[]> {
-    return this.memo("getDocuments", async () => {
+  async getDocuments(profileIds?: string[]): Promise<Document[]> {
+    return this.memo(`getDocuments${this._fk(profileIds)}`, async () => {
       if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
       // PERF: Exclude file_data from list queries — base64 blobs can be 10MB+ each.
       // Only getDocument(id) returns file_data when specifically needed.
-      const { data, error } = await this.supabase.from("documents")
+      // PERF (durable-fix-phase1): DB pushdown via idx_documents_linked_profiles_gin.
+      let q = this.supabase.from("documents")
         .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
         .eq("user_id", this.userId)
-        .is("deleted_at", null)
-        .order("created_at", { ascending: false });
+        .is("deleted_at", null);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
     });
@@ -2835,11 +2877,14 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // HABITS
   // ============================================================
-  async getHabits(): Promise<Habit[]> {
-    return this.memo("getHabits", async () => {
-      // Fetch all habits and ALL checkins in 2 parallel queries (not N+1)
+  async getHabits(profileIds?: string[]): Promise<Habit[]> {
+    return this.memo(`getHabits${this._fk(profileIds)}`, async () => {
+      // PERF (durable-fix-phase1): DB pushdown via idx_habits_linked_profiles.
+      let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null);
+      habitsQuery = this._applyProfileFilter(habitsQuery, profileIds);
+      // Fetch habits and ALL checkins in 2 parallel queries (not N+1)
       const [habitsResult, checkinsResult] = await Promise.all([
-        this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null),
+        habitsQuery,
         this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
       ]);
       if (habitsResult.error) throw habitsResult.error;
@@ -2964,11 +3009,14 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // OBLIGATIONS
   // ============================================================
-  async getObligations(): Promise<Obligation[]> {
-    return this.memo("getObligations", async () => {
-      // Fetch all obligations and ALL payments in 2 parallel queries (not N+1)
+  async getObligations(profileIds?: string[]): Promise<Obligation[]> {
+    return this.memo(`getObligations${this._fk(profileIds)}`, async () => {
+      // PERF (durable-fix-phase1): DB pushdown via idx_obligations_linked_profiles_gin.
+      let obligationsQuery = this.supabase.from("obligations").select("*").eq("user_id", this.userId);
+      obligationsQuery = this._applyProfileFilter(obligationsQuery, profileIds);
+      // Fetch obligations and ALL payments in 2 parallel queries (not N+1)
       const [obligationsResult, paymentsResult] = await Promise.all([
-        this.supabase.from("obligations").select("*").eq("user_id", this.userId),
+        obligationsQuery,
         this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
       ]);
       if (obligationsResult.error) throw obligationsResult.error;
@@ -3183,9 +3231,12 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // ARTIFACTS
   // ============================================================
-  async getArtifacts(): Promise<Artifact[]> {
-    return this.memo("getArtifacts", async () => {
-      const { data, error } = await this.supabase.from("artifacts").select("*").eq("user_id", this.userId);
+  async getArtifacts(profileIds?: string[]): Promise<Artifact[]> {
+    return this.memo(`getArtifacts${this._fk(profileIds)}`, async () => {
+      // PERF (durable-fix-phase1): DB pushdown via idx_artifacts_linked_profiles_gin.
+      let q = this.supabase.from("artifacts").select("*").eq("user_id", this.userId);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q;
       if (error) throw error;
       return (data || []).map(r => this.rowToArtifact(r));
     });
@@ -3332,9 +3383,12 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // JOURNAL
   // ============================================================
-  async getJournalEntries(): Promise<JournalEntry[]> {
-    return this.memo("getJournalEntries", async () => {
-      const { data, error } = await this.supabase.from("journal_entries").select("*").eq("user_id", this.userId).order("created_at", { ascending: false });
+  async getJournalEntries(profileIds?: string[]): Promise<JournalEntry[]> {
+    return this.memo(`getJournalEntries${this._fk(profileIds)}`, async () => {
+      // PERF (durable-fix-phase1): DB pushdown via idx_journal_entries_linked_profiles_gin.
+      let q = this.supabase.from("journal_entries").select("*").eq("user_id", this.userId);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToJournalEntry(r));
     });
@@ -3485,8 +3539,11 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // GOALS
   // ============================================================
-  async getGoals(): Promise<Goal[]> {
-    const { data, error } = await this.supabase.from("goals").select("*").eq("user_id", this.userId).order("created_at", { ascending: false });
+  async getGoals(profileIds?: string[]): Promise<Goal[]> {
+    // PERF (durable-fix-phase1): DB pushdown via idx_goals_linked_profiles.
+    let q = this.supabase.from("goals").select("*").eq("user_id", this.userId);
+    q = this._applyProfileFilter(q, profileIds);
+    const { data, error } = await q.order("created_at", { ascending: false });
     if (error) throw error;
     const goals = (data || []).map(r => this.rowToGoal(r));
     for (const goal of goals) {
@@ -3815,17 +3872,38 @@ export class SupabaseStorage implements IStorage {
     // profiles/events/artifacts/memories). The streak/habit math is pure JS
     // and doesn't need to block fetching; collapsing to one parallel batch
     // cut cold /api/stats from ~4s → ~1.5s.
+    // PERF (2026-05-30 Phase 1b): push the profile filter into the DB
+    // queries (linked_profiles GIN index) rather than fetching all rows and
+    // filtering in JS. CORRECTNESS: pushdown only matches
+    // linked_profiles ∩ selection — it would drop orphan items
+    // (linkedProfiles = []), which the unified passesProfileFilter rule
+    // includes whenever a self profile is selected. So we pre-fetch
+    // profiles, then push the filter down ONLY when no self profile is
+    // in the selection. The post-fetch matchesProfile() still runs to
+    // enforce the unified rule.
+    const fpIds = filterProfileIds || (filterProfileId ? [filterProfileId] : undefined);
+    // Start getProfiles() in parallel with the rest. We need it to decide
+    // whether DB pushdown is safe (see _dbFilterIds), but we don't want to
+    // serialize the wave. await it as the very first thing after Promise.all.
+    const profilesPromise = this.getProfiles();
+    // Best-effort pushdown: if the caller passed a filter that contains NO
+    // self profile, the unified rule reduces to "linked_profiles ∩
+    // selection ≠ ∅" — which the GIN-indexed cs.[id] check enforces. When
+    // self IS in the selection, orphans (linkedProfiles = []) must also pass,
+    // so we conservatively skip DB pushdown and let the JS filter do its job.
+    const allProfiles = await profilesPromise;
+    const _selfIds = selfIdsFrom(allProfiles);
+    const _selfInFilter = !!fpIds && fpIds.some(id => _selfIds.has(id));
+    const _dbFilterIds = fpIds && !_selfInFilter ? fpIds : undefined;
     const [
       allTasks, allExpenses, allTrackers, allHabits, allObligations,
-      journalEntries, allProfiles, allEvents, artifacts, memories,
+      journalEntries, allEvents, artifacts, memories,
     ] = await Promise.all([
-      this.getTasks(), this.getExpenses(), this.getTrackers(),
-      this.getHabits(), this.getObligations(), this.getJournalEntries(),
-      this.getProfiles(), this.getEvents(), this.getArtifacts(), this.getMemories(),
+      this.getTasks(_dbFilterIds), this.getExpenses(_dbFilterIds), this.getTrackers(undefined, _dbFilterIds),
+      this.getHabits(_dbFilterIds), this.getObligations(_dbFilterIds), this.getJournalEntries(_dbFilterIds),
+      this.getEvents(_dbFilterIds), this.getArtifacts(_dbFilterIds), this.getMemories(),
     ]);
 
-    // Multi-select filter support: filterProfileIds takes precedence
-    const fpIds = filterProfileIds || (filterProfileId ? [filterProfileId] : undefined);
     // Use the unified rule (shared/profile-filter.ts) so server stats agree
     // with the client's Finance/Calendar views — see getDashboardEnhanced for
     // the full rationale.
@@ -4023,9 +4101,18 @@ export class SupabaseStorage implements IStorage {
     // 5pm PDT on April 30 (UTC has already rolled to May).
     const userYearMonth = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone }).slice(0, 7);
 
-    const [documents, rawTrackers, allProfiles, rawExpenses, rawObligations, rawTasks, rawEvents, allAssetLinks, allLiabLinks] = await Promise.all([
-      this.getDocuments(), this.getTrackers(), this.getProfiles(),
-      this.getExpenses(), this.getObligations(), this.getTasks(), this.getEvents(),
+    // PERF (2026-05-30 Phase 1b): push the profile filter into the DB
+    // queries when the selection contains no self profile. Same correctness
+    // rule as getStats — see the comment block above passesProfileFilter.
+    const profilesPromise = this.getProfiles();
+    const allProfiles = await profilesPromise;
+    const _selfIdsEnh = selfIdsFrom(allProfiles);
+    const _selfInFilterEnh = !!fpIds && fpIds.some(id => _selfIdsEnh.has(id));
+    const _dbFilterIdsEnh = fpIds && !_selfInFilterEnh ? fpIds : undefined;
+    const [documents, rawTrackers, rawExpenses, rawObligations, rawTasks, rawEvents, allAssetLinks, allLiabLinks] = await Promise.all([
+      this.getDocuments(_dbFilterIdsEnh), this.getTrackers(undefined, _dbFilterIdsEnh),
+      this.getExpenses(_dbFilterIdsEnh), this.getObligations(_dbFilterIdsEnh),
+      this.getTasks(_dbFilterIdsEnh), this.getEvents(_dbFilterIdsEnh),
       this.getAssetPartyLinks().catch(() => [] as any[]),
       this.getLiabilityProfileLinks().catch(() => [] as any[]),
     ]);

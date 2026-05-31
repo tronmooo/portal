@@ -47,7 +47,7 @@ export interface IStorage {
   wouldCreateCycle(userId: string, profileId: string, newParentId: string | null): Promise<boolean>;
 
   // Trackers
-  getTrackers(): Promise<Tracker[]>;
+  getTrackers(daysBack?: number, profileIds?: string[]): Promise<Tracker[]>;
   getTracker(id: string): Promise<Tracker | undefined>;
   createTracker(data: InsertTracker): Promise<Tracker>;
   updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined>;
@@ -58,21 +58,21 @@ export interface IStorage {
   migrateUnlinkedTrackersToSelf(): Promise<number>;
 
   // Tasks
-  getTasks(): Promise<Task[]>;
+  getTasks(profileIds?: string[]): Promise<Task[]>;
   getTask(id: string): Promise<Task | undefined>;
   createTask(data: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<Task>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
 
   // Expenses
-  getExpenses(): Promise<Expense[]>;
+  getExpenses(profileIds?: string[]): Promise<Expense[]>;
   getExpense(id: string): Promise<Expense | undefined>;
   createExpense(data: InsertExpense): Promise<Expense>;
   updateExpense(id: string, data: Partial<Expense>): Promise<Expense | undefined>;
   deleteExpense(id: string): Promise<boolean>;
 
   // Events
-  getEvents(): Promise<CalendarEvent[]>;
+  getEvents(profileIds?: string[]): Promise<CalendarEvent[]>;
   getEvent(id: string): Promise<CalendarEvent | undefined>;
   createEvent(data: InsertEvent): Promise<CalendarEvent>;
   updateEvent(id: string, data: Partial<CalendarEvent>): Promise<CalendarEvent | undefined>;
@@ -82,7 +82,7 @@ export interface IStorage {
   getCalendarTimeline(startDate: string, endDate: string, profileIds?: string[]): Promise<CalendarTimelineItem[]>;
 
   // Documents
-  getDocuments(): Promise<Document[]>;
+  getDocuments(profileIds?: string[]): Promise<Document[]>;
   getDocument(id: string): Promise<Document | undefined>;
   createDocument(data: Partial<InsertDocument> & { name: string; type: string } & Record<string, unknown>): Promise<Document>;
   updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
@@ -90,7 +90,7 @@ export interface IStorage {
   getDocumentsForProfile(profileId: string): Promise<Document[]>;
 
   // Habits
-  getHabits(): Promise<Habit[]>;
+  getHabits(profileIds?: string[]): Promise<Habit[]>;
   getHabit(id: string): Promise<Habit | undefined>;
   createHabit(data: InsertHabit): Promise<Habit>;
   checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined>;
@@ -98,7 +98,7 @@ export interface IStorage {
   deleteHabit(id: string): Promise<boolean>;
 
   // Obligations
-  getObligations(): Promise<Obligation[]>;
+  getObligations(profileIds?: string[]): Promise<Obligation[]>;
   getObligation(id: string): Promise<Obligation | undefined>;
   createObligation(data: InsertObligation): Promise<Obligation>;
   updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined>;
@@ -106,7 +106,7 @@ export interface IStorage {
   deleteObligation(id: string): Promise<boolean>;
 
   // Artifacts
-  getArtifacts(): Promise<Artifact[]>;
+  getArtifacts(profileIds?: string[]): Promise<Artifact[]>;
   getArtifact(id: string): Promise<Artifact | undefined>;
   createArtifact(data: InsertArtifact): Promise<Artifact>;
   updateArtifact(id: string, data: Partial<Artifact>): Promise<Artifact | undefined>;
@@ -117,7 +117,7 @@ export interface IStorage {
   setArtifactShareToken?(id: string, token: string | null): Promise<Artifact | undefined>;
 
   // Journal
-  getJournalEntries(): Promise<JournalEntry[]>;
+  getJournalEntries(profileIds?: string[]): Promise<JournalEntry[]>;
   createJournalEntry(data: InsertJournalEntry): Promise<JournalEntry>;
   updateJournalEntry(id: string, data: Partial<JournalEntry>): Promise<JournalEntry | undefined>;
   deleteJournalEntry(id: string): Promise<boolean>;
@@ -130,7 +130,7 @@ export interface IStorage {
   updateMemory(id: string, data: Partial<MemoryItem>): Promise<MemoryItem | undefined>;
 
   // Goals
-  getGoals(): Promise<Goal[]>;
+  getGoals(profileIds?: string[]): Promise<Goal[]>;
   getGoal(id: string): Promise<Goal | undefined>;
   createGoal(data: InsertGoal): Promise<Goal>;
   updateGoal(id: string, data: Partial<Goal>): Promise<Goal | undefined>;
@@ -165,7 +165,7 @@ export interface IStorage {
   setPreference(key: string, value: string): Promise<void>;
 
   // Income
-  getIncomes(): Promise<Income[]>;
+  getIncomes(profileIds?: string[]): Promise<Income[]>;
   createIncome(data: InsertIncome): Promise<Income>;
   updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined>;
   deleteIncome(id: string): Promise<boolean>;
