@@ -3676,10 +3676,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // NW-7: report ownership-share-adjusted asset/liability values so chat
       // never quotes a profile's gross value for a co-owned item.
       const assetSummary = await storage.getProfileAssetValue(profile.id).catch(() => null);
+      // NW-7: child asset/liability profiles must NOT expose raw gross value
+      // fields, or the model quotes them and ignores the share-adjusted figure.
+      // Strip monetary fields from financial children; assetSummary is the only
+      // source of truth for values (it carries both grossValue and yourValue).
+      const financialChildTypes = new Set(["vehicle", "asset", "investment", "property", "loan", "account", "liability"]);
+      const moneyFieldKeys = new Set(["currentValue", "current_value", "purchasePrice", "purchase_price", "price", "cost", "balance", "remainingBalance", "remaining_balance", "value", "amount", "marketValue", "market_value", "estimatedValue", "estimated_value"]);
       return {
         name: detail.name,
         type: detail.type,
         fields: detail.fields,
+        valueGuidance: assetSummary ? "Use assetSummary for all monetary values. yourValue is this profile's ownership-share-adjusted amount; grossValue is the full item value. Quote yourValue when asked what this profile owns/owes." : undefined,
         assetSummary: assetSummary ? {
           ownedAssetValue: assetSummary.assetValue,
           ownedLiabilityValue: assetSummary.liabilityValue,
@@ -3693,7 +3700,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         events: detail.relatedEvents.map(e => ({ title: e.title, date: e.date, time: e.time })),
         documents: detail.relatedDocuments.map(d => ({ name: d.name, type: d.type })),
         obligations: detail.relatedObligations.map(o => ({ name: o.name, amount: o.amount, frequency: o.frequency, nextDue: o.nextDueDate })),
-        childProfiles: (detail.childProfiles || []).map(c => ({ name: c.name, type: c.type, fields: c.fields })),
+        childProfiles: (detail.childProfiles || []).map(c => {
+          if (financialChildTypes.has(c.type) && c.fields && typeof c.fields === "object") {
+            const stripped: Record<string, any> = {};
+            for (const [k, v] of Object.entries(c.fields)) {
+              if (!moneyFieldKeys.has(k)) stripped[k] = v;
+            }
+            return { name: c.name, type: c.type, fields: stripped };
+          }
+          return { name: c.name, type: c.type, fields: c.fields };
+        }),
         recentTimeline: detail.timeline.slice(0, 10).map(t => ({ type: t.type, title: t.title, description: t.description, timestamp: t.timestamp })),
       };
     }
