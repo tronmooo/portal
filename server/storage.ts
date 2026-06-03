@@ -224,6 +224,7 @@ export interface IStorage {
   // Asset ↔ party links (Phase 1 of relationships module)
   getAssetPartyLinks(assetProfileId?: string): Promise<import("@shared/schema").AssetPartyLink[]>;
   getAssetPartyLinksForParty(partyProfileId: string): Promise<import("@shared/schema").AssetPartyLink[]>;
+  getProfileAssetValue(profileId: string): Promise<{ assetValue: number; liabilityValue: number; netValue: number; assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }>; liabilities: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> }>;
   createAssetPartyLink(data: import("@shared/schema").InsertAssetPartyLink): Promise<import("@shared/schema").AssetPartyLink>;
   updateAssetPartyLink(id: string, patch: Partial<import("@shared/schema").InsertAssetPartyLink>): Promise<import("@shared/schema").AssetPartyLink | undefined>;
   deleteAssetPartyLink(id: string): Promise<boolean>;
@@ -2104,6 +2105,7 @@ export class MemStorage implements IStorage {
   async deleteLiabilityProfileLink(_id: string) { return false; }
   async getAssetPartyLinks(_id?: string) { return []; }
   async getAssetPartyLinksForParty(_id: string) { return []; }
+  async getProfileAssetValue(_profileId: string) { return { assetValue: 0, liabilityValue: 0, netValue: 0, assets: [], liabilities: [] }; }
   async createAssetPartyLink(_data: any): Promise<any> { throw new Error("MemStorage: asset party links not implemented"); }
   async updateAssetPartyLink(_id: string, _patch: any) { return undefined; }
   async deleteAssetPartyLink(_id: string) { return false; }

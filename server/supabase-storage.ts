@@ -5204,6 +5204,74 @@ export class SupabaseStorage implements IStorage {
     return (data || []).map((r: any) => this.rowToAssetPartyLink(r));
   }
 
+  // NW-7: ownership-share-aware asset/liability value for a single profile,
+  // mirroring the assetBreakdown / shareForAsset math in getDashboardEnhanced.
+  // Chat read tools must report a profile's RESIDUAL share of co-owned items
+  // (e.g. Bob's 50% of a $350k Home = $175k), not the gross value in fields.
+  async getProfileAssetValue(profileId: string): Promise<{
+    assetValue: number; liabilityValue: number; netValue: number;
+    assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }>;
+    liabilities: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }>;
+  }> {
+    const [allProfiles, allAssetLinks, allLiabLinks] = await Promise.all([
+      this.getProfiles(),
+      this.getAssetPartyLinks().catch(() => [] as any[]),
+      this.getLiabilityProfileLinks().catch(() => [] as any[]),
+    ]);
+    // party -> (item -> ownership%)
+    const assetLinksByParty = new Map<string, Map<string, number>>();
+    const assetCoOwnerTotalPct = new Map<string, number>();
+    for (const l of (allAssetLinks as any[]) || []) {
+      const pid = (l as any).partyProfileId; const aid = (l as any).assetProfileId;
+      if (!pid || !aid) continue;
+      if (!assetLinksByParty.has(pid)) assetLinksByParty.set(pid, new Map());
+      assetLinksByParty.get(pid)!.set(aid, Number((l as any).ownershipPercentage ?? 100));
+      assetCoOwnerTotalPct.set(aid, (assetCoOwnerTotalPct.get(aid) || 0) + Number((l as any).ownershipPercentage ?? 0));
+    }
+    const liabLinksByParty = new Map<string, Map<string, number>>();
+    const liabCoOwnerTotalPct = new Map<string, number>();
+    for (const l of (allLiabLinks as any[]) || []) {
+      const pid = (l as any).partyProfileId; const lid = (l as any).liabilityProfileId;
+      if (!pid || !lid) continue;
+      if (!liabLinksByParty.has(pid)) liabLinksByParty.set(pid, new Map());
+      liabLinksByParty.get(pid)!.set(lid, Number((l as any).ownershipPercentage ?? 100));
+      liabCoOwnerTotalPct.set(lid, (liabCoOwnerTotalPct.get(lid) || 0) + Number((l as any).ownershipPercentage ?? 0));
+    }
+    const assetChildTypes = new Set(["vehicle", "asset", "investment", "property", "loan", "account"]);
+    const liabilityChildTypes = new Set(["liability", "loan", "vehicle", "property", "asset", "account", "investment"]);
+    const shareFor = (p: any, byParty: Map<string, Map<string, number>>, coOwner: Map<string, number>): number => {
+      if (p.id === profileId) return 100;
+      const linkPct = byParty.get(profileId)?.get(p.id);
+      if (linkPct !== undefined) return linkPct;
+      if (p.parentProfileId === profileId) {
+        const taken = coOwner.get(p.id) || 0;
+        return Math.max(0, 100 - taken);
+      }
+      return 0;
+    };
+    const assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
+    for (const p of allProfiles) {
+      if (!assetChildTypes.has(p.type)) continue;
+      const gross = resolveAssetValue(p.fields);
+      if (gross <= 0) continue;
+      const share = shareFor(p, assetLinksByParty, assetCoOwnerTotalPct);
+      if (share <= 0) continue;
+      assets.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: Math.round(gross * share) / 100 });
+    }
+    const liabilities: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
+    for (const p of allProfiles) {
+      if (!liabilityChildTypes.has(p.type)) continue;
+      const gross = resolveLiabilityValue(p.fields);
+      if (gross <= 0) continue;
+      const share = shareFor(p, liabLinksByParty, liabCoOwnerTotalPct);
+      if (share <= 0) continue;
+      liabilities.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: Math.round(gross * share) / 100 });
+    }
+    const assetValue = Math.round(assets.reduce((s, a) => s + a.value, 0) * 100) / 100;
+    const liabilityValue = Math.round(liabilities.reduce((s, l) => s + l.value, 0) * 100) / 100;
+    return { assetValue, liabilityValue, netValue: Math.round((assetValue - liabilityValue) * 100) / 100, assets, liabilities };
+  }
+
   async createAssetPartyLink(data: InsertAssetPartyLink): Promise<AssetPartyLink> {
     const now = new Date().toISOString();
     const id = randomUUID();

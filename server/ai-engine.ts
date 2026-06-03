@@ -3673,10 +3673,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!profile) return { error: `No profile found matching "${input.profileName}"` };
       const detail = await storage.getProfileDetail(profile.id);
       if (!detail) return { error: "Could not load profile data" };
+      // NW-7: report ownership-share-adjusted asset/liability values so chat
+      // never quotes a profile's gross value for a co-owned item.
+      const assetSummary = await storage.getProfileAssetValue(profile.id).catch(() => null);
       return {
         name: detail.name,
         type: detail.type,
         fields: detail.fields,
+        assetSummary: assetSummary ? {
+          ownedAssetValue: assetSummary.assetValue,
+          ownedLiabilityValue: assetSummary.liabilityValue,
+          netValue: assetSummary.netValue,
+          assets: assetSummary.assets.map(a => ({ name: a.name, type: a.type, grossValue: a.grossValue, ownershipShare: a.share, yourValue: a.value })),
+          liabilities: assetSummary.liabilities.map(l => ({ name: l.name, type: l.type, grossValue: l.grossValue, ownershipShare: l.share, yourValue: l.value })),
+        } : undefined,
         tasks: detail.relatedTasks.map(t => ({ title: t.title, status: t.status, priority: t.priority, dueDate: t.dueDate })),
         expenses: detail.relatedExpenses.map(e => ({ description: e.description, amount: e.amount, category: e.category, date: e.date })),
         trackers: detail.relatedTrackers.map(t => ({ name: t.name, category: t.category, entryCount: t.entries.length, latestEntry: t.entries[t.entries.length - 1]?.values })),
@@ -3913,36 +3923,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         parentProfileId,
       });
 
-      // Auto-create purchase expense for assets/vehicles with a purchase price
-      const purchasePrice = finalFields?.purchasePrice || finalFields?.cost || finalFields?.price;
-      if (purchasePrice && Number(purchasePrice) > 0 && childTypes.includes(input.type || "")) {
-        try {
-          const expCategory = input.type === "vehicle" ? "vehicle" : "shopping";
-          const expense = await storage.createExpense({
-            amount: Number(purchasePrice),
-            category: expCategory,
-            description: `${input.name} purchase`,
-            date: input.fields?.purchaseDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-            vendor: input.fields?.brand || "",
-            tags: ["purchase"],
-          });
-          // Link to both the new asset profile and the self/owner profile
-          const linkIds = [newProfile.id];
-          if (parentProfileId) linkIds.push(parentProfileId);
-          else {
-            const selfP = (await storage.getProfiles()).find(p => p.type === "self");
-            if (selfP) linkIds.push(selfP.id);
-          }
-          await updateEntityLinkedProfiles("expense", expense.id, linkIds[0]);
-          for (const lid of linkIds) {
-            await storage.linkProfileTo(lid, "expense", expense.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-            await updateEntityLinkedProfiles("expense", expense.id, lid).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-          }
-          logger.info("ai", `Auto-created purchase expense $${purchasePrice} for ${input.name}`);
-        } catch (e) {
-          logger.warn("ai", `Failed to auto-create purchase expense: ${e}`);
-        }
-      }
+      // NW-10: do NOT auto-create a "<name> purchase" expense when an asset is
+      // added. A physical item is a balance-sheet asset, not money flowing out;
+      // creating both double-counts net worth and attributes a phantom expense
+      // to Self. If the user actually paid for it they say "I paid $X", which
+      // routes to create_expense explicitly.
 
       // Auto-estimate asset value for valuable profile types (best-effort, non-blocking).
       // Defense in depth: estimateAssetValue also enforces the type guard, but
@@ -5637,14 +5622,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_obligation": {
-      // Dedup: check if an obligation with the same name already exists
-      const existingObs = await storage.getObligations();
-      const dupOb = existingObs.find(o => o.name.toLowerCase() === (input.name || "").toLowerCase());
-      if (dupOb) {
-        logger.info("ai", `Skipped duplicate obligation: ${dupOb.name}`);
-        return dupOb;
-      }
-
       // BUG FIX (multi-person obligation): Resolve forProfile BEFORE
       // calling storage.createObligation so we can pass linkedProfiles
       // upfront. Otherwise the Supabase storage layer auto-prepends Self
@@ -5669,6 +5646,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const allProfiles = await storage.getProfiles();
         const matched = matchProfileByName(allProfiles, oblForProfile);
         if (matched) preResolvedTargetProfileId = matched.id;
+      }
+
+      // NW-13: dedupe by (name + owning profile), not name alone. Jim can have
+      // his own Netflix even if Self (or anyone else) already has one. A match
+      // only counts when the existing obligation is linked to the SAME profile
+      // we are creating for (or both are unscoped / Self-default).
+      const existingObs = await storage.getObligations();
+      const nameLC = (input.name || "").toLowerCase();
+      const dupOb = existingObs.find(o => {
+        if (o.name.toLowerCase() !== nameLC) return false;
+        if (!preResolvedTargetProfileId) return true; // unscoped create → name-only
+        const lp = (o as any).linkedProfiles || (o as any).linked_profiles || [];
+        return Array.isArray(lp) && lp.includes(preResolvedTargetProfileId);
+      });
+      if (dupOb) {
+        logger.info("ai", `Skipped duplicate obligation: ${dupOb.name} (scoped to ${preResolvedTargetProfileId || "self/unscoped"})`);
+        return dupOb;
       }
 
       const newObligation = await storage.createObligation({
@@ -6886,6 +6880,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const totalLoans = extractLoan(rootProfile) + allDescendants.reduce((sum, p) => sum + extractLoan(p), 0);
       const netValue = totalValue - totalLoans;
 
+      // NW-7: ownership-share-adjusted totals — this profile's residual share
+      // of co-owned items, not the gross balance-sheet value.
+      const shareSummary = await storage.getProfileAssetValue(rootProfile.id).catch(() => null);
+
       return {
         profile: { id: rootProfile.id, name: rootProfile.name, type: rootProfile.type },
         baseValue: Math.round(baseValue * 100) / 100,
@@ -6893,14 +6891,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         totalValue: Math.round(totalValue * 100) / 100,
         totalLoans: Math.round(totalLoans * 100) / 100,
         netValue: Math.round(netValue * 100) / 100,
+        ...(shareSummary ? {
+          ownedAssetValue: shareSummary.assetValue,
+          ownedLiabilityValue: shareSummary.liabilityValue,
+          ownedNetValue: shareSummary.netValue,
+        } : {}),
         childCount: directChildren.length,
         descendantCount: allDescendants.length,
-        children: directChildren.map(c => ({
-          id: c.id,
-          name: c.name,
-          type: c.type,
-          currentValue: extractValue(c),
-        })),
+        children: directChildren.map(c => {
+          const sa = shareSummary?.assets.find(a => a.id === c.id) || shareSummary?.liabilities.find(l => l.id === c.id);
+          return {
+            id: c.id,
+            name: c.name,
+            type: c.type,
+            currentValue: extractValue(c),
+            ...(sa ? { ownershipShare: sa.share, yourValue: sa.value } : {}),
+          };
+        }),
       };
     }
 
