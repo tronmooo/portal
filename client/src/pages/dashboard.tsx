@@ -455,11 +455,12 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
 // own row at the very top of the dashboard (under AI Summary). The smaller
 // KPISection below becomes a secondary chip row of habits/tasks/journal/docs.
 
-function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
+function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = false }: {
   enhanced: any;
   stats: DashboardStats | undefined;
   filterMode: string;
   filterIds: string[];
+  refetching?: boolean;
 }) {
   const [, navigate] = useLocation();
   const [heroPopup, setHeroPopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
@@ -550,16 +551,28 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
   // roll-up so the hero card never flashes a stale-looking number while the
   // authoritative server response is pending — it'll snap to the correct
   // value in <300ms.
+  // NW-5: the Net Worth tile must consume the server's filtered finance
+  // snapshot as the source of truth (same numbers the drilldown popup and AI
+  // Summary use), not a divergent client roll-up. When a filter is active we
+  // already trust the server. For Everyone, prefer the server snapshot once
+  // `enhanced` has resolved; the client roll-up is used only as a pre-resolve
+  // animation source to avoid a $0 flash before the first response lands.
+  const serverAssets = enhanced?.financeSnapshot?.totalAssetValue;
+  const serverLiabs = enhanced?.financeSnapshot?.totalLiabilities;
   const totalAssetValue = filterActive
-    ? (enhanced?.financeSnapshot?.totalAssetValue ?? 0)
-    : allProfiles
-      ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
-      : (enhanced?.financeSnapshot?.totalAssetValue ?? 0);
+    ? (serverAssets ?? 0)
+    : serverAssets != null
+      ? serverAssets
+      : allProfiles
+        ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
+        : 0;
   const totalLiabilities = filterActive
-    ? (enhanced?.financeSnapshot?.totalLiabilities ?? 0)
-    : allProfiles
-      ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
-      : (enhanced?.financeSnapshot?.totalLiabilities ?? 0);
+    ? (serverLiabs ?? 0)
+    : serverLiabs != null
+      ? serverLiabs
+      : allProfiles
+        ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
+        : 0;
   const netWorth = totalAssetValue - totalLiabilities;
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
@@ -576,7 +589,19 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-2">
+    <div className="relative">
+      {/* NW-16: subtle refetch indicator so the user sees the tiles are
+          updating during a filter switch instead of staring at stale numbers. */}
+      {refetching && (
+        <div
+          className="absolute top-1 right-1 z-10 flex items-center gap-1.5 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm border border-border/50 animate-pulse"
+          data-testid="hero-kpi-refetching"
+        >
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />
+          Updating filter…
+        </div>
+      )}
+      <div className={`grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
       {/* NET WORTH */}
       <button
         type="button"
@@ -676,6 +701,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds }: {
           <span>Out ${fmt(Math.round(monthlySpend))}</span>
         </div>
       </button>
+      </div>
 
       {/* Hero KPI Popups */}
       <NetWorthPopup
@@ -4014,7 +4040,7 @@ export default function DashboardPage() {
     return () => clearTimeout(dsk);
   }, [statsLoading]);
 
-  const { data: enhanced } = useQuery<any>({
+  const { data: enhanced, isFetching: enhancedFetching } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: async () => {
       try {
@@ -4117,7 +4143,7 @@ export default function DashboardPage() {
     let content: React.ReactNode = null;
     switch (id) {
       case "hero-kpis":
-        content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} />;
+        content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} refetching={enhancedFetching} />;
         break;
       case "kpis":
         content = (showDashSkeleton && !stats) ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :

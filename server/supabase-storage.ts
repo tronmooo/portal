@@ -4123,8 +4123,16 @@ export class SupabaseStorage implements IStorage {
     // PERF (2026-05-30 Phase 1b): push the profile filter into the DB
     // queries when the selection contains no self profile. Same correctness
     // rule as getStats — see the comment block above passesProfileFilter.
-    const profilesPromise = this.getProfiles();
-    const allProfiles = await profilesPromise;
+    // NW-15 (cold-load): the asset/liability link queries don't depend on the
+    // profile filter, so kick them off concurrently with getProfiles() instead
+    // of waiting for profiles first and only then starting them. On a cold
+    // Supabase connection getProfiles() was the long pole (~3-4s) and nothing
+    // else ran during it; overlapping the two link fetches removes that serial
+    // gap. The filter-dependent fetches still wait on profiles (they need the
+    // self-id resolution) but now start as soon as profiles resolve.
+    const assetLinksPromise = this.getAssetPartyLinks().catch(() => [] as any[]);
+    const liabLinksPromise = this.getLiabilityProfileLinks().catch(() => [] as any[]);
+    const allProfiles = await this.getProfiles();
     const _selfIdsEnh = selfIdsFrom(allProfiles);
     const _selfInFilterEnh = !!fpIds && fpIds.some(id => _selfIdsEnh.has(id));
     const _dbFilterIdsEnh = fpIds && !_selfInFilterEnh ? fpIds : undefined;
@@ -4132,8 +4140,8 @@ export class SupabaseStorage implements IStorage {
       this.getDocuments(_dbFilterIdsEnh), this.getTrackers(undefined, _dbFilterIdsEnh),
       this.getExpenses(_dbFilterIdsEnh), this.getObligations(_dbFilterIdsEnh),
       this.getTasks(_dbFilterIdsEnh), this.getEvents(_dbFilterIdsEnh),
-      this.getAssetPartyLinks().catch(() => [] as any[]),
-      this.getLiabilityProfileLinks().catch(() => [] as any[]),
+      assetLinksPromise,
+      liabLinksPromise,
     ]);
     // Co-ownership lookups for asset/liability share math — same shape as
     // getStats. A filtered profile that's a co-owner via the party_link
