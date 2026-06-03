@@ -4258,6 +4258,64 @@ export class SupabaseStorage implements IStorage {
 
     const overdueTasks = allTasks.filter(t => { if (t.status === 'done' || !t.dueDate) return false; return new Date(t.dueDate) < now; }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 
+    // BUG-NW-2/3 fix (2026-06-03): build asset / liability breakdown arrays here
+    // so the Net Worth popup never recomputes its own per-row math. The popup
+    // renders these arrays directly and the rows always sum to the total.
+    // `subscription` is intentionally excluded from assetBreakdown.
+    const assetChildTypes = new Set(["vehicle", "asset", "investment", "property", "loan", "account"]);
+    const liabilityChildTypes = new Set(["liability", "loan", "vehicle", "property", "asset", "account", "investment"]);
+    const noFilterBreak = !fpIds || fpIds.length === 0;
+    const shareForAsset = (p: any): number => {
+      if (noFilterBreak) return 100;
+      const pParent = p.parentProfileId;
+      let pct = 0;
+      for (const fid of fpIds!) {
+        if (fid === p.id) { pct = Math.max(pct, 100); continue; }
+        const linkPct = assetLinksByParty.get(fid)?.get(p.id);
+        if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
+        if (pParent && pParent === fid) {
+          const taken = assetCoOwnerTotalPct.get(p.id) || 0;
+          pct = Math.max(pct, Math.max(0, 100 - taken));
+        }
+      }
+      return pct;
+    };
+    const shareForLiability = (p: any): number => {
+      if (noFilterBreak) return 100;
+      const pParent = p.parentProfileId;
+      let pct = 0;
+      for (const fid of fpIds!) {
+        if (fid === p.id) { pct = Math.max(pct, 100); continue; }
+        const linkPct = liabLinksByParty.get(fid)?.get(p.id);
+        if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
+        if (pParent && pParent === fid) {
+          const taken = liabCoOwnerTotalPct.get(p.id) || 0;
+          pct = Math.max(pct, Math.max(0, 100 - taken));
+        }
+      }
+      return pct;
+    };
+    const assetBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
+    for (const p of allProfiles) {
+      if (!assetChildTypes.has(p.type)) continue;
+      const gross = resolveAssetValue(p.fields);
+      if (gross <= 0) continue;
+      const share = shareForAsset(p);
+      if (share <= 0) continue;
+      assetBreakdown.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: gross * share / 100 });
+    }
+    assetBreakdown.sort((a, b) => b.value - a.value);
+    const liabilityBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
+    for (const p of allProfiles) {
+      if (!liabilityChildTypes.has(p.type)) continue;
+      const gross = resolveLiabilityValue(p.fields);
+      if (gross <= 0) continue;
+      const share = shareForLiability(p);
+      if (share <= 0) continue;
+      liabilityBreakdown.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: gross * share / 100 });
+    }
+    liabilityBreakdown.sort((a, b) => b.value - a.value);
+
     const todaysEvents = allEvents.filter(e => e.date === today).map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
 
     return {
@@ -4269,9 +4327,12 @@ export class SupabaseStorage implements IStorage {
         spendByCategory, upcomingBills,
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
         totalAssetValue: (() => {
-          // Asset profiles: vehicles, real estate, investments, accounts, subscriptions, generic assets, even loans
+          // Asset profiles: vehicles, real estate, investments, accounts, generic assets, even loans
           // (a loan profile may carry the asset's market value separately from its remaining balance).
-          const childTypes = new Set(["vehicle", "asset", "investment", "property", "subscription", "loan", "account"]);
+          // BUG-NW-1 fix (2026-06-03): `subscription` removed — subscriptions are recurring expenses,
+          // never balance-sheet items. They were leaking $cost into Net Worth via resolveAssetValue's
+          // fields.cost candidate path.
+          const childTypes = new Set(["vehicle", "asset", "investment", "property", "loan", "account"]);
           const noFilter = !fpIds || fpIds.length === 0;
           // Per filtered profile, what fraction of each asset's value belongs
           // to them? 0 → they don't own it at all. 100 → full credit.
@@ -4343,6 +4404,8 @@ export class SupabaseStorage implements IStorage {
             return s + (resolveLiabilityValue(p.fields) * share / 100);
           }, 0);
         })(),
+        assetBreakdown,
+        liabilityBreakdown,
         recentExpenses: allExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category })),
         monthlyExpenseRecords: monthlyExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(e => ({ id: e.id, description: e.description, amount: e.amount, date: e.date, category: e.category, vendor: e.vendor })),
       },

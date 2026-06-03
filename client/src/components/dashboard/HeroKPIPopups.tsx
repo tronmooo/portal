@@ -103,7 +103,10 @@ function resolveLiabilityBalance(p: any): number {
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
-const ASSET_TYPES = new Set(["vehicle", "asset", "investment", "property", "subscription", "account"]);
+// BUG-NW-1 fix (2026-06-03): `subscription` removed — subscriptions are
+// recurring expenses, not balance-sheet items. They were leaking $cost into
+// the Net Worth popup as if they were assets.
+const ASSET_TYPES = new Set(["vehicle", "asset", "investment", "property", "account"]);
 const LIABILITY_TYPES = new Set(["liability", "loan"]);
 
 function iconForProfile(type: string) {
@@ -212,33 +215,37 @@ export function NetWorthPopup({
     return scopeIsInScope(candidates, { selectedIds: filterIds, selfIds }, "out_of_scope");
   };
 
-  const { assets, liabilities, totalA, totalL } = useMemo(() => {
+  // BUG-NW-2/3 fix (2026-06-03): the popup now renders the server-computed
+  // breakdown arrays directly. Header total and per-row values come from one
+  // source so they cannot drift. The earlier client walk produced rows whose
+  // gross values didn't match the ownership-share-adjusted header (200% Home).
+  // The client walk is kept ONLY as a one-tick fallback before the server
+  // payload resolves so the popup never shows an empty list.
+  const fallback = useMemo(() => {
     const assets: any[] = [];
     const liabilities: any[] = [];
     for (const p of allProfiles) {
       if (!isInScope(p)) continue;
       if (ASSET_TYPES.has(p.type)) {
         const v = resolveAssetValue(p);
-        if (v > 0) assets.push({ ...p, _value: v });
+        if (v > 0) assets.push({ id: p.id, name: p.name, type: p.type, grossValue: v, share: 100, value: v });
       }
       if (LIABILITY_TYPES.has(p.type) || (p.type === "vehicle" || p.type === "property" || p.type === "asset")) {
         const v = resolveLiabilityBalance(p);
-        if (v > 0) liabilities.push({ ...p, _value: v });
+        if (v > 0) liabilities.push({ id: p.id, name: p.name, type: p.type, grossValue: v, share: 100, value: v });
       }
     }
-    assets.sort((a, b) => b._value - a._value);
-    liabilities.sort((a, b) => b._value - a._value);
-    const totalA = assets.reduce((s, p) => s + p._value, 0);
-    const totalL = liabilities.reduce((s, p) => s + p._value, 0);
-    return { assets, liabilities, totalA, totalL };
+    assets.sort((a, b) => b.value - a.value);
+    liabilities.sort((a, b) => b.value - a.value);
+    return { assets, liabilities };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allProfiles, filterMode, filterIds.join(",")]);
 
-  // Pin displayed totals to the server financeSnapshot; fall back to the client
-  // walk only until /api/dashboard-enhanced resolves.
   const snap = enhancedRes?.financeSnapshot;
-  const displayTotalA = snap?.totalAssetValue ?? totalA;
-  const displayTotalL = snap?.totalLiabilities ?? totalL;
+  const assets = Array.isArray(snap?.assetBreakdown) ? snap.assetBreakdown : fallback.assets;
+  const liabilities = Array.isArray(snap?.liabilityBreakdown) ? snap.liabilityBreakdown : fallback.liabilities;
+  const displayTotalA = snap?.totalAssetValue ?? assets.reduce((s: number, r: any) => s + (r.value || 0), 0);
+  const displayTotalL = snap?.totalLiabilities ?? liabilities.reduce((s: number, r: any) => s + (r.value || 0), 0);
   const netWorth = displayTotalA - displayTotalL;
 
   return (
@@ -314,7 +321,13 @@ function EntityList({
     <div className="divide-y divide-border/60">
       {items.map((p) => {
         const Icon = iconForProfile(p.type);
-        const pct = total > 0 ? Math.round((p._value / total) * 100) : 0;
+        // BUG-NW-2 fix (2026-06-03): row value is the ownership-share-adjusted
+        // amount from the server breakdown (the popup no longer multiplies a
+        // gross value by share itself). `share` is the ownership %. The small
+        // secondary number shows the ownership share (e.g. "50%" co-owner),
+        // not "% of total" — the old formula produced 200% on a 50%-owned home.
+        const rowValue = Number(p.value ?? p._value ?? 0);
+        const sharePct = Number.isFinite(Number(p.share)) ? Math.round(Number(p.share)) : 100;
         return (
           <button
             key={p.id}
@@ -331,8 +344,8 @@ function EntityList({
               <p className="text-[10px] text-muted-foreground capitalize">{p.type}</p>
             </div>
             <div className="text-right shrink-0">
-              <p className="text-xs font-semibold tabular-nums">${fmt(p._value)}</p>
-              <p className="text-[10px] text-muted-foreground tabular-nums">{pct}%</p>
+              <p className="text-xs font-semibold tabular-nums">${fmt(rowValue)}</p>
+              <p className="text-[10px] text-muted-foreground tabular-nums">{sharePct < 100 ? `${sharePct}% owned` : ""}</p>
             </div>
             <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
           </button>
