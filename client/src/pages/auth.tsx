@@ -276,7 +276,7 @@ export default function AuthPage() {
             <img
               src="/portol-logo-clean.png"
               alt="Portol"
-              className="w-20 h-20 object-contain"
+              className="w-28 h-28 object-contain"
               style={{ filter: 'drop-shadow(0 0 20px rgba(0,200,220,0.4))' }}
             />
           </div>

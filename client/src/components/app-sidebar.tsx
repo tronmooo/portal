@@ -43,7 +43,7 @@ export function AppSidebar() {
           <img
             src="/portol-logo-clean.png"
             alt="Portol"
-            className="w-8 h-8 object-contain"
+            className="w-11 h-11 object-contain"
             style={{ filter: 'drop-shadow(0 0 6px rgba(0,200,220,0.5))' }}
           />
           <div>
