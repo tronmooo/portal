@@ -2298,7 +2298,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
   );
 }
 
-function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; profileIds?: string[] }) {
+export function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; profileIds?: string[] }) {
   // Multi-profile aware: prefer profileIds (array) when present, fall back to single profileId.
   const ids = profileIds.length > 0 ? profileIds : (profileId ? [profileId] : []);
   const profileParam = ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";

@@ -55,6 +55,7 @@ const _habImport   = () => import("@/pages/habits");
 const _jourImport  = () => import("@/pages/journal");
 const _oblImport   = () => import("@/pages/obligations");
 const _taskImport  = () => import("@/pages/tasks");
+const _goalsImport = () => import("@/pages/goals");
 const _privImport  = () => import("@/pages/privacy");
 const _termsImport = () => import("@/pages/terms");
 const _editImport  = () => import("@/pages/editor");
@@ -76,6 +77,7 @@ const HabitsPage       = lazy(_habImport);
 const JournalPage      = lazy(_jourImport);
 const ObligationsPage  = lazy(_oblImport);
 const TasksPage        = lazy(_taskImport);
+const GoalsPage        = lazy(_goalsImport);
 const PrivacyPage      = lazy(_privImport);
 const TermsPage        = lazy(_termsImport);
 const EditorPage       = lazy(_editImport);
@@ -522,6 +524,8 @@ function AppRouter() {
             deeplinks resolve instead of 404'ing. Each aliases the canonical
             /dashboard/* route above. */}
         <Route path="/tasks" component={TasksPage} />
+        <Route path="/goals" component={GoalsPage} />
+        <Route path="/dashboard/goals" component={GoalsPage} />
         <Route path="/finance" component={FinancePage} />
         <Route path="/obligations" component={ObligationsPage} />
         <Route path="/journal" component={JournalPage} />
