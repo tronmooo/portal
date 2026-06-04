@@ -1957,7 +1957,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "pay_obligation",
-    description: "Record a payment for an obligation. Find by name.",
+    description: "Record a payment for an obligation. Find by name. By default pays the oldest open occurrence. To pay a SPECIFIC month, pass forMonth (YYYY-MM) or dueDate (YYYY-MM-DD) — e.g. 'mark Bob's phone bill paid for June 2026' → forMonth: '2026-06'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1965,6 +1965,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         amount: { type: "number", description: "Amount paid (defaults to obligation amount)" },
         method: { type: "string", description: "Payment method" },
         confirmationNumber: { type: "string", description: "Confirmation number" },
+        forMonth: { type: "string", description: "Target a specific month's occurrence, YYYY-MM (e.g. '2026-06'). Use when the user names a month/year." },
+        dueDate: { type: "string", description: "Target the exact occurrence due on this date, YYYY-MM-DD." },
       },
       required: ["name"],
     },
@@ -6066,7 +6068,51 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const obligations = await storage.getObligations();
       const ob = obligations.find(o => o.name.toLowerCase().includes((input.name || "").toLowerCase()));
       if (!ob) return { error: "Obligation not found: " + (input.name || "unknown") };
-      return storage.payObligation(ob.id, parseFloat(input.amount) || ob.amount, input.method, input.confirmationNumber);
+      const payAmount = parseFloat(input.amount) || ob.amount;
+      // W4-2: target a specific month/date occurrence when requested. Without
+      // forMonth/dueDate, keep the default behavior (oldest open occurrence).
+      const forMonth = input.forMonth ? String(input.forMonth).trim() : undefined;
+      const dueDate = input.dueDate ? String(input.dueDate).trim() : undefined;
+      if (forMonth || dueDate) {
+        const supabase = (storage as any).supabase;
+        const uid = (storage as any).userId;
+        if (!supabase || !uid) {
+          // MemStorage / no occurrence engine — fall back to default.
+          return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
+        }
+        const { listOccurrences, markOccurrence, materializeOccurrences } = await import("./obligation-engine");
+        // Make sure the requested window is materialized before we look.
+        await materializeOccurrences(supabase, uid, ob.id, 825).catch(() => {});
+        let start: string, end: string, label: string;
+        if (dueDate && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+          start = dueDate; end = dueDate; label = dueDate;
+        } else if (forMonth && /^\d{4}-\d{2}$/.test(forMonth)) {
+          start = `${forMonth}-01`;
+          const [yy, mm] = forMonth.split("-").map(Number);
+          const lastDay = new Date(yy, mm, 0).getDate();
+          end = `${forMonth}-${String(lastDay).padStart(2, "0")}`;
+          label = forMonth;
+        } else {
+          return { error: `Couldn't read the target date "${forMonth || dueDate}". Use YYYY-MM (month) or YYYY-MM-DD (exact day).` };
+        }
+        const occs = (await listOccurrences(supabase, uid, start, end))
+          .filter((o: any) => o.obligation_id === ob.id);
+        const open = occs.filter((o: any) => o.status === "pending" || o.status === "late");
+        if (open.length === 0) {
+          // List open occurrences across a wide window so the error is actionable.
+          const allOpen = (await listOccurrences(supabase, uid, "2000-01-01", "2100-12-31"))
+            .filter((o: any) => o.obligation_id === ob.id && (o.status === "pending" || o.status === "late"))
+            .map((o: any) => String(o.due_at).slice(0, 10))
+            .sort();
+          const list = allOpen.length ? allOpen.join(", ") : "none";
+          return { error: `No unpaid occurrence found for ${ob.name} in ${label}. Open occurrences: ${list}.` };
+        }
+        const target = open.sort((a: any, b: any) => String(a.due_at).localeCompare(String(b.due_at)))[0];
+        const result = await markOccurrence(supabase, uid, target.id, "done", { actualAmount: payAmount, method: input.method });
+        if (!result.ok) return { error: result.error || "Failed to mark occurrence paid" };
+        return { ...result.occurrence, _paidMonth: label };
+      }
+      return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
     }
 
     case "journal_entry": {
