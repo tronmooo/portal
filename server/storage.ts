@@ -1001,7 +1001,7 @@ export class MemStorage implements IStorage {
     const tracker = this.trackers.get(data.trackerId);
     if (!tracker) return undefined;
     const computed = computeSecondaryData(tracker.name, tracker.category, data.values);
-    const entry: TrackerEntry = { id: randomUUID(), values: data.values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: new Date().toISOString() };
+    const entry: TrackerEntry = { id: randomUUID(), values: data.values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: data.timestamp || new Date().toISOString() };
     tracker.entries.push(entry);
     let desc = `Logged ${tracker.name}: ${JSON.stringify(data.values)}`;
     if (computed.caloriesBurned) desc += ` (~${computed.caloriesBurned} cal burned)`;

@@ -1495,6 +1495,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         values: { type: "object", description: "Key-value pairs to log. ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: { hours, quality }. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
+        at: { type: "string", description: "Optional date/time the entry actually happened (ISO date or natural language like 'June 3 2025'). Set this when the user says the entry was on a specific past or future date. Omit for 'now'." },
       },
       required: ["trackerName", "values"],
     },
@@ -3564,6 +3565,20 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
           }
         }
       }
+      // W4-4: honor an explicit entry date. Parse whatever the AI passed in `at`
+      // (ISO or natural language). On parse failure, warn and drop it so the
+      // executor falls back to NOW(). Do NOT infer from the raw message here.
+      if (normalized.at != null && String(normalized.at).trim()) {
+        const when = new Date(String(normalized.at).trim());
+        if (isNaN(when.getTime())) {
+          warnings.push(`Couldn't parse entry date "${normalized.at}" — using now instead`);
+          normalized.at = undefined;
+        } else {
+          normalized.at = when.toISOString();
+        }
+      } else {
+        normalized.at = undefined;
+      }
       break;
     }
     case "create_profile": {
@@ -4456,7 +4471,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (knownFieldNames.has(k.toLowerCase())) continue;
           unknownFields.push(k);
         }
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: normalizedValues, forProfile: targetProfileId, profileId: targetProfileId });
+        const entry = await storage.logEntry({ trackerId: tracker.id, values: normalizedValues, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
@@ -4547,7 +4562,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // so unit suffixes get stripped (e.g. "99°F" → 99) before the
       // first entry is written.
       const { values: nv } = normalizeTrackerEntry(newTracker as any, entryValues);
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId });
+      const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
       return entry;
     }
 

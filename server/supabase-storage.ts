@@ -1837,7 +1837,9 @@ export class SupabaseStorage implements IStorage {
 
     const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), validated };
     const id = randomUUID();
-    const ts = new Date().toISOString();
+    // W4-4: honor an explicit entry timestamp when the caller supplies one
+    // (already parsed to ISO upstream); otherwise stamp NOW().
+    const ts = data.timestamp || new Date().toISOString();
     const { error } = await this.supabase.from("tracker_entries").insert({
       id, user_id: this.userId, tracker_id: data.trackerId,
       entry_values: values, computed, notes: data.notes || null,

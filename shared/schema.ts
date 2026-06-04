@@ -339,6 +339,7 @@ export const insertTrackerEntrySchema = z.object({
   tags: z.array(z.string()).optional(),
   forProfile: z.string().optional(),
   profileId: z.string().optional(),
+  timestamp: z.string().optional(),
 });
 
 export type InsertTrackerEntry = z.infer<typeof insertTrackerEntrySchema>;
