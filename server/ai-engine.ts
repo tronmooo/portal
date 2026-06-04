@@ -8802,6 +8802,21 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       finalReply = `${finalReply}\n\n${unknownFieldWarnings.join("\n")}`;
     }
 
+    // BUG-D: external calendar sync is not connected. If the user asks to sync a
+    // Google/Apple/Outlook calendar, be honest instead of pretending it worked.
+    // Checked BEFORE the reminder prefix so a "sync my calendar" message gets the
+    // definitive sync disclaimer, not the reminder one.
+    {
+      const msgForDisclaimer = userMessage || "";
+      if (/((google|apple|outlook|gcal|icloud)\s*calendar.*sync|sync.*(google|apple|outlook|gcal|icloud)\s*calendar|sync.*calendar)/i.test(msgForDisclaimer)) {
+        finalReply = "Google/Apple/Outlook calendar sync isn't connected yet. Your Portol calendar still works internally.";
+      } else if (/(remind me|notify me|alert me|reminder)/i.test(msgForDisclaimer)) {
+        // BUG-C: reminders/push aren't wired up. Still proceed normally (the item
+        // lands on the calendar/dashboard), but say so up front.
+        finalReply = `Reminders aren't wired up yet — but I'll still add it to your calendar/dashboard so you'll see it.\n\n${finalReply}`;
+      }
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // SAFETY NET — "create a profile for X" hallucination guard.
     //
