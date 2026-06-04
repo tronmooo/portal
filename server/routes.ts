@@ -3358,29 +3358,28 @@ Rules:
   // ---- Budgets ----
   app.get("/api/budgets", asyncHandler(async (req, res) => {
     const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
-    const budgets = await storage.getBudgets(month);
-    // Bug: budgets are stored per-user (not per-profile) so this endpoint used
-    // to return the same list regardless of selected profile. That made fresh
-    // non-self profiles (e.g. a brand-new EMPTYPROBE_QA) show "Budgeted: $X"
-    // on the dashboard hero tile even though that profile owns nothing.
-    // Treat budgets as a self-only concept: hide them when the active filter
-    // explicitly excludes the self profile. "everyone"/no filter still shows.
     const fps = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
+    // Per-profile budgets: when a profile filter is active, return only
+    // entries owned by one of the selected profiles plus shared/null-profile
+    // entries (handled inside getBudgets). Self-scoped (null profileId)
+    // entries are hidden when the filter explicitly excludes the self profile,
+    // mirroring the prior behavior for the dashboard hero tile.
     if (filterProfileIds.length > 0) {
       const allProfiles = await storage.getProfiles();
       const selfIds = new Set(allProfiles.filter(p => p.type === "self").map(p => p.id));
       const selfInSel = filterProfileIds.some(id => selfIds.has(id));
-      if (!selfInSel) {
-        return res.json({ month, budgets: [] });
-      }
+      const scoped = await storage.getBudgets(month, filterProfileIds);
+      const budgets = selfInSel ? scoped : scoped.filter(b => b.profileId);
+      return res.json({ month, budgets });
     }
+    const budgets = await storage.getBudgets(month);
     res.json({ month, budgets });
   }));
 
   app.post("/api/budgets", asyncHandler(async (req, res) => {
-    const { month, category, amount, notes } = req.body;
+    const { month, category, amount, notes, profileId } = req.body;
     if (!category || typeof category !== "string" || !category.trim()) {
       return res.status(400).json({ error: "category is required and must be a non-empty string" });
     }
@@ -3398,8 +3397,11 @@ Rules:
     if (notes !== undefined && typeof notes !== "string") {
       return res.status(400).json({ error: "notes must be a string" });
     }
+    if (profileId !== undefined && profileId !== null && typeof profileId !== "string") {
+      return res.status(400).json({ error: "profileId must be a string" });
+    }
     const m = month || getUserCurrentMonth(getTimezone(req));
-    const budget = await storage.addBudget(m, category.trim(), parsedAmount, notes);
+    const budget = await storage.addBudget(m, category.trim(), parsedAmount, notes, profileId || undefined);
     res.json(budget);
   }));
 

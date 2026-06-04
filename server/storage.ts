@@ -177,10 +177,10 @@ export interface IStorage {
   migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }>;
 
   // Budgets
-  getBudgets(month: string): Promise<Array<{id: string; category: string; amount: number; notes?: string}>>;
-  setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string}>): Promise<void>;
-  addBudget(month: string, category: string, amount: number, notes?: string): Promise<{id: string; category: string; amount: number; notes?: string}>;
-  updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string}): Promise<boolean>;
+  getBudgets(month: string, profileIds?: string[]): Promise<Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>;
+  setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>): Promise<void>;
+  addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
+  updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean>;
   deleteBudget(month: string, budgetId: string): Promise<boolean>;
   copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number>;
 
@@ -2022,17 +2022,29 @@ export class MemStorage implements IStorage {
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
 
   // Budget stubs
-  private budgetStore = new Map<string, Array<{id: string; category: string; amount: number; notes?: string}>>();
-  async getBudgets(month: string) { return this.budgetStore.get(month) || []; }
-  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string}>) { this.budgetStore.set(month, budgets); }
-  async addBudget(month: string, category: string, amount: number, notes?: string) {
-    const budget = { id: crypto.randomUUID(), category, amount, notes };
+  private budgetStore = new Map<string, Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>();
+  async getBudgets(month: string, profileIds?: string[]) {
+    const all = this.budgetStore.get(month) || [];
+    if (!profileIds) return all;
+    const wanted = new Set(profileIds);
+    return all.filter(b => !b.profileId || wanted.has(b.profileId));
+  }
+  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>) { this.budgetStore.set(month, budgets); }
+  async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string) {
     const list = this.budgetStore.get(month) || [];
+    const existing = list.find(b => b.category.toLowerCase() === category.toLowerCase() && (b.profileId || null) === (profileId || null));
+    if (existing) {
+      existing.amount = amount;
+      if (notes) existing.notes = notes;
+      this.budgetStore.set(month, list);
+      return existing;
+    }
+    const budget = { id: crypto.randomUUID(), category, amount, notes, profileId };
     list.push(budget);
     this.budgetStore.set(month, list);
     return budget;
   }
-  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string}) {
+  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}) {
     const list = this.budgetStore.get(month) || [];
     const idx = list.findIndex(b => b.id === budgetId);
     if (idx === -1) return false;

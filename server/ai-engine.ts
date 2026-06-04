@@ -2622,6 +2622,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         category: { type: "string", description: "Budget category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general" },
         amount: { type: "number", description: "Monthly budget amount in dollars" },
         month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
+        forProfile: { type: "string", description: "OPTIONAL: name of the person/pet this budget is for (e.g. 'Bob', 'Mom'). Set this when the user scopes the budget to someone ('$200 groceries budget for Bob'). Omit for a shared/household budget." },
       },
       required: ["category", "amount"],
     },
@@ -4521,7 +4522,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "set_budget": {
       const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
-      const budget = await storage.addBudget(month, input.category, input.amount, input.notes);
+      // BUG 1: resolve an optional forProfile name to a profileId so budgets can
+      // be scoped per-person. Omitted/unresolved means a shared/household budget.
+      let budgetProfileId: string | undefined;
+      if (input.forProfile && String(input.forProfile).trim()) {
+        const profiles = await storage.getProfiles();
+        const matched = matchProfileByName(profiles, input.forProfile);
+        if (matched) budgetProfileId = matched.id;
+      }
+      const budget = await storage.addBudget(month, input.category, input.amount, input.notes, budgetProfileId);
       return { ...budget, month, message: `Budget set: $${input.amount} for ${input.category} in ${month}` };
     }
 
@@ -6932,7 +6941,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "create_budget": {
       const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
-      const budget = await storage.addBudget(month, input.category, Number(input.amount));
+      // BUG 1: resolve an optional forProfile name to a profileId so budgets can
+      // be scoped per-person. Omitted/unresolved means a shared/household budget.
+      let budgetProfileId: string | undefined;
+      if (input.forProfile && String(input.forProfile).trim()) {
+        const profiles = await storage.getProfiles();
+        const matched = matchProfileByName(profiles, input.forProfile);
+        if (matched) budgetProfileId = matched.id;
+      }
+      const budget = await storage.addBudget(month, input.category, Number(input.amount), undefined, budgetProfileId);
       return { ...budget, month, message: `Budget created: $${input.amount} for ${input.category} in ${month}`, actions: [{ type: "create", category: "budget", data: { ...budget, month } }] };
     }
 

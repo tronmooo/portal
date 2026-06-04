@@ -4637,17 +4637,23 @@ export class SupabaseStorage implements IStorage {
   // BUDGETS (stored in preferences table as JSON)
   // ============================================================
 
-  async getBudgets(month: string): Promise<Array<{id: string; category: string; amount: number; notes?: string}>> {
+  async getBudgets(month: string, profileIds?: string[]): Promise<Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>> {
     const { data } = await this.supabase.from("preferences")
       .select("value")
       .eq("user_id", this.userId)
       .eq("key", `budget:${month}`)
       .single();
     if (!data?.value) return [];
-    try { return JSON.parse(data.value); } catch { return []; }
+    let parsed: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
+    try { parsed = JSON.parse(data.value); } catch { return []; }
+    if (!profileIds) return parsed;
+    // Entries with no profileId are shared/all and always returned; otherwise
+    // only entries whose profileId is in the requested set.
+    const wanted = new Set(profileIds);
+    return parsed.filter(b => !b.profileId || wanted.has(b.profileId));
   }
 
-  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string}>): Promise<void> {
+  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>): Promise<void> {
     const { data: existing } = await this.supabase.from("preferences")
       .select("id")
       .eq("user_id", this.userId)
@@ -4666,28 +4672,31 @@ export class SupabaseStorage implements IStorage {
     }
   }
 
-  async addBudget(month: string, category: string, amount: number, notes?: string): Promise<{id: string; category: string; amount: number; notes?: string}> {
+  async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{id: string; category: string; amount: number; notes?: string; profileId?: string}> {
     const budgets = await this.getBudgets(month);
-    const existing = budgets.find(b => b.category.toLowerCase() === category.toLowerCase());
+    // Dedupe on (category, profileId) so the same category can carry a
+    // different cap per profile (shared entries use a null profileId).
+    const existing = budgets.find(b => b.category.toLowerCase() === category.toLowerCase() && (b.profileId || null) === (profileId || null));
     if (existing) {
       existing.amount = amount;
       if (notes) existing.notes = notes;
       await this.setBudgets(month, budgets);
       return existing;
     }
-    const entry = { id: crypto.randomUUID(), category, amount, notes };
+    const entry = { id: crypto.randomUUID(), category, amount, notes, profileId };
     budgets.push(entry);
     await this.setBudgets(month, budgets);
     return entry;
   }
 
-  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string}): Promise<boolean> {
+  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean> {
     const budgets = await this.getBudgets(month);
     const b = budgets.find(x => x.id === budgetId);
     if (!b) return false;
     if (updates.amount !== undefined) b.amount = updates.amount;
     if (updates.category) b.category = updates.category;
     if (updates.notes !== undefined) b.notes = updates.notes;
+    if (updates.profileId !== undefined) b.profileId = updates.profileId;
     await this.setBudgets(month, budgets);
     return true;
   }
