@@ -849,6 +849,55 @@ export async function registerRoutes(
   });
   app.get("/api/cron/fire-due-reminders", cronFireDueReminders);
 
+  // ---- Cron: daily net-worth snapshot (W4-5) ----
+  // Global cross-user job. Gated by ?key= matching CRON_SECRET, runs under the
+  // service_role admin client, and writes one snapshot row per profile + an
+  // aggregate row for each user. Returns { snapped: N } counting users snapped.
+  const cronSnapshotNetWorth: any = asyncHandler(async (req: any, res: any) => {
+    const secret = process.env.CRON_SECRET;
+    const provided = String(req.query.key || "").trim();
+    if (!secret || !provided || !safeEqual(provided, secret)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      const { createClient } = await import("@supabase/supabase-js");
+      const url = process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) return res.status(500).json({ error: "Supabase admin env vars missing" });
+      const admin = createClient(url, key);
+      const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
+      if (listErr) throw listErr;
+      const users = usersList?.users || [];
+      const { createScopedStorage, requestStorageContext } = await import("./storage");
+
+      let snapped = 0;
+      for (const u of users) {
+        try {
+          const scoped = createScopedStorage(u.id);
+          await new Promise<void>((resolve) => {
+            requestStorageContext.run(scoped, async () => {
+              try {
+                const profiles = await scoped.getProfiles();
+                // Only profiles that can carry a balance are worth a per-profile row.
+                const ownerTypes = new Set(["self", "person", "vehicle", "asset", "investment", "property", "loan", "liability", "account"]);
+                const profileIds = profiles.filter(p => ownerTypes.has((p as any).type)).map(p => p.id);
+                const rows = await scoped.takeNetWorthSnapshot(profileIds);
+                if (rows.length > 0) snapped++;
+              } catch { /* per-user failure shouldn't abort the run */ }
+              resolve();
+            });
+          });
+        } catch { /* skip user */ }
+      }
+      res.json({ snapped });
+    } catch (err: any) {
+      log.error("[Cron Snapshot Net Worth]", err?.message || err);
+      res.status(500).json({ error: "Cron failed" });
+    }
+  });
+  app.get("/api/cron/snapshot-net-worth", cronSnapshotNetWorth);
+  app.post("/api/cron/snapshot-net-worth", cronSnapshotNetWorth);
+
   // ---- Activity Feed ----
   app.get("/api/activity", asyncHandler(async (req, res) => {
     const actUserId = (req as AuthenticatedRequest).userId || undefined;

@@ -4467,6 +4467,65 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
+  // NET-WORTH SNAPSHOTS (W4-5)
+  // ============================================================
+  // Compute and persist today's net worth. One row per profile passed in plus
+  // one aggregate row (profile_id NULL = "everyone"). Reuses the share-aware,
+  // subscription-excluding math in getDashboardEnhanced — no re-implementation.
+  // Upsert semantics: one row per (user, profile-or-aggregate, day); a second
+  // call the same day overwrites rather than duplicating.
+  async takeNetWorthSnapshot(profileIds?: string[]): Promise<Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }>> {
+    const snapshotDate = getUserToday(this._timezone);
+    const targets: Array<string | null> = [null, ...((profileIds || []).filter(Boolean))];
+    const rows: Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }> = [];
+    for (const pid of targets) {
+      const enhanced = await this.getDashboardEnhanced(undefined, pid ? [pid] : undefined);
+      const fin = (enhanced && (enhanced as any).financeSnapshot) || {};
+      const assetsTotal = Number(fin.totalAssetValue || 0);
+      const liabilitiesTotal = Number(fin.totalLiabilities || 0);
+      const netWorth = assetsTotal - liabilitiesTotal;
+      // Expression unique index (COALESCE(profile_id, sentinel)) can't be named
+      // in onConflict, so resolve the existing row by hand then update/insert.
+      let q = this.supabase.from("net_worth_snapshots")
+        .select("id").eq("user_id", this.userId).eq("snapshot_date", snapshotDate);
+      q = pid ? q.eq("profile_id", pid) : q.is("profile_id", null);
+      const { data: existing } = await q.maybeSingle();
+      if (existing?.id) {
+        await this.supabase.from("net_worth_snapshots")
+          .update({ assets_total: assetsTotal, liabilities_total: liabilitiesTotal, net_worth: netWorth })
+          .eq("id", existing.id);
+      } else {
+        await this.supabase.from("net_worth_snapshots").insert({
+          user_id: this.userId, profile_id: pid, snapshot_date: snapshotDate,
+          assets_total: assetsTotal, liabilities_total: liabilitiesTotal, net_worth: netWorth,
+        });
+      }
+      rows.push({ profileId: pid, assetsTotal, liabilitiesTotal, netWorth, snapshotDate });
+    }
+    return rows;
+  }
+
+  // Read snapshot history for a profile (or the aggregate when profileId is
+  // omitted) within the lookback window, newest first.
+  async getNetWorthHistory(profileId?: string, lookbackDays: number = 1): Promise<Array<{ snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>> {
+    const today = getUserToday(this._timezone);
+    const since = tzAddDays(today, -Math.max(1, lookbackDays));
+    let q = this.supabase.from("net_worth_snapshots")
+      .select("snapshot_date, assets_total, liabilities_total, net_worth")
+      .eq("user_id", this.userId)
+      .gte("snapshot_date", since);
+    q = profileId ? q.eq("profile_id", profileId) : q.is("profile_id", null);
+    const { data, error } = await q.order("snapshot_date", { ascending: false });
+    if (error) throw error;
+    return (data || []).map((r: any) => ({
+      snapshotDate: r.snapshot_date,
+      assetsTotal: Number(r.assets_total || 0),
+      liabilitiesTotal: Number(r.liabilities_total || 0),
+      netWorth: Number(r.net_worth || 0),
+    }));
+  }
+
+  // ============================================================
   // INSIGHTS
   // ============================================================
   async getInsights(filterProfileId?: string): Promise<Insight[]> {

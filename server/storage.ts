@@ -164,6 +164,10 @@ export interface IStorage {
   getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats>;
   getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<Record<string, unknown>>;
 
+  // Net-worth snapshots (W4-5)
+  takeNetWorthSnapshot(profileIds?: string[]): Promise<Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }>>;
+  getNetWorthHistory(profileId?: string, lookbackDays?: number): Promise<Array<{ snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>>;
+
   // Insights
   getInsights(): Promise<Insight[]>;
 
@@ -1892,6 +1896,16 @@ export class MemStorage implements IStorage {
       todaysEvents,
       totalDocuments: documents.length,
     };
+  }
+
+  // ---- Net-worth snapshots (W4-5) ----
+  // In-memory backend is dev-only and has no snapshot store; the real
+  // persistence lives in SupabaseStorage. Stubs keep IStorage satisfied.
+  async takeNetWorthSnapshot(_profileIds?: string[]): Promise<Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }>> {
+    return [];
+  }
+  async getNetWorthHistory(_profileId?: string, _lookbackDays?: number): Promise<Array<{ snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>> {
+    return [];
   }
 
   // ---- Insights ----

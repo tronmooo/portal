@@ -1584,6 +1584,18 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: [],
     },
   },
+  {
+    name: "query_net_worth_history",
+    description: "Answer 'why did my net worth change today' / 'how did Bob's net worth change'. Reads the daily net-worth snapshot history and compares today's snapshot to a prior day. Use this for net-worth-over-time questions; it does NOT list transactions.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        forProfile: { type: "string", description: "Profile name to scope to (e.g. 'Bob'). Omit for the household/aggregate net worth." },
+        lookbackDays: { type: "number", description: "How many days back to compare against. Default 1 (yesterday)." },
+      },
+      required: [],
+    },
+  },
 
   // --- Paychecks, Loans, Cashflow ---
   {
@@ -4662,6 +4674,41 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         percentUsed: b.amount > 0 ? Math.round(((byCategory[b.category] || 0) / b.amount) * 100) : 0,
       }));
       return { month, totalBudget, totalSpent, remaining: totalBudget - totalSpent, categories };
+    }
+
+    case "query_net_worth_history": {
+      // W4-5: compare today's net-worth snapshot to a prior day.
+      const lookbackDays = Number(input.lookbackDays) > 0 ? Number(input.lookbackDays) : 1;
+      let nwProfileId: string | undefined;
+      let nwName: string | undefined = input.forProfile && String(input.forProfile).trim() ? String(input.forProfile).trim() : undefined;
+      if (nwName) {
+        const profiles = await storage.getProfiles();
+        const matched = matchProfileByName(profiles, nwName);
+        if (matched) nwProfileId = matched.id;
+      }
+      const history = await storage.getNetWorthHistory(nwProfileId, lookbackDays);
+      const who = nwName ? `${nwName}'s` : "your";
+      if (history.length === 0) {
+        return { history: [], message: `No net-worth snapshots exist yet for ${who} net worth. The daily snapshot job has not recorded a value — once it runs, day-over-day changes can be compared.` };
+      }
+      const latest = history[0];
+      if (history.length === 1) {
+        return {
+          history,
+          latest,
+          message: `Today is the first snapshot of ${who} net worth ($${Math.round(latest.netWorth).toLocaleString()}) — there is no prior day to compare against yet. Check back tomorrow for a day-over-day change.`,
+        };
+      }
+      const prior = history[history.length - 1];
+      const delta = latest.netWorth - prior.netWorth;
+      const sign = delta >= 0 ? "+" : "-";
+      return {
+        history,
+        latest,
+        prior,
+        delta,
+        message: `${who} net worth was $${Math.round(prior.netWorth).toLocaleString()} on ${prior.snapshotDate} and $${Math.round(latest.netWorth).toLocaleString()} on ${latest.snapshotDate} — a change of ${sign}$${Math.abs(Math.round(delta)).toLocaleString()}. This is snapshot-based; for the exact transactions behind the change, ask to show ${who} activity since ${prior.snapshotDate}.`,
+      };
     }
 
     case "log_expected_paycheck": {
