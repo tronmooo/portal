@@ -773,7 +773,7 @@ export class SupabaseStorage implements IStorage {
     const obligationIds = (obligationsRes as any[]).map((r: any) => r.id);
     const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
       trackerIds.length > 0
-        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).order("timestamp", { ascending: false }).then(r => r.data || [])
+        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
       obligationIds.length > 0
         ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIds).order("date", { ascending: false }).then(r => r.data || [])
@@ -1688,7 +1688,7 @@ export class SupabaseStorage implements IStorage {
     trackersQuery = this._applyProfileFilter(trackersQuery, profileIds);
     const [trackersResult, entriesResult] = await Promise.all([
       trackersQuery,
-      this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).gte("timestamp", cutoff).order("timestamp", { ascending: true }),
+      this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).gte("timestamp", cutoff).is("deleted_at", null).order("timestamp", { ascending: true }),
     ]);
     if (trackersResult.error) throw trackersResult.error;
     // Group entries by tracker_id
@@ -1706,7 +1706,7 @@ export class SupabaseStorage implements IStorage {
   async getTracker(id: string): Promise<Tracker | undefined> {
     const [{ data, error }, entriesResult] = await Promise.all([
       this.supabase.from("trackers").select("*").eq("id", id).eq("user_id", this.userId).single(),
-      this.supabase.from("tracker_entries").select("*").eq("tracker_id", id).eq("user_id", this.userId).order("timestamp", { ascending: true }),
+      this.supabase.from("tracker_entries").select("*").eq("tracker_id", id).eq("user_id", this.userId).is("deleted_at", null).order("timestamp", { ascending: true }),
     ]);
     if (error || !data) return undefined;
     return this.rowToTracker(
@@ -1824,6 +1824,7 @@ export class SupabaseStorage implements IStorage {
       .select("id, entry_values, timestamp")
       .eq("tracker_id", data.trackerId)
       .eq("user_id", this.userId)
+      .is("deleted_at", null)
       .gte("timestamp", new Date(Date.now() - 5 * 60 * 1000).toISOString())
       .order("timestamp", { ascending: false })
       .limit(5);
