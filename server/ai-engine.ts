@@ -1432,7 +1432,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Tasks ---
   {
     name: "create_task",
-    description: "Create a new task or reminder.",
+    description: "Create a new task or reminder. For recurring chores ('water plants weekly', 'take meds daily', 'pay rent monthly'), set the recurrence field — a new dated instance is auto-created each time the task is completed.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1440,6 +1440,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         priority: { type: "string", enum: ["low", "medium", "high"], description: "Priority level" },
         dueDate: { type: "string", description: "Due date (YYYY-MM-DD)" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
+        recurrence: { type: "string", enum: ["daily", "weekly", "biweekly", "monthly"], description: "Set when the task repeats on a schedule (e.g. 'water plants weekly'). Leave unset for one-off tasks." },
         forProfile: { type: "string", description: "Name of an EXISTING profile to link this task to (e.g. 'Max', 'Mom', 'Tesla'). Only set this if the person/entity already exists as a profile. If the user just mentions someone by name in the task (e.g. 'return book to Sarah'), put the name in the title instead — do NOT create a profile for them." },
       },
       required: ["title"],
@@ -4165,12 +4166,28 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Dedup lock: skipped duplicate task "${input.title}"`);
         return { error: "Duplicate task detected — skipped" };
       }
+      // BUG-B: recurring tasks. We store cadence as a `recur:<freq>` tag (no
+      // schema change needed). On completion the PATCH/complete_task path reads
+      // this tag and spawns the next dated instance. Detect cadence from the
+      // explicit `recurrence` arg, the title, or the user's message.
+      const recurText = `${input.recurrence || ""} ${input.title || ""} ${String((input as any).__userMessage || "")}`.toLowerCase();
+      let recurFreq: string | undefined;
+      if (/\bdaily\b|every day|each day/.test(recurText)) recurFreq = "daily";
+      else if (/\bweekly\b|every week|each week/.test(recurText)) recurFreq = "weekly";
+      else if (/\bbiweekly\b|every (other|2) weeks|every two weeks/.test(recurText)) recurFreq = "biweekly";
+      else if (/\bmonthly\b|every month|each month/.test(recurText)) recurFreq = "monthly";
+      else { const m = recurText.match(/every (\d+) days?/); if (m) recurFreq = `every-${m[1]}-days`; }
+      const taskTags = [...(input.tags || [])];
+      if (recurFreq && !taskTags.some(t => String(t).startsWith("recur:"))) {
+        taskTags.push(`recur:${recurFreq}`);
+      }
+
       const newTask = await storage.createTask({
         title: input.title,
         priority: input.priority || "medium",
         dueDate: input.dueDate,
         description: input.description,
-        tags: input.tags || [],
+        tags: taskTags,
         linkedProfiles: taskLinkedProfiles.length > 0 ? taskLinkedProfiles : undefined,
       });
       markCreation(dedupUser, taskDedupKey);

@@ -1984,7 +1984,47 @@ export class SupabaseStorage implements IStorage {
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
+
+    // BUG-B: recurring tasks. When a task carrying a `recur:<freq>` tag flips to
+    // done, spawn the next dated instance so the chore reappears. Cadence lives
+    // in the tag (no schema change). Guard against double-spawn: only fire on the
+    // todo/pending -> done transition.
+    if (data.status === "done" && existing.status !== "done") {
+      const recurTag = (existing.tags || []).find((t: string) => String(t).startsWith("recur:"));
+      if (recurTag) {
+        try {
+          await this.spawnNextRecurringTask(existing, String(recurTag).slice("recur:".length));
+        } catch (e: any) {
+          console.error(`[updateTask] recurring spawn failed for ${id.slice(0,8)}: ${e?.message || e}`);
+        }
+      }
+    }
     return this.getTask(id);
+  }
+
+  /** Create the next instance of a recurring task with its due date advanced. */
+  private async spawnNextRecurringTask(prev: Task, freq: string): Promise<void> {
+    const base = prev.dueDate ? new Date(prev.dueDate.slice(0, 10) + "T00:00:00") : new Date();
+    const next = new Date(base);
+    const everyMatch = freq.match(/^every-(\d+)-days$/);
+    if (everyMatch) next.setDate(next.getDate() + parseInt(everyMatch[1], 10));
+    else if (freq === "daily") next.setDate(next.getDate() + 1);
+    else if (freq === "weekly") next.setDate(next.getDate() + 7);
+    else if (freq === "biweekly") next.setDate(next.getDate() + 14);
+    else if (freq === "monthly") {
+      const day = next.getDate();
+      const last = new Date(next.getFullYear(), next.getMonth() + 2, 0).getDate();
+      next.setMonth(next.getMonth() + 1, Math.min(day, last));
+    } else return; // unknown cadence — do nothing
+    const nextDue = next.toLocaleDateString("en-CA");
+    await this.createTask({
+      title: prev.title,
+      description: prev.description || undefined,
+      priority: prev.priority,
+      dueDate: nextDue,
+      tags: prev.tags || [],
+      linkedProfiles: prev.linkedProfiles || [],
+    } as any);
   }
 
   async deleteTask(id: string): Promise<boolean> {
