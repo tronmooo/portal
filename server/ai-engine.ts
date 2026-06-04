@@ -2947,7 +2947,7 @@ NEVER ask clarifying questions for CRUD operations. Just execute. If it fails, r
 
 ━━━ TRACKER CRUD ━━━
 - create tracker: create_tracker(name, category, fields, forProfile?)
-- log entry: log_tracker_entry(trackerName, values, forProfile?)
+- log entry: log_tracker_entry(trackerName, values, forProfile?, at?). When the user names a specific date the entry happened ("log weight 185 on June 3 2025", "I ran 5k yesterday"), pass that date in the at field (ISO or natural language). Backdating IS supported — never tell the user it is not. Omit at for "now".
 - update most recent entry: update_tracker_entry(trackerName, values, forProfile?, entryIndex?)
 - delete most recent entry: delete_tracker_entry(trackerName, forProfile?, entryIndex?)
 - rename/update tracker: update_tracker(trackerName, changes)
