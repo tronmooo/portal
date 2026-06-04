@@ -29,15 +29,29 @@ function toLocalDateStr(d: Date): string {
   return d.toLocaleDateString("en-CA");
 }
 
+// Add `months` calendar months to `date`, clamping the day-of-month to the last
+// valid day of the target month. Plain setMonth() overflows (Jan 31 + 1mo → Mar 3
+// because Feb has no 31st), which silently shifts a "due on the 31st" bill into
+// the wrong month. Clamp instead: Jan 31 + 1mo → Feb 28/29. (Bug-L)
+function addMonthsClamped(date: Date, months: number): Date {
+  const dueDay = date.getDate();
+  const y = date.getFullYear();
+  const m = date.getMonth();
+  // Day 0 of (target month + 1) === last day of the target month.
+  const lastDay = new Date(y, m + months + 1, 0).getDate();
+  return new Date(y, m + months, Math.min(dueDay, lastDay));
+}
+
 function advance(date: Date, frequency: string, units = 1): Date {
   const next = new Date(date);
   switch (frequency) {
     case "weekly":    next.setDate(next.getDate() + 7 * units); break;
     case "biweekly":  next.setDate(next.getDate() + 14 * units); break;
-    case "monthly":   next.setMonth(next.getMonth() + units); break;
-    case "quarterly": next.setMonth(next.getMonth() + 3 * units); break;
+    case "monthly":   return addMonthsClamped(next, units);
+    case "quarterly": return addMonthsClamped(next, 3 * units);
     case "yearly":    next.setFullYear(next.getFullYear() + units); break;
     case "once":      return next;
+    case "one-time":  return next;
   }
   return next;
 }

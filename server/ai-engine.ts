@@ -5685,10 +5685,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         return dupOb;
       }
 
+      // BUG-A: the validator accepts "one-time", but the obligation engine only
+      // branches on "once" (single occurrence, never advanced). Normalize here so
+      // a one-time bill gets exactly ONE calendar occurrence on its due date and
+      // never recurs into next year.
+      const normalizedFrequency = (input.frequency === "one-time") ? "once" : (input.frequency || "monthly");
+
       const newObligation = await storage.createObligation({
         name: input.name,
         amount: parseFloat(input.amount) || 0,
-        frequency: input.frequency || "monthly",
+        frequency: normalizedFrequency,
         category: input.category || "general",
         nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
         autopay: input.autopay ?? false,
@@ -5704,7 +5710,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Auto-create subscription profile if this looks like a subscription/service
       // and no matching profile already exists
       const isSubscriptionLike = (input.category === "subscription") ||
-        (input.frequency === "monthly" || input.frequency === "yearly" || input.frequency === "quarterly") ||
+        (normalizedFrequency === "monthly" || normalizedFrequency === "yearly" || normalizedFrequency === "quarterly") ||
         /subscription|premium|plus|pro|membership|plan/i.test(input.name || "");
       if (isSubscriptionLike) {
         const profiles = await storage.getProfiles();
