@@ -1447,6 +1447,19 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "create_reminder",
+    description: "Create a REAL reminder that fires an in-app notification at a specific date AND time. Use this (not create_task) whenever the user gives a clock time to be reminded ('remind me to call the dentist tomorrow at 3pm', 'remind Bob to take meds at 8am'). For undated to-dos with no clock time, use create_task instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "What to be reminded about (e.g. 'call the dentist')." },
+        fireAt: { type: "string", description: "When the reminder should fire, as a full ISO 8601 datetime (e.g. '2026-06-05T15:00:00'). Resolve relative phrasing like 'tomorrow at 3pm' to an absolute datetime." },
+        forProfile: { type: "string", description: "OPTIONAL: name of an EXISTING person/pet profile this reminder is for (e.g. 'Bob', 'Mom'). Omit for the user themselves." },
+      },
+      required: ["title", "fireAt"],
+    },
+  },
+  {
     name: "complete_task",
     description: "Mark a task as DONE/COMPLETE. Use this when user says 'I completed X', 'mark X as done', 'finished X task', 'checked off X', 'did X', 'I did the X task'. Find by title. NEVER use create_task when the user is referring to completing an EXISTING task. If task is not found, say so — do NOT create a new one.",
     input_schema: {
@@ -3489,6 +3502,14 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       }
       break;
     }
+    case "create_reminder": {
+      if (!normalized.title?.trim()) errors.push("Reminder title is required");
+      else normalized.title = normalized.title.trim();
+      const when = normalized.fireAt ? new Date(normalized.fireAt) : null;
+      if (!when || isNaN(when.getTime())) errors.push(`Invalid reminder time: ${normalized.fireAt}`);
+      else normalized.fireAt = when.toISOString();
+      break;
+    }
     case "create_event": {
       if (!normalized.title?.trim()) errors.push("Event title is required");
       else normalized.title = normalized.title.trim();
@@ -4137,6 +4158,52 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const profile = dpResult.match;
       await storage.deleteProfile(profile.id);
       return { deleted: true, name: profile.name, id: profile.id };
+    }
+
+    case "create_reminder": {
+      // BUG 3: real reminders. Resolve an optional forProfile name to a
+      // profileId, persist the reminder, and let the cron fire loop deliver it.
+      let reminderProfileId: string | undefined;
+      // Third-person fallback: "remind Bob to ..." should target Bob even if the
+      // model didn't populate forProfile. Parse the captured name (skip me/us).
+      let reminderNameHint = input.forProfile;
+      if (!reminderNameHint) {
+        const tp = String((input as any).__userMessage || "").match(/\bremind\s+(\w+)\s+(?:to\s+)?/i);
+        const nm = tp?.[1] || "";
+        if (nm && !/^(me|myself|us|i)$/i.test(nm)) reminderNameHint = nm;
+      }
+      const reminderForProfile = await resolveForProfile(reminderNameHint, input.title || "");
+      if (reminderForProfile) {
+        const profiles = await storage.getProfiles();
+        const matched = matchProfileByName(profiles, reminderForProfile);
+        if (matched) reminderProfileId = matched.id;
+      }
+      let reminder;
+      try {
+        reminder = await storage.createReminder({
+          title: input.title,
+          fireAt: input.fireAt,
+          profileId: reminderProfileId,
+        });
+      } catch (e: any) {
+        // The reminders table is provisioned by an additive migration. Until it
+        // lands, fail soft so chat stays usable instead of throwing a 500.
+        const missingTable = /reminders/i.test(String(e?.message || e)) && /(relation|table|exist)/i.test(String(e?.message || e));
+        if (missingTable) {
+          return { error: "Reminders aren't available yet — the reminders table hasn't been provisioned. Try again shortly." };
+        }
+        throw e;
+      }
+      const fireDate = new Date(reminder.fireAt);
+      const human = fireDate.toLocaleString("en-US", {
+        timeZone: "America/Los_Angeles",
+        weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+      });
+      return {
+        ...reminder,
+        message: `Reminder set for ${human}. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
+        actions: [{ type: "create", category: "reminder", data: reminder }],
+      };
     }
 
     case "create_task": {
@@ -8953,12 +9020,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // definitive sync disclaimer, not the reminder one.
     {
       const msgForDisclaimer = userMessage || "";
+      // BUG 3: a real reminder was persisted when allActions carries a reminder
+      // create. The create_reminder executor already returns the honest
+      // "Reminder set for ..." message, so we don't prepend anything here.
+      const reminderCreated = allActions.some(a => (a.category as string) === "reminder");
       if (/((google|apple|outlook|gcal|icloud)\s*calendar.*sync|sync.*(google|apple|outlook|gcal|icloud)\s*calendar|sync.*calendar)/i.test(msgForDisclaimer)) {
         finalReply = "Google/Apple/Outlook calendar sync isn't connected yet. Your Portol calendar still works internally.";
-      } else if (/(remind me|notify me|alert me|reminder)/i.test(msgForDisclaimer)) {
-        // BUG-C: reminders/push aren't wired up. Still proceed normally (the item
-        // lands on the calendar/dashboard), but say so up front.
-        finalReply = `Reminders aren't wired up yet — but I'll still add it to your calendar/dashboard so you'll see it.\n\n${finalReply}`;
+      } else if (!reminderCreated && /(remind\s+(?:me|him|her|them|\w+)|notify me|alert me|reminder)/i.test(msgForDisclaimer)) {
+        // The message asked for a reminder but none was persisted (e.g. no clock
+        // time, so it became a task). Be honest about in-app-only delivery.
+        finalReply = `I've added that to your calendar/dashboard so you'll see it. Heads up: timed push and email reminders aren't connected yet — only in-app notifications fire.\n\n${finalReply}`;
       }
     }
 

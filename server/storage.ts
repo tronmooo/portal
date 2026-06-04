@@ -30,6 +30,16 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
+export interface Reminder {
+  id: string;
+  title: string;
+  fireAt: string;
+  firedAt?: string | null;
+  profileId?: string | null;
+  channel: string;
+  createdAt: string;
+}
+
 export interface IStorage {
   // Profiles
   getProfiles(): Promise<Profile[]>;
@@ -183,6 +193,11 @@ export interface IStorage {
   updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean>;
   deleteBudget(month: string, budgetId: string): Promise<boolean>;
   copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number>;
+
+  // Reminders (real, fired by GET /api/cron/fire-due-reminders)
+  createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder>;
+  listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]>;
+  markReminderFired(id: string): Promise<boolean>;
 
   // Paychecks
   getPaychecks(): Promise<any[]>;
@@ -2064,6 +2079,35 @@ export class MemStorage implements IStorage {
     const copied = source.map(b => ({ ...b, id: crypto.randomUUID() }));
     this.budgetStore.set(toMonth, copied);
     return copied.length;
+  }
+
+  // Reminder stubs
+  private reminderStore: Reminder[] = [];
+  async createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder> {
+    const reminder: Reminder = {
+      id: crypto.randomUUID(),
+      title: data.title,
+      fireAt: data.fireAt,
+      firedAt: null,
+      profileId: data.profileId ?? null,
+      channel: "in_app",
+      createdAt: new Date().toISOString(),
+    };
+    this.reminderStore.push(reminder);
+    return reminder;
+  }
+  async listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]> {
+    return this.reminderStore.filter(r => {
+      if (r.firedAt) return false;
+      if (filter?.dueBefore && new Date(r.fireAt) > filter.dueBefore) return false;
+      return true;
+    });
+  }
+  async markReminderFired(id: string): Promise<boolean> {
+    const r = this.reminderStore.find(x => x.id === id);
+    if (!r) return false;
+    r.firedAt = new Date().toISOString();
+    return true;
   }
 
   // Paycheck stubs

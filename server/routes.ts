@@ -789,6 +789,66 @@ export async function registerRoutes(
   app.get("/api/cron/weekly-review", cronWeeklyReview);
   app.post("/api/cron/weekly-review", cronWeeklyReview);
 
+  // ---- Cron: fire due reminders (BUG 3) ----
+  // Vercel serverless has no always-on background, so a scheduled GET drives
+  // delivery. Gated by ?key= matching CRON_SECRET. For every user, find
+  // reminders whose fire_at has passed and that haven't fired, drop an in-app
+  // task marker, and stamp fired_at so they don't re-fire.
+  const cronFireDueReminders: any = asyncHandler(async (req: any, res: any) => {
+    const secret = process.env.CRON_SECRET;
+    const provided = String(req.query.key || "").trim();
+    if (!secret || !provided || !safeEqual(provided, secret)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      const { createClient } = await import("@supabase/supabase-js");
+      const url = process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) return res.status(500).json({ error: "Supabase admin env vars missing" });
+      const admin = createClient(url, key);
+      const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
+      if (listErr) throw listErr;
+      const users = usersList?.users || [];
+      const { createScopedStorage, requestStorageContext } = await import("./storage");
+
+      const now = new Date();
+      let fired = 0;
+      for (const u of users) {
+        try {
+          const scoped = createScopedStorage(u.id);
+          await new Promise<void>((resolve) => {
+            requestStorageContext.run(scoped, async () => {
+              try {
+                const due = await scoped.listReminders({ dueBefore: now });
+                for (const r of due) {
+                  // In-app marker: no notifications table exists, so surface the
+                  // fired reminder as a task the user will see on the dashboard.
+                  try {
+                    await scoped.createTask({
+                      title: `Reminder: ${r.title}`,
+                      priority: "high",
+                      tags: ["reminder"],
+                      linkedProfiles: r.profileId ? [r.profileId] : undefined,
+                      source: "reminder",
+                    } as any);
+                  } catch { /* marker is best-effort */ }
+                  await scoped.markReminderFired(r.id);
+                  fired++;
+                }
+              } catch { /* per-user failure shouldn't abort the run */ }
+              resolve();
+            });
+          });
+        } catch { /* skip user */ }
+      }
+      res.json({ fired });
+    } catch (err: any) {
+      log.error("[Cron Fire Reminders]", err?.message || err);
+      res.status(500).json({ error: "Cron failed" });
+    }
+  });
+  app.get("/api/cron/fire-due-reminders", cronFireDueReminders);
+
   // ---- Activity Feed ----
   app.get("/api/activity", asyncHandler(async (req, res) => {
     const actUserId = (req as AuthenticatedRequest).userId || undefined;

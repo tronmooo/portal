@@ -53,7 +53,7 @@ import {
   type OwnershipHistoryEntry,
   MOOD_SCORES,
 } from "@shared/schema";
-import { type IStorage, computeSecondaryData } from "./storage";
+import { type IStorage, type Reminder, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
@@ -4716,6 +4716,54 @@ export class SupabaseStorage implements IStorage {
     const newBudgets = source.map(b => ({ ...b, id: crypto.randomUUID() }));
     await this.setBudgets(toMonth, newBudgets);
     return newBudgets.length;
+  }
+
+  // ============================================================
+  // REMINDERS (fired by GET /api/cron/fire-due-reminders)
+  // ============================================================
+  // Service role bypasses RLS, so every query filters by user_id ourselves.
+  private mapReminder(row: any): Reminder {
+    return {
+      id: row.id,
+      title: row.title,
+      fireAt: row.fire_at,
+      firedAt: row.fired_at ?? null,
+      profileId: row.profile_id ?? null,
+      channel: row.channel || "in_app",
+      createdAt: row.created_at,
+    };
+  }
+
+  async createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder> {
+    const { data: row, error } = await this.supabase.from("reminders").insert({
+      user_id: this.userId,
+      profile_id: data.profileId || null,
+      title: data.title,
+      fire_at: data.fireAt,
+      channel: "in_app",
+    }).select().single();
+    if (error) throw error;
+    this.logActivity("reminder", `Set reminder: ${data.title}`);
+    return this.mapReminder(row);
+  }
+
+  async listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]> {
+    let q = this.supabase.from("reminders").select("*")
+      .eq("user_id", this.userId)
+      .is("fired_at", null)
+      .is("deleted_at", null);
+    if (filter?.dueBefore) q = q.lte("fire_at", filter.dueBefore.toISOString());
+    const { data, error } = await q.order("fire_at", { ascending: true });
+    if (error) throw error;
+    return (data || []).map(r => this.mapReminder(r));
+  }
+
+  async markReminderFired(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from("reminders")
+      .update({ fired_at: new Date().toISOString() })
+      .eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+    return true;
   }
 
   // ============================================================
