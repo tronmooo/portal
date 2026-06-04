@@ -4280,9 +4280,29 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Resolve forProfile FIRST so we can match the right tracker
       const profiles = await storage.getProfiles();
       let targetProfileId: string | undefined;
+      // BUG 2: when the user EXPLICITLY names a profile ("for Bob") we must not
+      // silently fall back to Self. If the named profile does not resolve, or no
+      // tracker matches the named tracker for any profile, refuse and ask.
+      const explicitProfile = !!(input.forProfile && String(input.forProfile).trim());
       if (input.forProfile) {
-        const match = profiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
+        const fpLC = String(input.forProfile).toLowerCase();
+        const match = profiles.find(p => p.name.toLowerCase() === fpLC)
+          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
         if (match) targetProfileId = match.id;
+        else if (explicitProfile) {
+          return { error: `I couldn't find a profile named '${input.forProfile}'. Which person/pet did you mean?` };
+        }
+      }
+      if (explicitProfile) {
+        const named = String(input.trackerName || "").toLowerCase();
+        const anyMatch = trackers.some(t => {
+          const tn = t.name.toLowerCase();
+          return tn === named || tn.includes(named) || named.includes(tn);
+        });
+        if (!anyMatch) {
+          const available = trackers.slice(0, 5).map(t => t.name).join(", ") || "none yet";
+          return { error: `I couldn't find a tracker named '${input.trackerName}' for any profile. Which tracker did you mean? Available: ${available}.` };
+        }
       }
       // If no forProfile specified, default to self
       if (!targetProfileId) {
