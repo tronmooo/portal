@@ -8,7 +8,7 @@
 
 CREATE TABLE IF NOT EXISTS reminders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   profile_id uuid REFERENCES profiles(id) ON DELETE SET NULL,
   title text NOT NULL,
   fire_at timestamptz NOT NULL,
