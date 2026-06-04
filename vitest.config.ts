@@ -13,6 +13,7 @@ export default defineConfig({
       'tests/scope.test.ts',
       'tests/ownership.test.ts',
       'tests/asset-rollup.test.ts',
+      'tests/asset-classification.test.ts',
       'tests/ai-parent-resolution.test.ts',
       'tests/dashboard-card-consistency.test.ts',
       'tests/auto-ownership-hook.test.ts',

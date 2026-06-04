@@ -25,6 +25,8 @@ import {
   parseMoney as _sharedParseMoney,
   resolveAssetValue as _sharedResolveAssetValue,
   resolveLiabilityBalance as _sharedResolveLiabilityBalance,
+  ASSET_PROFILE_TYPES,
+  LIABILITY_PROFILE_TYPES,
 } from "../shared/asset-value";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
@@ -4315,8 +4317,10 @@ export class SupabaseStorage implements IStorage {
     // so the Net Worth popup never recomputes its own per-row math. The popup
     // renders these arrays directly and the rows always sum to the total.
     // `subscription` is intentionally excluded from assetBreakdown.
-    const assetChildTypes = new Set(["vehicle", "asset", "investment", "property", "loan", "account"]);
-    const liabilityChildTypes = new Set(["liability", "loan", "vehicle", "property", "asset", "account", "investment"]);
+    // Source of truth: shared/asset-value.ts. Do NOT inline a local copy of
+    // these type sets — drift here silently desyncs dashboard net worth.
+    const assetChildTypes = ASSET_PROFILE_TYPES;
+    const liabilityChildTypes = LIABILITY_PROFILE_TYPES;
     const noFilterBreak = !fpIds || fpIds.length === 0;
     const shareForAsset = (p: any): number => {
       if (noFilterBreak) return 100;
@@ -4385,7 +4389,7 @@ export class SupabaseStorage implements IStorage {
           // BUG-NW-1 fix (2026-06-03): `subscription` removed — subscriptions are recurring expenses,
           // never balance-sheet items. They were leaking $cost into Net Worth via resolveAssetValue's
           // fields.cost candidate path.
-          const childTypes = new Set(["vehicle", "asset", "investment", "property", "loan", "account"]);
+          const childTypes = ASSET_PROFILE_TYPES;
           const noFilter = !fpIds || fpIds.length === 0;
           // Per filtered profile, what fraction of each asset's value belongs
           // to them? 0 → they don't own it at all. 100 → full credit.
@@ -4429,7 +4433,7 @@ export class SupabaseStorage implements IStorage {
         totalLiabilities: (() => {
           // 'liability' is the new canonical type (Phase 1+); 'loan' is the legacy
           // alias kept around for any rows that haven't been migrated yet.
-          const liabilityTypes = new Set(["liability", "loan", "vehicle", "property", "asset", "account", "investment"]);
+          const liabilityTypes = LIABILITY_PROFILE_TYPES;
           const noFilter = !fpIds || fpIds.length === 0;
           const shareFor = (p: any): number => {
             if (noFilter) return 100;
@@ -5406,8 +5410,10 @@ export class SupabaseStorage implements IStorage {
       liabLinksByParty.get(pid)!.set(lid, Number((l as any).ownershipPercentage ?? 100));
       liabCoOwnerTotalPct.set(lid, (liabCoOwnerTotalPct.get(lid) || 0) + Number((l as any).ownershipPercentage ?? 0));
     }
-    const assetChildTypes = new Set(["vehicle", "asset", "investment", "property", "loan", "account"]);
-    const liabilityChildTypes = new Set(["liability", "loan", "vehicle", "property", "asset", "account", "investment"]);
+    // Source of truth: shared/asset-value.ts. Do NOT inline a local copy of
+    // these type sets — drift here silently desyncs dashboard net worth.
+    const assetChildTypes = ASSET_PROFILE_TYPES;
+    const liabilityChildTypes = LIABILITY_PROFILE_TYPES;
     const shareFor = (p: any, byParty: Map<string, Map<string, number>>, coOwner: Map<string, number>): number => {
       if (p.id === profileId) return 100;
       const linkPct = byParty.get(profileId)?.get(p.id);
