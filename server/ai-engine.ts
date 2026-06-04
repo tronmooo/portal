@@ -1555,6 +1555,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         amount: { type: "number", description: "Monthly budget amount in dollars" },
         month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
         notes: { type: "string", description: "Optional notes about this budget" },
+        forProfile: { type: "string", description: "Profile name this budget belongs to (e.g. 'Bob', 'Mom'). Set when the user scopes the budget to a specific person, like 'set a $500 grocery budget for Bob'. Omit for the shared/household budget." },
       },
       required: ["category", "amount"],
     },
@@ -1573,11 +1574,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "get_budget_summary",
-    description: "Get the budget vs actual spending summary for a month. Shows all budget categories with budgeted amounts and actual spending.",
+    description: "Get the budget vs actual spending summary for a month. Shows all budget categories with budgeted amounts and actual spending. When the user asks about a specific person's budget (e.g. 'how much of Bob's grocery budget is left'), set forProfile so both the budget and the spending are scoped to that person.",
     input_schema: {
       type: "object" as const,
       properties: {
         month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
+        forProfile: { type: "string", description: "Profile name to scope the summary to (e.g. 'Bob'). When set, only that person's budgets and only that person's spending are counted. Omit for the shared/household summary." },
       },
       required: [],
     },
@@ -4629,8 +4631,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "get_budget_summary": {
       const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
-      const budgets = await storage.getBudgets(month);
-      const expenses = await storage.getExpenses();
+      // W4-3: scope BOTH the budget side and the spend side to a profile when the
+      // question is about a specific person ("how much of Bob's grocery budget is left").
+      // Resolve forProfile if the model set it; otherwise fall back to a server-side
+      // "for <name>" / "<name>'s" scan of the raw message so we never silently count
+      // everyone's spending against one person's budget.
+      let summaryProfileIds: string[] | undefined;
+      let scopeName: string | undefined = input.forProfile && String(input.forProfile).trim() ? String(input.forProfile).trim() : undefined;
+      if (!scopeName && input.__userMessage) {
+        const m = String(input.__userMessage).match(/(?:for\s+|\b)([A-Z][a-z]+)(?:'s|’s)\b/);
+        if (m) scopeName = m[1];
+      }
+      if (scopeName) {
+        const profiles = await storage.getProfiles();
+        const matched = matchProfileByName(profiles, scopeName);
+        if (matched) summaryProfileIds = [matched.id];
+      }
+      const budgets = await storage.getBudgets(month, summaryProfileIds);
+      const expenses = await storage.getExpenses(summaryProfileIds);
       const monthExpenses = expenses.filter(e => e.date?.startsWith(month));
       const byCategory: Record<string, number> = {};
       monthExpenses.forEach(e => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
