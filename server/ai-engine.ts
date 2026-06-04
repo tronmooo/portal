@@ -2695,6 +2695,31 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: ["forProfile"],
     },
   },
+  {
+    name: "convert_expense_to_asset",
+    description: "Convert a one-time expense into a tracked asset profile. Use when the user says something like 'that laptop I expensed is actually an asset', 'turn my $1200 camera purchase into an asset', or 'I bought a bike for $800, track it as an asset'. Looks up the expense by description, creates an asset profile with the expense amount as its purchase price and the expense date as its purchase date, then removes the original expense.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        expenseDescription: { type: "string", description: "Description of the expense to convert (partial match)." },
+        assetName: { type: "string", description: "Name for the new asset profile. Defaults to the expense description if omitted." },
+        assetType: { type: "string", enum: ["asset", "vehicle", "property"], description: "Asset profile type. Defaults to 'asset' (inferred from the name when possible)." },
+      },
+      required: ["expenseDescription"],
+    },
+  },
+  {
+    name: "refund_expense",
+    description: "Record a refund against a previously logged expense. Use when the user says 'I got refunded $40 for the shoes', 'return the headphones I bought', or 'refund the $120 hotel charge'. Creates a negative (credit) expense linked to the original via refundOf. If no amount is given, refunds the full original amount.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        expenseDescription: { type: "string", description: "Description of the original expense being refunded (partial match)." },
+        amount: { type: "number", description: "Refund amount (positive). Defaults to the full original expense amount if omitted." },
+      },
+      required: ["expenseDescription"],
+    },
+  },
 ];
 
 // ============================================================
@@ -2809,6 +2834,8 @@ BEHAVIOR:
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
   Wording like "$20/mo", "/month", "monthly", or "every month" ALWAYS means recurring: call create_obligation, never create_expense.
+- EXPENSE TO ASSET: When the user says a logged expense is really an asset ("that laptop I expensed is an asset", "track my $1200 camera as an asset"), call convert_expense_to_asset — it moves the purchase price and date onto a new asset profile and removes the duplicate expense. Do NOT call create_profile + delete_expense separately.
+- REFUNDS: When the user gets money back on a prior purchase ("I got refunded $40 for the shoes", "returned the headphones"), call refund_expense with the original expense description and the refund amount (omit amount for a full refund). Do NOT log a new positive expense for a refund.
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
 - PROFILE NAMING ACCURACY: Use EXACTLY the details the user provides. If the user says "2022 Tesla Model 3", the profile name and year field MUST say 2022, not 2023 or any other year. Never change, round, or guess details — use the user's exact words for names, years, models, and other specifics.
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
@@ -5477,6 +5504,58 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const expense = dResult.match;
       await storage.deleteExpense(expense.id);
       return { deleted: true, description: expense.description, id: expense.id };
+    }
+
+    case "convert_expense_to_asset": {
+      const expenses = await storage.getExpenses();
+      const cResult = safeMatchEntity(expenses, input.expenseDescription || "", e => e.description);
+      if (!cResult.match) return { error: cResult.error || "Expense not found", candidates: cResult.candidates };
+      const expense = cResult.match;
+      const assetName = String(input.assetName || expense.description || "").trim();
+      if (!assetName) return { error: "Could not determine a name for the asset." };
+      // Infer the asset type from the name when the caller didn't specify one.
+      let assetType = input.assetType;
+      if (!assetType) {
+        const lc = assetName.toLowerCase();
+        if (/(car|truck|suv|sedan|honda|toyota|ford|chevy|tesla|porsche|bmw|audi|nissan|hyundai|kia|jeep|civic|camry|accord|model\s?[xyz3])/i.test(lc)) assetType = "vehicle";
+        else if (/(home|house|condo|duplex|apartment|property|lot|street|avenue|drive|road|blvd|lane)/i.test(lc)) assetType = "property";
+        else assetType = "asset";
+      }
+      let asset;
+      try {
+        asset = await storage.createProfile({
+          name: assetName, type: assetType,
+          fields: { purchasePrice: expense.amount, purchaseDate: expense.date, convertedFromExpense: expense.id },
+          tags: [], notes: null,
+        } as any);
+      } catch (e: any) { return { error: `Could not create asset profile: ${e?.message || "unknown"}` }; }
+      await storage.deleteExpense(expense.id);
+      return {
+        result: { assetId: asset.id, assetName: asset.name, assetType, purchasePrice: expense.amount, purchaseDate: expense.date, removedExpenseId: expense.id },
+        actions: [{ type: "create", category: "profile", data: asset }],
+      };
+    }
+
+    case "refund_expense": {
+      const expenses = await storage.getExpenses();
+      const rResult = safeMatchEntity(expenses, input.expenseDescription || "", e => e.description);
+      if (!rResult.match) return { error: rResult.error || "Expense not found", candidates: rResult.candidates };
+      const expense = rResult.match;
+      const reqAmount = (typeof input.amount === "number" && isFinite(input.amount)) ? input.amount : Number(input.amount);
+      const refundAmount = (!reqAmount || reqAmount <= 0) ? expense.amount : Math.min(reqAmount, expense.amount);
+      // Storage rejects negative/zero amounts, so a refund reduces the original
+      // expense's net cost instead of inserting a negative-amount credit row.
+      const remaining = Math.round((expense.amount - refundAmount) * 100) / 100;
+      const refundTag = `refundOf:${expense.id}:${refundAmount}`;
+      if (remaining <= 0) {
+        await storage.deleteExpense(expense.id);
+        return { result: { refunded: refundAmount, fullRefund: true, expenseId: expense.id, description: expense.description } };
+      }
+      const updated = await storage.updateExpense(expense.id, {
+        amount: remaining,
+        tags: [...((expense as any).tags || []), refundTag],
+      } as any);
+      return { result: { refunded: refundAmount, fullRefund: false, newAmount: remaining, expenseId: expense.id, description: expense.description, updated: !!updated } };
     }
 
     case "create_event": {
