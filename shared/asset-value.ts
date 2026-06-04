@@ -141,7 +141,6 @@ export const ASSET_PROFILE_TYPES = new Set([
   "asset",
   "investment",
   "property",
-  "subscription",
   "loan",
   "account",
 ]);
