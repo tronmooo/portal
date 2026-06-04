@@ -5691,12 +5691,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // never recurs into next year.
       const normalizedFrequency = (input.frequency === "one-time") ? "once" : (input.frequency || "monthly");
 
+      // BUG-H: when the user gives a recurring subscription/bill with no explicit
+      // due date ("Spotify $11/month"), infer the recurring day-of-month from
+      // today and compute the NEXT occurrence one period out. Previously we just
+      // defaulted to today+30d, which produces an arbitrary mid-month date that
+      // drifts away from the real billing day.
+      let inferredDueDate: string | undefined;
+      let dueDateInferenceNote: string | undefined;
+      if (!input.nextDueDate && (normalizedFrequency === "monthly" || normalizedFrequency === "yearly" || normalizedFrequency === "quarterly")) {
+        const today = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+        const dueDay = today.getDate();
+        const periodMonths = normalizedFrequency === "monthly" ? 1 : normalizedFrequency === "quarterly" ? 3 : 12;
+        const ty = today.getFullYear();
+        const tm = today.getMonth();
+        const lastDay = new Date(ty, tm + periodMonths + 1, 0).getDate();
+        const next = new Date(ty, tm + periodMonths, Math.min(dueDay, lastDay));
+        inferredDueDate = next.toLocaleDateString("en-CA");
+        const ordinal = dueDay + (["th","st","nd","rd"][(dueDay % 100 - 20) % 10] || ["th","st","nd","rd"][dueDay] || "th");
+        dueDateInferenceNote = `Set to recur on the ${ordinal} — let me know if you want a different day.`;
+      }
+
       const newObligation = await storage.createObligation({
         name: input.name,
         amount: parseFloat(input.amount) || 0,
         frequency: normalizedFrequency,
         category: input.category || "general",
-        nextDueDate: input.nextDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        nextDueDate: input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
         autopay: input.autopay ?? false,
         // Seed linkedProfiles so Supabase storage doesn't auto-prepend Self
         ...(preResolvedTargetProfileId ? { linkedProfiles: [preResolvedTargetProfileId] } as any : {}),
@@ -5772,6 +5792,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
       }
 
+      if (dueDateInferenceNote) {
+        (newObligation as any)._dueDateNote = dueDateInferenceNote;
+      }
       return newObligation;
     }
 
