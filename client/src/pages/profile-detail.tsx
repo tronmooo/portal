@@ -1782,11 +1782,20 @@ function flattenProfileFields(rawFields: any): any {
     serviceAddress: "address",
   };
   const out: any = {};
+  // Case-insensitive presence tracking so "Weight" and "weight" don't both end
+  // up as separate rows. First write wins; matches storage's schema (lowercase).
+  const seenLC: Record<string, string> = {}; // lowercased key -> canonical key already in out
   const setIfEmpty = (key: string, val: any) => {
     if (val === undefined || val === null || val === "") return;
-    if (out[key] === undefined || out[key] === null || out[key] === "") {
-      out[key] = val;
+    const lc = key.toLowerCase();
+    const existingKey = seenLC[lc];
+    if (existingKey !== undefined) {
+      const cur = out[existingKey];
+      if (cur === undefined || cur === null || cur === "") out[existingKey] = val;
+      return;
     }
+    out[key] = val;
+    seenLC[lc] = key;
   };
   // First, copy nested-group keys up
   for (const group of NESTED_GROUPS) {
@@ -1808,8 +1817,18 @@ function flattenProfileFields(rawFields: any): any {
       out[k] = v;
       continue;
     }
-    if (v !== undefined && v !== null && v !== "") {
+    if (v === undefined || v === null || v === "") continue;
+    const lc = k.toLowerCase();
+    const existingKey = seenLC[lc];
+    if (existingKey !== undefined && existingKey !== k) {
+      // Top-level wins over a nested-promoted duplicate — replace under the
+      // top-level key and drop the previously-promoted alias row.
+      delete out[existingKey];
       out[k] = v;
+      seenLC[lc] = k;
+    } else {
+      out[k] = v;
+      seenLC[lc] = k;
     }
   }
   // Liability fallback: if no top-level balance but finance.loans[] has one, sum them

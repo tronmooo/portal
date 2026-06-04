@@ -803,6 +803,12 @@ export class SupabaseStorage implements IStorage {
       journalRows, habitsRes,
     ] = await Promise.all([
       this.getProfiles(),
+      // FIX: linked_profiles is jsonb on these 6 tables. supabase-js .contains()
+      // serializes the JS array as PostgREST `cs.{uuid}` array syntax, which is
+      // invalid for jsonb columns (returns 22P02 "invalid input syntax for type
+      // json"). The error was swallowed by `.then(r => r.data || [])`, so every
+      // profile detail page showed 0 linked items. Use raw `.filter('cs', '[uuid]')`
+      // with explicit JSON array syntax instead.
       this.supabase.from("trackers").select("*")
         .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
@@ -822,6 +828,7 @@ export class SupabaseStorage implements IStorage {
       this.supabase.from("obligations").select("*")
         .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
+      // journal_entries.linked_profiles is text[] (ARRAY) — .contains() works fine here.
       this.supabase.from("journal_entries")
         .select("*")
         .eq("user_id", this.userId)

@@ -974,6 +974,8 @@ EXTRACTION RULES:
 - trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, balance, etc.) — only if actually printed.
 - Dates: prefer YYYY-MM-DD, otherwise copy them exactly as printed.
 
+For pet vaccination / preventive care records: in extractedData, output one key per upcoming due date using the pattern "<vaccineName>Due" in camelCase with ISO YYYY-MM-DD value. Examples: "rabiesDue":"2029-06-04", "dappDue":"2029-06-04", "bordetellaDue":"2027-06-04", "fecalDue":"2026-12-16", "heartwormTestDue":"...", "leptospirosisDue":"...". Also include "petName", "species", "breed", "dateOfVisit", "weight" (numeric pounds), "providerName" (hospital), "facilityAddress" when present. Every preventive-care row in the document MUST appear as its own "<name>Due" key — never lump them into one field.
+
 ${userMessage ? `User said: "${userMessage}"` : ""}
 
 Return only what you actually read. When in doubt, leave it out.`;
@@ -1090,6 +1092,82 @@ Return ONLY the JSON array, nothing else.`;
         }
       } catch (e) {
         console.error('[extraction] Second-pass lab extraction failed:', e);
+      }
+    }
+
+    // === TWO-PASS PET VACCINATION / PREVENTIVE-CARE EXTRACTION ===
+    // For pet medical / vaccination records, ensure every future due date is captured
+    // as its own *Due key so the pending-extraction UI surfaces a calendar suggestion per row.
+    const isPetVaccineType =
+      /vaccin|pet_record|examination|preventive|banfield|vca|bluepearl|veterin/i.test(parsed.documentType || "") ||
+      /vaccin|pet|veterin|banfield|preventive|exam(ination)? report/i.test(parsed.label || "");
+    if (isPetVaccineType) {
+      const existingDueKeys = Object.keys(parsed.extractedData || {}).filter(k => /due$/i.test(k));
+      if (existingDueKeys.length < 2) {
+        console.log(`[extraction] Pet vaccine doc detected (${parsed.documentType}/${parsed.label}); only ${existingDueKeys.length} *Due keys present. Running focused second pass...`);
+        try {
+          const vaccinePrompt = `This is a pet veterinary record (vaccination, preventive care, or exam report).
+
+Your ONLY job is to extract every UPCOMING due date for vaccines, parasite prevention, fecal exams, dental cleanings, and any other preventive care item.
+
+Return ONLY a JSON object. Keys MUST follow the pattern "<itemName>Due" in camelCase. Values MUST be ISO YYYY-MM-DD strings.
+
+Examples of correct keys (only include those actually present in the document):
+  rabiesDue, dappDue, bordetellaDue, leptospirosisDue, lymeDue, influenzaDue, fecalDue, heartwormTestDue, dentalDue, examDue, fvrcpDue, felvDue
+
+Rules:
+- Read EVERY row of the "Preventive Care", "Vaccinations", "Next Due", or similar tables.
+- Only include items with a future or explicit calendar due date printed on the document.
+- Use the exact dates printed; convert MM/DD/YYYY to YYYY-MM-DD.
+- If a vaccine name has multiple components (e.g., "DAPP", "DA2PP", "DHPP"), keep the printed name lowercased + "Due".
+- Return {} if none are present.
+
+Return ONLY the JSON object, nothing else.`;
+
+          const vaccineResponse = await getClient().messages.create({
+            model: process.env.ANTHROPIC_EXTRACTION_MODEL || "claude-sonnet-4-6",
+            max_tokens: 1024,
+            messages: [{
+              role: "user",
+              content: [
+                ...messageContent,
+                { type: "text", text: vaccinePrompt },
+              ],
+            }],
+          });
+
+          const vText = vaccineResponse.content[0].type === "text" ? vaccineResponse.content[0].text : "{}";
+          try {
+            const objMatch = vText.match(/\{[\s\S]*\}/);
+            const dueObj = objMatch ? JSON.parse(objMatch[0]) : {};
+            if (dueObj && typeof dueObj === "object" && !Array.isArray(dueObj)) {
+              let added = 0;
+              parsed.extractedData = parsed.extractedData || {};
+              for (const [k, v] of Object.entries(dueObj)) {
+                if (!k || !v) continue;
+                if (!/due$/i.test(k)) continue;
+                const sv = String(v).trim();
+                // Accept only ISO-like dates
+                if (!/^\d{4}-\d{2}-\d{2}/.test(sv)) continue;
+                if (parsed.extractedData[k] == null) {
+                  parsed.extractedData[k] = sv;
+                  added++;
+                }
+              }
+              if (added > 0) {
+                console.log(`[extraction] Pet-vaccine second pass added ${added} *Due keys`);
+                // Force documentType to vaccination_record so downstream code (icons, links) is correct
+                if (!/vaccin|pet_record/i.test(parsed.documentType || "")) {
+                  parsed.documentType = "vaccination_record";
+                }
+              }
+            }
+          } catch (e) {
+            console.error('[extraction] Failed to parse pet-vaccine second pass:', e);
+          }
+        } catch (e) {
+          console.error('[extraction] Pet-vaccine second-pass extraction failed:', e);
+        }
       }
     }
 
@@ -3194,6 +3272,14 @@ NEVER ask clarifying questions for CRUD operations. Just execute. If it fails, r
 ━━━ TRACKER CRUD ━━━
 - create tracker: create_tracker(name, category, fields, forProfile?)
 - log entry: log_tracker_entry(trackerName, values, forProfile?, at?). When the user names a specific date the entry happened ("log weight 185 on June 3 2025", "I ran 5k yesterday"), pass that date in the at field (ISO or natural language). Backdating IS supported — never tell the user it is not. Omit at for "now".
+
+WEIGHT / MEASURABLE READING RULE — CRITICAL:
+When the user states a numeric measurement about a person OR pet ("Rex weighs 51 pounds", "Bob's BP is 130/85", "Max slept 8 hours", "I weighed 184 today"), this is a TRACKER ENTRY, not a profile field.
+- ALWAYS call log_tracker_entry(trackerName:"Weight" (or appropriate metric), values:{weight:51}, forProfile:"Rex").
+- NEVER write the value into profile.fields via update_profile — profile fields are static identity (breed, microchip, species). Weight and other measurements change over time and belong in trackers.
+- The Tracker context block lists all existing trackers per profile. Scan it FIRST. If a Weight tracker already exists for the named person/pet, log to it. If none exists, log_tracker_entry will auto-create one — do not bail to update_profile.
+- NEVER say "no weight tracker exists for X" without first scanning the Trackers context block.
+- NEVER claim "updated X's profile to N lbs" — the correct success message is "Logged weight: N lbs for X".
 - update most recent entry: update_tracker_entry(trackerName, values, forProfile?, entryIndex?)
 - delete most recent entry: delete_tracker_entry(trackerName, forProfile?, entryIndex?)
 - rename/update tracker: update_tracker(trackerName, changes)
@@ -4394,6 +4480,28 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const previousNotes = input.changes.notes !== undefined ? (profile.notes ?? null) : undefined;
       const previousTags = input.changes.tags !== undefined ? (profile.tags || []) : undefined;
       const previousType = input.changes.type !== undefined ? profile.type : undefined;
+
+      // GUARDRAIL: weight (and other time-series measurements) belong in a
+      // tracker, NOT on the profile row. If the AI tried to stuff a weight-like
+      // value into profile.fields on a person/pet, reject with instructions to
+      // call log_tracker_entry instead. Profile fields are static identity
+      // (breed, microchip, species); trackers hold values that change over time.
+      // The fix prevents the AI from writing "Weight: 51 lbs" onto Rex's row
+      // (which lies to the UI cache and never logs history).
+      const isPersonLike = profile.type === "self" || profile.type === "person" || profile.type === "pet";
+      if (isPersonLike && input.changes.fields) {
+        const measurementKeys = ["weight", "bp", "bloodpressure", "systolic", "diastolic", "glucose", "bloodglucose", "heartrate", "pulse", "sleep", "sleephours", "temperature", "bodytemperature", "steps", "distance"];
+        const offenders: string[] = [];
+        for (const k of Object.keys(input.changes.fields)) {
+          const lk = k.toLowerCase().replace(/[\s_-]/g, "");
+          if (measurementKeys.includes(lk)) offenders.push(k);
+        }
+        if (offenders.length > 0) {
+          return {
+            error: `"${offenders.join(", ")}" is a time-series measurement — don't write it to ${profile.name}'s profile fields. Use log_tracker_entry(trackerName:"${offenders[0]}", values:{${offenders[0].toLowerCase()}:<value>}, forProfile:"${profile.name}") instead. Tracker history is the source of truth for measurements.`,
+          };
+        }
+      }
 
       const changes: any = {};
       if (updateFlatFields) changes.fields = { ...profile.fields, ...updateFlatFields };

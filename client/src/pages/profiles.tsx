@@ -1042,19 +1042,28 @@ const prettyFieldLabel = (key: string): string => {
 // into top-level entries so the card never shows "pets: breed: ...".
 const flattenProfileFields = (fields: Record<string, any>): Array<[string, any]> => {
   const out: Array<[string, any]> = [];
+  const seen = new Set<string>();
+  // Promote top-level primitives first so they win over nested duplicates.
   for (const [k, v] of Object.entries(fields || {})) {
     if (v === null || v === undefined || v === "") continue;
-    if (typeof v === "object" && !Array.isArray(v)) {
-      // Promote each inner primitive entry one level up
-      const innerEntries = Object.entries(v).filter(([_, iv]) => iv !== null && iv !== undefined && iv !== "");
-      if (innerEntries.length === 0) continue;
-      // If the inner value is primitive-ish, keep its own key. Group key becomes section context only.
-      for (const [ik, iv] of innerEntries) {
-        if (typeof iv === "object") continue; // skip deeper nesting
-        out.push([ik, iv]);
-      }
-    } else {
-      out.push([k, v]);
+    if (typeof v === "object" && !Array.isArray(v)) continue;
+    const key = k.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push([k, v]);
+  }
+  // Then promote nested primitives, skipping any key already present at top level.
+  // This prevents duplicate rows like "pets.breed: Husky" + "breed: Husky".
+  for (const [k, v] of Object.entries(fields || {})) {
+    if (v === null || v === undefined || v === "") continue;
+    if (typeof v !== "object" || Array.isArray(v)) continue;
+    const innerEntries = Object.entries(v).filter(([_, iv]) => iv !== null && iv !== undefined && iv !== "");
+    for (const [ik, iv] of innerEntries) {
+      if (typeof iv === "object") continue;
+      const key = ik.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push([ik, iv]);
     }
   }
   return out;
