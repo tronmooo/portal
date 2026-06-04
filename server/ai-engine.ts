@@ -4670,6 +4670,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         else input.subtype = "other";
       }
       // Resolve parent (forProfile)
+      const forProfileProvided = !!(input.forProfile && String(input.forProfile).trim());
       let parentProfileId: string | undefined;
       if (input.forProfile) {
         const fp = String(input.forProfile).toLowerCase().trim();
@@ -4924,6 +4925,42 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               role: "collateral",
             } as any);
           } catch (e: any) { logger.warn("ai", `auto link asset failed: ${e?.message}`); }
+          // Liability inherits ownership from linked asset when forProfile is unspecified — keeps NW math consistent (W4-1).
+          if (!forProfileProvided) {
+            try {
+              const assetOwners = await storage.getAssetPartyLinks(asset.id).catch(() => [] as any[]);
+              const owners = (assetOwners || []).filter((l: any) => l.partyProfileId);
+              if (owners.length > 0) {
+                // Re-point the liability's parent to the asset's primary owner so
+                // single-owner net worth nets the debt against the right person.
+                const primary = owners.slice().sort((a: any, b: any) => Number(b.ownershipPercentage ?? 0) - Number(a.ownershipPercentage ?? 0))[0];
+                if (primary?.partyProfileId && asset.parentProfileId && asset.parentProfileId !== liability.parentProfileId) {
+                  await storage.updateProfile(liability.id, { parentProfileId: asset.parentProfileId } as any).catch(() => {});
+                }
+                // Copy the asset's exact owner shares onto the liability (multi-owner).
+                const ownerIds = new Set(owners.map((o: any) => o.partyProfileId));
+                const existingLiabLinks = await storage.getLiabilityProfileLinks(liability.id).catch(() => [] as any[]);
+                // Drop the auto-created default owner link (e.g. Self) so the SUM-100
+                // ownership trigger does not split the debt across the wrong people.
+                for (const l of existingLiabLinks || []) {
+                  if (l.partyProfileId && !ownerIds.has(l.partyProfileId)) {
+                    await storage.deleteLiabilityProfileLink(l.id).catch((e: any) => logger.warn("ai", `drop stale owner link failed: ${e?.message}`));
+                  }
+                }
+                for (const o of owners) {
+                  const dup = (existingLiabLinks || []).some((l: any) => l.partyProfileId === o.partyProfileId);
+                  if (dup) continue;
+                  await storage.createLiabilityProfileLink({
+                    liabilityProfileId: liability.id,
+                    partyProfileId: o.partyProfileId,
+                    ownershipPercentage: o.ownershipPercentage ?? 100,
+                    role: "owner",
+                  } as any).catch((e: any) => logger.warn("ai", `inherit owner link failed: ${e?.message}`));
+                }
+                logger.info("ai", `liability ${liability.id} inherited ${owners.length} owner(s) from asset ${asset.id} (W4-1)`);
+              }
+            } catch (e: any) { logger.warn("ai", `W4-1 ownership inherit failed: ${e?.message}`); }
+          }
         }
       }
       // Stash suggestedAssetLink on the liability response so the AI sees it
