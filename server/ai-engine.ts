@@ -3547,6 +3547,14 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
     case "create_profile": {
       if (!normalized.name?.trim()) errors.push("Profile name is required");
       else normalized.name = normalized.name.trim();
+      // BUG 5 alias: "home"/"house"/"real_estate" are common synonyms the model
+      // emits for real property. Canonical profile type is "property".
+      if (normalized.type && ["home", "house", "real_estate", "realestate"].includes(String(normalized.type).toLowerCase())) {
+        normalized.type = "property";
+      }
+      if (normalized.subtype && ["home", "house", "real_estate", "realestate"].includes(String(normalized.subtype).toLowerCase())) {
+        normalized.subtype = "property";
+      }
       const validTypes = ["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "investment", "property", "account", "insurance", "medical"];
       if (normalized.type && !validTypes.includes(normalized.type)) {
         warnings.push(`Type "${normalized.type}" is not standard — defaulting to "person"`);
