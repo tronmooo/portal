@@ -3518,12 +3518,16 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       const amt2 = Number(normalized.amount);
       if (!amt2 || amt2 <= 0) errors.push(`Invalid amount: ${normalized.amount}`);
       else normalized.amount = Math.round(amt2 * 100) / 100;
-      const validFreqs2 = ["monthly", "yearly", "weekly", "biweekly", "quarterly", "one-time"];
+      const validFreqs2 = ["monthly", "yearly", "weekly", "biweekly", "quarterly", "once", "one-time"];
       if (normalized.frequency && !validFreqs2.includes(normalized.frequency)) {
         warnings.push(`Frequency "${normalized.frequency}" — defaulting to "monthly"`);
         normalized.frequency = "monthly";
       }
       if (!normalized.frequency) normalized.frequency = "monthly";
+      // Normalize legacy "one-time" alias to canonical "once" before the executor
+      // sees it, so the obligation engine's single-occurrence branch fires and the
+      // materialize loop never spins up duplicate dates.
+      if (normalized.frequency === "one-time") normalized.frequency = "once";
       break;
     }
     case "log_tracker_entry": {
