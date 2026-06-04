@@ -3462,9 +3462,13 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
     case "create_event": {
       if (!normalized.title?.trim()) errors.push("Event title is required");
       else normalized.title = normalized.title.trim();
-      if (!normalized.date) errors.push("Event date is required");
-      else if (!/^\d{4}-\d{2}-\d{2}/.test(normalized.date)) {
-        errors.push(`Event date "${normalized.date}" is not valid YYYY-MM-DD format`);
+      // BUG-F: an event with no date is meaningless. Accept either `date` or
+      // `startDate`; require one of them to be a non-empty string.
+      const evDate = normalized.date || normalized.startDate;
+      if (!evDate || !String(evDate).trim()) {
+        errors.push("Date is required (e.g. 'June 12 at 2pm' or 'tomorrow')");
+      } else if (!/^\d{4}-\d{2}-\d{2}/.test(String(evDate))) {
+        errors.push(`Event date "${evDate}" is not valid YYYY-MM-DD format`);
       }
       break;
     }
@@ -8829,6 +8833,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       }
     } catch (e: any) {
       logger.warn("ai", `[hallucination-guard] Unexpected error: ${e?.message || e}`);
+    }
+
+    // BUG-M false-success guard: the model sometimes replies "Done."/"Created."
+    // without ever calling a tool, so nothing actually happened. If the final
+    // reply claims success but this turn ran zero tool calls AND produced zero
+    // actions (the hallucination-guard above may have recovered a create), be
+    // honest instead of silently lying to the user.
+    if (totalToolCalls === 0 && allActions.length === 0 &&
+        /\b(done|added|created|set up|set it up|scheduled|saved|noted|all set)\b/i.test(finalReply || "")) {
+      logger.warn("ai", `[false-success-guard] reply claimed success with zero tool calls — rewriting. msg="${(userMessage || "").slice(0, 80)}"`);
+      finalReply = "I described what I would do but didn't actually execute a tool call. Can you rephrase or be more specific?";
     }
 
     // If artifact found, persist it to chat_artifacts table.
