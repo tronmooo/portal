@@ -682,7 +682,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   async getProfiles(): Promise<Profile[]> {
     return this.memo("getProfiles", async () => {
-      const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId);
+      const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).is("deleted_at", null);
       if (error) throw error;
       return (data || []).map(r => this.rowToProfile(r));
     });
@@ -699,7 +699,8 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await this.supabase
       .from("profiles")
       .select("id, type, type_key, name, avatar, parent_profile_id, linked_obligation_id, created_at, updated_at")
-      .eq("user_id", this.userId);
+      .eq("user_id", this.userId)
+      .is("deleted_at", null);
     if (error) throw error;
     return (data || []).map((r: any): Profile => ({
       id: r.id,
@@ -723,7 +724,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getProfile(id: string): Promise<Profile | undefined> {
-    const { data, error } = await this.supabase.from("profiles").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("profiles").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToProfile(data);
   }
@@ -1362,7 +1363,7 @@ export class SupabaseStorage implements IStorage {
 
     // Build the set of valid profile ids once.
     const { data: profileRows } = await this.supabase
-      .from("profiles").select("id").eq("user_id", this.userId);
+      .from("profiles").select("id").eq("user_id", this.userId).is("deleted_at", null);
     const validIds = new Set<string>((profileRows || []).map((r: any) => r.id));
 
     let totalDisagree = 0;
@@ -1393,7 +1394,8 @@ export class SupabaseStorage implements IStorage {
     const { data: financeProfiles } = await this.supabase
       .from("profiles")
       .select("id, type, type_key, fields")
-      .eq("user_id", this.userId);
+      .eq("user_id", this.userId)
+      .is("deleted_at", null);
     const assetIds: string[] = [];
     const liaIds: string[] = [];
     const isAsset = (p: any) => ["asset", "vehicle", "property", "investment"].includes(p.type)
@@ -1624,7 +1626,7 @@ export class SupabaseStorage implements IStorage {
 
   // Get the "self" profile (type="self") for this user — used for auto-linking
   async getSelfProfile(): Promise<Profile | undefined> {
-    const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).eq("type", "self").limit(1).single();
+    const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).eq("type", "self").is("deleted_at", null).limit(1).single();
     if (error || !data) return undefined;
     return this.rowToProfile(data);
   }
