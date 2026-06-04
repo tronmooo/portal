@@ -2431,7 +2431,24 @@ export default function ChatPage() {
 
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
-        <div className={`max-w-2xl mx-auto space-y-4 ${messages.length <= 1 ? 'min-h-[40vh] flex flex-col justify-end' : ''}`}>
+        <div className={`max-w-2xl mx-auto space-y-4 ${messages.length <= 1 ? 'min-h-[72vh] flex flex-col justify-end' : ''}`}>
+
+          {/* Empty-state brand hero — fills the space above the welcome bubble
+              with the Portol logo centred in the middle of the chat page. */}
+          {messages.length <= 1 && !searchOpen && (
+            <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 py-6" data-testid="chat-brand-hero">
+              <img
+                src="/portol-logo-clean.png"
+                alt="Portol"
+                className="w-24 h-24 sm:w-28 sm:h-28 object-contain"
+                style={{ filter: 'drop-shadow(0 0 24px rgba(0,200,220,0.45))' }}
+              />
+              <div>
+                <p className="text-xl font-bold tracking-tight text-foreground">Portol</p>
+                <p className="text-sm text-muted-foreground">Your AI-powered life command center</p>
+              </div>
+            </div>
+          )}
 
           {/* Search bar */}
           {searchOpen && (
