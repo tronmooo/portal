@@ -2807,6 +2807,7 @@ BEHAVIOR:
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
+  Wording like "$20/mo", "/month", "monthly", or "every month" ALWAYS means recurring: call create_obligation, never create_expense.
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
 - PROFILE NAMING ACCURACY: Use EXACTLY the details the user provides. If the user says "2022 Tesla Model 3", the profile name and year field MUST say 2022, not 2023 or any other year. Never change, round, or guess details — use the user's exact words for names, years, models, and other specifics.
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
@@ -5333,6 +5334,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "create_expense": {
       logger.info("ai", `create_expense input: desc="${input.description}" forProfile="${input.forProfile}" amount=${input.amount}`);
+      // BUG-J: a one-shot expense is the wrong home for a recurring charge. If the
+      // user's phrasing signals recurrence ("$20/mo for parking", "monthly"), bounce
+      // back and tell the model to use create_obligation instead.
+      const expMsg = String((input as any).__userMessage || "");
+      if (/(per month|per year|\/mo\b|\/yr\b|monthly|yearly|every month|each month|every year|\$\d+\s*\/\s*m\b)/i.test(expMsg)) {
+        return { error: "This sounds recurring — use create_obligation instead, or rephrase as a one-time spend." };
+      }
       // Validate amount — reject invalid/zero amounts instead of silently logging $0
       const parsedAmount = typeof input.amount === 'number' && isFinite(input.amount) ? input.amount : parseFloat(input.amount);
       if (!parsedAmount || parsedAmount <= 0) {
