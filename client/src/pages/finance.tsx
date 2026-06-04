@@ -19,7 +19,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2 } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -603,6 +603,20 @@ export default function FinancePage() {
   const chartData = useMemo(() => Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name)), [byCategory]);
   const categories = useMemo(() => [...new Set(profileFiltered.map(e => e.category))].sort((a, b) => a.localeCompare(b)), [profileFiltered]);
 
+  // BUG-G: Subscriptions section. Subscription profiles (type==="subscription")
+  // are owned by a person via parentProfileId. Respect the active profile filter:
+  // show all when "everyone", otherwise only subs whose parent is selected (or
+  // the sub itself is directly selected). Exclude soft-deleted rows.
+  const subscriptions = useMemo(() => {
+    const selected = filterMode === "everyone" ? null : new Set(filterIds);
+    return (profiles || []).filter((p: any) => {
+      if (p.type !== "subscription") return false;
+      if (p.deletedAt || p.deleted_at) return false;
+      if (!selected) return true;
+      return selected.has(p.id) || (p.parentProfileId && selected.has(p.parentProfileId));
+    });
+  }, [profiles, filterMode, filterIds]);
+
   // Group loans by loan_name
   const loanGroups = useMemo(() => loanSchedules.reduce((acc: Record<string, any[]>, entry: any) => {
     const name = entry.loan_name || "Unknown";
@@ -921,6 +935,40 @@ export default function FinancePage() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {subscriptions.length > 0 && (
+        <Card data-testid="subscriptions-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold">Subscriptions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="divide-y divide-border">
+              {subscriptions.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((sub: any) => {
+                const cost = Number(sub.fields?.cost ?? sub.fields?.amount ?? 0);
+                const freq = sub.fields?.frequency || "monthly";
+                const parent = (profiles || []).find((p: any) => p.id === sub.parentProfileId);
+                return (
+                  <Link key={sub.id} href={`/profiles/${sub.id}`}>
+                    <div className="flex items-center gap-3 py-3 cursor-pointer hover:bg-muted/40 rounded-md px-1" data-testid={`subscription-${sub.id}`}>
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <Repeat className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">{sub.name}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <Badge variant="secondary" className="text-xs capitalize">{freq}</Badge>
+                          {parent && <span className="text-xs text-muted-foreground truncate">{parent.name}</span>}
+                        </div>
+                      </div>
+                      {cost > 0 && <span className="text-sm font-semibold tabular-nums shrink-0">${cost.toFixed(2)}</span>}
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
