@@ -888,10 +888,14 @@ Return only what you actually read. When in doubt, leave it out.`;
       }
     }
 
-    // Keep backward-compatible by using the old structure for images
+    // Extended thinking ON — this is what the Claude app does and is the single
+    // biggest lever for spatially-tricky documents (e.g. a 2-column "due in the
+    // future" table). The model reasons about which date lines up with which row
+    // before answering, instead of pattern-matching dates onto blank rows.
     const response = await getClient().messages.create({
       model: "claude-sonnet-4-6", // Sonnet 4.6 — same model family as Claude app, best vision accuracy
-      max_tokens: 4096,
+      max_tokens: 8000,
+      thinking: { type: "enabled", budget_tokens: 3000 },
       messages: [{
         role: "user",
         content: [
@@ -901,7 +905,8 @@ Return only what you actually read. When in doubt, leave it out.`;
       }],
     });
 
-    const text = response.content[0].type === "text" ? response.content[0].text : "{}";
+    // With thinking enabled the first block is a thinking block — pick the text block.
+    const text = (response.content.find((b: any) => b.type === "text") as any)?.text ?? "{}";
     console.log(`[extraction] Claude response (first 500 chars): ${text.slice(0, 500)}`);
     let parsed: any;
     try {
@@ -1161,6 +1166,53 @@ Return ONLY the JSON array, nothing else.`;
         if (isPlaceholderValue((flat as any)[k])) delete (flat as any)[k];
       }
       parsed.extractedData = flat;
+
+      // === DATE VERIFICATION PASS ===
+      // For multi-date documents (the hard case: a 2-column "due in the future"
+      // table), send the image back with the dates we extracted and make the
+      // model confirm each is actually printed on that item's row. This is what
+      // catches hallucinated dates smeared onto blank rows — the exact failure on
+      // the Banfield exam report. Best-effort: any failure keeps all dates.
+      const dateEntries = Object.entries(flat)
+        .filter(([, v]) => containsDate(v))
+        .map(([k, v]) => ({
+          key: k,
+          label: k.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/\s+/g, ' ').trim(),
+          date: normalizeDateString(v) || String(v),
+        }));
+      if (dateEntries.length >= 2) {
+        try {
+          const verifyList = dateEntries.map((e, i) => `${i + 1}. id="${e.key}" — "${e.label}" = ${e.date}`).join('\n');
+          const verifyPrompt = `Look at the SAME document image again. From it I extracted these dated items:
+
+${verifyList}
+
+For EACH item, check the document carefully: is that exact date actually printed on that item's OWN row? Many rows are intentionally blank (shown as "—" or nothing) and MUST be rejected. Reject any date that was borrowed from a different row, or copied from the document's header/exam/print date. Keep a date only if you can see it printed next to that specific item.
+
+Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely printed on that item's own row. Omit every id you are not certain about.`;
+          const vr = await getClient().messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 4000,
+            thinking: { type: "enabled", budget_tokens: 2500 },
+            messages: [{ role: "user", content: [...messageContent, { type: "text", text: verifyPrompt }] }],
+          });
+          const vtext = (vr.content.find((b: any) => b.type === "text") as any)?.text ?? "";
+          const vmatch = vtext.match(/\{[\s\S]*\}/);
+          if (vmatch) {
+            const vparsed = JSON.parse(vmatch[0]);
+            if (Array.isArray(vparsed.keep)) {
+              const keep = new Set(vparsed.keep.map((s: any) => String(s)));
+              let removed = 0;
+              for (const e of dateEntries) {
+                if (!keep.has(e.key)) { delete (flat as any)[e.key]; removed++; }
+              }
+              console.log(`[extraction] Date verification: kept ${keep.size}/${dateEntries.length}, removed ${removed} unverifiable date(s)`);
+            }
+          }
+        } catch (e: any) {
+          console.error('[extraction] Date verification pass failed (keeping all dates):', e?.message || e);
+        }
+      }
 
       for (const [key, value] of Object.entries(flat)) {
         const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
