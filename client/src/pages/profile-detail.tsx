@@ -23,6 +23,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
+import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -2022,7 +2023,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
         )}
 
         {/* Highlights row */}
-        {aiSummary.highlights.length > 0 && (
+        {(aiSummary.highlights?.length ?? 0) > 0 && (
           <div className="flex flex-wrap gap-2" data-testid="ai-summary-highlights">
             {aiSummary.highlights.map((h, i) => (
               <div
@@ -2043,7 +2044,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
         )}
 
         {/* Action items */}
-        {aiSummary.actionItems.length > 0 && (
+        {(aiSummary.actionItems?.length ?? 0) > 0 && (
           <div className="space-y-1.5" data-testid="ai-summary-actions">
             <p className="text-xs font-medium text-muted-foreground">Action Items</p>
             {aiSummary.actionItems.map((item, i) => (
@@ -11178,9 +11179,13 @@ export default function ProfileDetailPage() {
         })()}
       </div>
 
-      {/* AI Summary Card */}
+      {/* AI Summary Card — isolated so a malformed summary payload (e.g. a
+          stale cached entry missing highlights/actionItems) degrades to a
+          compact inline error instead of blanking the whole profile page. */}
       <div className="px-4 md:px-6 pt-4">
-        <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} />
+        <SectionErrorBoundary name="profile-ai-summary" inline>
+          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} />
+        </SectionErrorBoundary>
       </div>
 
       {/* Profile Tabs — always use the full tab system */}

@@ -2725,7 +2725,16 @@ Respond ONLY in JSON format:
             if (parsed.generatedAt) {
               const age = Date.now() - new Date(parsed.generatedAt).getTime();
               if (age < 7200000) { // 2 hour TTL
-                return res.json(parsed);
+                // Re-normalize on read: older cache entries (written before the
+                // generation path normalized these) could omit the arrays, which
+                // crashed the client's `.length` access and blanked the profile
+                // page. Always return a well-formed shape.
+                return res.json({
+                  summary: parsed.summary || "No summary available.",
+                  actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
+                  highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
+                  generatedAt: parsed.generatedAt,
+                });
               }
             }
           } catch (err) { console.error("[routes:profile-ai-summary] cache parse failed:", err); }
