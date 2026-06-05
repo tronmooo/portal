@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
+import { flattenExtractedData, containsDate, normalizeDateString } from "@shared/extraction-normalize";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -832,6 +833,15 @@ export async function processFileUpload(
 
 Document types: drivers_license, medical_report, lab_results, prescription, insurance_card, insurance_policy, receipt, invoice, bank_statement, vehicle_registration, warranty, pet_record, vaccination_record, or other.
 
+CRITICAL — DATES AND TABLES:
+- A document often lists MANY dates (e.g. a vaccination record or a "preventive care due in the future" table where Rabies is due 6/4/2029, DAPP due 6/4/2027, Fecal Exam due 12/16/2023, etc.). You MUST extract EVERY date.
+- Put EACH date in its OWN field with a descriptive key naming what it is for, e.g. "rabiesDueDate": "2029-06-04", "dappDueDate": "2027-06-04", "fecalExamDueDate": "2023-12-16", "rabiesAdministered": "2026-06-04".
+- NEVER lump several dates into one field, one sentence, or one comma-separated string. One date = one field.
+- Read every row of any schedule/table top to bottom — administered dates, due dates, expiration dates, next-visit dates.
+- Format dates as YYYY-MM-DD when you can; otherwise copy them exactly as printed.
+
+For pet / vaccination records, also extract: petName, species, breed, sex, color, age, weight, microchipId, and each vaccine with its administered and due dates as separate fields.
+
 For lab reports, also fill trackerEntries: [{"trackerName": "<test>", "values": {"value": <number>}, "unit": "<unit>", "category": "health"}]
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
@@ -1126,41 +1136,41 @@ Return ONLY the JSON array, nothing else.`;
 
     const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string; suggestedEvent?: string}> = [];
 
-    if (parsed.extractedData) {
-      const DATE_PATTERNS = /\d{4}[-\/]\d{2}[-\/]\d{2}|\d{2}[-\/]\d{2}[-\/]\d{4}/;
-      for (const [key, rawValue] of Object.entries(parsed.extractedData)) {
-        // Unwrap {value, confidence} objects from the AI response
-        const value = (rawValue && typeof rawValue === 'object' && 'value' in (rawValue as any)) ? (rawValue as any).value : rawValue;
-        // Replace the extractedData entry with the unwrapped value too
-        parsed.extractedData[key] = value;
-        const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
+    if (parsed.extractedData && typeof parsed.extractedData === 'object') {
+      // Flatten nested objects / arrays so EVERY leaf — especially every date in
+      // a vaccination schedule or a "preventive care due in the future" table —
+      // becomes its own field instead of collapsing to "[object Object]" and
+      // getting silently dropped. The flattened scalar map then becomes the
+      // canonical extractedData, so the saved document AND the profile fields
+      // both receive the split-out dates.
+      const flat = flattenExtractedData(parsed.extractedData);
+      parsed.extractedData = flat;
+
+      for (const [key, value] of Object.entries(flat)) {
+        const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         const strVal = String(value);
-        const isDate = DATE_PATTERNS.test(strVal) || /expir|renew|due|valid|issued|birth|appoint/i.test(key);
+        const hasDate = containsDate(strVal);
+        const isDate = hasDate || /expir|renew|due|valid|issued|birth|appoint/i.test(key);
         let suggestedEvent: string | undefined;
-        if (isDate) {
-          if (/expir/i.test(key)) suggestedEvent = `⚠️ ${parsed.label || fileName} — Expiration`;
-          else if (/renew/i.test(key)) suggestedEvent = `🔄 ${parsed.label || fileName} — Renewal`;
-          else if (/due/i.test(key)) suggestedEvent = `📅 ${parsed.label || fileName} — Due Date`;
-          else if (/appoint/i.test(key)) suggestedEvent = `🗓️ ${parsed.label || fileName} — Appointment`;
-          else if (/valid|issued/i.test(key)) suggestedEvent = undefined;
-          else suggestedEvent = `📅 ${label}: ${strVal}`;
+        // Only suggest a calendar event when we can actually resolve a real date
+        // from the value (a key called "dueAmount" must not become an event).
+        if (hasDate) {
+          if (/expir/i.test(key)) suggestedEvent = `⚠️ ${label}`;
+          else if (/renew/i.test(key)) suggestedEvent = `🔄 ${label}`;
+          else if (/due/i.test(key)) suggestedEvent = `📅 ${label}`;
+          else if (/appoint|visit|service/i.test(key)) suggestedEvent = `🗓️ ${label}`;
+          else if (/valid|issued|administered/i.test(key)) suggestedEvent = undefined;
+          else suggestedEvent = `📅 ${label}`;
         }
-        DATE_PATTERNS.lastIndex = 0; // reset regex state
 
-        // Categorize the field
         const category = CATEGORY_MAP[key] || 'OTHER';
-
-        // ALL fields default to checked. User unchecks what they don't want.
         const selected = true;
-
         extractedFields.push({ key, label, value, selected, isDate, category, suggestedEvent });
 
-        // Field key normalization: if key is dob or dateOfBirth, also add a birthday alias field
-        if ((key === 'dob' || key === 'dateOfBirth') && value) {
-          const birthdayLabel = 'birthday';
-          const alreadyHasBirthday = parsed.extractedData.hasOwnProperty('birthday');
-          if (!alreadyHasBirthday) {
-            parsed.extractedData['birthday'] = value;
+        // dob/dateOfBirth → also expose a birthday alias field
+        if ((key === 'dob' || key === 'dateOfBirth' || /date of birth/i.test(key)) && value) {
+          if (!('birthday' in flat)) {
+            (flat as any)['birthday'] = value;
             extractedFields.push({ key: 'birthday', label: 'Birthday', value, selected: true, isDate: true, category: 'PERSONAL', suggestedEvent: undefined });
           }
         }

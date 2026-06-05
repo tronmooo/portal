@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
+import { normalizeDateString } from "@shared/extraction-normalize";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -1602,19 +1603,11 @@ If unsure, return "profile_fact".`,
       if (createCalendarEvents && createCalendarEvents.length > 0) {
         for (const event of createCalendarEvents) {
           try {
-            // Parse date from the field value
-            let dateStr = event.date;
+            // Parse date from the field value. Uses the shared parser so
+            // printed forms like "6/4/2029" (single-digit month/day) and
+            // "Jun 4, 2029" normalize correctly instead of being dropped.
+            const dateStr = normalizeDateString(event.date);
             if (!dateStr) continue;
-            // Normalize date to YYYY-MM-DD
-            const dateMatch = dateStr.match(/(\d{4})[-/](\d{2})[-/](\d{2})/);
-            if (!dateMatch) {
-              // Try MM/DD/YYYY format
-              const altMatch = dateStr.match(/(\d{2})[-/](\d{2})[-/](\d{4})/);
-              if (altMatch) dateStr = `${altMatch[3]}-${altMatch[1]}-${altMatch[2]}`;
-              else continue;
-            } else {
-              dateStr = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
-            }
             await storage.createEvent({
               title: event.title || `📅 ${event.field}`,
               date: dateStr,
