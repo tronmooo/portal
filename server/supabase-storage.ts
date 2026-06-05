@@ -4331,8 +4331,12 @@ export class SupabaseStorage implements IStorage {
         const linkPct = assetLinksByParty.get(fid)?.get(p.id);
         if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
         if (pParent && pParent === fid) {
+          // Single source of truth: the parent inherits ownership ONLY when the
+          // asset has NO explicit owners. Once any explicit owner exists,
+          // ownership is fully explicit — the parent is never silently credited
+          // the remainder (that produced phantom "you own 50%" attributions).
           const taken = assetCoOwnerTotalPct.get(p.id) || 0;
-          pct = Math.max(pct, Math.max(0, 100 - taken));
+          if (taken === 0) pct = Math.max(pct, 100);
         }
       }
       return pct;
@@ -4346,8 +4350,9 @@ export class SupabaseStorage implements IStorage {
         const linkPct = liabLinksByParty.get(fid)?.get(p.id);
         if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
         if (pParent && pParent === fid) {
+          // Parent inherits a liability ONLY when there are no explicit owners.
           const taken = liabCoOwnerTotalPct.get(p.id) || 0;
-          pct = Math.max(pct, Math.max(0, 100 - taken));
+          if (taken === 0) pct = Math.max(pct, 100);
         }
       }
       return pct;
@@ -4406,9 +4411,10 @@ export class SupabaseStorage implements IStorage {
               const linkPct = assetLinksByParty.get(fid)?.get(p.id);
               if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
               if (pParent && pParent === fid) {
-                // Parent gets residual share after explicit co-owners.
+                // Parent inherits ONLY when there are no explicit owners; once
+                // an explicit owner exists, ownership is fully explicit.
                 const taken = assetCoOwnerTotalPct.get(p.id) || 0;
-                pct = Math.max(pct, Math.max(0, 100 - taken));
+                if (taken === 0) pct = Math.max(pct, 100);
               }
             }
             return pct;
@@ -4449,7 +4455,7 @@ export class SupabaseStorage implements IStorage {
               if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
               if (pParent && pParent === fid) {
                 const taken = liabCoOwnerTotalPct.get(p.id) || 0;
-                pct = Math.max(pct, Math.max(0, 100 - taken));
+                if (taken === 0) pct = Math.max(pct, 100);
               }
             }
             return pct;
@@ -5419,8 +5425,10 @@ export class SupabaseStorage implements IStorage {
       const linkPct = byParty.get(profileId)?.get(p.id);
       if (linkPct !== undefined) return linkPct;
       if (p.parentProfileId === profileId) {
+        // Parent inherits ONLY when there are no explicit owners; otherwise
+        // ownership is fully explicit and the parent gets nothing automatically.
         const taken = coOwner.get(p.id) || 0;
-        return Math.max(0, 100 - taken);
+        return taken === 0 ? 100 : 0;
       }
       return 0;
     };
