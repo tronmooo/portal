@@ -59,6 +59,7 @@ import { type IStorage, type Reminder, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
+import { shareForParties, type OwnershipLink } from "../shared/ownership-model";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -4190,33 +4191,23 @@ export class SupabaseStorage implements IStorage {
       assetLinksPromise,
       liabLinksPromise,
     ]);
-    // Co-ownership lookups for asset/liability share math — same shape as
-    // getStats. A filtered profile that's a co-owner via the party_link
-    // tables must see their fractional share of the asset/liability in
-    // their dashboard totals (e.g. Jane = 50% of Home).
-    const assetLinksByParty = new Map<string, Map<string, number>>();
+    // Per-asset / per-liability explicit ownership links, in the shape the
+    // shared ownership-model consumes. The model is the SINGLE SOURCE OF TRUTH:
+    // explicit owners win; with no explicit owners the Self profile owns 100%
+    // (NOT the nesting parent). See shared/ownership-model.ts.
+    const assetLinksByAsset = new Map<string, OwnershipLink[]>();
     for (const l of (allAssetLinks as any[]) || []) {
-      const pid = (l as any).partyProfileId; const aid = (l as any).assetProfileId;
-      if (!pid || !aid) continue;
-      if (!assetLinksByParty.has(pid)) assetLinksByParty.set(pid, new Map());
-      assetLinksByParty.get(pid)!.set(aid, Number((l as any).ownershipPercentage ?? 100));
+      const aid = (l as any).assetProfileId; const pid = (l as any).partyProfileId;
+      if (!aid || !pid) continue;
+      if (!assetLinksByAsset.has(aid)) assetLinksByAsset.set(aid, []);
+      assetLinksByAsset.get(aid)!.push({ partyProfileId: pid, ownershipPercentage: Number((l as any).ownershipPercentage ?? 100), role: (l as any).role });
     }
-    const liabLinksByParty = new Map<string, Map<string, number>>();
+    const liabLinksByLiability = new Map<string, OwnershipLink[]>();
     for (const l of (allLiabLinks as any[]) || []) {
-      const pid = (l as any).partyProfileId; const lid = (l as any).liabilityProfileId;
-      if (!pid || !lid) continue;
-      if (!liabLinksByParty.has(pid)) liabLinksByParty.set(pid, new Map());
-      liabLinksByParty.get(pid)!.set(lid, Number((l as any).ownershipPercentage ?? 100));
-    }
-    const assetCoOwnerTotalPct = new Map<string, number>();
-    for (const l of (allAssetLinks as any[]) || []) {
-      const aid = (l as any).assetProfileId; if (!aid) continue;
-      assetCoOwnerTotalPct.set(aid, (assetCoOwnerTotalPct.get(aid) || 0) + Number((l as any).ownershipPercentage ?? 0));
-    }
-    const liabCoOwnerTotalPct = new Map<string, number>();
-    for (const l of (allLiabLinks as any[]) || []) {
-      const lid = (l as any).liabilityProfileId; if (!lid) continue;
-      liabCoOwnerTotalPct.set(lid, (liabCoOwnerTotalPct.get(lid) || 0) + Number((l as any).ownershipPercentage ?? 0));
+      const lid = (l as any).liabilityProfileId; const pid = (l as any).partyProfileId;
+      if (!lid || !pid) continue;
+      if (!liabLinksByLiability.has(lid)) liabLinksByLiability.set(lid, []);
+      liabLinksByLiability.get(lid)!.push({ partyProfileId: pid, ownershipPercentage: Number((l as any).ownershipPercentage ?? 100), role: (l as any).role });
     }
     // Use the SAME unified rule the client uses (shared/profile-filter.ts).
     // The previous strict-only rule diverged from the Finance / Calendar /
@@ -4322,40 +4313,18 @@ export class SupabaseStorage implements IStorage {
     const assetChildTypes = ASSET_PROFILE_TYPES;
     const liabilityChildTypes = LIABILITY_PROFILE_TYPES;
     const noFilterBreak = !fpIds || fpIds.length === 0;
+    // Ownership share for the selected filter, via the shared model. Nesting
+    // (parentProfileId) is NOT consulted — ownership is explicit links, else
+    // Self owns 100%. Selecting the asset/liability profile itself = full value.
     const shareForAsset = (p: any): number => {
       if (noFilterBreak) return 100;
-      const pParent = p.parentProfileId;
-      let pct = 0;
-      for (const fid of fpIds!) {
-        if (fid === p.id) { pct = Math.max(pct, 100); continue; }
-        const linkPct = assetLinksByParty.get(fid)?.get(p.id);
-        if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
-        if (pParent && pParent === fid) {
-          // Single source of truth: the parent inherits ownership ONLY when the
-          // asset has NO explicit owners. Once any explicit owner exists,
-          // ownership is fully explicit — the parent is never silently credited
-          // the remainder (that produced phantom "you own 50%" attributions).
-          const taken = assetCoOwnerTotalPct.get(p.id) || 0;
-          if (taken === 0) pct = Math.max(pct, 100);
-        }
-      }
-      return pct;
+      if (fpIds!.includes(p.id)) return 100;
+      return shareForParties(fpIds!, assetLinksByAsset.get(p.id), selfId);
     };
     const shareForLiability = (p: any): number => {
       if (noFilterBreak) return 100;
-      const pParent = p.parentProfileId;
-      let pct = 0;
-      for (const fid of fpIds!) {
-        if (fid === p.id) { pct = Math.max(pct, 100); continue; }
-        const linkPct = liabLinksByParty.get(fid)?.get(p.id);
-        if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
-        if (pParent && pParent === fid) {
-          // Parent inherits a liability ONLY when there are no explicit owners.
-          const taken = liabCoOwnerTotalPct.get(p.id) || 0;
-          if (taken === 0) pct = Math.max(pct, 100);
-        }
-      }
-      return pct;
+      if (fpIds!.includes(p.id)) return 100;
+      return shareForParties(fpIds!, liabLinksByLiability.get(p.id), selfId);
     };
     const assetBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
@@ -4395,33 +4364,11 @@ export class SupabaseStorage implements IStorage {
           // never balance-sheet items. They were leaking $cost into Net Worth via resolveAssetValue's
           // fields.cost candidate path.
           const childTypes = ASSET_PROFILE_TYPES;
-          const noFilter = !fpIds || fpIds.length === 0;
-          // Per filtered profile, what fraction of each asset's value belongs
-          // to them? 0 → they don't own it at all. 100 → full credit.
-          // Rules (co-ownership only applies to true asset/liability items):
-          //  - co-owner link present → use ownership_percentage
-          //  - parent profile + no link → 100% (or residual after co-owners)
-          //  - directly selected (asset itself) → 100%
-          const shareFor = (p: any): number => {
-            if (noFilter) return 100;
-            const pParent = p.parentProfileId;
-            let pct = 0;
-            for (const fid of fpIds!) {
-              if (fid === p.id) { pct = Math.max(pct, 100); continue; }
-              const linkPct = assetLinksByParty.get(fid)?.get(p.id);
-              if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
-              if (pParent && pParent === fid) {
-                // Parent inherits ONLY when there are no explicit owners; once
-                // an explicit owner exists, ownership is fully explicit.
-                const taken = assetCoOwnerTotalPct.get(p.id) || 0;
-                if (taken === 0) pct = Math.max(pct, 100);
-              }
-            }
-            return pct;
-          };
+          // Same ownership-share rule as assetBreakdown (shared model) — keep
+          // the total and the per-row breakdown in lockstep.
           return allProfiles.reduce((s, p) => {
             if (!childTypes.has(p.type)) return s;
-            const share = shareFor(p);
+            const share = shareForAsset(p);
             if (share <= 0) return s;
             return s + (resolveAssetValue(p.fields) * share / 100);
           }, 0);
@@ -4440,29 +4387,10 @@ export class SupabaseStorage implements IStorage {
           // 'liability' is the new canonical type (Phase 1+); 'loan' is the legacy
           // alias kept around for any rows that haven't been migrated yet.
           const liabilityTypes = LIABILITY_PROFILE_TYPES;
-          const noFilter = !fpIds || fpIds.length === 0;
-          const shareFor = (p: any): number => {
-            if (noFilter) return 100;
-            const pParent = p.parentProfileId;
-            let pct = 0;
-            for (const fid of fpIds!) {
-              if (fid === p.id) { pct = Math.max(pct, 100); continue; }
-              // Liability link tables only key real liability/loan/subscription
-              // rows; for asset-type carrying-a-debt rows we still fall back
-              // to parent rule. Liability links also apply to vehicles that
-              // are actually financed (legacy data shape).
-              const linkPct = liabLinksByParty.get(fid)?.get(p.id);
-              if (linkPct !== undefined) { pct = Math.max(pct, linkPct); continue; }
-              if (pParent && pParent === fid) {
-                const taken = liabCoOwnerTotalPct.get(p.id) || 0;
-                if (taken === 0) pct = Math.max(pct, 100);
-              }
-            }
-            return pct;
-          };
+          // Same ownership-share rule as liabilityBreakdown (shared model).
           return allProfiles.reduce((s, p) => {
             if (!liabilityTypes.has(p.type)) return s;
-            const share = shareFor(p);
+            const share = shareForLiability(p);
             if (share <= 0) return s;
             return s + (resolveLiabilityValue(p.fields) * share / 100);
           }, 0);
@@ -5397,47 +5325,41 @@ export class SupabaseStorage implements IStorage {
       this.getAssetPartyLinks().catch(() => [] as any[]),
       this.getLiabilityProfileLinks().catch(() => [] as any[]),
     ]);
-    // party -> (item -> ownership%)
-    const assetLinksByParty = new Map<string, Map<string, number>>();
-    const assetCoOwnerTotalPct = new Map<string, number>();
+    // Explicit ownership links keyed by the item (asset/liability) id, in the
+    // shape the shared ownership-model consumes. Single source of truth:
+    // explicit owners win; with none, Self owns 100% (nesting is NOT ownership).
+    const selfId = allProfiles.find(p => p.type === 'self')?.id || null;
+    const assetLinksByAsset = new Map<string, OwnershipLink[]>();
     for (const l of (allAssetLinks as any[]) || []) {
-      const pid = (l as any).partyProfileId; const aid = (l as any).assetProfileId;
-      if (!pid || !aid) continue;
-      if (!assetLinksByParty.has(pid)) assetLinksByParty.set(pid, new Map());
-      assetLinksByParty.get(pid)!.set(aid, Number((l as any).ownershipPercentage ?? 100));
-      assetCoOwnerTotalPct.set(aid, (assetCoOwnerTotalPct.get(aid) || 0) + Number((l as any).ownershipPercentage ?? 0));
+      const aid = (l as any).assetProfileId; const pid = (l as any).partyProfileId;
+      if (!aid || !pid) continue;
+      if (!assetLinksByAsset.has(aid)) assetLinksByAsset.set(aid, []);
+      assetLinksByAsset.get(aid)!.push({ partyProfileId: pid, ownershipPercentage: Number((l as any).ownershipPercentage ?? 100), role: (l as any).role });
     }
-    const liabLinksByParty = new Map<string, Map<string, number>>();
-    const liabCoOwnerTotalPct = new Map<string, number>();
+    const liabLinksByLiability = new Map<string, OwnershipLink[]>();
     for (const l of (allLiabLinks as any[]) || []) {
-      const pid = (l as any).partyProfileId; const lid = (l as any).liabilityProfileId;
-      if (!pid || !lid) continue;
-      if (!liabLinksByParty.has(pid)) liabLinksByParty.set(pid, new Map());
-      liabLinksByParty.get(pid)!.set(lid, Number((l as any).ownershipPercentage ?? 100));
-      liabCoOwnerTotalPct.set(lid, (liabCoOwnerTotalPct.get(lid) || 0) + Number((l as any).ownershipPercentage ?? 0));
+      const lid = (l as any).liabilityProfileId; const pid = (l as any).partyProfileId;
+      if (!lid || !pid) continue;
+      if (!liabLinksByLiability.has(lid)) liabLinksByLiability.set(lid, []);
+      liabLinksByLiability.get(lid)!.push({ partyProfileId: pid, ownershipPercentage: Number((l as any).ownershipPercentage ?? 100), role: (l as any).role });
     }
     // Source of truth: shared/asset-value.ts. Do NOT inline a local copy of
     // these type sets — drift here silently desyncs dashboard net worth.
     const assetChildTypes = ASSET_PROFILE_TYPES;
     const liabilityChildTypes = LIABILITY_PROFILE_TYPES;
-    const shareFor = (p: any, byParty: Map<string, Map<string, number>>, coOwner: Map<string, number>): number => {
+    // This profile's ownership share of an item: the item itself = 100%; else
+    // the profile's explicit ownership %, or 100% if it's Self and the item has
+    // no explicit owners.
+    const shareForItem = (p: any, links: Map<string, OwnershipLink[]>): number => {
       if (p.id === profileId) return 100;
-      const linkPct = byParty.get(profileId)?.get(p.id);
-      if (linkPct !== undefined) return linkPct;
-      if (p.parentProfileId === profileId) {
-        // Parent inherits ONLY when there are no explicit owners; otherwise
-        // ownership is fully explicit and the parent gets nothing automatically.
-        const taken = coOwner.get(p.id) || 0;
-        return taken === 0 ? 100 : 0;
-      }
-      return 0;
+      return shareForParties([profileId], links.get(p.id), selfId);
     };
     const assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
       if (!assetChildTypes.has(p.type)) continue;
       const gross = resolveAssetValue(p.fields);
       if (gross <= 0) continue;
-      const share = shareFor(p, assetLinksByParty, assetCoOwnerTotalPct);
+      const share = shareForItem(p, assetLinksByAsset);
       if (share <= 0) continue;
       assets.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: Math.round(gross * share) / 100 });
     }
@@ -5446,7 +5368,7 @@ export class SupabaseStorage implements IStorage {
       if (!liabilityChildTypes.has(p.type)) continue;
       const gross = resolveLiabilityValue(p.fields);
       if (gross <= 0) continue;
-      const share = shareFor(p, liabLinksByParty, liabCoOwnerTotalPct);
+      const share = shareForItem(p, liabLinksByLiability);
       if (share <= 0) continue;
       liabilities.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: Math.round(gross * share) / 100 });
     }
