@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { flattenExtractedData, containsDate, normalizeDateString, buildReminderFields } from "@shared/extraction-normalize";
+import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue } from "@shared/extraction-normalize";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -831,28 +831,32 @@ export async function processFileUpload(
   // what the document is and decides what matters. We do not hardcode document
   // types, field names, or domain rules here — a vaccination record, a lease, a
   // warranty, a lab panel and a bank statement all flow through the same prompt.
-  const extractionPrompt = `You are reading an arbitrary document. First understand what it is, then extract everything useful. Return ONE valid JSON object:
+  const extractionPrompt = `You are reading an arbitrary document. First understand what it is, then extract ONLY the data that is actually printed on it. Return ONE valid JSON object:
 
 {
-  "documentType": "<your own short description of what this document is>",
+  "documentType": "<a SHORT snake_case category, 1-3 words, e.g. vaccination_record, lab_results, vehicle_registration, insurance_policy>",
   "label": "<short human title for this document>",
-  "extractedData": { <every field you can read, as key/value pairs> },
-  "reminders": [ { "label": "<what this date is for>", "date": "<the date>", "kind": "due|expiration|renewal|appointment|payment|other" } ],
+  "extractedData": { <only fields that actually have a value> },
   "trackerEntries": [ { "trackerName": "<measurement>", "values": {"value": <number>}, "unit": "<unit>", "category": "<area>" } ],
   "summary": "<one line>"
 }
 
-Universal rules (apply to EVERY document, whatever it is):
-- Identify the document yourself — do not pick from a fixed list. Describe it in your own words.
-- Extract EVERY readable field into extractedData with a descriptive camelCase key. Include people, organizations, identifiers, amounts, and notes.
-- DATES: put EACH date in its OWN field with a descriptive key (e.g. "rabiesDueDate", "policyExpirationDate", "nextServiceDate"). NEVER combine multiple dates into one field, sentence, or comma-separated string. Read every row of any table/schedule top to bottom.
-- reminders[]: list every FUTURE / actionable date a person would want reminding about (a due date, an expiration, a renewal, an appointment, a payment) with a clear label, the date, and the kind. Skip purely historical dates. This is how the document becomes calendar events, so be thorough but only include real dates you actually read.
-- trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, blood pressure, odometer, balance, etc.), regardless of document type.
+ACCURACY RULES — these matter more than completeness:
+- Extract ONLY what is actually printed. NEVER guess, infer, calculate, copy, or reuse a value.
+- If a field or a table cell is empty, blank, or shows a placeholder (— or - or "N/A" or "None"), OMIT it entirely. Do NOT output a key for it. Many rows in a schedule are intentionally blank — that is expected and correct; leave them out.
+- A date belongs to an item ONLY if it is printed on the SAME ROW / right next to that item. Do not borrow a date from another row, and never reuse the document's own date (e.g. the exam/print date) as an item's date.
+- It is correct and expected for most rows to have NO date. Returning fewer, correct fields is far better than filling everything in.
+
+EXTRACTION RULES:
+- Identify the document yourself — do not pick from a fixed list. Keep documentType to a short 1-3 word category (not a sentence); put any longer title in "label".
+- Put EACH real date in its OWN field with a descriptive camelCase key (e.g. "rabiesDueDate"). One date = one field. Never combine multiple dates into one value.
+- Also extract people, organizations, identifiers, amounts, and notes that are actually present.
+- trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, balance, etc.) — only if actually printed.
 - Dates: prefer YYYY-MM-DD, otherwise copy them exactly as printed.
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
 
-Do not skip anything. Do not invent data — only return what you actually read.`;
+Return only what you actually read. When in doubt, leave it out.`;
 
   try {
     const isImage = mimeType.startsWith("image/");
@@ -1150,6 +1154,12 @@ Return ONLY the JSON array, nothing else.`;
       // canonical extractedData, so the saved document AND the profile fields
       // both receive the split-out dates.
       const flat = flattenExtractedData(parsed.extractedData);
+      // Drop blank cells / placeholder values ("—", "N/A", etc.). Vet schedules
+      // print a dash for every item with no date; those must never become fields
+      // or the model's stray echoes turn into invented dates on the profile.
+      for (const k of Object.keys(flat)) {
+        if (isPlaceholderValue((flat as any)[k])) delete (flat as any)[k];
+      }
       parsed.extractedData = flat;
 
       for (const [key, value] of Object.entries(flat)) {
@@ -1180,23 +1190,6 @@ Return ONLY the JSON array, nothing else.`;
             extractedFields.push({ key: 'birthday', label: 'Birthday', value, selected: true, isDate: true, category: 'PERSONAL', suggestedEvent: undefined });
           }
         }
-      }
-    }
-
-    // Model-driven reminders: every actionable future date the model identified,
-    // for ANY document type. This is the dynamic, non-hardcoded path — the model
-    // decides what deserves a reminder (a due date, an expiry, a renewal, an
-    // appointment, a payment) and we surface each as its own confirmable event.
-    // Deduped against the date fields already derived from extractedData.
-    const reminderFields = buildReminderFields(parsed.reminders, extractedFields.filter(f => f.isDate));
-    for (const rf of reminderFields) {
-      extractedFields.push({
-        key: rf.key, label: rf.label, value: rf.value,
-        selected: true, isDate: true, category: rf.category, suggestedEvent: rf.suggestedEvent,
-      });
-      // Persist into extractedData so the date also saves to the profile + document.
-      if (parsed.extractedData && typeof parsed.extractedData === 'object' && !(rf.key in parsed.extractedData)) {
-        (parsed.extractedData as any)[rf.key] = rf.value;
       }
     }
 

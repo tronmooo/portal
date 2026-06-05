@@ -5317,14 +5317,14 @@ export default function TrackersPage() {
                               <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
                               <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>
                             </div>
-                            <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-                              <span className="text-base font-black text-foreground capitalize">{doc.type?.replace(/_/g, ' ') || 'Document'}</span>
+                            <div className="px-2.5 pb-1 flex-1 min-h-0 overflow-hidden flex flex-col gap-0.5">
+                              <span className="text-base font-black text-foreground capitalize line-clamp-2 break-words leading-tight">{doc.type?.replace(/_/g, ' ') || 'Document'}</span>
                               <KpiLine label="Format" value={mimeShort} />
                               <KpiLine label="Added" value={createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} />
                               {linkedNames.length > 0 && <KpiLine label="Owner" value={linkedNames.join(', ')} />}
                               {daysSince <= 7 && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
                             </div>
-                            <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
+                            <div className="px-2.5 pb-2 pt-0.5 shrink-0 flex items-center justify-between">
                               <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
                               <div className="flex gap-1">
                                 <button onClick={stopProp(() => handleShareDoc(doc))} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>

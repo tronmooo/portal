@@ -78,6 +78,27 @@ export function containsDate(input: unknown): boolean {
   return normalizeDateString(input) !== null;
 }
 
+// Values a document uses to mean "this cell is intentionally blank". A vet
+// schedule prints "—" for every item with no due date; those must NEVER become
+// fields (the model occasionally echoes them instead of omitting them).
+const PLACEHOLDER_VALUES = new Set([
+  "", "-", "--", "---", "—", "–", "n/a", "na", "none", "null", "tbd", "n.a.", "—-", "not applicable", "pending",
+]);
+
+/** True if a value is empty or a "no value" placeholder and should be dropped. */
+export function isPlaceholderValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "boolean" || typeof value === "number") return false;
+  const s = String(value).trim().toLowerCase();
+  if (s === "") return true;
+  // Strip surrounding punctuation/dashes so "—", "- -", "( n/a )" all match.
+  const stripped = s.replace(/[\s().]/g, "");
+  if (PLACEHOLDER_VALUES.has(s) || PLACEHOLDER_VALUES.has(stripped)) return true;
+  // A value made up entirely of dashes/em-dashes is a blank cell.
+  if (/^[-–—]+$/.test(stripped)) return true;
+  return false;
+}
+
 // Field keys that name the "what" of a row (so a {name, dueDate} array element
 // can be flattened to "Rabies due date" instead of "vaccines 1 dueDate").
 const NAME_HINT = /^(name|test|testname|item|type|label|service|vaccine|procedure|description|title|product)$/i;

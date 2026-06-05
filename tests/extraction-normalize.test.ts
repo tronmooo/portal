@@ -13,6 +13,7 @@ import {
   unwrapValue,
   buildReminderFields,
   toCamelKey,
+  isPlaceholderValue,
 } from "@shared/extraction-normalize";
 
 describe("normalizeDateString", () => {
@@ -127,6 +128,49 @@ describe("flattenExtractedData", () => {
       .filter((d): d is string => d !== null)
       .sort();
     expect(normalizedDueDates).toEqual(["2023-12-16", "2027-06-04", "2029-06-04"]);
+  });
+});
+
+describe("isPlaceholderValue (blank cells must never become fields)", () => {
+  it("treats dashes / N/A / empty as placeholders", () => {
+    for (const v of ["", " ", "-", "--", "—", "–", "N/A", "n/a", "None", "null", "TBD", "(N/A)"]) {
+      expect(isPlaceholderValue(v)).toBe(true);
+    }
+  });
+  it("keeps real values", () => {
+    for (const v of ["6/4/2029", "Rex", "50.80 lbs", 0, false, "WAT110U"]) {
+      expect(isPlaceholderValue(v)).toBe(false);
+    }
+  });
+
+  it("a vet schedule with mostly blank rows keeps only the real dates", () => {
+    // The exact failure: blank rows were getting invented dates. After dropping
+    // placeholders, only the printed dates survive.
+    const raw = {
+      preventiveCareDue: {
+        "Heartworm Prevention": "—",
+        "Flea Prevention": "—",
+        Roundworms: "—",
+        Hookworms: "—",
+        Rabies: "—",
+        Leptospirosis: "6/4/2029",
+        DAPP: "6/4/2029",
+        "Dental Prophylaxis": "—",
+        Bordetella: "6/4/2027",
+        "Fecal Exam": "12/16/2023",
+        "Heartworm Test": "—",
+      },
+    };
+    const flat = flattenExtractedData(raw);
+    for (const k of Object.keys(flat)) {
+      if (isPlaceholderValue((flat as any)[k])) delete (flat as any)[k];
+    }
+    const kept = Object.entries(flat);
+    // Exactly the four rows that actually had dates.
+    expect(kept).toHaveLength(4);
+    const dates = kept.map(([, v]) => normalizeDateString(v)).sort();
+    expect(dates).toEqual(["2023-12-16", "2027-06-04", "2029-06-04", "2029-06-04"]);
+    expect(kept.some(([k]) => /heartworm|flea|roundworm|hookworm|rabies|dental/i.test(k))).toBe(false);
   });
 });
 
