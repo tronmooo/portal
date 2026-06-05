@@ -151,9 +151,9 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
           </div>
         )}
 
-        {entry.tags.length > 0 && (
+        {(entry.tags?.length ?? 0) > 0 && (
           <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-border">
-            {entry.tags.map((t, i) => (
+            {(entry.tags ?? []).map((t, i) => (
               <span key={i} className="text-xs text-muted-foreground">#{t}</span>
             ))}
           </div>

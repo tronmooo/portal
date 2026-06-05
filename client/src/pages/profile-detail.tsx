@@ -3210,12 +3210,12 @@ function InfoTab({
       )}
 
       {/* ── 8. Tags ── */}
-      {profile.tags.length > 0 && (
+      {(profile.tags?.length ?? 0) > 0 && (
         <Card>
           <CardContent className="p-3">
             <div className="flex items-center gap-1.5 flex-wrap">
               <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
-              {profile.tags.slice().sort((a, b) => a.localeCompare(b)).map(tag => (
+              {(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
                 <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
               ))}
             </div>
@@ -11141,7 +11141,7 @@ export default function ProfileDetailPage() {
             )}
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
               <Badge variant="secondary" className="text-xs capitalize">{profile.type}</Badge>
-              {profile.tags.slice().sort((a, b) => a.localeCompare(b)).map(tag => (
+              {(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
                 <Badge key={tag} variant="outline" className="text-xs">
                   <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
                 </Badge>
