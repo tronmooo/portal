@@ -184,3 +184,82 @@ export function distributeEvenly(count: number): number[] {
 export function roundPct(n: number): number {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VISIBILITY — ownership drives which assets/liabilities appear under a person.
+//
+// Rule (product decision 2026-06): if a party owns ANY percentage > 0 of an
+// asset/liability, that item must surface under their profile and pass a filter
+// selecting them — everywhere (Linked page, cards, dashboard, search, AI,
+// reports). Visibility is NOT limited to the creator / primary owner / nesting
+// parent. These helpers are the shared primitive every surface uses.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A normalized ownership record (asset_party_links OR liability_profile_links). */
+export interface OwnershipRecord {
+  /** The asset/liability profile id being owned. */
+  itemId: string;
+  /** The owning party profile id. */
+  partyId: string;
+  ownershipPercentage: number;
+  role?: string;
+}
+
+/**
+ * Build an index `itemId -> Set<ownerPartyId>` of every party that owns a
+ * positive share (owner-role only) of each asset/liability. Use it to answer
+ * "is this item owned by any selected person?" in O(1).
+ */
+export function buildOwnerIndex(records: OwnershipRecord[] | undefined | null): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  for (const r of records || []) {
+    if (!r || !r.itemId || !r.partyId) continue;
+    if (!isOwnerRole(r.role)) continue;
+    if (!(Number(r.ownershipPercentage) > 0)) continue;
+    if (!index.has(r.itemId)) index.set(r.itemId, new Set());
+    index.get(r.itemId)!.add(r.partyId);
+  }
+  return index;
+}
+
+/** The set of item ids owned (>0%) by ANY of the given parties. */
+export function ownedItemIds(index: Map<string, Set<string>>, partyIds: string[] | undefined | null): Set<string> {
+  const out = new Set<string>();
+  if (!partyIds || partyIds.length === 0) return out;
+  const sel = new Set(partyIds);
+  for (const [itemId, owners] of index) {
+    for (const o of owners) {
+      if (sel.has(o)) { out.add(itemId); break; }
+    }
+  }
+  return out;
+}
+
+/**
+ * Should an asset/liability item be VISIBLE for the active profile selection?
+ * True when:
+ *   • no filter is active (everyone), OR
+ *   • the item itself is selected, OR
+ *   • any selected party owns a positive share of it, OR
+ *   • the item has NO explicit owners and a Self profile is selected (the
+ *     Self-100% default — an unowned asset belongs to "me").
+ */
+export function itemVisibleForSelection(
+  itemId: string,
+  selectedIds: string[] | undefined | null,
+  ownerIndex: Map<string, Set<string>>,
+  selfIds: Set<string> | string[] | undefined | null,
+): boolean {
+  if (!selectedIds || selectedIds.length === 0) return true;
+  const sel = new Set(selectedIds);
+  if (sel.has(itemId)) return true;
+  const owners = ownerIndex.get(itemId);
+  if (owners && owners.size > 0) {
+    for (const o of owners) if (sel.has(o)) return true;
+    return false; // has explicit owners, none selected
+  }
+  // No explicit owners → belongs to Self.
+  const selfSet = selfIds instanceof Set ? selfIds : new Set(selfIds || []);
+  for (const s of sel) if (selfSet.has(s)) return true;
+  return false;
+}

@@ -5,7 +5,11 @@ import {
   shareForParties,
   validateOwnership,
   distributeEvenly,
+  buildOwnerIndex,
+  ownedItemIds,
+  itemVisibleForSelection,
   type OwnershipLink,
+  type OwnershipRecord,
 } from "../shared/ownership-model";
 
 const SELF = "self-id";
@@ -144,6 +148,60 @@ describe("validateOwnership", () => {
       { partyProfileId: "c", ownershipPercentage: 33.34, role: "owner" },
     ]);
     expect(v.valid).toBe(true);
+  });
+});
+
+describe("visibility — ownership drives which items appear under a person", () => {
+  const CAR = "car-id";
+  const HOUSE = "house-id";
+  const records: OwnershipRecord[] = [
+    { itemId: CAR, partyId: JOE, ownershipPercentage: 50, role: "owner" }, // Bob/Joe owns 50% of the car
+    { itemId: CAR, partyId: ME, ownershipPercentage: 50, role: "owner" },
+    { itemId: HOUSE, partyId: ME, ownershipPercentage: 100, role: "owner" },
+  ];
+  const index = buildOwnerIndex(records);
+  const selfIds = new Set([SELF]);
+
+  it("indexes every positive-share owner of each item", () => {
+    expect(index.get(CAR)).toEqual(new Set([JOE, ME]));
+    expect(index.get(HOUSE)).toEqual(new Set([ME]));
+  });
+
+  it("a 1% owner still counts as connected", () => {
+    const idx = buildOwnerIndex([{ itemId: CAR, partyId: JOE, ownershipPercentage: 1, role: "owner" }]);
+    expect(idx.get(CAR)?.has(JOE)).toBe(true);
+  });
+
+  it("excludes 0% and non-owner roles from visibility", () => {
+    const idx = buildOwnerIndex([
+      { itemId: CAR, partyId: JOE, ownershipPercentage: 0, role: "owner" },
+      { itemId: CAR, partyId: ME, ownershipPercentage: 100, role: "co_signer" },
+    ]);
+    expect(idx.has(CAR)).toBe(false);
+  });
+
+  it("ownedItemIds returns every item a selected party co-owns", () => {
+    expect(ownedItemIds(index, [JOE])).toEqual(new Set([CAR])); // Joe sees the car (50%)
+    expect(ownedItemIds(index, [ME])).toEqual(new Set([CAR, HOUSE]));
+  });
+
+  it("the car is visible when filtering by Joe even though Joe is not the parent/creator", () => {
+    expect(itemVisibleForSelection(CAR, [JOE], index, selfIds)).toBe(true);
+    expect(itemVisibleForSelection(HOUSE, [JOE], index, selfIds)).toBe(false); // Joe owns 0% of house
+  });
+
+  it("no filter active → everything visible", () => {
+    expect(itemVisibleForSelection(CAR, [], index, selfIds)).toBe(true);
+  });
+
+  it("the item itself being selected makes it visible", () => {
+    expect(itemVisibleForSelection(CAR, [CAR], index, selfIds)).toBe(true);
+  });
+
+  it("an unowned item is visible when Self is selected (Self-100% default)", () => {
+    const empty = buildOwnerIndex([]);
+    expect(itemVisibleForSelection("orphan", [SELF], empty, selfIds)).toBe(true);
+    expect(itemVisibleForSelection("orphan", [JOE], empty, selfIds)).toBe(false);
   });
 });
 

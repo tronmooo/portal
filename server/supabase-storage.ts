@@ -59,7 +59,7 @@ import { type IStorage, type Reminder, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
-import { shareForParties, validateOwnership, roundPct, type OwnershipLink } from "../shared/ownership-model";
+import { shareForParty, shareForParties, validateOwnership, roundPct, type OwnershipLink } from "../shared/ownership-model";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -827,8 +827,10 @@ export class SupabaseStorage implements IStorage {
           if (!aid || seen.has(aid)) continue;
           const a = allProfiles.find(p => p.id === aid);
           if (!a) continue;
-          // Only assets surface as co-owned children, per the rule.
-          if (!["vehicle", "asset", "investment", "property"].includes(a.type)) continue;
+          // Only assets surface as co-owned children, per the rule. Use the
+          // canonical ASSET_PROFILE_TYPES set so co-owned accounts/loans/etc.
+          // surface too (the old hardcoded list dropped `account` and `loan`).
+          if (!ASSET_PROFILE_TYPES.has(a.type)) continue;
           seen.add(aid);
           childProfiles.push({ ...a, _coOwner: true, _ownershipPercentage: (l as any).ownershipPercentage });
         }
@@ -837,7 +839,7 @@ export class SupabaseStorage implements IStorage {
           if (!lid || seen.has(lid)) continue;
           const x = allProfiles.find(p => p.id === lid);
           if (!x) continue;
-          if (!["liability", "loan", "subscription"].includes(x.type)) continue;
+          if (!LIABILITY_PROFILE_TYPES.has(x.type) && x.type !== "subscription") continue;
           seen.add(lid);
           childProfiles.push({ ...x, _coOwner: true, _ownershipPercentage: (l as any).ownershipPercentage });
         }
@@ -861,6 +863,45 @@ export class SupabaseStorage implements IStorage {
     for (const o of relatedObligations) timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt });
     for (const j of relatedJournal) timeline.push({ id: j.id, type: "journal", title: j.content?.slice(0, 80) || "Journal entry", description: j.mood ? `Mood: ${j.mood}` : undefined, timestamp: j.date || (j as any).createdAt });
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    // Annotate each asset/liability child with THIS profile's ownership share
+    // (single source of truth = shared/ownership-model). Co-ownership drives
+    // both visibility and the per-row financial figure: e.g. a car Bob owns 50%
+    // of shows `_ownershipPercentage: 50` so the UI can badge "owns 50%" and
+    // render half the value. Items with no explicit owners are left unannotated
+    // (treated as wholly the viewer's / contained), so plain nested children
+    // don't sprout a confusing "0%". Only meaningful for person-like profiles.
+    if (isPersonLike && childProfiles.length > 0) {
+      try {
+        const [allAssetLinks, allLiabLinks] = await Promise.all([
+          this.getAssetPartyLinks().catch(() => [] as any[]),
+          this.getLiabilityProfileLinks().catch(() => [] as any[]),
+        ]);
+        const selfId2 = allProfiles.find(p => p.type === "self")?.id || null;
+        const assetLinksByItem = new Map<string, OwnershipLink[]>();
+        for (const l of (allAssetLinks as any[]) || []) {
+          if (!l?.assetProfileId || !l?.partyProfileId) continue;
+          if (!assetLinksByItem.has(l.assetProfileId)) assetLinksByItem.set(l.assetProfileId, []);
+          assetLinksByItem.get(l.assetProfileId)!.push({ partyProfileId: l.partyProfileId, ownershipPercentage: Number(l.ownershipPercentage ?? 100), role: l.role });
+        }
+        const liabLinksByItem = new Map<string, OwnershipLink[]>();
+        for (const l of (allLiabLinks as any[]) || []) {
+          if (!l?.liabilityProfileId || !l?.partyProfileId) continue;
+          if (!liabLinksByItem.has(l.liabilityProfileId)) liabLinksByItem.set(l.liabilityProfileId, []);
+          liabLinksByItem.get(l.liabilityProfileId)!.push({ partyProfileId: l.partyProfileId, ownershipPercentage: Number(l.ownershipPercentage ?? 100), role: l.role });
+        }
+        for (const child of childProfiles) {
+          const links = assetLinksByItem.get(child.id) || liabLinksByItem.get(child.id);
+          if (!links || links.length === 0) continue; // no explicit owners → leave unannotated
+          const share = shareForParty(id, links, selfId2);
+          if (share <= 0) continue; // contained but not owned by this person → show gross, no "0%"
+          child._ownershipPercentage = share;
+          child._coOwner = true;
+        }
+      } catch (e) {
+        console.warn("getProfileDetail: ownership-share annotation failed:", (e as any)?.message || e);
+      }
+    }
 
     // `relatedJournal` is added to the returned shape so the profile detail
     // page can render a journal section. Existing keys are unchanged.

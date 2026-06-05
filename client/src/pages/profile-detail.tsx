@@ -782,7 +782,7 @@ function ChildAssetsCard({
   // Flatten subtree into rows with depth, skipping the root (== profile itself).
   // Only asset-type nodes are rendered as children — person nodes don't belong
   // in this card.
-  type DepthRow = { id: string; name: string; type: string; fields: any; depth: number };
+  type DepthRow = { id: string; name: string; type: string; fields: any; depth: number; ownershipPct?: number };
   const subtreeRows = useMemo((): DepthRow[] => {
     if (!subtreeData) return [];
     const rows: DepthRow[] = [];
@@ -801,7 +801,7 @@ function ChildAssetsCard({
   const hasDeepDescendants = subtreeRows.length > directChildren.length;
   const visibleChildren: DepthRow[] = treeMode === "full" && hasDeepDescendants
     ? subtreeRows
-    : directChildren.map((c: any) => ({ id: c.id, name: c.name, type: c.type, fields: c.fields, depth: 0 }));
+    : directChildren.map((c: any) => ({ id: c.id, name: c.name, type: c.type, fields: c.fields, depth: 0, ownershipPct: c._ownershipPercentage }));
 
   // ADOPT-AS-CHILD redesign (2026-05-26): the previous inline picker / mutation
   // (allProfilesForLink, linkCandidates, filteredLinkCandidates, linkExistingMut,
@@ -940,7 +940,12 @@ function ChildAssetsCard({
                 // Direct view — alphabetical sort for predictability.
                 : visibleChildren.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")))
               .map((child) => {
-                const childValue = getAssetBaseValue(child.fields);
+                const grossValue = getAssetBaseValue(child.fields);
+                // Co-ownership: when this profile owns a fractional share, show
+                // their share of the value and badge the %. Full/undefined = 100%.
+                const ownPct = typeof child.ownershipPct === "number" ? child.ownershipPct : 100;
+                const childValue = grossValue * ownPct / 100;
+                const isShared = ownPct < 100;
                 // 14px indent per nesting level. We cap visual indent at
                 // 6 levels (84px) so deep trees stay readable inside the
                 // card width — depth is still tracked accurately for sort.
@@ -967,10 +972,18 @@ function ChildAssetsCard({
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{child.name}</p>
-                      <p className="text-xs text-muted-foreground capitalize">{child.type}{child.depth > 0 ? ` · level ${child.depth + 1}` : ""}</p>
+                      <p className="text-xs text-muted-foreground capitalize">
+                        {child.type}{child.depth > 0 ? ` · level ${child.depth + 1}` : ""}
+                        {isShared ? ` · owns ${ownPct}%` : ""}
+                      </p>
                     </div>
+                    {isShared && (
+                      <span className="text-[10px] font-semibold tabular-nums shrink-0 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary" data-testid={`child-asset-ownership-${child.id}`}>
+                        {ownPct}%
+                      </span>
+                    )}
                     {childValue > 0 && (
-                      <span className="text-xs font-semibold tabular-nums shrink-0">
+                      <span className="text-xs font-semibold tabular-nums shrink-0" title={isShared ? `${formatCurrency(grossValue)} total · your ${ownPct}% share` : undefined}>
                         {formatCurrency(childValue)}
                       </span>
                     )}
@@ -3111,10 +3124,12 @@ function InfoTab({
         const kids = (profile.childProfiles || []) as any[];
         const liabilities = kids.filter(c => c.type === "liability" || c.type === "loan");
         if (liabilities.length === 0) return null;
+        const liabPct = (l: any) => typeof l._ownershipPercentage === "number" ? l._ownershipPercentage : 100;
         const totalBalance = liabilities.reduce((s: number, l: any) => {
           const f = l.fields || {}; const fin = f.finance || {};
           const v = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
-          return s + (Number.isFinite(v) ? v : 0);
+          // Sum only THIS profile's share of each debt.
+          return s + (Number.isFinite(v) ? v * liabPct(l) / 100 : 0);
         }, 0);
         const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
         return (
@@ -3131,7 +3146,10 @@ function InfoTab({
             <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
               {liabilities.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((l: any) => {
                 const f = l.fields || {}; const fin = f.finance || {};
-                const bal = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+                const grossBal = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+                const pct = liabPct(l);
+                const bal = grossBal * pct / 100;
+                const isShared = pct < 100;
                 const apr = f.apr ?? f.interestRate ?? fin.apr ?? fin.interestRate;
                 const monthly = f.monthlyPayment ?? fin.monthlyPayment;
                 const subtypeRaw = (l.type_key || l.fields?.subtype || "").toString().replace(/_/g, " ");
@@ -3144,11 +3162,14 @@ function InfoTab({
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium truncate">{l.name}</p>
                         <p className="text-xs text-muted-foreground truncate capitalize">
-                          {subtypeRaw || "loan"}{apr ? ` · ${apr}${String(apr).includes("%") ? "" : "%"} APR` : ""}{monthly ? ` · ${fmt(Number(monthly))}/mo` : ""}
+                          {subtypeRaw || "loan"}{apr ? ` · ${apr}${String(apr).includes("%") ? "" : "%"} APR` : ""}{monthly ? ` · ${fmt(Number(monthly))}/mo` : ""}{isShared ? ` · owes ${pct}%` : ""}
                         </p>
                       </div>
+                      {isShared && (
+                        <span className="text-[10px] font-semibold tabular-nums shrink-0 px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-400">{pct}%</span>
+                      )}
                       {bal > 0 && (
-                        <span className="text-xs font-bold tabular-nums text-red-500 shrink-0">{fmt(bal)}</span>
+                        <span className="text-xs font-bold tabular-nums text-red-500 shrink-0" title={isShared ? `${fmt(grossBal)} total · your ${pct}% share` : undefined}>{fmt(bal)}</span>
                       )}
                       <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                     </div>

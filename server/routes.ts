@@ -6,6 +6,9 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
+import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES } from "@shared/asset-value";
+import { selfIdsFrom } from "@shared/scope";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 
@@ -5184,8 +5187,29 @@ Rules:
         ? profileIdsParam.split(",").filter(Boolean)
         : (fp ? [fp] : []);
       if (ids.length > 0) {
+        // Co-ownership drives visibility: an asset/liability the selected party
+        // owns ANY share of (even 1%) must appear in search, not just items
+        // whose linkedProfiles names them. Build the owner index once.
+        const [assetLinks, liabLinks, allProfiles] = await Promise.all([
+          storage.getAssetPartyLinks().catch(() => [] as any[]),
+          storage.getLiabilityProfileLinks().catch(() => [] as any[]),
+          storage.getProfiles().catch(() => [] as any[]),
+        ]);
+        const records: OwnershipRecord[] = [
+          ...((assetLinks as any[]) || []).map((l) => ({ itemId: l.assetProfileId, partyId: l.partyProfileId, ownershipPercentage: Number(l.ownershipPercentage ?? 0), role: l.role })),
+          ...((liabLinks as any[]) || []).map((l) => ({ itemId: l.liabilityProfileId, partyId: l.partyProfileId, ownershipPercentage: Number(l.ownershipPercentage ?? 0), role: l.role })),
+        ];
+        const ownerIndex = buildOwnerIndex(records);
+        const selfIds = selfIdsFrom(allProfiles as any[]);
+        const isAssetOrLiability = (type?: string) => !!type && (ASSET_PROFILE_TYPES.has(type) || LIABILITY_PROFILE_TYPES.has(type));
         results = results.filter((r: any) => {
-          if (r._type === "profile") return ids.includes(r.id);
+          if (r._type === "profile") {
+            if (ids.includes(r.id)) return true;
+            // Asset/liability profiles surface for any selected co-owner (or for
+            // Self when unowned). Other profile types match by id only.
+            if (isAssetOrLiability(r.type)) return itemVisibleForSelection(r.id, ids, ownerIndex, selfIds);
+            return false;
+          }
           const lp: string[] = r.linkedProfiles || [];
           return lp.some((pid: string) => ids.includes(pid));
         });
