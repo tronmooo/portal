@@ -2019,43 +2019,56 @@ export default function ChatPage() {
           }
         } catch { /* keep orientation = 1 if parsing fails */ }
 
-        // ALWAYS process through canvas: applies EXIF rotation AND resizes large images
+        // ALWAYS process through canvas: applies EXIF rotation AND keeps the
+        // upload under Vercel's ~4.5MB body limit. We prefer HIGH resolution and
+        // quality so faint document text (e.g. a vet schedule) stays legible for
+        // the vision model — degrading the image is a top cause of misreads —
+        // and only step down if the encoded size exceeds the budget.
         const img = new Image();
         img.onload = () => {
-          let w = img.width, h = img.height;
-          
-          // Cap at 2048px on longest side — enough for document extraction
-          // This prevents massive Gemini/AI-generated PNGs from exceeding upload limits
-          const MAX_DIM = 2048;
-          if (w > MAX_DIM || h > MAX_DIM) {
-            const scale = MAX_DIM / Math.max(w, h);
-            w = Math.round(w * scale);
-            h = Math.round(h * scale);
-          }
+          const renderAt = (maxDim: number): HTMLCanvasElement => {
+            let w = img.width, h = img.height;
+            if (w > maxDim || h > maxDim) {
+              const scale = maxDim / Math.max(w, h);
+              w = Math.round(w * scale);
+              h = Math.round(h * scale);
+            }
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d')!;
+            // Set canvas size based on rotation
+            if (orientation >= 5) { canvas.width = h; canvas.height = w; }
+            else { canvas.width = w; canvas.height = h; }
+            // Apply EXIF transform
+            switch (orientation) {
+              case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
+              case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
+              case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
+              case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+              case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
+              case 7: ctx.transform(0, -1, -1, 0, h, w); break;
+              case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
+            }
+            ctx.imageSmoothingEnabled = true;
+            (ctx as any).imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, w, h);
+            return canvas;
+          };
 
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d')!;
-          
-          // Set canvas size based on rotation
-          if (orientation >= 5) { canvas.width = h; canvas.height = w; }
-          else { canvas.width = w; canvas.height = h; }
-          
-          // Apply EXIF transform
-          switch (orientation) {
-            case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
-            case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
-            case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
-            case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
-            case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
-            case 7: ctx.transform(0, -1, -1, 0, h, w); break;
-            case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
+          const sizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
+          const BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
+          // Highest quality first; fall back only if the encoded image is too big.
+          const attempts: Array<{ dim: number; q: number }> = [
+            { dim: 3072, q: 0.92 },
+            { dim: 3072, q: 0.85 },
+            { dim: 2048, q: 0.85 },
+            { dim: 1600, q: 0.8 },
+          ];
+          let compressed = '';
+          for (const a of attempts) {
+            compressed = renderAt(a.dim).toDataURL('image/jpeg', a.q).split(',')[1];
+            if (sizeMB(compressed) <= BUDGET_MB) break;
           }
-          
-          ctx.drawImage(img, 0, 0, w, h);
-          // Export as JPEG at 85% quality — good enough for document text extraction
-          // while keeping file size well under Vercel's ~4.5MB request body limit
-          const compressed = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
-          console.log(`[upload] Image processed: ${img.width}x${img.height} → ${w}x${h}, base64 length: ${compressed.length} (${(compressed.length * 0.75 / 1024 / 1024).toFixed(1)}MB)`);
+          console.log(`[upload] Image processed: ${img.width}x${img.height} → base64 ${sizeMB(compressed).toFixed(1)}MB`);
           resolve(compressed);
         };
         img.onerror = reject;
