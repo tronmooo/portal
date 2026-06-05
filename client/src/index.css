@@ -748,3 +748,80 @@ textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type=
   background: rgba(96, 165, 250, 0.45);
 }
 
+/* ============================================================
+   GLOBAL POLISH LAYER — app-wide visual finish
+   Additive only: typography rendering, branded selection,
+   accessible focus rings, and theme-native chart styling.
+   No layout, structure, or feature changes.
+   ============================================================ */
+
+/* Crisper text rendering across the whole app */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tighter, more readable body rhythm */
+body {
+  line-height: 1.5;
+}
+
+/* Branded text selection (uses the teal primary) */
+::selection {
+  background: hsl(var(--primary) / 0.22);
+}
+
+/* Accessible, consistent keyboard-focus ring on interactive elements.
+   Uses :focus-visible so mouse/touch taps never show a ring — only
+   keyboard navigation does. Ring follows each element's own radius. */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.5);
+}
+
+/* Smoother default transitions on common interactive surfaces so color /
+   background changes ease instead of snapping. Scoped to avoid animating
+   layout-affecting properties. */
+button, a, [role="button"], .card-lift {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 0.16s;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Recharts: harmonize stock chart chrome with the theme so inline graphs
+   feel native in both light and dark mode (grid lines, axis text, tooltips). */
+.recharts-cartesian-grid line,
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: hsl(var(--border)) !important;
+}
+.recharts-text {
+  fill: hsl(var(--muted-foreground)) !important;
+}
+.recharts-default-tooltip {
+  background: hsl(var(--popover)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 0.625rem !important;
+  box-shadow: var(--shadow-lg) !important;
+  padding: 0.5rem 0.625rem !important;
+  color: hsl(var(--popover-foreground)) !important;
+}
+.recharts-tooltip-label {
+  color: hsl(var(--foreground)) !important;
+  font-weight: 600;
+  margin-bottom: 2px !important;
+}
+.recharts-tooltip-item {
+  color: hsl(var(--muted-foreground)) !important;
+}
+.recharts-active-dot {
+  filter: drop-shadow(0 0 4px hsl(var(--primary) / 0.45));
+}
+

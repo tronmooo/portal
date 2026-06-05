@@ -53,6 +53,7 @@ import {
   FileBarChart,
   Mic,
   Search,
+  Copy,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
@@ -76,6 +77,59 @@ interface TableSpec2 { title:string; subtitle?:string; columns:TableColumn2[]; r
 interface ReportMetric2 { label:string; value:string|number; change?:string; changeType?:"positive"|"negative"|"neutral"; }
 interface ReportSection2 { heading:string; content?:string; chart?:ChartSpec2; table?:TableSpec2; metrics?:ReportMetric2[]; }
 interface ReportSpec2 { title:string; subtitle?:string; sections:ReportSection2[]; generatedAt:string; }
+
+// ─── Copy-to-clipboard button ──────────────────────────────────────────────
+// Lightweight, reusable copy control used across chat (messages, extracted data,
+// tables). Shows a transient check on success. No new features — purely a
+// convenience affordance for content already on screen.
+function CopyButton({
+  value,
+  label = "Copy",
+  className = "",
+  iconOnly = false,
+}: {
+  value: string | (() => string);
+  label?: string;
+  className?: string;
+  iconOnly?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const text = typeof value === "function" ? value() : value;
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — silently ignore */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`inline-flex items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors ${iconOnly ? "p-1" : "px-1.5 py-0.5"} ${className}`}
+      aria-label={label}
+      title={copied ? "Copied" : label}
+    >
+      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+      {!iconOnly && <span>{copied ? "Copied" : label}</span>}
+    </button>
+  );
+}
 
 // ─── Rich Visual Components ────────────────────────────────────────────────────────────────────────
 const CHART_PALETTE = ["hsl(188 55% 50%)","#6366f1","#f59e0b","#10b981","#ef4444","#8b5cf6","#06b6d4","#84cc16"];
@@ -201,7 +255,16 @@ function ChatTable({ spec }: { spec: TableSpec2 }) {
           <span className="text-xs font-semibold">{spec.title}</span>
           <span className="text-xs text-muted-foreground">({spec.rows.length} rows)</span>
         </div>
-        {open?<ChevronUp className="h-3.5 w-3.5 text-muted-foreground"/>:<ChevronDown className="h-3.5 w-3.5 text-muted-foreground"/>}
+        <div className="flex items-center gap-1.5">
+          <CopyButton
+            value={() =>
+              spec.columns.map(c => c.label).join("\t") + "\n" +
+              spec.rows.map(row => spec.columns.map(c => fmtVal(row[c.key], c.format)).join("\t")).join("\n")
+            }
+            iconOnly
+          />
+          {open?<ChevronUp className="h-3.5 w-3.5 text-muted-foreground"/>:<ChevronDown className="h-3.5 w-3.5 text-muted-foreground"/>}
+        </div>
       </div>
       {open&&(
         <div className="overflow-x-auto max-h-72">
@@ -622,6 +685,15 @@ function ExtractionConfirmation({
     queryKey: ["/api/profiles"],
   });
 
+  // Default the linked profile to "my profile" (the self profile) whenever the
+  // extraction didn't already target someone specific. Runs once profiles load.
+  useEffect(() => {
+    if (selectedProfileId) return;
+    if (extraction.targetProfile?.id) return;
+    const self = allProfiles.find((p: any) => p.type === "self");
+    if (self) setSelectedProfileId(self.id);
+  }, [allProfiles, selectedProfileId, extraction.targetProfile?.id]);
+
   const toggleField = (idx: number) => {
     setFields((prev) => prev.map((f, i) => i === idx ? { ...f, selected: !f.selected } : f));
   };
@@ -721,115 +793,133 @@ function ExtractionConfirmation({
     );
   }
 
+  // Excel/spreadsheet-friendly TSV (Field<TAB>Value) of all extracted fields so
+  // the user can paste the whole table straight into a sheet.
+  const buildTsv = () =>
+    "Field\tValue\n" +
+    fields.map((f) => {
+      const v = typeof f.value === 'object' && f.value !== null
+        ? JSON.stringify(f.value)
+        : String(f.value ?? '');
+      return `${f.label || f.key}\t${v}`;
+    }).join("\n");
+
   return (
-    <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-foreground">
-          Review extracted data
+    <div className="mt-3 rounded-lg bg-muted/40 border border-border overflow-hidden text-foreground">
+      {/* Header bar */}
+      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-muted/60">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Review extracted data · {fields.length}
         </span>
-        <select
-          className="text-xs bg-muted border border-border rounded px-1.5 py-0.5 text-foreground max-w-[140px]"
-          value={selectedProfileId || ""}
-          onChange={(e) => setSelectedProfileId(e.target.value || undefined)}
-          data-testid="select-extraction-profile"
-        >
-          <option value="">Link to profile...</option>
-          {allProfiles.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((p: any) => (
-            <option key={p.id} value={p.id}>{p.name} ({p.type})</option>
-          ))}
-        </select>
+        <div className="ml-auto flex items-center gap-1.5">
+          <CopyButton value={buildTsv} label="Copy" />
+          <select
+            className="text-[11px] bg-background border border-border rounded px-1 py-0.5 text-foreground max-w-[150px]"
+            value={selectedProfileId || ""}
+            onChange={(e) => setSelectedProfileId(e.target.value || undefined)}
+            data-testid="select-extraction-profile"
+          >
+            <option value="">Link to profile…</option>
+            {allProfiles.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((p: any) => (
+              <option key={p.id} value={p.id}>{p.name}{p.type === 'self' ? ' (me)' : ` (${p.type})`}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      <div className="space-y-1.5">
-        {fields.map((field, idx) => (
-          <label
-            key={field.key}
-            className="flex items-start gap-2 cursor-pointer group"
-          >
-            <Checkbox
-              checked={field.selected}
-              onCheckedChange={() => toggleField(idx)}
-              className="mt-0.5"
-            />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-foreground capitalize">
-                  {field.label}
-                </span>
-                {field.isDate && field.suggestedEvent && (
-                  <Calendar className="h-3 w-3 text-blue-500" />
-                )}
-              </div>
-              {/* Type-specific input rendering */}
-              {(() => {
-                const strVal = typeof field.value === 'object' && field.value !== null
-                  ? JSON.stringify(field.value).replace(/[{}"/]/g, '').replace(/,/g, ', ')
-                  : String(field.value ?? '');
-                const isDateField = field.category === 'DATE' || field.isDate;
-                const isBoolField = strVal === 'true' || strVal === 'false' || strVal === 'True' || strVal === 'False';
-                const isNumField = !isDateField && !isBoolField && /^-?\$?[\d,]+(\.[\d]+)?$/.test(strVal.trim());
-
-                if (isBoolField) {
-                  return (
-                    <div className="flex items-center gap-1.5 py-0.5" onClick={(e) => e.stopPropagation()}>
-                      <Checkbox
-                        checked={strVal === 'true' || strVal === 'True'}
-                        onCheckedChange={(checked) => {
+      {/* Excel-style grid: tight rows, column lines, header row */}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <th className="w-7 border-b border-border px-1 py-1 font-medium"></th>
+              <th className="border-b border-border px-2 py-1 text-left font-medium">Field</th>
+              <th className="border-b border-border px-2 py-1 text-left font-medium">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fields.map((field, idx) => {
+              const strVal = typeof field.value === 'object' && field.value !== null
+                ? JSON.stringify(field.value).replace(/[{}"/]/g, '').replace(/,/g, ', ')
+                : String(field.value ?? '');
+              const isDateField = field.category === 'DATE' || field.isDate;
+              const isBoolField = strVal === 'true' || strVal === 'false' || strVal === 'True' || strVal === 'False';
+              const isNumField = !isDateField && !isBoolField && /^-?\$?[\d,]+(\.[\d]+)?$/.test(strVal.trim());
+              return (
+                <tr
+                  key={field.key}
+                  className={`border-b border-border/60 last:border-0 ${field.selected ? '' : 'opacity-50'}`}
+                >
+                  <td className="border-r border-border/60 px-1 py-0.5 text-center align-middle">
+                    <Checkbox
+                      checked={field.selected}
+                      onCheckedChange={() => toggleField(idx)}
+                      className="h-3.5 w-3.5"
+                    />
+                  </td>
+                  <td className="border-r border-border/60 px-2 py-0.5 align-middle">
+                    <div className="flex items-center gap-1">
+                      <span className="font-medium capitalize">{field.label}</span>
+                      {field.isDate && field.suggestedEvent && (
+                        <Calendar className="h-3 w-3 text-blue-500 shrink-0" />
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-2 py-0.5 align-middle">
+                    {isBoolField ? (
+                      <div className="flex items-center gap-1.5">
+                        <Checkbox
+                          checked={strVal === 'true' || strVal === 'True'}
+                          onCheckedChange={(checked) => {
+                            const newFields = [...fields];
+                            newFields[idx] = { ...newFields[idx], value: String(!!checked) };
+                            setFields(newFields);
+                          }}
+                          className="h-3.5 w-3.5"
+                        />
+                        <span className="text-muted-foreground">{strVal === 'true' || strVal === 'True' ? 'Yes' : 'No'}</span>
+                      </div>
+                    ) : (
+                      <input
+                        type={isDateField ? 'date' : isNumField ? 'number' : 'text'}
+                        className="w-full bg-transparent text-foreground focus:outline-none focus:bg-primary/5 rounded px-0.5 py-0.5"
+                        value={strVal}
+                        onChange={(e) => {
                           const newFields = [...fields];
-                          newFields[idx] = { ...newFields[idx], value: String(!!checked) };
+                          newFields[idx] = { ...newFields[idx], value: e.target.value };
                           setFields(newFields);
                         }}
-                        className="h-3.5 w-3.5"
                       />
-                      <span className="text-xs text-muted-foreground">{strVal === 'true' || strVal === 'True' ? 'Yes' : 'No'}</span>
-                    </div>
-                  );
-                }
-
-                return (
-                  <input
-                    type={isDateField ? 'date' : isNumField ? 'number' : 'text'}
-                    className="text-xs text-muted-foreground bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none w-full py-0.5 transition-colors"
-                    value={strVal}
-                    onChange={(e) => {
-                      const newFields = [...fields];
-                      newFields[idx] = { ...newFields[idx], value: e.target.value };
-                      setFields(newFields);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                );
-              })()}
-              {field.isDate && field.suggestedEvent && field.selected && (
-                <span className="text-xs text-blue-600 dark:text-blue-400">
-                  Will create: {field.suggestedEvent}
-                </span>
-              )}
-              {/* "Also track over time" inline toggle for trackable numeric profile fields
-                  (height, weight, BP, etc.) — fixes the silent drop where this checkbox
-                  used to do nothing. */}
-              {field.selected && field.key && isTrackableField(field.key) && (
-                <label
-                  className="flex items-center gap-1.5 mt-0.5 cursor-pointer"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <Checkbox
-                    checked={!!alsoTrack[field.key]}
-                    onCheckedChange={(checked) =>
-                      setAlsoTrack((prev) => ({ ...prev, [field.key]: !!checked }))
-                    }
-                    className="h-3 w-3"
-                    data-testid={`also-track-${field.key}`}
-                  />
-                  <span className="text-[10px] text-muted-foreground">
-                    Also create a tracker for this
-                  </span>
-                </label>
-              )}
-            </div>
-          </label>
-        ))}
+                    )}
+                    {field.isDate && field.suggestedEvent && field.selected && (
+                      <div className="text-[10px] text-blue-600 dark:text-blue-400 leading-tight">
+                        → {field.suggestedEvent}
+                      </div>
+                    )}
+                    {field.selected && field.key && isTrackableField(field.key) && (
+                      <label
+                        className="flex items-center gap-1 mt-0.5 cursor-pointer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Checkbox
+                          checked={!!alsoTrack[field.key]}
+                          onCheckedChange={(checked) =>
+                            setAlsoTrack((prev) => ({ ...prev, [field.key]: !!checked }))
+                          }
+                          className="h-3 w-3"
+                          data-testid={`also-track-${field.key}`}
+                        />
+                        <span className="text-[10px] text-muted-foreground">Also track over time</span>
+                      </label>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
+      <div className="p-2.5 pt-2 space-y-2">
 
       {extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
         <div className="pt-1.5 border-t border-border/50">
@@ -895,6 +985,7 @@ function ExtractionConfirmation({
         >
           Skip
         </Button>
+      </div>
       </div>
     </div>
   );
@@ -1685,6 +1776,19 @@ export default function ChatPage() {
   const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
   });
+
+  // Default the attachment link target to "my profile" (the self profile) on first
+  // load, so anything the user attaches is linked to them unless they pick otherwise.
+  const didDefaultProfile = useRef(false);
+  useEffect(() => {
+    if (didDefaultProfile.current || profiles.length === 0) return;
+    if (selectedProfileId !== "none") { didDefaultProfile.current = true; return; }
+    const self = profiles.find((p) => p.type === "self");
+    if (self) {
+      setSelectedProfileId(self.id);
+      didDefaultProfile.current = true;
+    }
+  }, [profiles, selectedProfileId]);
 
   const chatMutation = useMutation({
     mutationFn: async (message: string) => {
@@ -2522,6 +2626,9 @@ export default function ChatPage() {
                     <span className="text-xs font-medium text-primary">
                       Portol
                     </span>
+                    {msg.content?.trim() && (
+                      <CopyButton value={msg.content} iconOnly className="ml-auto opacity-60 hover:opacity-100" />
+                    )}
                   </div>
                 )}
 
@@ -2549,9 +2656,19 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                <div className="text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 text-foreground">
+                <div className={`text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 ${msg.role === "user" ? "text-primary-foreground" : "text-foreground"}`}>
                   {msg.content}
                 </div>
+
+                {msg.role === "user" && msg.content?.trim() && (
+                  <div className="flex justify-end mt-1">
+                    <CopyButton
+                      value={msg.content}
+                      iconOnly
+                      className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
+                    />
+                  </div>
+                )}
 
                 {/* Document previews - inline with zoom & share */}
                 <ChatDocumentPreviews
