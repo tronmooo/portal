@@ -10,6 +10,7 @@ export default defineConfig({
       'tests/utils.test.ts',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
+      'tests/cache-isolation.test.ts',
       'tests/scope.test.ts',
       'tests/ownership.test.ts',
       'tests/asset-rollup.test.ts',

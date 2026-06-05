@@ -3,7 +3,7 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 // references that break sandboxed iframe deployment. Instead we call the Supabase OAuth
 // endpoint directly via URL redirect.
 import { apiRequest } from "./queryClient";
-import { queryClient, clearAllClientCaches } from "./queryClient";
+import { queryClient, clearAllClientCaches, resetQueryCacheForUserSwitch } from "./queryClient";
 import { clearChatCache } from "@/pages/chat";
 import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
 
@@ -114,6 +114,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // next user does not inherit the previous user's selection.
   useEffect(() => {
     if (user?.id) {
+      // SECURITY (defense-in-depth): if a DIFFERENT user was the last active
+      // account on this device, scrub any in-memory React Query cache and the
+      // persisted snapshot before seeding this user's state. The persisted-cache
+      // hydrate already validates ownership against the live session token, but
+      // this also covers the rare in-tab account swap where signOut's clear
+      // didn't run (e.g. a refresh that returns a different user).
+      try {
+        const prev = localStorage.getItem("portol_active_user_id");
+        if (prev && prev !== user.id) {
+          resetQueryCacheForUserSwitch();
+          try { clearChatCache(); } catch { /* ignore */ }
+        }
+      } catch { /* localStorage unavailable — ignore */ }
       setActiveUserForFilter(user.id);
     } else {
       clearProfileFilterForUser();

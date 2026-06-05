@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -241,6 +242,25 @@ export const queryClient = new QueryClient({
 const STORAGE_KEY = "portol-query-cache-v1";
 const MAX_AGE_MS = 24 * 60 * 60_000; // 24h — anything older is re-fetched
 
+/* SECURITY (cross-account leak fix): the persisted snapshot is stamped with the
+   id of the user who created it, and is ONLY ever restored for that same user.
+   The owning user is derived from the LIVE session token in sessionStorage
+   (the same source AuthProvider uses for its provisional user) — NOT from a
+   long-lived localStorage value, so a stale "active user" key can never grant
+   access to another user's cached data.
+
+   Without this, the localStorage query cache (which survives tab close, token
+   expiry, and crashes — i.e. every path that bypasses signOut's clear) could be
+   hydrated into a different user's session, showing user A's profiles/finances
+   to user B. */
+function currentSessionUserId(): string | null {
+  try {
+    return decodeSessionUserId(sessionStorage.getItem("portol_session"));
+  } catch {
+    return null;
+  }
+}
+
 function isSafeToPersist(queryKey: any): boolean {
   const first = String(queryKey?.[0] || "");
   // Don't persist anything that's user-identity-bound at the URL level; React
@@ -254,6 +274,14 @@ function isSafeToPersist(queryKey: any): boolean {
 
 function snapshotCache(): void {
   try {
+    // Never persist data for a user we can't positively identify from the live
+    // session. If nobody is signed in (signed out / expired), drop any existing
+    // blob so it can't be revived for the next account.
+    const uid = currentSessionUserId();
+    if (!uid) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+      return;
+    }
     const all = queryClient.getQueryCache().getAll();
     const out: Array<{ k: any; d: any; t: number }> = [];
     for (const q of all) {
@@ -262,8 +290,9 @@ function snapshotCache(): void {
       if (!isSafeToPersist(q.queryKey)) continue;
       out.push({ k: q.queryKey, d: q.state.data, t: q.state.dataUpdatedAt });
     }
-    // Cap size to avoid blowing localStorage (~5MB browser quota)
-    const json = JSON.stringify(out);
+    // Cap size to avoid blowing localStorage (~5MB browser quota).
+    // Stamp the snapshot with the owning user id (see currentSessionUserId).
+    const json = JSON.stringify({ uid, entries: out });
     if (json.length > 2_500_000) return; // ~2.5MB cap
     localStorage.setItem(STORAGE_KEY, json);
   } catch { /* localStorage may be unavailable (private browsing) */ }
@@ -298,21 +327,42 @@ export function clearAllClientCaches(): void {
   } catch { /* ignore */ }
 }
 
+// Synchronous query-cache-only reset for an in-tab account switch. Wipes the
+// in-memory React Query cache and the persisted snapshot, but deliberately does
+// NOT touch the profile filter (which is already namespaced per-user) so the
+// caller can immediately seed the new user's filter without a race.
+export function resetQueryCacheForUserSwitch(): void {
+  try { queryClient.clear(); } catch { /* ignore */ }
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+}
+
 export function hydrateQueryCache(): void {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
-    const arr = JSON.parse(raw) as Array<{ k: any; d: any; t: number }>;
-    if (!Array.isArray(arr)) return;
-    const cutoff = Date.now() - MAX_AGE_MS;
-    for (const entry of arr) {
-      if (!entry || !entry.k || entry.t < cutoff) continue;
-      // Only seed if no fresh data exists
-      const existing = queryClient.getQueryData(entry.k);
-      if (existing !== undefined) continue;
-      queryClient.setQueryData(entry.k, entry.d, { updatedAt: entry.t });
+
+    // SECURITY: only restore the snapshot if it belongs to the user whose
+    // session is live in this tab RIGHT NOW. Any mismatch — a different
+    // account, a logged-out tab, or a legacy un-stamped (array) blob — is
+    // treated as untrusted and purged so it can never bleed into another
+    // account. (See cache-isolation.ts for the validated selection logic.)
+    const sessionUid = currentSessionUserId();
+    const { entries, purge } = selectHydratableEntries(raw, sessionUid, { maxAgeMs: MAX_AGE_MS });
+    if (purge) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+      return;
     }
-  } catch { /* corrupt cache — ignore */ }
+
+    for (const entry of entries) {
+      // Only seed if no fresh data exists
+      const existing = queryClient.getQueryData(entry.k as any);
+      if (existing !== undefined) continue;
+      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: entry.t });
+    }
+  } catch {
+    // Corrupt cache — purge it rather than risk a partial/cross-user restore.
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+  }
 }
 
 // Wire up the snapshot loop. queryCache.subscribe fires on every cache event;
