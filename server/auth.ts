@@ -3,15 +3,20 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { Request, Response, NextFunction, Express } from "express";
 import { storage, isSupabaseStorage, createScopedStorage, requestStorageContext } from "./storage";
 
-// Type-safe helpers for storage methods that only exist on Supabase implementation
-function setStorageUserId(userId: string): void {
-  if (typeof (storage as Record<string, any>).setUserId === 'function') {
-    (storage as Record<string, any>).setUserId(userId);
-  }
-}
-async function seedStorageIfEmpty(): Promise<void> {
-  if (typeof (storage as Record<string, any>).seedIfEmpty === 'function') {
-    await (storage as Record<string, any>).seedIfEmpty();
+// Seed a brand-new user's starter data inside a storage instance scoped to
+// THAT user. We deliberately avoid mutating the global storage singleton's
+// userId (the old setStorageUserId fallback): under concurrency a second
+// request could flip the global between the seed write and a later read,
+// crediting data to the wrong account. createScopedStorage returns a dedicated
+// SupabaseStorage bound to this userId, so the seed is always isolated.
+async function seedNewUser(userId: string): Promise<void> {
+  try {
+    const scoped = createScopedStorage(userId) as Record<string, any>;
+    if (typeof scoped.seedIfEmpty === 'function') {
+      await scoped.seedIfEmpty();
+    }
+  } catch (e) {
+    console.error('[auth] seed for new user failed:', e);
   }
 }
 
@@ -194,7 +199,6 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     // The legacy setUserId is kept as a fallback for any code paths that
     // don't go through the AsyncLocalStorage context.
     const scopedStorage = createScopedStorage(user.id);
-    setStorageUserId(user.id); // backward compat fallback
 
     // Run the rest of the request within the scoped storage context.
     // All code that reads `storage` via the proxy will automatically
@@ -345,9 +349,8 @@ export function registerAuthRoutes(app: Express) {
       return res.status(400).json({ error: "Invalid email or password" });
     }
 
-    // Seed data for the new user
-      setStorageUserId(data.user.id);
-      await seedStorageIfEmpty();
+    // Seed data for the new user (scoped to that user — never via the global singleton)
+    await seedNewUser(data.user.id);
 
     res.json({
       user: { id: data.user.id, email: data.user.email },
@@ -572,8 +575,7 @@ export function registerAuthRoutes(app: Express) {
       }
 
       // Seed data for brand-new users (first-time Google sign-in creates a new account)
-        setStorageUserId(user.id);
-        await seedStorageIfEmpty();
+      await seedNewUser(user.id);
 
       res.json({
         user: { id: user.id, email: user.email },

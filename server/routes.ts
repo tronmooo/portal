@@ -279,6 +279,14 @@ setInterval(() => {
 // it on for perf since a single Node process handles everything.
 const CACHE_ENABLED = !process.env.VERCEL && !process.env.VERCEL_ENV;
 const responseCache = new Map<string, { data: any; expiresAt: number }>();
+// Cache keys MUST be per-user. authMiddleware guarantees req.userId on every
+// authenticated data route in Supabase mode (it 401s otherwise), so the
+// fallback below is unreachable in practice — but if userId were ever missing
+// we return a per-request-unique token instead of a shared "anon" string, so a
+// cross-user cache bucket can NEVER form. (Hardening follow-up.)
+function cacheUserKey(req: { userId?: string }): string {
+  return req.userId || `nouser-${Math.random().toString(36).slice(2)}`;
+}
 function getCached(key: string): any | null {
   if (!CACHE_ENABLED) return null;
   const entry = responseCache.get(key);
@@ -489,7 +497,7 @@ export async function registerRoutes(
   app.post("/api/client-errors", express.json({ limit: "64kb" }) as any, (req, res) => {
     try {
       const { section, message, stack, componentStack, url, userAgent, ts } = req.body || {};
-      const uid = (req as AuthenticatedRequest).userId || "anon";
+      const uid = cacheUserKey(req as AuthenticatedRequest);
       // Keep this on a single console.error so Vercel groups it nicely.
       console.error("[client-error]", JSON.stringify({
         uid,
@@ -510,7 +518,7 @@ export async function registerRoutes(
   app.get("/api/warmup", asyncHandler(async (req, res) => {
     res.json({ ok: true, ts: Date.now() });
     // Pre-populate expensive caches in background (after response sent)
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     if (uid !== "anon") {
       const ckStats = `stats:${uid}:all`;
       const ckEnh = `enhanced:${uid}:all`;
@@ -1799,7 +1807,7 @@ If unsure, return "profile_fact".`,
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
-    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const userId = cacheUserKey(req as AuthenticatedRequest);
     const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
@@ -1823,7 +1831,7 @@ If unsure, return "profile_fact".`,
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
-    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const userId = cacheUserKey(req as AuthenticatedRequest);
     const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
@@ -1856,7 +1864,7 @@ If unsure, return "profile_fact".`,
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
-    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const userId = cacheUserKey(req as AuthenticatedRequest);
     const filterKey = filterIds?.join(",") || "all";
     const cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
     const cached = getCached(cacheKey);
@@ -1942,7 +1950,7 @@ If unsure, return "profile_fact".`,
   // ---- Insights ----
   app.get("/api/insights", asyncHandler(async (req, res) => {
     try {
-      const uid = (req as AuthenticatedRequest).userId || "anon";
+      const uid = cacheUserKey(req as AuthenticatedRequest);
       const profileIdsParam = req.query.profileIds as string | undefined;
       const profileId = req.query.profileId as string | undefined;
       const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -2048,7 +2056,7 @@ If unsure, return "profile_fact".`,
   // only needs id/type/name/avatar/parent. Skips heavy jsonb columns. MUST be
   // registered before /api/profiles/:id so "lite" isn't matched as an id.
   app.get("/api/profiles/lite", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `profiles-lite:${uid}`;
     const hit = getCached(ck);
     if (hit) {
@@ -2067,7 +2075,7 @@ If unsure, return "profile_fact".`,
   }));
 
   app.get("/api/profiles", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `profiles:${uid}`;
     const hit = getCached(ck);
     if (hit) {
@@ -2191,7 +2199,7 @@ If unsure, return "profile_fact".`,
   // their per-endpoint caches so they're effectively free when warm.
   app.get("/api/profile-bootstrap/:id", asyncHandler(async (req, res) => {
     const profileId = req.params.id;
-    const userId = (req as AuthenticatedRequest).userId || "anon";
+    const userId = cacheUserKey(req as AuthenticatedRequest);
     const cacheKey = `profile-bootstrap:${userId}:${profileId}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
@@ -2258,7 +2266,7 @@ If unsure, return "profile_fact".`,
   }));
 
   app.post("/api/profiles", asyncHandler(async (req, res) => {
-    const uid_p1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_p1 = cacheUserKey(req as AuthenticatedRequest);
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Profile name is required" });
     }
@@ -2438,7 +2446,7 @@ If unsure, return "profile_fact".`,
     res.status(201).json(created);
   }));
   app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
-    const uid_p2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_p2 = cacheUserKey(req as AuthenticatedRequest);
     // Capture `fieldsToDelete` BEFORE Zod parse. It is not in insertProfileSchema
     // (it is a write-only deletion hint, not a stored column) so the parser would
     // strip it. We sanitize to a string[] and re-attach to req.body after parse.
@@ -2561,7 +2569,7 @@ If unsure, return "profile_fact".`,
     res.json(updated);
   }));
   app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {
-    const uid_p3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_p3 = cacheUserKey(req as AuthenticatedRequest);
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
     const ok = await storage.deleteProfile(req.params.id);
@@ -2596,7 +2604,7 @@ If unsure, return "profile_fact".`,
           await storage.propagateDocumentToAncestors(entityId, req.params.id);
         } catch { /* non-critical */ }
       }
-      const uid_pl1 = (req as AuthenticatedRequest).userId || "anon";
+      const uid_pl1 = cacheUserKey(req as AuthenticatedRequest);
       bustCache(`profiles:${uid_pl1}`); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
       res.json({ ok: true });
     } catch (err: any) {
@@ -2608,7 +2616,7 @@ If unsure, return "profile_fact".`,
   app.post("/api/profiles/:id/unlink", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
-    const uid_pl2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_pl2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
     res.json({ ok: true });
   }));
@@ -3041,7 +3049,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
 
   // ---- Trackers ----
   app.get("/api/trackers", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `trackers:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getTrackers());
@@ -3110,7 +3118,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // Bug fix: trackers list cache had a 5-min TTL but no busting on create —
     // newly added trackers wouldn't appear on dashboard / linked page until
     // the cache expired.
-    const uid_tr1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_tr1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`trackers:${uid_tr1}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr1}`); bustCache(`enhanced:`);
     res.status(201).json(created);
   }));
@@ -3131,7 +3139,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // Bug fix: same as POST — patches were silently invisible until cache
     // expired (e.g. renaming a tracker would still show the old name on the
     // dashboard for up to 5 minutes).
-    const uid_tr2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_tr2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`trackers:${uid_tr2}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
@@ -3237,7 +3245,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(404).json({ error: "Tracker not found" });
-    const uid_te1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_te1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`trackers:`); bustCache(`stats:${uid_te1}`); bustCache(`enhanced:`);
     res.status(201).json(entry);
   }));
@@ -3266,14 +3274,14 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     }
     const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, patch);
     if (!updated) return res.status(404).json({ error: "Entry not found" });
-    const uid_tep = (req as AuthenticatedRequest).userId || "anon";
+    const uid_tep = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`trackers:`); bustCache(`stats:${uid_tep}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
     if (!deleted) return res.status(404).json({ error: "Entry not found" });
-    const uid_te2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_te2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`trackers:`); bustCache(`stats:${uid_te2}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
@@ -3289,7 +3297,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       if (entry) {
         const deleted = await storage.deleteTrackerEntry(t.id, req.params.entryId);
         if (deleted) {
-          const uid_te3 = (req as AuthenticatedRequest).userId || "anon";
+          const uid_te3 = cacheUserKey(req as AuthenticatedRequest);
           bustCache(`trackers:`); bustCache(`stats:${uid_te3}`); bustCache(`enhanced:`);
           return res.json({ success: true });
         }
@@ -3303,7 +3311,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     await storage.deleteTracker(req.params.id);
     // Bug fix: deleted trackers stayed visible for up to 5 minutes because
     // the trackers list cache wasn't busted.
-    const uid_tr3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_tr3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`trackers:${uid_tr3}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr3}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
@@ -3377,7 +3385,7 @@ Rules:
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(500).json({ error: "Failed to log entry" });
 
-    const uid_se = (req as AuthenticatedRequest).userId || "anon";
+    const uid_se = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`trackers:`); bustCache(`stats:${uid_se}`); bustCache(`enhanced:`);
     res.status(201).json({
       entry,
@@ -3388,7 +3396,7 @@ Rules:
 
   // ---- Tasks ----
   app.get("/api/tasks", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `tasks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getTasks>> = hit || await dedupe(ck, () => storage.getTasks());
@@ -3427,7 +3435,7 @@ Rules:
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newTask = await storage.createTask(parsed.data);
-    const uid_t1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
     res.status(201).json(newTask);
   }));
@@ -3446,21 +3454,21 @@ Rules:
     if (req.body.description) req.body.description = sanitize(req.body.description);
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_t2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_t2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`); bustCache(`notifications:${uid_t2}`);
     res.json(updated);
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteTask(req.params.id);
-    const uid_t3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_t3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t3}`); bustCache(`notifications:${uid_t3}`);
     res.json({ success: true });
   }));
   app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreTask(req.params.id);
     if (!ok) return res.status(404).json({ error: "Task not found" });
-    const uid_t4 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_t4 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t4}`); bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t4}`); bustCache(`notifications:${uid_t4}`);
     const task = await storage.getTask(req.params.id);
     res.json(task || { id: req.params.id, restored: true });
@@ -3556,7 +3564,7 @@ Rules:
 
   // ---- Expenses ----
   app.get("/api/expenses", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `expenses:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getExpenses());
@@ -3639,7 +3647,7 @@ Rules:
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newExpense = await storage.createExpense(parsed.data);
-    const uid_e1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`); bustCache(`enhanced:`);
     res.status(201).json(newExpense);
   }));
@@ -3656,21 +3664,21 @@ Rules:
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_e2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_e2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e2}`); bustCache(`stats:${uid_e2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteExpense(req.params.id);
-    const uid_e3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_e3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `paychecks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getPaychecks>> = hit || await dedupe(ck, () => storage.getPaychecks());
@@ -3710,7 +3718,7 @@ Rules:
       return res.status(400).json({ error: "expected_date must be a valid date" });
     }
     const created = await storage.createPaycheck({ source: source.trim(), amount: numAmount, expected_date, notes });
-    const uid_pc1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_pc1 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: paychecks list cache had a 3-min TTL but no busting on create —
     // newly added paychecks wouldn't appear on the Finance page until expiry.
     bustCache(`paychecks:${uid_pc1}`); bustCache(`stats:${uid_pc1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc1}`);
@@ -3720,14 +3728,14 @@ Rules:
   app.patch("/api/paychecks/:id/confirm", asyncHandler(async (req, res) => {
     const { actual_amount } = req.body;
     const updated = await storage.confirmPaycheck(req.params.id, actual_amount);
-    const uid_pc2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_pc2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`paychecks:${uid_pc2}`); bustCache(`stats:${uid_pc2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc2}`);
     res.json(updated);
   }));
 
   app.delete("/api/paychecks/:id", asyncHandler(async (req, res) => {
     await storage.deletePaycheck(req.params.id);
-    const uid_pc3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_pc3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`paychecks:${uid_pc3}`); bustCache(`stats:${uid_pc3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc3}`);
     res.json({ success: true });
   }));
@@ -3757,14 +3765,14 @@ Rules:
     const { entries } = req.body;
     if (!Array.isArray(entries)) return res.status(400).json({ error: "entries array required" });
     const created = await storage.createLoanSchedule(entries);
-    const uid_ln1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_ln1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_ln1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln1}`); bustCache(`profile-detail:${uid_ln1}:`);
     res.json(created);
   }));
 
   app.patch("/api/loans/payment/:id/mark", asyncHandler(async (req, res) => {
     const updated = await storage.markLoanPayment(req.params.id);
-    const uid_ln2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_ln2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_ln2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
     res.json(updated);
   }));
@@ -3815,7 +3823,7 @@ Rules:
 
   // ---- Events ----
   app.get("/api/events", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `events:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getEvents());
@@ -3840,7 +3848,7 @@ Rules:
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newEvent = await storage.createEvent(parsed.data);
-    const uid_ev1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_ev1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev1}`);
     res.status(201).json(newEvent);
   }));
@@ -3856,7 +3864,7 @@ Rules:
     }
     const updated = await storage.updateEvent(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_ev2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_ev2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev2}`);
     res.json(updated);
   }));
@@ -3864,7 +3872,7 @@ Rules:
     const existing = await storage.getEvent(req.params.id);
     if (!existing) return res.status(404).json({ error: "Event not found" });
     await storage.deleteEvent(req.params.id);
-    const uid_ev3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_ev3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev3}`);
     res.json({ success: true });
   }));
@@ -3975,7 +3983,7 @@ Rules:
       }
 
       const doc = await storage.createDocument(req.body);
-      const uid_d1 = (req as AuthenticatedRequest).userId || "anon";
+      const uid_d1 = cacheUserKey(req as AuthenticatedRequest);
       bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d1}:`); bustCache(`notifications:${uid_d1}`);
       res.status(201).json(doc);
     } catch (err: any) {
@@ -3995,14 +4003,14 @@ Rules:
     }
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_d2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_d2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteDocument(req.params.id);
-    const uid_d3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_d3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
     res.json({ success: true });
   }));
@@ -4121,7 +4129,7 @@ Rules:
 
   // ---- Habits ----
   app.get("/api/habits", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `habits:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getHabits());
@@ -4162,7 +4170,7 @@ Rules:
       const updated = await storage.updateHabit(newHabit.id, { linkedProfiles: req.body.linkedProfiles });
       if (updated) newHabit = updated;
     }
-    const uid_h3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_h3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h3}`);
     res.status(201).json(newHabit);
   }));
@@ -4172,14 +4180,14 @@ Rules:
     if (!checkin) return res.status(404).json({ error: "Habit not found" });
     // Return the full updated habit (with recalculated streak) instead of just the checkin
     const updatedHabit = await storage.getHabit(req.params.id);
-    const uid_h1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_h1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h1}`);
     res.status(201).json(updatedHabit || checkin);
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
     const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
     if (!ok) return res.status(404).json({ error: "Checkin not found" });
-    const uid_h2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_h2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h2}`);
     res.json({ success: true });
   }));
@@ -4192,7 +4200,7 @@ Rules:
       }
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
-      const uid_h4 = (req as AuthenticatedRequest).userId || "anon";
+      const uid_h4 = cacheUserKey(req as AuthenticatedRequest);
       bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`); bustCache(`enhanced:`);
       res.json(result);
     } catch (e: any) { console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" }); }
@@ -4201,14 +4209,14 @@ Rules:
     const existing = await storage.getHabit(req.params.id);
     if (!existing) return res.status(404).json({ error: "Habit not found" });
     await storage.deleteHabit(req.params.id);
-    const uid_h5 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_h5 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h5}`); bustCache(`stats:${uid_h5}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreHabit(req.params.id);
     if (!ok) return res.status(404).json({ error: "Habit not found" });
-    const uid_h6 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_h6 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: missing `enhanced:` bust meant a restored habit could remain
     // missing from the dashboard until the 15-second cache expired.
     bustCache(`habits:${uid_h6}`); bustCache(`stats:${uid_h6}`); bustCache(`enhanced:`);
@@ -4218,7 +4226,7 @@ Rules:
 
   // ---- Obligations ----
   app.get("/api/obligations", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `obligations:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getObligations>> = hit || await dedupe(ck, () => storage.getObligations());
@@ -4256,7 +4264,7 @@ Rules:
   app.post("/api/obligations", asyncHandler(async (req, res) => {
     const parsed = insertObligationSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    const uid_o1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_o1 = cacheUserKey(req as AuthenticatedRequest);
     // Build a stable fingerprint of the new obligation. Same uid + same
     // name/amount/frequency/nextDueDate inside 8s = treat as a duplicate
     // click and return the original record instead of inserting again.
@@ -4293,7 +4301,7 @@ Rules:
     }
     const updated = await storage.updateObligation(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_o2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_o2 = cacheUserKey(req as AuthenticatedRequest);
     // BUG-20260528-obligation-patch-materialize: previously the PATCH handler
     // never re-materialized occurrences, so edits to frequency or nextDueDate
     // wouldn't show on the calendar/obligations list until /materialize was
@@ -4331,7 +4339,7 @@ Rules:
       return res.status(400).json({ error: "Date must be YYYY-MM-DD format" });
     }
     // Default to obligation's own amount if none provided
-    const uid_o3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_o3 = cacheUserKey(req as AuthenticatedRequest);
     if (amount === undefined || amount === null) {
       const ob = await storage.getObligation(req.params.id);
       if (!ob) return res.status(404).json({ error: "Obligation not found" });
@@ -4360,7 +4368,7 @@ Rules:
   // a non-existent `isPaid` field). This deletes the latest obligation_payments
   // row so the obligation re-appears as unpaid for the current period.
   app.delete("/api/obligations/:id/last-payment", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Obligation not found" });
     if (!ob.payments || ob.payments.length === 0) {
@@ -4392,7 +4400,7 @@ Rules:
     const existing = await storage.getObligation(req.params.id);
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
     await storage.deleteObligation(req.params.id);
-    const uid_o4 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_o4 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`); bustCache(`notifications:${uid_o4}`);
     res.json({ success: true });
   }));
@@ -4403,7 +4411,7 @@ Rules:
   // These power the new dashboard "Due today / Overdue / Upcoming" cards
   // and the calendar chips.
   app.get("/api/obligation-occurrences", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const tz = getTimezone(req);
     const today = getUserToday(tz);
     const start = (req.query.start as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.start as string)
@@ -4442,7 +4450,7 @@ Rules:
   }));
 
   app.post("/api/obligations/:id/materialize", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     // Wave 17: default horizon is the engine's default (2 years). When the caller
     // explicitly passes `days`, clamp to [7, 1825] (5 years) so we still bound a
     // pathological request but allow full-series materialization on demand.
@@ -4457,7 +4465,7 @@ Rules:
   }));
 
   app.post("/api/obligation-occurrences/:occId/status", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const { status, actualAmount, method, notes } = req.body || {};
     const allowed = ["done", "skipped", "pending", "late"];
     if (!allowed.includes(status)) {
@@ -4477,7 +4485,7 @@ Rules:
   }));
 
   app.post("/api/obligation-occurrences/:occId/reschedule", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const { newDueAt } = req.body || {};
     const { rescheduleOccurrence } = await import("./obligation-engine");
     const supabase = (storage as any).supabase;
@@ -4507,7 +4515,7 @@ Rules:
     const parsed = insertArtifactSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const created = await storage.createArtifact(parsed.data);
-    const uid_a1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_a1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a1}`); bustCache(`stats:${uid_a1}`); bustCache(`enhanced:`);
     res.status(201).json(created);
   }));
@@ -4537,14 +4545,14 @@ Rules:
     if (req.body.description !== undefined && typeof req.body.description === "string") req.body.description = sanitize(req.body.description);
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_a2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_a2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a2}`); bustCache(`stats:${uid_a2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.post("/api/artifacts/:id/toggle/:itemId", asyncHandler(async (req, res) => {
     const result = await storage.toggleChecklistItem(req.params.id, req.params.itemId);
     if (!result) return res.status(404).json({ error: "Not found" });
-    const uid_a3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_a3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a3}`); bustCache(`stats:${uid_a3}`); bustCache(`enhanced:`);
     res.json(result);
   }));
@@ -4552,7 +4560,7 @@ Rules:
     const existing = await storage.getArtifact(req.params.id);
     if (!existing) return res.status(404).json({ error: "Artifact not found" });
     await storage.deleteArtifact(req.params.id);
-    const uid_a4 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_a4 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a4}`); bustCache(`stats:${uid_a4}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
@@ -4579,7 +4587,7 @@ Rules:
       sheetData: src.sheetData,
       source: src.source,
     } as any);
-    const uid_adup = (req as AuthenticatedRequest).userId || "anon";
+    const uid_adup = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_adup}`); bustCache(`stats:${uid_adup}`); bustCache(`enhanced:`);
     res.status(201).json(created);
   }));
@@ -4603,7 +4611,7 @@ Rules:
         await storage.updateArtifact(req.params.id, { shareToken: token });
       }
     }
-    const uid_sh = (req as AuthenticatedRequest).userId || "anon";
+    const uid_sh = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_sh}`);
     res.json({ token, path: `/share/${token}` });
   }));
@@ -4613,7 +4621,7 @@ Rules:
     if (typeof storage.setArtifactShareToken === "function") {
       await storage.setArtifactShareToken(req.params.id, null);
     }
-    const uid_sh2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_sh2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_sh2}`);
     res.json({ success: true });
   }));
@@ -4684,7 +4692,7 @@ Rules:
 
   // ---- Journal ----
   app.get("/api/journal", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || "anon";
+    const uid = cacheUserKey(req as AuthenticatedRequest);
     const ck = `journal:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getJournalEntries>> = hit || await dedupe(ck, () => storage.getJournalEntries());
@@ -4726,7 +4734,7 @@ Rules:
       const updated = await storage.updateJournalEntry(newEntry.id, { linkedProfiles: req.body.linkedProfiles } as any);
       if (updated) newEntry = updated as any;
     }
-    const uid_j1 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_j1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j1}`);
     res.status(201).json(newEntry);
   }));
@@ -4746,7 +4754,7 @@ Rules:
     }
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_j2 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_j2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j2}`);
     res.json(updated);
   }));
@@ -4756,7 +4764,7 @@ Rules:
     // existed when we used getJournalEntries() to pre-check existence.
     const removed = await storage.deleteJournalEntry(req.params.id);
     if (!removed) return res.status(404).json({ error: "Journal entry not found" });
-    const uid_j3 = (req as AuthenticatedRequest).userId || "anon";
+    const uid_j3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j3}`);
     res.json({ success: true });
   }));
@@ -4811,7 +4819,7 @@ Rules:
   // ---- Notifications (computed on each request) ----
   app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
-      const userId = (req as AuthenticatedRequest).userId || "anon";
+      const userId = cacheUserKey(req as AuthenticatedRequest);
       const notifCacheKey = `notifications:${userId}`;
       // Make profile filter part of the cache key so two different filters
       // don't share the same cached payload (was returning unfiltered list).
