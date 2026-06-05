@@ -190,3 +190,91 @@ export function flattenExtractedData(data: any): Record<string, string | number 
   }
   return out;
 }
+
+/** Turn an arbitrary label into a camelCase field key. */
+export function toCamelKey(label: string): string {
+  const cleaned = String(label || "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!cleaned) return "reminderDate";
+  return cleaned.replace(/\s+(.)/g, (_, c) => c.toUpperCase());
+}
+
+// Icon per reminder kind. Cosmetic only — the model decides the kind; this just
+// maps it to an emoji. Anything unrecognised falls back to the calendar icon.
+const KIND_EMOJI: Record<string, string> = {
+  expiration: "⚠️",
+  expire: "⚠️",
+  expires: "⚠️",
+  renewal: "🔄",
+  renew: "🔄",
+  due: "📅",
+  payment: "💵",
+  appointment: "🗓️",
+  visit: "🗓️",
+};
+
+export interface ReminderField {
+  key: string;
+  label: string;
+  value: string;
+  date: string; // normalized YYYY-MM-DD
+  isDate: true;
+  category: "DATE";
+  selected: true;
+  suggestedEvent: string;
+  kind: string;
+}
+
+/**
+ * Build confirmable calendar-event fields from the model's `reminders[]` array.
+ * This is the dynamic, document-agnostic path: the model decides what is an
+ * actionable date for ANY document, and we surface each one as its own event.
+ *
+ * `existingDateFields` are the date fields already derived from extractedData;
+ * a reminder is skipped if one with the same normalized date AND a matching
+ * label already exists, so we don't double-create events.
+ */
+export function buildReminderFields(
+  reminders: unknown,
+  existingDateFields: Array<{ label?: string; value?: unknown }> = [],
+): ReminderField[] {
+  if (!Array.isArray(reminders)) return [];
+
+  const sig = (date: string | null, label: string) =>
+    `${date || ""}|${label.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+
+  const seen = new Set<string>();
+  for (const f of existingDateFields) {
+    const d = normalizeDateString(f.value);
+    if (d) seen.add(sig(d, String(f.label ?? "")));
+  }
+
+  const out: ReminderField[] = [];
+  for (const r of reminders) {
+    if (!r || typeof r !== "object") continue;
+    const rec = r as Record<string, unknown>;
+    const rawDate = rec.date ?? rec.value ?? rec.dueDate;
+    const date = normalizeDateString(rawDate);
+    if (!date) continue; // only real, parseable dates become reminders
+    const label = String(rec.label ?? rec.title ?? rec.name ?? "Reminder").trim() || "Reminder";
+    const s = sig(date, label);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    const kind = String(rec.kind ?? "").toLowerCase().trim();
+    const emoji = KIND_EMOJI[kind] || "📅";
+    out.push({
+      key: toCamelKey(label),
+      label,
+      value: typeof rawDate === "string" ? rawDate : date,
+      date,
+      isDate: true,
+      category: "DATE",
+      selected: true,
+      suggestedEvent: `${emoji} ${label}`,
+      kind: kind || "other",
+    });
+  }
+  return out;
+}

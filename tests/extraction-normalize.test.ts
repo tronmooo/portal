@@ -11,6 +11,8 @@ import {
   containsDate,
   flattenExtractedData,
   unwrapValue,
+  buildReminderFields,
+  toCamelKey,
 } from "@shared/extraction-normalize";
 
 describe("normalizeDateString", () => {
@@ -99,6 +101,15 @@ describe("flattenExtractedData", () => {
     expect(Object.values(flat)).toContain("50.80 lbs");
   });
 
+  it("end-to-end: a same-date pair of vaccines both survive flattening", () => {
+    // Leptospirosis and DAPP are BOTH due 6/4/2029 — distinct fields, same date.
+    const flat = flattenExtractedData({
+      preventiveCareDue: { Leptospirosis: "6/4/2029", DAPP: "6/4/2029", Bordetella: "6/4/2027" },
+    });
+    const dates = Object.values(flat).filter((v) => containsDate(v));
+    expect(dates).toHaveLength(3);
+  });
+
   it("end-to-end: the vet exam report yields exactly three due dates", () => {
     // Shape the model returns for the second photo (a sparse two-column table).
     const extractedData = {
@@ -116,5 +127,50 @@ describe("flattenExtractedData", () => {
       .filter((d): d is string => d !== null)
       .sort();
     expect(normalizedDueDates).toEqual(["2023-12-16", "2027-06-04", "2029-06-04"]);
+  });
+});
+
+describe("toCamelKey", () => {
+  it("turns arbitrary labels into camelCase keys", () => {
+    expect(toCamelKey("Policy Expiration Date")).toBe("policyExpirationDate");
+    expect(toCamelKey("Rabies (due)")).toBe("rabiesDue");
+    expect(toCamelKey("")).toBe("reminderDate");
+  });
+});
+
+describe("buildReminderFields (model-driven, document-agnostic)", () => {
+  it("creates one confirmable date field per actionable reminder, any doc type", () => {
+    const fields = buildReminderFields([
+      { label: "Registration expires", date: "3/15/2027", kind: "expiration" },
+      { label: "Premium payment due", date: "2026-07-01", kind: "payment" },
+      { label: "Annual checkup", date: "Jun 4, 2027", kind: "appointment" },
+    ]);
+    expect(fields).toHaveLength(3);
+    expect(fields[0]).toMatchObject({ label: "Registration expires", date: "2027-03-15", isDate: true });
+    expect(fields[0].suggestedEvent).toContain("Registration expires");
+    expect(fields.map((f) => f.date).sort()).toEqual(["2026-07-01", "2027-03-15", "2027-06-04"]);
+  });
+
+  it("skips reminders with no parseable date and ignores non-arrays", () => {
+    expect(buildReminderFields(null)).toEqual([]);
+    expect(buildReminderFields([{ label: "no date here", kind: "due" }])).toEqual([]);
+    expect(buildReminderFields([{ label: "junk", date: "not a date" }])).toEqual([]);
+  });
+
+  it("does not duplicate a reminder already present as an extractedData date field", () => {
+    const existing = [{ label: "Rabies Due Date", value: "6/4/2029" }];
+    const fields = buildReminderFields(
+      [{ label: "Rabies Due Date", date: "2029-06-04", kind: "due" }],
+      existing,
+    );
+    expect(fields).toHaveLength(0);
+  });
+
+  it("keeps two same-date reminders with different labels", () => {
+    const fields = buildReminderFields([
+      { label: "Leptospirosis due", date: "6/4/2029", kind: "due" },
+      { label: "DAPP due", date: "6/4/2029", kind: "due" },
+    ]);
+    expect(fields).toHaveLength(2);
   });
 });

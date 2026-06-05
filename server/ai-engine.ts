@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { flattenExtractedData, containsDate, normalizeDateString } from "@shared/extraction-normalize";
+import { flattenExtractedData, containsDate, normalizeDateString, buildReminderFields } from "@shared/extraction-normalize";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -826,27 +826,33 @@ export async function processFileUpload(
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
-  // Use Claude vision to analyze the image/document
-  const extractionPrompt = `Extract every data point you can read from this document. Return valid JSON:
+  // Use Claude vision to analyze the image/document.
+  // The instructions are deliberately DOCUMENT-AGNOSTIC: the model identifies
+  // what the document is and decides what matters. We do not hardcode document
+  // types, field names, or domain rules here — a vaccination record, a lease, a
+  // warranty, a lab panel and a bank statement all flow through the same prompt.
+  const extractionPrompt = `You are reading an arbitrary document. First understand what it is, then extract everything useful. Return ONE valid JSON object:
 
-{"documentType": "<type>", "label": "<short title>", "extractedData": {<every field you can read>}, "targetProfile": null, "trackerEntries": [], "summary": "<one line>"}
+{
+  "documentType": "<your own short description of what this document is>",
+  "label": "<short human title for this document>",
+  "extractedData": { <every field you can read, as key/value pairs> },
+  "reminders": [ { "label": "<what this date is for>", "date": "<the date>", "kind": "due|expiration|renewal|appointment|payment|other" } ],
+  "trackerEntries": [ { "trackerName": "<measurement>", "values": {"value": <number>}, "unit": "<unit>", "category": "<area>" } ],
+  "summary": "<one line>"
+}
 
-Document types: drivers_license, medical_report, lab_results, prescription, insurance_card, insurance_policy, receipt, invoice, bank_statement, vehicle_registration, warranty, pet_record, vaccination_record, or other.
-
-CRITICAL — DATES AND TABLES:
-- A document often lists MANY dates (e.g. a vaccination record or a "preventive care due in the future" table where Rabies is due 6/4/2029, DAPP due 6/4/2027, Fecal Exam due 12/16/2023, etc.). You MUST extract EVERY date.
-- Put EACH date in its OWN field with a descriptive key naming what it is for, e.g. "rabiesDueDate": "2029-06-04", "dappDueDate": "2027-06-04", "fecalExamDueDate": "2023-12-16", "rabiesAdministered": "2026-06-04".
-- NEVER lump several dates into one field, one sentence, or one comma-separated string. One date = one field.
-- Read every row of any schedule/table top to bottom — administered dates, due dates, expiration dates, next-visit dates.
-- Format dates as YYYY-MM-DD when you can; otherwise copy them exactly as printed.
-
-For pet / vaccination records, also extract: petName, species, breed, sex, color, age, weight, microchipId, and each vaccine with its administered and due dates as separate fields.
-
-For lab reports, also fill trackerEntries: [{"trackerName": "<test>", "values": {"value": <number>}, "unit": "<unit>", "category": "health"}]
+Universal rules (apply to EVERY document, whatever it is):
+- Identify the document yourself — do not pick from a fixed list. Describe it in your own words.
+- Extract EVERY readable field into extractedData with a descriptive camelCase key. Include people, organizations, identifiers, amounts, and notes.
+- DATES: put EACH date in its OWN field with a descriptive key (e.g. "rabiesDueDate", "policyExpirationDate", "nextServiceDate"). NEVER combine multiple dates into one field, sentence, or comma-separated string. Read every row of any table/schedule top to bottom.
+- reminders[]: list every FUTURE / actionable date a person would want reminding about (a due date, an expiration, a renewal, an appointment, a payment) with a clear label, the date, and the kind. Skip purely historical dates. This is how the document becomes calendar events, so be thorough but only include real dates you actually read.
+- trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, blood pressure, odometer, balance, etc.), regardless of document type.
+- Dates: prefer YYYY-MM-DD, otherwise copy them exactly as printed.
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
 
-Extract every single field. Do not skip anything. Do not make up data — only return what you actually read from the document.`;
+Do not skip anything. Do not invent data — only return what you actually read.`;
 
   try {
     const isImage = mimeType.startsWith("image/");
@@ -1174,6 +1180,23 @@ Return ONLY the JSON array, nothing else.`;
             extractedFields.push({ key: 'birthday', label: 'Birthday', value, selected: true, isDate: true, category: 'PERSONAL', suggestedEvent: undefined });
           }
         }
+      }
+    }
+
+    // Model-driven reminders: every actionable future date the model identified,
+    // for ANY document type. This is the dynamic, non-hardcoded path — the model
+    // decides what deserves a reminder (a due date, an expiry, a renewal, an
+    // appointment, a payment) and we surface each as its own confirmable event.
+    // Deduped against the date fields already derived from extractedData.
+    const reminderFields = buildReminderFields(parsed.reminders, extractedFields.filter(f => f.isDate));
+    for (const rf of reminderFields) {
+      extractedFields.push({
+        key: rf.key, label: rf.label, value: rf.value,
+        selected: true, isDate: true, category: rf.category, suggestedEvent: rf.suggestedEvent,
+      });
+      // Persist into extractedData so the date also saves to the profile + document.
+      if (parsed.extractedData && typeof parsed.extractedData === 'object' && !(rf.key in parsed.extractedData)) {
+        (parsed.extractedData as any)[rf.key] = rf.value;
       }
     }
 
