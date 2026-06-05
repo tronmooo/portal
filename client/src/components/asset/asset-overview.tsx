@@ -60,6 +60,7 @@ import {
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { OwnershipEditor } from "@/components/OwnershipEditor";
 import {
   Popover,
   PopoverContent,
@@ -665,6 +666,11 @@ export function FinancialsBreakdown({
 // Phase 6 — Owner field + countToward toggle + mismatch banner
 // ---------------------------------------------------------------------------
 
+// OwnerControl now delegates to the redesigned, percentage-based OwnershipEditor
+// (sliders + manual % + live 100% validation + history). The old single-owner
+// picker and the "Counts toward: Owner's net worth / Parent chain" toggle are
+// gone: net worth is driven purely by the explicit ownership shares, and an
+// asset with no owners belongs to Self at 100%. Nesting is location-only.
 export function OwnerControl({
   profile,
   allProfiles,
@@ -674,186 +680,7 @@ export function OwnerControl({
   allProfiles: AnyProfile[];
   onSaved: () => void;
 }) {
-  const { toast } = useToast();
-  const [open, setOpen] = useState(false);
-  const inferredOwner = findOwner(profile, allProfiles);
-  const explicitOwnerId =
-    (profile.fields as any)?.ownerProfileId ||
-    (profile.fields as any)?.owner_profile_id ||
-    null;
-  const explicitOwner = explicitOwnerId
-    ? allProfiles.find((p) => p.id === explicitOwnerId)
-    : null;
-  const effectiveOwner = explicitOwner || inferredOwner;
-  // Split rule (user chose this): asset has a `countToward` field —
-  // "owner" or "parent" — that controls whose net worth this rolls up to.
-  const countToward: "owner" | "parent" =
-    ((profile.fields as any)?.countToward as any) || "parent";
-  const mismatch =
-    !!explicitOwner && !!inferredOwner && explicitOwner.id !== inferredOwner.id;
-
-  const people = useMemo(
-    () =>
-      allProfiles
-        .filter((p) => PERSON_TYPES.has(p.type) && !(p.fields as any)?.deleted)
-        .sort((a, b) => (a.name || "").localeCompare(b.name || "")),
-    [allProfiles],
-  );
-
-  const patchMut = useMutation({
-    mutationFn: async (changes: { ownerProfileId?: string | null; countToward?: "owner" | "parent" }) => {
-      const newFields = {
-        ...(profile.fields || {}),
-        ...("ownerProfileId" in changes
-          ? { ownerProfileId: changes.ownerProfileId }
-          : {}),
-        ...("countToward" in changes ? { countToward: changes.countToward } : {}),
-      };
-      const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        fields: newFields,
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      toast({ title: "Owner updated" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      onSaved();
-    },
-    onError: (err: Error) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
-
-  return (
-    <Card data-testid="card-owner-control">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Users className="h-4 w-4 text-muted-foreground" /> Ownership
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Owner:</span>
-          <span className="text-xs font-medium flex-1 truncate">
-            {effectiveOwner ? (
-              effectiveOwner.name
-            ) : (
-              <span className="text-muted-foreground italic">Unassigned</span>
-            )}
-            {explicitOwner && (
-              <span className="text-[10px] text-muted-foreground ml-1">(explicit)</span>
-            )}
-            {!explicitOwner && inferredOwner && (
-              <span className="text-[10px] text-muted-foreground ml-1">
-                (inherited from chain)
-              </span>
-            )}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 text-xs"
-            onClick={() => setOpen(true)}
-            data-testid="button-edit-owner"
-          >
-            Change
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Counts toward:</span>
-          <div className="inline-flex rounded-md border bg-card text-[10px] font-medium">
-            <button
-              className={`px-2 py-1 ${
-                countToward === "owner"
-                  ? "bg-primary text-primary-foreground rounded-l-md"
-                  : "text-muted-foreground"
-              }`}
-              onClick={() => patchMut.mutate({ countToward: "owner" })}
-              disabled={patchMut.isPending}
-              data-testid="count-toward-owner"
-            >
-              Owner's net worth
-            </button>
-            <button
-              className={`px-2 py-1 ${
-                countToward === "parent"
-                  ? "bg-primary text-primary-foreground rounded-r-md"
-                  : "text-muted-foreground"
-              }`}
-              onClick={() => patchMut.mutate({ countToward: "parent" })}
-              disabled={patchMut.isPending}
-              data-testid="count-toward-parent"
-            >
-              Parent chain
-            </button>
-          </div>
-        </div>
-
-        {mismatch && (
-          <div
-            className="rounded-md border border-yellow-500/40 bg-yellow-500/10 text-yellow-700 dark:text-yellow-300 p-2 flex items-start gap-2"
-            data-testid="owner-mismatch-banner"
-          >
-            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-            <p className="text-[11px] leading-relaxed">
-              This asset is inside <strong>{inferredOwner!.name}</strong>'s asset
-              but owned by <strong>{explicitOwner!.name}</strong>. Rollups credit{" "}
-              <strong>{countToward === "owner" ? explicitOwner!.name : inferredOwner!.name}</strong>.
-            </p>
-          </div>
-        )}
-      </CardContent>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm" data-testid="dialog-owner-picker">
-          <DialogHeader>
-            <DialogTitle>Change Owner</DialogTitle>
-            <DialogDescription>
-              Pick the person who owns this asset. Setting this overrides the
-              inferred owner from the parent chain.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1 max-h-[50vh] overflow-y-auto">
-            <button
-              className="w-full text-left px-3 py-3 rounded-lg text-xs hover:bg-muted min-h-[44px]"
-              onClick={() => {
-                patchMut.mutate({ ownerProfileId: null });
-                setOpen(false);
-              }}
-              data-testid="owner-option-clear"
-            >
-              <span className="italic text-muted-foreground">
-                Clear (use inferred owner)
-              </span>
-            </button>
-            {people.map((p) => (
-              <button
-                key={p.id}
-                className={`w-full text-left px-3 py-3 rounded-lg text-xs hover:bg-muted min-h-[44px] ${
-                  explicitOwnerId === p.id ? "bg-primary/10 font-semibold" : ""
-                }`}
-                onClick={() => {
-                  patchMut.mutate({ ownerProfileId: p.id });
-                  setOpen(false);
-                }}
-                data-testid={`owner-option-${p.id}`}
-              >
-                {p.name}{" "}
-                <span className="text-[10px] text-muted-foreground capitalize">
-                  · {p.type}
-                </span>
-              </button>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </Card>
-  );
+  return <OwnershipEditor profile={profile as any} allProfiles={allProfiles as any} onSaved={onSaved} />;
 }
 
 // ---------------------------------------------------------------------------

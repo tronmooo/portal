@@ -6995,6 +6995,28 @@ No emojis. No prose outside the JSON.`,
     if (!ok) return res.status(404).json({ error: "Link not found" });
     res.json({ success: true });
   }));
+  // Atomic, validated ownership write — the single source of truth used by the
+  // redesigned ownership editor. Body: { owners: [{ partyProfileId, ownershipPercentage }] }
+  // An empty array clears ownership (asset reverts to Self-100%).
+  app.put("/api/profiles/:id/owners", asyncHandler(async (req, res) => {
+    const asset = await storage.getProfile(req.params.id);
+    if (!asset) return res.status(404).json({ error: "Profile not found" });
+    const owners = Array.isArray(req.body?.owners) ? req.body.owners : [];
+    // Validate referenced parties exist (and aren't the asset itself).
+    for (const o of owners) {
+      if (!o?.partyProfileId || o.partyProfileId === req.params.id) {
+        return res.status(400).json({ error: "Invalid owner reference" });
+      }
+      const party = await storage.getProfile(o.partyProfileId);
+      if (!party) return res.status(404).json({ error: "Owner profile not found" });
+    }
+    try {
+      const links = await storage.setAssetOwners(req.params.id, owners);
+      res.json({ ownerProfileId: req.params.id, owners: links });
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to set owners" });
+    }
+  }));
 
   // Ownership history
   app.get("/api/ownership-history", asyncHandler(async (req, res) => {

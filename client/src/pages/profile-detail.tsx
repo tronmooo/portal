@@ -8641,7 +8641,10 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
   const { toast } = useToast();
   const [adding, setAdding] = useState(false);
   const [pickPersonId, setPickPersonId] = useState("");
-  const [pickPct, setPickPct] = useState("50");
+  // Default a new co-owner's share to whatever is left to reach 100% (NOT a
+  // hardcoded 50%). 0 if already full.
+  const remainingPctDefault = () => String(Math.max(0, 100 - coOwners.reduce((s: number, l: any) => s + Number(l.ownershipPercentage ?? 0), 0)));
+  const [pickPct, setPickPct] = useState(remainingPctDefault());
 
   const totalPct = coOwners.reduce((s, l) => s + Number(l.ownershipPercentage ?? 0), 0);
   const linkedPersonIds = new Set(coOwners.map((l: any) => l.partyProfileId));
@@ -8659,7 +8662,7 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
         role: "owner",
       });
     },
-    onSuccess: () => { toast({ title: "Co-owner added" }); setAdding(false); setPickPersonId(""); setPickPct("50"); onChanged(); },
+    onSuccess: () => { toast({ title: "Co-owner added" }); setAdding(false); setPickPersonId(""); setPickPct(remainingPctDefault()); onChanged(); },
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
   const updateMutation = useMutation({

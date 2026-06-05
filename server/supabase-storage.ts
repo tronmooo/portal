@@ -59,7 +59,7 @@ import { type IStorage, type Reminder, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
-import { shareForParties, type OwnershipLink } from "../shared/ownership-model";
+import { shareForParties, validateOwnership, roundPct, type OwnershipLink } from "../shared/ownership-model";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -5456,6 +5456,64 @@ export class SupabaseStorage implements IStorage {
       newValue: null, changedBy: "user", note: null,
     });
     return true;
+  }
+
+  /**
+   * Atomically replace the OWNER set of an asset — the single source-of-truth
+   * write for ownership. Validates the full set (each 0–100, no dupes, totals
+   * exactly 100% unless empty), then applies the minimal diff in a SAFE ORDER
+   * so the per-asset sum never transiently exceeds 100 (which the DB guardrail
+   * rejects): removals + decreases first, then increases + additions.
+   * Passing [] clears ownership → the asset reverts to the Self-100% default.
+   */
+  async setAssetOwners(
+    assetProfileId: string,
+    owners: Array<{ partyProfileId: string; ownershipPercentage: number }>,
+  ): Promise<AssetPartyLink[]> {
+    // Normalize + validate the desired set against the shared model.
+    const desired = (owners || [])
+      .filter((o) => o && o.partyProfileId)
+      .map((o) => ({ partyProfileId: o.partyProfileId, ownershipPercentage: roundPct(Number(o.ownershipPercentage)), role: "owner" }));
+    const v = validateOwnership(desired);
+    if (!v.valid) {
+      throw new Error(v.errors[0] || "Invalid ownership configuration");
+    }
+
+    // Current OWNER-role links for this asset (ignore co_signer/etc.).
+    const existingAll = await this.getAssetPartyLinks(assetProfileId);
+    const existing = existingAll.filter((l) => {
+      const r = (l.role || "owner").toLowerCase();
+      return r === "owner" || r === "co_owner" || r === "co-owner";
+    });
+    const existingByParty = new Map(existing.map((l) => [l.partyProfileId, l]));
+    const desiredByParty = new Map(desired.map((o) => [o.partyProfileId, o]));
+
+    // Phase A — lower the running sum first (safe under the >100 guardrail):
+    //   delete parties no longer present, and decrease shrinking ones.
+    for (const l of existing) {
+      if (!desiredByParty.has(l.partyProfileId)) {
+        await this.deleteAssetPartyLink(l.id);
+      }
+    }
+    for (const o of desired) {
+      const cur = existingByParty.get(o.partyProfileId);
+      if (cur && o.ownershipPercentage < Number(cur.ownershipPercentage)) {
+        await this.updateAssetPartyLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
+      }
+    }
+    // Phase B — raise the running sum: increases then brand-new owners.
+    for (const o of desired) {
+      const cur = existingByParty.get(o.partyProfileId);
+      if (cur && o.ownershipPercentage > Number(cur.ownershipPercentage)) {
+        await this.updateAssetPartyLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
+      }
+    }
+    for (const o of desired) {
+      if (!existingByParty.has(o.partyProfileId)) {
+        await this.createAssetPartyLink({ assetProfileId, partyProfileId: o.partyProfileId, ownershipPercentage: o.ownershipPercentage, role: "owner" } as InsertAssetPartyLink);
+      }
+    }
+    return this.getAssetPartyLinks(assetProfileId);
   }
 
   async getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<OwnershipHistoryEntry[]> {
