@@ -23,6 +23,19 @@ DROP FUNCTION IF EXISTS enforce_asset_party_ownership_sum();
 DROP TRIGGER IF EXISTS trg_liability_party_ownership_sum ON liability_profile_links;
 DROP FUNCTION IF EXISTS enforce_liability_party_ownership_sum();
 
+-- 1b) Drop the "ensure has owner" AFTER DELETE triggers. These auto-inserted a
+--     Self 100% link whenever the last owner was removed. Under the new model
+--     an item with NO links already means "Self owns 100%" (resolved in the
+--     app), so materializing a Self link is redundant AND actively harmful: an
+--     atomic owner replacement (delete the old owner, then insert the new one)
+--     would see Self auto-added between the two steps, producing two 100% owners
+--     (200%) that the equalize trigger then split to 50/50. That is exactly how
+--     "Test 50%" appeared. Removing these makes ownership fully explicit.
+DROP TRIGGER IF EXISTS trg_asset_has_owner ON asset_party_links;
+DROP FUNCTION IF EXISTS ensure_asset_has_owner();
+DROP TRIGGER IF EXISTS trg_liability_has_owner ON liability_profile_links;
+DROP FUNCTION IF EXISTS ensure_liability_has_owner();
+
 -- 2) Guardrail: reject (do NOT rewrite) a state whose sum exceeds 100.
 --    A tiny epsilon absorbs float rounding (e.g. 33.33 * 3 = 99.99).
 --    The application writes owners by replacing the whole set, so the sum only
