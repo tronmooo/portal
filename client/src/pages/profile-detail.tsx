@@ -3799,6 +3799,18 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     }, 0),
     [sharedLiabilities],
   );
+  // Authoritative, ownership-based per-person finances — the SAME server
+  // computation the Dashboard and Net Worth popup use. Attributes by ownership
+  // shares (asset_party_links / liability_profile_links), not by "filed under"
+  // containment, so a car owned by this person shows here even when it's nested
+  // elsewhere, and a car merely filed under them but owned by someone else does
+  // not. The Financial Overview card prefers this and only falls back to the
+  // containment children for the brief moment before it resolves.
+  const { data: personFinanceSnap } = useQuery<any>({
+    queryKey: ["/api/dashboard-enhanced", "person-finances", profileId],
+    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced?profileIds=${profileId}`).then(r => r.json()),
+    enabled: isPersonOrSelf,
+  });
 
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ProfileDetail["relatedExpenses"][number] | null>(null);
@@ -4114,22 +4126,30 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       {/* ═══════════════════════════════════════════════════════ */}
       {["self","person"].includes(profile.type) && (() => {
         const children = (profile as any).childProfiles || [];
-        // BUG-20260528-asset-resolver-duplication: previous inline reducer
-        // missed nested namespace paths (fields.housing.*, fields.finance.*,
-        // fields.other.*, fields.estimatedValue, fields.cost, etc.), causing
-        // this card's net worth to differ from the Dashboard. Now uses the
-        // canonical resolveAssetValue / resolveLiabilityBalance from
-        // shared/asset-value.ts.
         const assetTypes = ["vehicle","property","investment","asset","account","banking"];
-        const assets = children.filter((c: any) => assetTypes.includes(c.type));
-        const totalAssets = assets.reduce((s: number, c: any) => s + resolveAssetValue(c), 0);
-        // Liabilities: loans with a balance (parent-child)
-        const loans = children.filter((c: any) => c.type === "loan" || c.type === "liability" || resolveLiabilityBalance(c) > 0);
-        const childLiabilitiesTotal = loans.reduce((s: number, c: any) => s + resolveLiabilityBalance(c), 0);
-        // Shared liabilities (linked via liability_profile_links, e.g. co-owned mortgage).
-        // Use the user's ownership share, not the full balance.
-        const totalLiabilities = childLiabilitiesTotal + sharedLiabilitiesUserShare;
-        const totalLoanCount = loans.length + sharedLiabilities.length;
+        // Prefer the ownership-based server snapshot (single source of truth);
+        // fall back to containment children only until it resolves. Each server
+        // row's `value` is already ownership-share-adjusted, and the breakdown
+        // includes items this person owns wherever they're filed — so this card
+        // now matches the Dashboard / Linked page exactly.
+        const snap = personFinanceSnap?.financeSnapshot;
+        const serverAssetRows = Array.isArray(snap?.assetBreakdown) ? snap.assetBreakdown : null;
+        const serverLiabRows = Array.isArray(snap?.liabilityBreakdown) ? snap.liabilityBreakdown : null;
+        const usingServer = !!snap;
+        const assets = serverAssetRows
+          ? serverAssetRows.map((r: any) => ({ id: r.id, name: r.name, type: r.type, value: Number(r.value) || 0, share: Number(r.share) }))
+          : children.filter((c: any) => assetTypes.includes(c.type)).map((c: any) => ({ id: c.id, name: c.name, type: c.type, value: resolveAssetValue(c), share: 100 }));
+        const loans = serverLiabRows
+          ? serverLiabRows.map((r: any) => ({ id: r.id, name: r.name, type: r.type, value: Number(r.value) || 0, share: Number(r.share) }))
+          : children.filter((c: any) => c.type === "loan" || c.type === "liability" || resolveLiabilityBalance(c) > 0).map((c: any) => ({ id: c.id, name: c.name, type: c.type, value: resolveLiabilityBalance(c), share: 100 }));
+        const totalAssets = usingServer ? (Number(snap.totalAssetValue) || 0) : assets.reduce((s: number, c: any) => s + c.value, 0);
+        // When using the server snapshot, co-owned liabilities are already in
+        // the breakdown at the right share — don't add sharedLiabilitiesUserShare
+        // again (that double-counted in the old containment-only path).
+        const totalLiabilities = usingServer
+          ? (Number(snap.totalLiabilities) || 0)
+          : (loans.reduce((s: number, c: any) => s + c.value, 0) + sharedLiabilitiesUserShare);
+        const totalLoanCount = usingServer ? loans.length : (loans.length + sharedLiabilities.length);
         const netWorth = totalAssets - totalLiabilities;
         // Monthly subscriptions
         const subs = children.filter((c: any) => c.type === "subscription" || c.type === "insurance");
@@ -4187,9 +4207,12 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                       <div className="flex items-center gap-2">
                         <span className="text-xs truncate max-w-[140px]">{c.name}</span>
                         <Badge variant="outline" className="text-[10px] px-1 py-0 capitalize">{c.type}</Badge>
+                        {Number.isFinite(c.share) && c.share < 100 && (
+                          <Badge variant="outline" className="text-[10px] px-1 py-0">{Math.round(c.share)}%</Badge>
+                        )}
                       </div>
                       <span className="text-xs font-semibold tabular-nums">
-                        {formatCurrency(Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || 0))}
+                        {formatCurrency(c.value)}
                       </span>
                     </div>
                   ))}
@@ -4201,16 +4224,23 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Liabilities</p>
                   {loans.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 4).map((c: any) => (
                     <div key={c.id} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
-                      <span className="text-xs truncate max-w-[160px]">{c.name}</span>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs truncate max-w-[160px]">{c.name}</span>
+                        {Number.isFinite(c.share) && c.share < 100 && (
+                          <Badge variant="outline" className="text-[10px] px-1 py-0">{Math.round(c.share)}%</Badge>
+                        )}
+                      </div>
                       <span className="text-xs font-semibold tabular-nums text-red-500">
-                        -{formatCurrency(Number(c.fields?.remainingBalance || c.fields?.loanBalance || c.fields?.balance || 0))}
+                        -{formatCurrency(c.value)}
                       </span>
                     </div>
                   ))}
                 </div>
               )}
-              {/* Shared liabilities (co-owned via liability_profile_links) */}
-              {sharedLiabilities.length > 0 && (
+              {/* Shared liabilities (co-owned via liability_profile_links). Only
+                  shown in the containment fallback — the server snapshot already
+                  folds co-owned liabilities into the list above at the right share. */}
+              {!usingServer && sharedLiabilities.length > 0 && (
                 <div className="mt-3 space-y-1" data-testid="shared-liabilities-section">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Shared Liabilities</p>
                   {sharedLiabilities.slice().sort((a: any, b: any) => (a.profile.name || '').localeCompare(b.profile.name || '')).slice(0, 6).map((x: any) => {

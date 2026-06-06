@@ -60,6 +60,50 @@ export default function FinancePage() {
     return () => window.removeEventListener('focus', handleFocus);
   }, []);
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // Ownership links — the single source of truth for "whose item is this".
+  // The nesting parent ("filed under") is only location; explicit owners win.
+  const { data: assetPartyLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()),
+  });
+  const { data: liabilityProfileLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
+  });
+  const isOwnerRoleFin = (role?: string) => {
+    const r = (role || "owner").toLowerCase();
+    return r === "owner" || r === "co_owner" || r === "co-owner" || r === "";
+  };
+  const ownersByAsset = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const l of assetPartyLinks || []) {
+      const aid = (l as any).assetProfileId; const pid = (l as any).partyProfileId;
+      if (!aid || !pid || !isOwnerRoleFin((l as any).role)) continue;
+      if (!(Number((l as any).ownershipPercentage ?? 100) > 0)) continue;
+      const arr = m.get(aid) || []; if (!arr.includes(pid)) arr.push(pid); m.set(aid, arr);
+    }
+    return m;
+  }, [assetPartyLinks]);
+  const ownersByLiability = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const l of liabilityProfileLinks || []) {
+      const lid = (l as any).liabilityProfileId; const pid = (l as any).partyProfileId;
+      if (!lid || !pid || !isOwnerRoleFin((l as any).role)) continue;
+      if (!(Number((l as any).ownershipPercentage ?? 100) > 0)) continue;
+      const arr = m.get(lid) || []; if (!arr.includes(pid)) arr.push(pid); m.set(lid, arr);
+    }
+    return m;
+  }, [liabilityProfileLinks]);
+  // Attribution predicate: an item belongs to the active selection when it's
+  // directly selected, or (if it has explicit owners) a selected party owns it,
+  // or (no explicit owners) its containment parent is selected.
+  const attributedToSelection = (itemId: string, parentId: string | null | undefined, kind: "asset" | "liability"): boolean => {
+    if (filterMode === "everyone" || filterIds.length === 0) return true;
+    if (filterIds.includes(itemId)) return true;
+    const owners = (kind === "asset" ? ownersByAsset : ownersByLiability).get(itemId);
+    if (owners && owners.length > 0) return owners.some(o => filterIds.includes(o));
+    return !!parentId && filterIds.includes(parentId);
+  };
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // CRITICAL: each filtered query MUST set its own queryFn that appends
   // ?profileIds=... to the URL. Without an explicit queryFn the default fetcher
@@ -608,14 +652,12 @@ export default function FinancePage() {
   // show all when "everyone", otherwise only subs whose parent is selected (or
   // the sub itself is directly selected). Exclude soft-deleted rows.
   const subscriptions = useMemo(() => {
-    const selected = filterMode === "everyone" ? null : new Set(filterIds);
     return (profiles || []).filter((p: any) => {
       if (p.type !== "subscription") return false;
       if (p.deletedAt || p.deleted_at) return false;
-      if (!selected) return true;
-      return selected.has(p.id) || (p.parentProfileId && selected.has(p.parentProfileId));
+      return attributedToSelection(p.id, p.parentProfileId, "liability");
     });
-  }, [profiles, filterMode, filterIds]);
+  }, [profiles, filterMode, filterIds, ownersByLiability]);
 
   // Group loans by loan_name
   const loanGroups = useMemo(() => loanSchedules.reduce((acc: Record<string, any[]>, entry: any) => {
@@ -811,12 +853,9 @@ export default function FinancePage() {
         // is selected directly.
         const assetProfiles = (profiles || []).filter(p => {
           if (!["vehicle", "asset", "investment", "property"].includes(p.type)) return false;
-          if (filterMode === "everyone" || filterIds.length === 0) return true;
-          const pParent = p.parentProfileId;
-          if (pParent && filterIds.includes(pParent)) return true;
-          // Allow direct selection of the asset itself (e.g. selecting the
-          // F150 directly should still surface its value).
-          return filterIds.includes(p.id);
+          // Ownership drives attribution (explicit owners win; else containment
+          // parent). Matches the Linked page and the server net-worth snapshot.
+          return attributedToSelection(p.id, p.parentProfileId, "asset");
         });
         // BUG-20260528-asset-resolver-duplication: previously used a local
         // readVal()/NS/KEYS resolver that diverged from the canonical one

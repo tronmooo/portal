@@ -3743,53 +3743,63 @@ export default function TrackersPage() {
     queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
   });
 
-  // Build O(1) lookups: for any given party (profile id), which asset/liability
-  // ids does it (co-)own? Used by the visibility predicates below.
-  const assetsByOwner = useMemo(() => {
-    const m = new Map<string, Set<string>>();
+  // Build O(1) lookups: for any asset/liability id, which party profile ids own
+  // a positive ("owner"-role) share of it? Ownership is the single source of
+  // truth for attribution — the nesting parent ("filed under") is only location.
+  const isOwnerRole = (role?: string) => {
+    const r = (role || "owner").toLowerCase();
+    return r === "owner" || r === "co_owner" || r === "co-owner" || r === "";
+  };
+  const ownersByAsset = useMemo(() => {
+    const m = new Map<string, string[]>();
     for (const l of assetPartyLinks || []) {
-      const pid = l.partyProfileId; const aid = l.assetProfileId;
-      if (!pid || !aid) continue;
-      if (!m.has(pid)) m.set(pid, new Set());
-      m.get(pid)!.add(aid);
+      const aid = l.assetProfileId; const pid = l.partyProfileId;
+      if (!aid || !pid) continue;
+      if (!isOwnerRole(l.role)) continue;
+      if (!(Number(l.ownershipPercentage ?? 100) > 0)) continue;
+      const arr = m.get(aid) || [];
+      if (!arr.includes(pid)) arr.push(pid);
+      m.set(aid, arr);
     }
     return m;
   }, [assetPartyLinks]);
-  const liabilitiesByOwner = useMemo(() => {
-    const m = new Map<string, Set<string>>();
+  const ownersByLiability = useMemo(() => {
+    const m = new Map<string, string[]>();
     for (const l of liabilityProfileLinks || []) {
-      const pid = l.partyProfileId; const lid = l.liabilityProfileId;
-      if (!pid || !lid) continue;
-      if (!m.has(pid)) m.set(pid, new Set());
-      m.get(pid)!.add(lid);
+      const lid = l.liabilityProfileId; const pid = l.partyProfileId;
+      if (!lid || !pid) continue;
+      if (!isOwnerRole(l.role)) continue;
+      if (!(Number(l.ownershipPercentage ?? 100) > 0)) continue;
+      const arr = m.get(lid) || [];
+      if (!arr.includes(pid)) arr.push(pid);
+      m.set(lid, arr);
     }
     return m;
   }, [liabilityProfileLinks]);
 
-  // Visibility helper: an asset is visible to the selected filter set if it's
-  // (a) directly selected, (b) parented to a selected profile, or (c) the
-  // selected profile appears as a co-owner via asset_party_links. Same logic
-  // for liabilities. Returns true when filterMode is "everyone".
+  // Visibility helper. An item is visible to the selected filter set when it's
+  // (a) directly selected, or (b) attributed to a selected profile. Attribution
+  // rule (matches shared/ownership-model.ts): if the item has EXPLICIT owners,
+  // ONLY those owners attribute it — the "filed under" parent is location, not
+  // ownership, and must NOT make it show under the parent. Only when there are
+  // no explicit owners do we fall back to the containment parent. Returns true
+  // when filterMode is "everyone".
   const isAssetVisible = (assetId: string, parentId: string | null | undefined): boolean => {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
     if (filterIds.includes(assetId)) return true;
+    const owners = ownersByAsset.get(assetId);
+    if (owners && owners.length > 0) return owners.some(o => filterIds.includes(o));
     if (parentId && filterIds.includes(parentId)) return true;
-    for (const fid of filterIds) {
-      const owned = assetsByOwner.get(fid);
-      if (owned && owned.has(assetId)) return true;
-    }
     return false;
   };
   const isLiabilityVisible = (liabId: string, parentId: string | null | undefined): boolean => {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
     if (filterIds.includes(liabId)) return true;
+    const owners = ownersByLiability.get(liabId);
+    if (owners && owners.length > 0) return owners.some(o => filterIds.includes(o));
     if (parentId && filterIds.includes(parentId)) return true;
-    for (const fid of filterIds) {
-      const owned = liabilitiesByOwner.get(fid);
-      if (owned && owned.has(liabId)) return true;
-    }
     return false;
   };
 
@@ -4061,7 +4071,7 @@ export default function TrackersPage() {
       counts[lab] = (counts[lab] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds, assetsByOwner]);
+  }, [profiles, filterMode, filterIds, ownersByAsset]);
 
   // Subscriptions/recurring bills are conceptually liabilities (things you owe
   // every month) so they live in the same Liabilities bucket alongside loans,
@@ -4098,7 +4108,7 @@ export default function TrackersPage() {
       counts[c] = (counts[c] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds, liabilitiesByOwner]);
+  }, [profiles, filterMode, filterIds, ownersByLiability]);
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
   const sortedFilterProfiles = useMemo(() => {
@@ -4532,6 +4542,11 @@ export default function TrackersPage() {
         const personProfiles = (profiles || []).filter(p => p.type === "self" || p.type === "person" || p.type === "pet");
         const personById = new Map<string, { id: string; name: string; type: string }>();
         personProfiles.forEach(p => personById.set(p.id, { id: p.id, name: p.name || "Unnamed", type: p.type }));
+        // Any profile (people, pets, companies, trusts…) can be an explicit
+        // owner, so group headers resolve names from the full set, not just
+        // person-type profiles.
+        const anyProfileById = new Map<string, { id: string; name: string; type: string }>();
+        (profiles || []).forEach(p => anyProfileById.set(p.id, { id: p.id, name: p.name || "Unnamed", type: p.type }));
         const selfProfileId = personProfiles.find(p => p.type === "self")?.id || "";
         // Walks up parent chain on an asset/liability profile to find the
         // first person-type ancestor. Assets are often nested under other
@@ -4550,6 +4565,18 @@ export default function TrackersPage() {
           // No person ancestor found — fall back to the self profile so the
           // user can still find their own untagged items.
           return selfProfileId || null;
+        };
+        // Resolve the owner ids that attribute an asset/liability. EXPLICIT
+        // ownership links win (the single source of truth); a co-owned item
+        // returns every owner so it surfaces under each of them. Only when no
+        // explicit owner exists do we fall back to the containment parent /
+        // self — keeping "filed under" purely a location, never ownership.
+        const resolveRowOwners = (p: any, kind: "asset" | "liability"): string[] => {
+          const explicit = ((kind === "asset" ? ownersByAsset : ownersByLiability).get(p.id) || [])
+            .filter(id => anyProfileById.has(id));
+          if (explicit.length > 0) return explicit;
+          const fallback = resolveOwnerFromProfile(p);
+          return fallback ? [fallback] : [];
         };
         // Assets
         if (sectionFilter === "all" || sectionFilter === "profiles") {
@@ -4572,8 +4599,7 @@ export default function TrackersPage() {
             const f = p.fields || {}; const fin = f.finance || {}; const housing = f.housing || {}; const other = f.other || {};
             const cv = toNum(f.currentValue) ?? toNum(housing.currentValue) ?? toNum(other.currentValue) ?? toNum(other.value) ?? toNum(fin.balance) ?? toNum(f.value);
             const sub = p.type.charAt(0).toUpperCase() + p.type.slice(1);
-            const owner = resolveOwnerFromProfile(p);
-            rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
+            rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}`, ownerIds: resolveRowOwners(p, "asset") });
           });
         }
         // Liabilities — includes loans/mortgages/credit cards AND subscriptions.
@@ -4594,8 +4620,7 @@ export default function TrackersPage() {
             const meta = bal != null && bal > 0
               ? `$${Math.round(bal).toLocaleString()}`
               : (cost != null && cost > 0 ? `$${Math.round(cost).toLocaleString()}/${freq.startsWith('y') ? 'yr' : freq.startsWith('w') ? 'wk' : 'mo'}` : "—");
-            const owner = resolveOwnerFromProfile(p);
-            rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta, href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
+            rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta, href: `/profiles/${p.id}`, ownerIds: resolveRowOwners(p, "liability") });
           });
         }
         // Documents — linkedProfiles[] tells us which people the doc is for.
@@ -4650,24 +4675,34 @@ export default function TrackersPage() {
           return raw < 60 ? raw : raw + 30;
         };
         const personAccent = (id: string) => `${hueForPerson(id)} 65% 58%`;
-        // Group rows by primary owner. "Unassigned" catches anything that
-        // truly has no person attribution.
+        // Group rows by owner. A co-owned item (e.g. Bob 50% / Jim 50%) surfaces
+        // under EVERY owner, not just a primary. "Unassigned" catches anything
+        // that truly has no attribution. When a profile filter is active we only
+        // render the selected owners' groups, so a co-owned item doesn't drag in
+        // an unselected co-owner's section.
         type Group = { ownerId: string; ownerName: string; accent: string; rows: Row[] };
         const groupsMap = new Map<string, Group>();
         const orderedOwnerIds: string[] = [];
+        const restrictToSelected = filterMode === "selected" && filterIds.length > 0;
         rows.forEach(r => {
-          const primary = r.ownerIds[0] || "__unassigned__";
-          if (!groupsMap.has(primary)) {
-            orderedOwnerIds.push(primary);
-            const person = personById.get(primary);
-            groupsMap.set(primary, {
-              ownerId: primary,
-              ownerName: person?.name || "Unassigned",
-              accent: primary === "__unassigned__" ? "220 10% 50%" : personAccent(primary),
-              rows: [],
-            });
+          let owners = r.ownerIds.length ? [...new Set(r.ownerIds)] : ["__unassigned__"];
+          if (restrictToSelected) {
+            const sel = owners.filter(id => filterIds.includes(id));
+            if (sel.length) owners = sel;
           }
-          groupsMap.get(primary)!.rows.push(r);
+          owners.forEach(ownerId => {
+            if (!groupsMap.has(ownerId)) {
+              orderedOwnerIds.push(ownerId);
+              const person = anyProfileById.get(ownerId);
+              groupsMap.set(ownerId, {
+                ownerId,
+                ownerName: person?.name || "Unassigned",
+                accent: ownerId === "__unassigned__" ? "220 10% 50%" : personAccent(ownerId),
+                rows: [],
+              });
+            }
+            groupsMap.get(ownerId)!.rows.push(r);
+          });
         });
         // Always render the self profile first if present, then other people
         // sorted alphabetically, with Unassigned last.

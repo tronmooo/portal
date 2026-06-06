@@ -119,10 +119,14 @@ export function OwnershipEditor({
     onSuccess: () => {
       toast({ title: "Ownership updated" });
       resetDraft();
-      // Recalculate everything that depends on ownership.
+      // Recalculate everything that depends on ownership. The editor handles
+      // BOTH assets and liabilities, so invalidate both link caches; and the
+      // Linked/finance views key off /api/trackers, so refresh that too.
       queryClient.invalidateQueries({ queryKey: ["/api/asset-party-links"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ownership-history"] });

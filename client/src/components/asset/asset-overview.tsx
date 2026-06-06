@@ -238,7 +238,8 @@ export function OwnershipTree({
     <Card data-testid="card-ownership-tree">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Users className="h-4 w-4 text-primary" /> Ownership Tree
+          <Users className="h-4 w-4 text-primary" /> Location
+          <span className="text-[10px] font-normal text-muted-foreground">· where it's filed, not who owns it</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0">
