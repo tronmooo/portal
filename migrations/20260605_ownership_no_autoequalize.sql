@@ -51,7 +51,7 @@ BEGIN
     AND user_id = NEW.user_id
     AND lower(coalesce(role, 'owner')) IN ('owner', 'co_owner', 'co-owner');
   IF v_total > 100.05 THEN
-    RAISE EXCEPTION 'Ownership for asset % would total %%% (must not exceed 100%%)', NEW.asset_profile_id, v_total
+    RAISE EXCEPTION 'Ownership for asset % would total % percent (must not exceed 100)', NEW.asset_profile_id, v_total
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -75,7 +75,7 @@ BEGIN
     AND user_id = NEW.user_id
     AND lower(coalesce(role, 'owner')) IN ('owner', 'co_owner', 'co-owner');
   IF v_total > 100.05 THEN
-    RAISE EXCEPTION 'Ownership for liability % would total %%% (must not exceed 100%%)', NEW.liability_profile_id, v_total
+    RAISE EXCEPTION 'Ownership for liability % would total % percent (must not exceed 100)', NEW.liability_profile_id, v_total
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
