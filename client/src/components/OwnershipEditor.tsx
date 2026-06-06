@@ -142,7 +142,7 @@ export function OwnershipEditor({
             <Users className="h-4 w-4 text-muted-foreground" /> Ownership
           </span>
           <span
-            className={`text-xs font-semibold tabular-nums px-2 py-0.5 rounded-full ${
+            className={`text-sm font-bold tabular-nums px-2.5 py-1 rounded-full ${
               unconfigured
                 ? "bg-muted text-muted-foreground"
                 : validation.valid
@@ -193,17 +193,18 @@ export function OwnershipEditor({
               className="flex-1"
               data-testid={`owner-slider-${row.partyProfileId}`}
             />
-            <div className="relative w-16 shrink-0">
+            {/* Big, always-legible percentage with an inline editable field. */}
+            <div className="flex items-center gap-1 shrink-0">
               <Input
                 type="number"
                 min={0}
                 max={100}
                 value={String(row.pct)}
                 onChange={(e) => updatePct(idx, Number(e.target.value))}
-                className="h-8 text-xs pr-5 tabular-nums"
+                className="h-9 w-16 text-base font-semibold text-center tabular-nums px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                 data-testid={`owner-input-${row.partyProfileId}`}
               />
-              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground pointer-events-none">%</span>
+              <span className="text-base font-semibold text-muted-foreground w-3">%</span>
             </div>
             <button
               onClick={() => removeRow(idx)}
