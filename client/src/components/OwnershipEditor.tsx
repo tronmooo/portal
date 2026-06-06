@@ -40,8 +40,8 @@ export function OwnershipEditor({
   allProfiles,
   onSaved,
 }: {
-  profile: { id: string; name?: string; type?: string };
-  allProfiles: Array<{ id: string; name?: string; type?: string; fields?: any }>;
+  profile: { id: string; name?: string; type?: string; parentProfileId?: string | null };
+  allProfiles: Array<{ id: string; name?: string; type?: string; fields?: any; parentProfileId?: string | null }>;
   onSaved?: () => void;
 }) {
   const { toast } = useToast();
@@ -57,6 +57,13 @@ export function OwnershipEditor({
   );
   const selfProfile = useMemo(() => allProfiles.find((p) => p.type === "self"), [allProfiles]);
   const nameFor = (id: string) => candidates.find((c) => c.id === id)?.name || selfProfile?.name || "Unknown";
+  // The profile this asset is NESTED under (location), if that container is a
+  // person/pet. Nesting is NOT ownership — but it's the most likely intended
+  // owner, so we offer a one-click way to assign them.
+  const parentPerson = useMemo(
+    () => (profile.parentProfileId ? candidates.find((c) => c.id === profile.parentProfileId) : undefined),
+    [candidates, profile.parentProfileId],
+  );
 
   // Current owner links for this asset.
   const { data: allLinks = [] } = useQuery<any[]>({
@@ -149,6 +156,21 @@ export function OwnershipEditor({
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0 space-y-3">
+        {parentPerson && (
+          <p className="text-[11px] text-muted-foreground" data-testid="ownership-parent-note">
+            Filed under <span className="font-medium text-foreground">{parentPerson.name}</span> — that's
+            location, not ownership.{" "}
+            {!(rows.length === 1 && rows[0].partyProfileId === parentPerson.id && rows[0].pct === 100) && (
+              <button
+                className="text-primary hover:underline font-medium"
+                onClick={() => setRows([{ partyProfileId: parentPerson.id, pct: 100 }])}
+                data-testid="ownership-assign-parent"
+              >
+                Assign {parentPerson.name} 100%
+              </button>
+            )}
+          </p>
+        )}
         {unconfigured && (
           <p className="text-xs text-muted-foreground" data-testid="ownership-default-note">
             Ownership not set — this counts toward{" "}
