@@ -40,18 +40,20 @@ export type Anomaly = {
   vsBaseline?: number;     // percentage delta vs baseline
 };
 
-export async function detectAnomalies(storage: any): Promise<Anomaly[]> {
+export async function detectAnomalies(storage: any, profileIds?: string[]): Promise<Anomaly[]> {
   const anomalies: Anomaly[] = [];
 
-  // Pull ~90 days of data to compute baselines.
+  // Pull ~90 days of data to compute baselines. When a profile filter is
+  // active, scope the data to it so anomalies don't leak across profiles.
   const now = Date.now();
   const ninetyDayAgo = new Date(now - 90 * 86400000);
   const sevenDayAgo = new Date(now - 7 * 86400000);
   const thirtyDayAgo = new Date(now - 30 * 86400000);
 
+  const fp = profileIds && profileIds.length > 0 ? profileIds : undefined;
   const [expenses, trackers, budgets] = await Promise.all([
-    storage.getExpenses().catch(() => []),
-    storage.getTrackers().catch(() => []),
+    storage.getExpenses(fp).catch(() => []),
+    storage.getTrackers(120, fp).catch(() => []),
     storage.getBudgets().catch(() => []),
   ]);
 
@@ -173,11 +175,12 @@ export async function detectAnomalies(storage: any): Promise<Anomaly[]> {
 // WEEKLY REVIEW
 // ============================================================
 
-export async function generateWeeklyReview(storage: any): Promise<{
+export async function generateWeeklyReview(storage: any, profileIds?: string[]): Promise<{
   artifactId: string;
   title: string;
   highlights: number;
 }> {
+  const fp = profileIds && profileIds.length > 0 ? profileIds : undefined;
   const now = new Date();
   const weekAgo = new Date(now.getTime() - 7 * 86400000);
   const monthAgo = new Date(now.getTime() - 30 * 86400000);
@@ -186,12 +189,12 @@ export async function generateWeeklyReview(storage: any): Promise<{
 
   // Pull data in parallel.
   const [tasks, expenses, trackers, journal, habits, anomalies] = await Promise.all([
-    storage.getTasks().catch(() => []),
-    storage.getExpenses().catch(() => []),
-    storage.getTrackers().catch(() => []),
-    storage.getJournalEntries().catch(() => []),
-    storage.getHabits().catch(() => []),
-    detectAnomalies(storage).catch(() => []),
+    storage.getTasks(fp).catch(() => []),
+    storage.getExpenses(fp).catch(() => []),
+    storage.getTrackers(120, fp).catch(() => []),
+    storage.getJournalEntries(fp).catch(() => []),
+    storage.getHabits(fp).catch(() => []),
+    detectAnomalies(storage, fp).catch(() => []),
   ]);
 
   // Tasks completed this week

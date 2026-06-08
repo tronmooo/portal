@@ -752,7 +752,7 @@ export class SupabaseStorage implements IStorage {
     const [
       allProfiles,
       trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
-      journalRows,
+      journalRows, habitsRes,
     ] = await Promise.all([
       this.getProfiles(),
       this.supabase.from("trackers").select("*")
@@ -780,16 +780,24 @@ export class SupabaseStorage implements IStorage {
         .contains("linked_profiles", [id])
         .order("created_at", { ascending: false })
         .then(r => r.data || []),
+      // habits.linked_profiles is JSONB → JSON containment form.
+      this.supabase.from("habits").select("*")
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
+        .then(r => r.data || []),
     ]);
 
     const trackerIds = (trackersRes as any[]).map((r: any) => r.id);
     const obligationIds = (obligationsRes as any[]).map((r: any) => r.id);
-    const [trackerEntryRows, obligationPaymentRows] = await Promise.all([
+    const habitIds = (habitsRes as any[]).map((r: any) => r.id);
+    const [trackerEntryRows, obligationPaymentRows, habitCheckinRows] = await Promise.all([
       trackerIds.length > 0
         ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
       obligationIds.length > 0
         ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIds).order("date", { ascending: false }).then(r => r.data || [])
+        : Promise.resolve([] as any[]),
+      habitIds.length > 0
+        ? this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).in("habit_id", habitIds).order("date", { ascending: true }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
     ]);
 
@@ -804,6 +812,11 @@ export class SupabaseStorage implements IStorage {
       if (!paymentsByObligation.has(p.obligation_id)) paymentsByObligation.set(p.obligation_id, []);
       paymentsByObligation.get(p.obligation_id)!.push(p);
     }
+    const checkinsByHabit = new Map<string, any[]>();
+    for (const c of habitCheckinRows) {
+      if (!checkinsByHabit.has(c.habit_id)) checkinsByHabit.set(c.habit_id, []);
+      checkinsByHabit.get(c.habit_id)!.push(c);
+    }
 
     // Map DB rows to domain objects
     const relatedTrackers = (trackersRes as any[]).map((r: any) => this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map((e: any) => this.rowToTrackerEntry(e))));
@@ -813,6 +826,7 @@ export class SupabaseStorage implements IStorage {
     const relatedDocuments = (documentsRes as any[]).map((r: any) => this.rowToDocument({ ...r, file_data: "" }));
     const relatedObligations = (obligationsRes as any[]).map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
     const relatedJournal = (journalRows as any[]).map((r: any) => this.rowToJournalEntry(r));
+    const relatedHabits = (habitsRes as any[]).map((r: any) => this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map((c: any) => this.rowToHabitCheckin(c))));
 
     // Child profiles: profiles whose parentProfileId points to this profile.
     // PLUS: assets/liabilities where this profile is a CO-OWNER via the link
@@ -914,7 +928,7 @@ export class SupabaseStorage implements IStorage {
 
     // `relatedJournal` is added to the returned shape so the profile detail
     // page can render a journal section. Existing keys are unchanged.
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedJournal, childProfiles, timeline } as any;
+    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedJournal, relatedHabits, childProfiles, timeline } as any;
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {

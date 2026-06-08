@@ -37,6 +37,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { getProfileFilter } from "@/lib/profileFilter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -219,7 +220,15 @@ export function CommandSearch() {
         const controller = new AbortController();
         abortRef.current = controller;
         try {
-          const res = await apiRequest("GET", `/api/search?q=${encodeURIComponent(value.trim())}`);
+          // Scope search results to the active profile filter (single source of
+          // truth). The server filters when given profileIds; without this the
+          // ⌘K search leaked every profile's records regardless of the filter.
+          const filter = getProfileFilter();
+          const params = new URLSearchParams({ q: value.trim() });
+          if (filter.mode === "selected" && filter.selectedIds.length > 0) {
+            params.set("profileIds", filter.selectedIds.join(","));
+          }
+          const res = await apiRequest("GET", `/api/search?${params.toString()}`);
           // Discard if a newer request was fired
           if (thisRequestId !== requestIdRef.current) return;
           const raw: any[] = await res.json();

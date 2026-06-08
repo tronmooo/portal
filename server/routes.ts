@@ -720,9 +720,11 @@ export async function registerRoutes(
   }));
 
   // ---- Anomaly Detection ----
-  app.get("/api/anomalies", asyncHandler(async (_req, res) => {
+  app.get("/api/anomalies", asyncHandler(async (req, res) => {
     try {
-      const anomalies = await detectAnomalies(storage);
+      const idsParam = req.query.profileIds as string | undefined;
+      const ids = idsParam ? idsParam.split(",").filter(Boolean) : [];
+      const anomalies = await detectAnomalies(storage, ids);
       res.json({ anomalies });
     } catch (err: any) {
       log.error("[Anomalies]", err?.message || err);
@@ -737,7 +739,11 @@ export async function registerRoutes(
       return res.status(429).json({ error: "Weekly review already being generated. Please wait." });
     }
     try {
-      const result = await generateWeeklyReview(storage);
+      const idsParam = (req.body?.profileIds ?? req.query.profileIds) as string | string[] | undefined;
+      const ids = Array.isArray(idsParam)
+        ? idsParam.filter(Boolean)
+        : (typeof idsParam === "string" ? idsParam.split(",").filter(Boolean) : []);
+      const result = await generateWeeklyReview(storage, ids);
       res.json(result);
     } catch (err: any) {
       log.error("[Weekly Review]", err?.message || err);

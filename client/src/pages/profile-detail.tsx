@@ -72,6 +72,7 @@ import {
   Tag,
   FileText,
   Activity,
+  Flame,
   DollarSign,
   ListTodo,
   Calendar,
@@ -3291,6 +3292,62 @@ function InfoTab({
 // ============================================================
 // DOCUMENTS TAB — with expiration highlighting
 // ============================================================
+
+// Habits tab — read-focused view of every habit linked to this profile.
+// Data comes from the server embed (profile.relatedHabits), which is filtered
+// by the same JSONB linked_profiles containment as documents/trackers/etc., so
+// a habit assigned to this person always appears here. Creation/check-in
+// management lives on the Habits page (linked below) to keep this surface
+// focused on "what habits does this profile have + how are they doing".
+function ProfileHabitsTab({ habits, profileName }: { habits: any[]; profileName: string }) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!habits || habits.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center">
+          <Flame className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No habits linked to {profileName}</p>
+          <p className="text-xs text-muted-foreground mt-1">Create a habit on the Habits page and link it to this profile</p>
+        </CardContent>
+      </Card>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {habits.map((h: any) => {
+        const checkins = Array.isArray(h.checkins) ? h.checkins : [];
+        const doneToday = checkins.some((c: any) => c.date === today);
+        const streak = Number(h.currentStreak) || 0;
+        return (
+          <Card key={h.id} data-testid={`profile-habit-${h.id}`}>
+            <CardContent className="py-3 px-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${doneToday ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground"}`}>
+                  {doneToday ? <Check className="h-4 w-4" /> : <Flame className="h-4 w-4" />}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold truncate">{h.name}</p>
+                  <p className="text-xs text-muted-foreground capitalize">
+                    {(h.frequency || "daily")}{Number(h.targetPerDay) > 1 ? ` · ${h.targetPerDay}×/day` : ""}
+                    {doneToday ? " · done today" : ""}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="flex items-center gap-1 justify-end text-sm font-bold tabular-nums">
+                  <Flame className={`h-3.5 w-3.5 ${streak > 0 ? "text-orange-500" : "text-muted-foreground/40"}`} />
+                  {streak}
+                </div>
+                <p className="text-[10px] text-muted-foreground">day streak</p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+      <Link href="/habits" className="block text-center text-xs text-primary hover:underline py-2" data-testid="link-manage-habits">Manage habits →</Link>
+    </div>
+  );
+}
 
 function DocumentsTab({
   documents: embeddedDocuments,
@@ -6651,6 +6708,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "belongings", label: "Belongings", testId: "tab-belongings" },
     { value: "health-trackers", label: "Health & Trackers", testId: "tab-health-trackers" },
     { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
+    { value: "habits", label: "Habits", testId: "tab-habits" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
   ],
   self: [
@@ -6658,6 +6716,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "belongings", label: "Belongings", testId: "tab-belongings" },
     { value: "health-trackers", label: "Health & Trackers", testId: "tab-health-trackers" },
     { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
+    { value: "habits", label: "Habits", testId: "tab-habits" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
   ],
   // Pet — care focused. "Health & Vet" tab removed 2026-05-21: it contained
@@ -6668,6 +6727,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
   pet: [
     { value: "info", label: "Overview", testId: "tab-info" },
     { value: "all-trackers", label: "Trackers", testId: "tab-all-trackers" },
+    { value: "habits", label: "Habits", testId: "tab-habits" },
     { value: "money", label: "Money", testId: "tab-money" },
     { value: "trackers", label: "Documents", testId: "tab-trackers" },
     { value: "tasks", label: "Reminders", testId: "tab-tasks" },
@@ -10185,6 +10245,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
           ['health','fitness','weight','sleep','wellness','nutrition','blood'].some(c => 
             (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c)));
         case "trackers": return (profile.relatedDocuments || []).length > 0; // Documents tab — show if docs exist
+        case "habits": return (profile.relatedHabits || []).length > 0; // Habits tab — show if any habit is linked
         case "finances": return (profile.relatedExpenses || []).length > 0;
         case "tasks": return (profile.relatedTasks || []).length > 0;
         case "activity": return ((profile.relatedExpenses || []).length + (profile.relatedTasks || []).length + (profile.relatedEvents || []).length) > 0;
@@ -11578,6 +11639,12 @@ export default function ProfileDetailPage() {
                       </CardContent>
                     </Card>
                   )}
+                </TabsContent>
+              )}
+
+              {tabValues.has("habits") && (
+                <TabsContent value="habits" className="mt-4 px-1 sm:px-0">
+                  <ProfileHabitsTab habits={profile.relatedHabits || []} profileName={profile.name} />
                 </TabsContent>
               )}
 

@@ -794,7 +794,9 @@ export class MemStorage implements IStorage {
     const allProfiles = await this.getProfiles();
     const childProfiles = allProfiles.filter(p => p.parentProfileId === profile.id);
 
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, childProfiles, timeline };
+    const relatedHabits = Array.from(this.habits.values()).filter(h => (h.linkedProfiles || []).includes(id));
+
+    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedHabits, childProfiles, timeline };
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {

@@ -981,6 +981,7 @@ export interface ProfileDetail extends Profile {
   relatedEvents: CalendarEvent[];
   relatedDocuments: Document[];
   relatedObligations: Obligation[];
+  relatedHabits: Habit[];
   childProfiles: Profile[];  // Nested profiles (assets, subscriptions, loans, etc.)
   timeline: TimelineEntry[];
 }

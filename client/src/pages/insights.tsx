@@ -1,10 +1,11 @@
 // Insights page — surfaces anomalies, runs receipt OCR, and triggers weekly
 // review generation. Lives at /insights so the dashboard layout is untouched.
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -65,15 +66,25 @@ export default function InsightsPage() {
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [scanning, setScanning] = useState(false);
 
+  // Scope insights/anomalies/weekly-review to the active profile filter (single
+  // source of truth). Without this the Reports surfaces leaked every profile's
+  // data regardless of the selected scope.
+  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  useEffect(() => subscribeProfileFilter((s) => { setFilterMode(s.mode); setFilterIds([...s.selectedIds]); }), []);
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+
   const { data: anomData, isLoading: anomLoading, refetch: refetchAnom } = useQuery<{ anomalies: Anomaly[] }>({
-    queryKey: ["/api/anomalies"],
-    queryFn: () => apiRequest("GET", "/api/anomalies").then(r => r.json()),
+    queryKey: ["/api/anomalies", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/anomalies${profileParam}`).then(r => r.json()),
   });
   const anomalies: Anomaly[] = anomData?.anomalies || [];
 
   const reviewMut = useMutation({
     mutationFn: async () => {
-      const r = await apiRequest("POST", "/api/weekly-review/generate", {});
+      const r = await apiRequest("POST", "/api/weekly-review/generate", {
+        profileIds: filterMode === "selected" && filterIds.length > 0 ? filterIds : undefined,
+      });
       return r.json();
     },
     onSuccess: (data: { artifactId: string; title: string }) => {
