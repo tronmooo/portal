@@ -7,7 +7,8 @@ import { parseMoney } from "@/lib/utils";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
-import { getProfileFilter, setDashboardProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
+import { getProfileFilter, setDashboardProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
+import { computeNetWorth } from "@shared/net-worth";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ import {
   ChevronLeft, ChevronRight, Plus, ShieldCheck,
   Wallet, PieChart as PieChartIcon, Settings2, AlertCircle, Bell, BellOff,
   Scale, Activity as ActivityIcon, Moon,
+  Users, TrendingDown,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -3870,6 +3872,132 @@ function CustomizeDialog({
 
 // ─── Main Dashboard ──────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HOUSEHOLD DASHBOARD ("Everyone" scope)
+//
+// The "Everyone" scope renders a DISTINCT aggregate dashboard — NOT a person's
+// personal dashboard summed up. It deliberately OMITS per-person widgets
+// (habits, journal, personal goals, personal budgets, health trackers) because
+// those are only meaningful for a single individual. Instead it surfaces
+// household-wide analytics: combined net worth, a per-profile summary +
+// ownership breakdown, shared/upcoming bills, the household schedule,
+// cross-profile insights, and a recent-activity feed across everyone.
+//
+// Selecting any profile (one or many) flips back to the personal dashboard
+// (the section grid), scoped to that selection. See the render branch in
+// DashboardPage.
+// ─────────────────────────────────────────────────────────────────────────────
+const fmtUSD0 = (n: number) => `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString()}`;
+
+function HouseholdGroupHeader({ icon: Icon, label }: { icon: any; label: string }) {
+  return (
+    <div className="flex items-center gap-2 mt-3 mb-1 px-0.5">
+      <Icon className="h-4 w-4 text-muted-foreground/80" aria-hidden="true" />
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{label}</span>
+      <div className="flex-1 h-px bg-border/40" />
+    </div>
+  );
+}
+
+// Per-profile summary cards = profile summaries + asset/liability ownership
+// breakdown in one. Net worth per person comes from the SINGLE source of truth
+// (computeNetWorth), so it agrees with the personal dashboard to the dollar.
+// Clicking a card switches the scope to that profile's personal dashboard.
+function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
+  const cards = useMemo(() => {
+    const people = (allProfiles || []).filter((p: any) => p.type === "self" || p.type === "person" || p.type === "pet");
+    return people
+      .map((p: any) => {
+        const nw = computeNetWorth(allProfiles, { mode: "selected", selectedIds: [p.id] });
+        return {
+          id: p.id,
+          name: p.name || "Unnamed",
+          type: p.type as string,
+          netWorth: nw.netWorth,
+          assets: nw.assets,
+          liabilities: nw.liabilities,
+          assetCount: nw.assetProfiles.length,
+          liabilityCount: nw.liabilityProfiles.length,
+        };
+      })
+      .sort((a: any, b: any) => b.netWorth - a.netWorth);
+  }, [allProfiles]);
+
+  if (cards.length === 0) return null;
+  const iconFor = (type: string) => (type === "pet" ? Heart : Users);
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      {cards.map((c: any) => {
+        const Icon = iconFor(c.type);
+        return (
+          <button
+            key={c.id}
+            onClick={() => setFilterSelected([c.id], [c.name])}
+            className="text-left rounded-xl border border-border bg-card hover:bg-muted/20 transition-colors p-3"
+            data-testid={`household-profile-${c.id}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-primary/10 text-primary">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold truncate">{c.type === "self" ? `${c.name} (You)` : c.name}</p>
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{c.type}</p>
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <p className={`text-sm font-bold tabular-nums ${c.netWorth >= 0 ? "text-foreground" : "text-destructive"}`}>{fmtUSD0(c.netWorth)}</p>
+                <p className="text-[10px] text-muted-foreground">net worth</p>
+              </div>
+            </div>
+            <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1"><TrendingUp className="h-3 w-3 text-emerald-500" />{fmtUSD0(c.assets)} <span className="text-muted-foreground/60">· {c.assetCount} assets</span></span>
+              <span className="inline-flex items-center gap-1"><TrendingDown className="h-3 w-3 text-rose-500" />{fmtUSD0(c.liabilities)} <span className="text-muted-foreground/60">· {c.liabilityCount} debts</span></span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
+  enhanced: any;
+  stats: any;
+  allProfiles: any[];
+  showSkeleton?: boolean;
+}) {
+  if (showSkeleton) return <SkeletonGrid cols={3} rows={2} h="h-14" />;
+  return (
+    <div className="space-y-3" data-testid="household-dashboard">
+      {/* Combined financials across all profiles (net worth / cash flow / budget) */}
+      <HeroKPISection enhanced={enhanced} stats={stats} filterMode="everyone" filterIds={[]} refetching={false} />
+
+      {/* Profile summaries + asset/liability ownership breakdown */}
+      <HouseholdGroupHeader icon={Users} label="Household Profiles" />
+      <ProfileSummaryGrid allProfiles={allProfiles} />
+
+      {/* Shared / household-wide obligations + attention items */}
+      <HouseholdGroupHeader icon={AlertTriangle} label="Needs Attention" />
+      {stats ? <ActionRequiredSection stats={stats} enhanced={enhanced} profileId={undefined} /> : null}
+      <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />
+
+      {/* Household schedule (today's events across everyone) */}
+      <HouseholdGroupHeader icon={Calendar} label="Today" />
+      <TodaySection enhanced={enhanced} stats={stats} />
+
+      {/* Cross-profile insights */}
+      <AISummaryWidget stats={stats} enhanced={enhanced} filterMode="everyone" filterIds={[]} scopeLabel="Everyone" />
+
+      {/* Recent activity across all profiles */}
+      <HouseholdGroupHeader icon={Activity} label="Recent Activity" />
+      {stats ? <ActivitySection activities={stats.recentActivity} /> : null}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   useEffect(() => { document.title = "Dashboard — Portol"; }, []);
   const { toast } = useToast();
@@ -3919,28 +4047,17 @@ export default function DashboardPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
-  // Dashboard-only: "Everyone" mode is disallowed here. When the page mounts
-  // with the global filter in everyone mode (or with no selection), switch to
-  // the Self profile so every widget renders the logged-in user's data instead
-  // of the unfiltered global rollup. Other pages keep their Everyone behavior
-  // because they don't run this effect.
-  //
-  // PERF (2026-05-30 Phase 3): track whether this auto-redirect is still
-  // pending. If it is, we suppress the bootstrap fetch below so the dashboard
-  // doesn't fire bootstrap once for everyone-mode then immediately again for
-  // the redirected self-mode (the "auto-redirect feedback loop" that caused
-  // 2 round-trips per cold load).
-  const needsSelfRedirect =
-    (filterMode === "everyone" || filterIds.length === 0) &&
-    !!allProfiles && allProfiles.length > 0 &&
-    !!allProfiles.find((p: any) => p.type === "self");
+  // Default scope = the primary user. On a user's FIRST load (no stored filter
+  // yet) we seed the Self profile so the dashboard opens as that person's
+  // PERSONAL dashboard, not the aggregate. "Everyone" is now a first-class,
+  // user-selectable scope that renders the distinct HOUSEHOLD dashboard
+  // (see the render branch below). If the account has no Self profile we leave
+  // the filter on Everyone (Household), which is the right fallback when there
+  // is no single primary user. Idempotent — never overrides a user's choice.
   useEffect(() => {
-    if (filterMode !== "everyone" && filterIds.length > 0) return;
     if (!allProfiles || allProfiles.length === 0) return;
-    const self = allProfiles.find((p: any) => p.type === "self");
-    if (!self) return;
-    setDashboardProfileFilter(self.id, self.name || "Self");
-  }, [allProfiles, filterMode, filterIds.length]);
+    initDefaultProfileFilter(allProfiles);
+  }, [allProfiles]);
 
   // Compute stats profile param for API calls.
   // Bug fix: gate on filterMode === "selected" so that when the user is in
@@ -3956,9 +4073,15 @@ export default function DashboardPage() {
   // filterIds passed through directly.
   const resolvedFilterId = filterMode === "everyone" ? undefined : (filterIds.length === 1 ? filterIds[0] : undefined);
 
-  // Sync profile filter to module-level state for backward compat with sub-pages
+  // Sync profile filter to module-level state for backward compat with sub-pages.
+  // Only mirror a SINGLE selected profile. We must NOT write "everyone" here:
+  //   (a) on first load it would persist "everyone" before initDefaultProfileFilter
+  //       can seed the Self profile (defeating the personal-by-default rule), and
+  //   (b) it would reset a 2+ profile multi-selection back to everyone.
+  // "Everyone" is only ever set by an explicit toolbar choice (which persists it).
   useEffect(() => {
-    setDashboardProfileFilter(resolvedFilterId, resolvedFilterId ? (allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || "") : "Everyone");
+    if (!resolvedFilterId) return;
+    setDashboardProfileFilter(resolvedFilterId, allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || "");
   }, [resolvedFilterId, allProfiles]);
 
   // PERF (2026-05-28): single-shot bootstrap. /api/dashboard-bootstrap returns
@@ -3981,9 +4104,6 @@ export default function DashboardPage() {
     : `?month=${currentMonth}`;
   const bootstrapQuery = useQuery<any>({
     queryKey: ["/api/dashboard-bootstrap", filterMode, ...filterIds, currentMonth],
-    // Phase 3: don't fetch the everyone-mode bootstrap if we're about to
-    // redirect to Self anyway — saves one full round-trip per cold load.
-    enabled: !needsSelfRedirect,
     queryFn: async () => {
       const r = await apiRequest("GET", `/api/dashboard-bootstrap${bootstrapQs}`);
       const b = await r.json();
@@ -4009,7 +4129,7 @@ export default function DashboardPage() {
   // Also keep them disabled while the self-redirect is pending so they don't
   // fetch with stale everyone-mode params and immediately refetch with the
   // redirected self filter (Phase 3 loop fix).
-  const bootstrapSettled = bootstrapQuery.isFetched && !needsSelfRedirect;
+  const bootstrapSettled = bootstrapQuery.isFetched;
 
   const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
@@ -4209,7 +4329,6 @@ export default function DashboardPage() {
             <MultiProfileFilter
               onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
               compact
-              hideEveryone
             />
           </div>
         </div>
@@ -4263,7 +4382,14 @@ export default function DashboardPage() {
       {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid.
           Swimlane group headers (💰 Money / 📅 Today / ❤️ Health) are emitted before the first
           section of each group, so the page visually segments into related clusters. */}
-      {(() => {
+      {filterMode === "everyone" ? (
+        <HouseholdDashboard
+          enhanced={enhanced}
+          stats={stats}
+          allProfiles={allProfiles}
+          showSkeleton={showDashSkeleton && !stats}
+        />
+      ) : (() => {
         const afterGridIds = new Set(["activity"]);
         const beforeGrid = fullWidthSections.filter(s => !afterGridIds.has(s.id));
         const afterGrid = fullWidthSections.filter(s => afterGridIds.has(s.id));

@@ -6,7 +6,7 @@
 // Otherwise, selectedIds contains the checked profile IDs.
 
 const STORAGE_KEY = "portol_profile_filter";
-const LOCAL_KEY_BASE = "portol_profile_filter_v4"; // bumped to v4 + per-user namespacing
+const LOCAL_KEY_BASE = "portol_profile_filter_v5"; // v5: default scope is now the Self profile (not "everyone")
 const USER_ID_KEY = "portol_active_user_id";
 const FILTER_EVENT = "portol:profile-filter-change";
 
@@ -25,6 +25,10 @@ try {
   localStorage.removeItem("portol_profile_filter");
   sessionStorage.removeItem("portol_profile_filter");
 } catch {}
+// NOTE: we intentionally do NOT eagerly delete the v4 namespaced keys here —
+// they belong to a per-user slot we can't enumerate cheaply. The v5 bump means
+// any user without a v5 value is treated as "unset", so initDefaultProfileFilter
+// will seed their Self profile on first load. Stale v4 keys are harmless.
 
 /** Get the storage key for the currently-active user. Falls back to a global
  *  slot only if no user id is known yet (e.g. during initial page load before
@@ -137,6 +141,36 @@ export function subscribeProfileFilter(
 /** Get the current filter state */
 export function getProfileFilter(): FilterState {
   return { ..._state };
+}
+
+/** Whether the active user has an explicitly-stored filter choice. When false,
+ *  the in-memory state is the "everyone" fallback and callers may seed a
+ *  better default (the Self profile) via initDefaultProfileFilter(). */
+export function hasStoredFilter(): boolean {
+  try {
+    return localStorage.getItem(storageKey()) != null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Seed the default scope on first load. The DEFAULT is the primary user — the
+ * single `self` profile — so the app opens as that person's personal dashboard
+ * rather than the aggregate "Everyone" view. Only runs when the user has made
+ * no explicit choice yet (hasStoredFilter() === false). If there is no Self
+ * profile, we leave the filter on "everyone" (the Household dashboard), which
+ * is a sensible fallback when there is no single primary user.
+ *
+ * Idempotent: once a value is stored (here or via a user action) this is a
+ * no-op, so a user who deliberately picks "Everyone" is never overridden.
+ */
+export function initDefaultProfileFilter(profiles: Array<{ id: string; name?: string; type?: string }> | null | undefined): void {
+  if (hasStoredFilter()) return;
+  if (!profiles || profiles.length === 0) return;
+  const self = profiles.find(p => p?.type === "self");
+  if (!self) return; // no primary user → keep Everyone (Household) default
+  setFilterSelected([self.id], [self.name || "Me"]);
 }
 
 /** Set filter to "everyone" (no filtering) */
