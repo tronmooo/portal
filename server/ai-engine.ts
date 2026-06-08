@@ -809,6 +809,33 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
 // FILE UPLOAD PROCESSING — AI Vision extraction
 // ============================================================
 
+// Keyword fallback for field categorization. The AI emits free-form field
+// names, so an exact-match map alone leaves many fields uncategorized (→ OTHER).
+// This pairs the explicit map with a normalized + substring pass so e.g.
+// "homeZipCode", "billing_state", "mailing_city" still land in ADDRESS.
+const CATEGORY_KEYWORDS: Array<{ category: string; patterns: RegExp[] }> = [
+  { category: 'ADDRESS', patterns: [/zip/i, /postal/i, /postcode/i, /\bcity\b/i, /\bstate\b/i, /province/i, /county/i, /country/i, /street/i, /address/i] },
+  { category: 'IDENTITY', patterns: [/licen[sc]e/i, /passport/i, /\bid\s?(number|no)\b/i, /document\s?number/i, /endorsement/i, /restriction/i, /\bclass\b/i, /\bssn\b/i] },
+  { category: 'FINANCE', patterns: [/balance/i, /amount/i, /payment/i, /interest/i, /\bapr\b/i, /premium/i, /\btax\b/i, /price/i, /\bcost\b/i, /account\s?(number|no)/i, /routing/i, /credit/i, /loan/i, /payoff/i] },
+  { category: 'HEALTH', patterns: [/diagnos/i, /medication/i, /prescription/i, /blood\s?pressure/i, /heart\s?rate/i, /glucose/i, /cholesterol/i, /\bdose\b/i, /vaccin/i] },
+  { category: 'VEHICLE', patterns: [/\bvin\b/i, /\bmake\b/i, /\bmodel\b/i, /mileage/i, /odometer/i, /plate/i] },
+  { category: 'DATE', patterns: [/date/i, /\bdob\b/i, /expir/i, /issued/i, /renew/i] },
+];
+
+function categorizeField(key: string, explicit: Record<string, string>): string {
+  if (explicit[key]) return explicit[key];
+  // Case-insensitive exact match against the explicit map.
+  const lower = key.toLowerCase();
+  for (const k of Object.keys(explicit)) {
+    if (k.toLowerCase() === lower) return explicit[k];
+  }
+  // Keyword/substring fallback.
+  for (const { category, patterns } of CATEGORY_KEYWORDS) {
+    if (patterns.some((p) => p.test(key))) return category;
+  }
+  return 'OTHER';
+}
+
 export async function processFileUpload(
   fileName: string,
   mimeType: string,
@@ -1126,13 +1153,22 @@ Return ONLY the JSON array, nothing else.`;
     // Build extraction fields list for the pending extraction UI
     // -- Category mapping for smart field categorization --
     const CATEGORY_MAP: Record<string, string> = {};
-    const personalKeys = ['firstName', 'lastName', 'name', 'patientName', 'dateOfBirth', 'dob', 'birthday', 'sex', 'gender', 'height', 'weight', 'address', 'city', 'state', 'zip', 'country', 'ssn', 'passportNumber', 'nationality', 'maritalStatus', 'bloodType', 'allergies', 'emergencyContact', 'phone', 'email', 'relationship'];
+    const personalKeys = ['firstName', 'lastName', 'middleName', 'fullName', 'name', 'patientName', 'dateOfBirth', 'dob', 'birthday', 'sex', 'gender', 'height', 'weight', 'eyeColor', 'hairColor', 'ssn', 'passportNumber', 'nationality', 'maritalStatus', 'bloodType', 'allergies', 'emergencyContact', 'phone', 'phoneNumber', 'email', 'relationship'];
+    // ADDRESS — every common address component. Previously city/state/zip lived
+    // under PERSONAL (and variants like stateCode/zipCode were unmapped, so they
+    // fell through to OTHER). A dedicated group keeps structured address data
+    // together everywhere it is shown.
+    const addressKeys = ['address', 'addressLine1', 'addressLine2', 'street', 'streetAddress', 'streetNumber', 'city', 'state', 'stateCode', 'stateName', 'stateAbbreviation', 'province', 'zip', 'zipCode', 'postalCode', 'postcode', 'county', 'country', 'countryCode', 'mailingAddress', 'residenceAddress'];
+    // IDENTITY — government ID / license fields (driver's license, passport, etc.)
+    const identityKeys = ['license', 'licenseNumber', 'licenseClass', 'class', 'endorsements', 'restrictions', 'idNumber', 'documentNumber', 'cardNumber', 'issuingState', 'issuingAuthority', 'organDonor', 'veteran', 'realId'];
     const healthKeys = ['diagnosis', 'medications', 'providerName', 'facilityName', 'doctorName', 'interpretation', 'conclusion', 'bloodPressure', 'heartRate', 'temperature', 'oxygenSaturation', 'glucose', 'cholesterol', 'bmi', 'testResults'];
-    const financeKeys = ['totalAmount', 'amountDue', 'amountPaid', 'balance', 'premium', 'monthlyPayment', 'subtotal', 'tax', 'interestRate', 'principalBalance', 'payoffAmount', 'accountNumber', 'policyNumber'];
+    const financeKeys = ['totalAmount', 'amountDue', 'amountPaid', 'balance', 'currentBalance', 'remainingBalance', 'originalBalance', 'principal', 'premium', 'monthlyPayment', 'minimumPayment', 'subtotal', 'tax', 'interestRate', 'apr', 'principalBalance', 'payoffAmount', 'creditLimit', 'accountNumber', 'routingNumber', 'policyNumber', 'lender', 'creditor'];
     const vehicleKeys = ['make', 'model', 'year', 'vin', 'licensePlate', 'mileage', 'registrationNumber', 'engineType', 'fuelType', 'color'];
-    const dateKeys = ['expirationDate', 'issueDate', 'dueDate', 'renewalDate', 'reportDate'];
+    const dateKeys = ['expirationDate', 'issueDate', 'issuedDate', 'dueDate', 'renewalDate', 'reportDate', 'effectiveDate', 'maturityDate'];
     const documentKeys = ['documentTitle', 'reportTitle', 'fileName', 'barcode', 'signatureType', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'organizationName', 'facilityAddress'];
     for (const k of personalKeys) CATEGORY_MAP[k] = 'PERSONAL';
+    for (const k of addressKeys) CATEGORY_MAP[k] = 'ADDRESS';
+    for (const k of identityKeys) CATEGORY_MAP[k] = 'IDENTITY';
     for (const k of healthKeys) CATEGORY_MAP[k] = 'HEALTH';
     for (const k of financeKeys) CATEGORY_MAP[k] = 'FINANCE';
     for (const k of vehicleKeys) CATEGORY_MAP[k] = 'VEHICLE';
@@ -1231,7 +1267,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
           else suggestedEvent = `📅 ${label}`;
         }
 
-        const category = CATEGORY_MAP[key] || 'OTHER';
+        const category = categorizeField(key, CATEGORY_MAP);
         const selected = true;
         extractedFields.push({ key, label, value, selected, isDate, category, suggestedEvent });
 

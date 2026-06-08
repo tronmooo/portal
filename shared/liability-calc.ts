@@ -51,6 +51,25 @@ export function normalizeAnnualRate(r: number | string | undefined | null): numb
   return n > 1 ? n / 100 : n;
 }
 
+/**
+ * Resolve a liability's annual interest rate from its `fields` object.
+ * Canonical resolver — mirrors the read order used by the liability detail
+ * page so the server and client agree on the rate. Returns a decimal (0.065).
+ */
+export function resolveAnnualRate(fields: any): number {
+  const f = fields || {};
+  const finance = f.finance || {};
+  const loan = f.loan || {};
+  return normalizeAnnualRate(
+    f.annualInterestRate ?? f.annual_interest_rate ??
+    f.interestRate ?? f.interest_rate ??
+    f.rate ?? f.apr ??
+    finance.interestRate ?? finance.interest_rate ?? finance.apr ??
+    loan.interestRate ?? loan.interest_rate ??
+    0,
+  );
+}
+
 /** Minimum payment for a fully-amortizing loan. */
 export function computeAmortizedPayment(balance: number, annualRate: number, months: number): number {
   const r = normalizeAnnualRate(annualRate) / 12;

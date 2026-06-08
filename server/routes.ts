@@ -7,7 +7,8 @@ const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
-import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES } from "@shared/asset-value";
+import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
+import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { selfIdsFrom } from "@shared/scope";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -6927,7 +6928,41 @@ No emojis. No prose outside the JSON.`,
     if (!liability) return res.status(404).json({ error: "Resource not found" });
     const parsed = insertLiabilityPaymentSchema.safeParse({ ...req.body, liabilityProfileId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const row = await storage.createLiabilityPayment(parsed.data);
+
+    // SINGLE SOURCE OF TRUTH: the server — not the client — owns the
+    // principal/interest split AND the resulting balance. The client used to
+    // compute these and ship them, but a field-name mismatch silently dropped
+    // them to $0 and stale client balances caused drift. Compute them here from
+    // the liability's own balance + APR so every reader (profile page, payment
+    // history, dashboard totals, net worth, linked page) agrees.
+    const balanceBefore = resolveLiabilityBalance(liability);
+    const annualRate = resolveAnnualRate(liability.fields);
+    const data = { ...parsed.data };
+    if (balanceBefore > 0) {
+      const split = allocatePayment(data.amount, balanceBefore, annualRate, data.fees ?? 0);
+      data.principalPortion = split.principal;
+      data.interestPortion = split.interest;
+      data.fees = split.fees;
+      data.remainingBalanceAfter = split.remainingBalanceAfter;
+    } else {
+      // No tracked balance: treat the whole payment as principal, no interest.
+      data.principalPortion = data.amount;
+      data.interestPortion = 0;
+    }
+    const row = await storage.createLiabilityPayment(data);
+
+    // Persist the new balance back onto the liability so the rest of the app
+    // reads it from one place. updateProfile deep-merges fields.
+    if (balanceBefore > 0 && data.remainingBalanceAfter != null) {
+      await storage.updateProfile(req.params.id, {
+        fields: {
+          ...(liability.fields || {}),
+          currentBalance: data.remainingBalanceAfter,
+          remainingBalance: data.remainingBalanceAfter,
+          loanBalance: data.remainingBalanceAfter,
+        },
+      });
+    }
     res.json(row);
   }));
   app.patch("/api/liability-payments/:id", asyncHandler(async (req, res) => {

@@ -114,8 +114,8 @@ interface LiabilityPayment {
   liabilityProfileId: string;
   paymentDate: string;     // ISO YYYY-MM-DD
   amount: number;
-  principal: number;
-  interest: number;
+  principalPortion: number;
+  interestPortion: number;
   fees: number;
   remainingBalanceAfter?: number | null;
   notes?: string | null;
@@ -659,7 +659,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     [payments],
   );
   const interestPaidToDate = useMemo(
-    () => payments.reduce((s, p) => s + (Number(p.interest) || 0), 0),
+    () => payments.reduce((s, p) => s + (Number(p.interestPortion) || 0), 0),
     [payments],
   );
 
@@ -725,7 +725,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     mutationFn: async (payment: LiabilityPayment) => {
       // Restore principal + fees to the balance (interest doesn't change balance,
       // it accrued separately).
-      const restoreAmount = (Number(payment.principal) || 0) + (Number(payment.fees) || 0);
+      const restoreAmount = (Number(payment.principalPortion) || 0) + (Number(payment.fees) || 0);
       const newBalance = (terms.currentBalance || 0) + restoreAmount;
       await apiRequest("DELETE", `/api/liability-payments/${payment.id}`);
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
@@ -759,29 +759,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       paymentDate: string;
       notes?: string;
     }) => {
-      const split = allocatePayment(
-        input.amount,
-        terms.currentBalance,
-        terms.annualRate,
-        0,
-      );
+      // The server owns the principal/interest split AND the resulting balance
+      // (single source of truth). We send only the raw payment; the server
+      // computes the rest from the liability's balance + APR and updates the
+      // profile balance atomically. See POST /api/liabilities/:id/payments.
       const res = await apiRequest("POST", `/api/liabilities/${profile.id}/payments`, {
         paymentDate: input.paymentDate,
         amount: input.amount,
-        principal: split.principal,
-        interest: split.interest,
-        fees: split.fees,
-        remainingBalanceAfter: split.remainingBalanceAfter,
         notes: input.notes || null,
-      });
-      // Update the profile balance to keep dashboards in sync.
-      await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        fields: {
-          ...(profile.fields || {}),
-          currentBalance: split.remainingBalanceAfter,
-          remainingBalance: split.remainingBalanceAfter,
-          loanBalance: split.remainingBalanceAfter,
-        },
       });
       return res.json();
     },
@@ -1578,8 +1563,8 @@ function PaymentRow({
       </div>
       <div className="flex items-center gap-3">
         <div className="text-right text-xs text-muted-foreground shrink-0">
-          <div>P {fmtUSD(Number(p.principal) || 0)}</div>
-          <div>I {fmtUSD(Number(p.interest) || 0)}</div>
+          <div>P {fmtUSD(Number(p.principalPortion) || 0)}</div>
+          <div>I {fmtUSD(Number(p.interestPortion) || 0)}</div>
           {expanded && p.remainingBalanceAfter != null ? (
             <div className="mt-0.5">Bal {fmtUSD(Number(p.remainingBalanceAfter) || 0)}</div>
           ) : null}
@@ -3175,7 +3160,7 @@ function ActivityTimelineCard({
         id: `pay-${p.id}`,
         type: "payment",
         title: `Payment ${fmtUSD(Number(p.amount) || 0)}`,
-        description: `${fmtUSD(Number(p.principal) || 0)} principal · ${fmtUSD(Number(p.interest) || 0)} interest${p.notes ? ` · ${p.notes}` : ""}`,
+        description: `${fmtUSD(Number(p.principalPortion) || 0)} principal · ${fmtUSD(Number(p.interestPortion) || 0)} interest${p.notes ? ` · ${p.notes}` : ""}`,
         timestamp: new Date(ts).toISOString(),
       });
     }

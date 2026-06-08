@@ -2525,6 +2525,27 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
 }
 
 // ── Field groups by profile type ──
+// Canonical address group reused across profile types. Lists every common
+// address key the AI extractor / form writers emit so structured address data
+// always lands in a real "Address" group instead of the "Other" catch-all.
+const ADDRESS_FIELD_GROUP: { title: string; fields: { key: string; label: string }[] }[] = [
+  { title: "Address", fields: [
+    { key: "address", label: "Address" },
+    { key: "addressLine1", label: "Address Line 1" },
+    { key: "addressLine2", label: "Address Line 2" },
+    { key: "street", label: "Street" },
+    { key: "streetAddress", label: "Street Address" },
+    { key: "city", label: "City" },
+    { key: "state", label: "State" },
+    { key: "stateCode", label: "State Code" },
+    { key: "stateName", label: "State Name" },
+    { key: "zip", label: "ZIP" },
+    { key: "zipCode", label: "ZIP Code" },
+    { key: "postalCode", label: "Postal Code" },
+    { key: "county", label: "County" },
+    { key: "country", label: "Country" },
+  ]},
+];
 const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label: string }[] }[]> = {
   vehicle: [
     { title: "Vehicle Identity", fields: [
@@ -2560,8 +2581,12 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
   ],
   person: [
     { title: "Contact Info", fields: [
-      { key: "phone", label: "Phone" }, { key: "email", label: "Email" }, { key: "address", label: "Address" },
+      { key: "phone", label: "Phone" }, { key: "email", label: "Email" },
     ]},
+    // Address group — every common address component the extractor produces.
+    // Without these keys, city/state/zip dump into "Other (N)", which is the
+    // exact mis-categorization users hit with driver's licenses & IDs.
+    ...ADDRESS_FIELD_GROUP,
     { title: "Personal Details", fields: [
       { key: "birthday", label: "Birthday" }, { key: "relationship", label: "Relationship" },
       { key: "bloodType", label: "Blood Type" }, { key: "height", label: "Height" }, { key: "weight", label: "Weight" },
@@ -2575,8 +2600,13 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
       { key: "licenseExpiration", label: "License Expiration" },
       { key: "expirationDate", label: "Expiration Date" },
       { key: "issueDate", label: "Issue Date" },
-      { key: "state", label: "State" },
-      { key: "stateName", label: "State Name" },
+      { key: "class", label: "Class" },
+      { key: "licenseClass", label: "License Class" },
+      { key: "endorsements", label: "Endorsements" },
+      { key: "restrictions", label: "Restrictions" },
+      { key: "sex", label: "Sex" },
+      { key: "eyeColor", label: "Eye Color" },
+      { key: "height", label: "Height" },
     ]},
     { title: "Emergency", fields: [
       { key: "emergencyContact", label: "Emergency Contact" }, { key: "allergies", label: "Allergies" },
@@ -2600,10 +2630,10 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
       { key: "weight", label: "Weight" }, { key: "bloodType", label: "Blood Type" },
       { key: "sex", label: "Sex" },
     ]},
-    { title: "Contact & Location", fields: [
+    { title: "Contact", fields: [
       { key: "phone", label: "Phone" }, { key: "email", label: "Email" },
-      { key: "address", label: "Address" }, { key: "state", label: "State" },
     ]},
+    ...ADDRESS_FIELD_GROUP,
   ],
   loan: [
     { title: "Loan Details", fields: [
@@ -3000,8 +3030,18 @@ function InfoTab({
       })()}
 
       {/* ── 3. Grouped Field Sections (type-aware) ── */}
+      {/* Only show a group if at least one of its fields has a value. This keeps
+          large reference groups (e.g. the comprehensive Address group) from
+          rendering a wall of empty "tap to add" rows on profiles that don't use
+          them, while a group surfaces automatically the moment extraction or a
+          manual edit fills any of its fields. */}
       {groups.length > 0 ? (
-        groups.slice().sort((a, b) => a.title.localeCompare(b.title)).map(group => {
+        groups
+          .filter(group => group.fields.some(({ key }) => {
+            const v = profile.fields[key];
+            return v != null && v !== "" && !(typeof v === "object" && Object.keys(v).length === 0);
+          }))
+          .slice().sort((a, b) => a.title.localeCompare(b.title)).map(group => {
           const isCollapsed = collapsedSections.has(group.title);
           return (
             <Card key={group.title}>
@@ -3253,7 +3293,7 @@ function InfoTab({
 // ============================================================
 
 function DocumentsTab({
-  documents,
+  documents: embeddedDocuments,
   profileId,
   profileName,
   childProfiles,
@@ -3281,6 +3321,27 @@ function DocumentsTab({
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   const [linkTarget, setLinkTarget] = useState<string>("profile"); // "profile" or a child profile ID
   const { view: docView, setView: setDocView } = useLinkedView(); // Wave 15: list/sheet toggle
+
+  // SINGLE SOURCE OF TRUTH for documents: the canonical `/api/documents` list,
+  // filtered by `linkedProfiles` — the exact source + filter the global Linked
+  // page uses. Previously this tab relied ONLY on the server `relatedDocuments`
+  // embed, so a doc could show on the Linked page (filtered by linkedProfiles)
+  // yet be missing here if the embed and the list ever diverged. We now union
+  // the embed with the live list so any document linked to this profile (or a
+  // child profile) ALWAYS appears. See ARCHITECTURE.md §2 (Documents).
+  const { data: allDocsRaw } = useQuery<any[]>({
+    queryKey: ["/api/documents"],
+    queryFn: async () => (await apiRequest("GET", "/api/documents")).json(),
+  });
+  const documents = useMemo(() => {
+    const byId = new Map<string, any>();
+    for (const d of (embeddedDocuments || [])) byId.set(d.id, d);
+    for (const d of (allDocsRaw || [])) {
+      const linked: string[] = (d.linkedProfiles || []) as string[];
+      if (linked.includes(profileId)) byId.set(d.id, { ...byId.get(d.id), ...d });
+    }
+    return Array.from(byId.values());
+  }, [embeddedDocuments, allDocsRaw, profileId]);
 
   // ── Child-asset documents (Section 5) ──
   const isAssetTypeForDocs = profileType ? NESTED_ASSET_TYPES.includes(profileType as NestedAssetType) : false;
@@ -3338,7 +3399,7 @@ function DocumentsTab({
     if (docTypeFilter !== "all" && normalizeFilter(d.type) !== normalizeFilter(docTypeFilter)) return false;
     if (docSearch) {
       const q = docSearch.toLowerCase();
-      return d.name.toLowerCase().includes(q) || d.type.toLowerCase().includes(q) || (d.tags || []).some(t => t.toLowerCase().includes(q));
+      return d.name.toLowerCase().includes(q) || d.type.toLowerCase().includes(q) || (d.tags || []).some((t: string) => t.toLowerCase().includes(q));
     }
     return true;
   }), [documents, docTypeFilter, docSearch]);
