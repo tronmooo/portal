@@ -740,6 +740,15 @@ export class SupabaseStorage implements IStorage {
     // profile_<type> junction tables were dropped. `linked_profiles @> [id]`
     // (via PostgREST `.contains`) returns rows that link to this profile.
     // Trackers/entries/payments are pulled in the same parallel batch.
+    //
+    // CRITICAL — JSONB vs ARRAY literal syntax (see _applyProfileFilter):
+    // linked_profiles is JSONB on trackers/expenses/tasks/events/documents/
+    // obligations, so the containment value MUST be JSON: `JSON.stringify([id])`
+    // → cs.["id"] → @> '["id"]'::jsonb. Passing a bare JS array `[id]` makes
+    // supabase-js emit a PG array literal `cs.{id}` which casts to invalid JSON
+    // and SILENTLY returns zero rows — that was the bug where a profile's own
+    // documents/trackers/tasks never appeared in its tabs. journal_entries is a
+    // text[] column, so it (and only it) keeps the bare `[id]` array form.
     const [
       allProfiles,
       trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
@@ -747,23 +756,23 @@ export class SupabaseStorage implements IStorage {
     ] = await Promise.all([
       this.getProfiles(),
       this.supabase.from("trackers").select("*")
-        .eq("user_id", this.userId).contains("linked_profiles", [id])
+        .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("expenses").select("*")
-        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", [id])
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("tasks").select("*")
-        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", [id])
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("events").select("*")
-        .eq("user_id", this.userId).contains("linked_profiles", [id])
+        .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("documents")
         .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
-        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", [id])
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("obligations").select("*")
-        .eq("user_id", this.userId).contains("linked_profiles", [id])
+        .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("journal_entries")
         .select("*")
