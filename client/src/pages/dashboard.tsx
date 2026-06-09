@@ -136,6 +136,13 @@ const ACTIVITY_ICONS: Record<string, any> = {
   expense: DollarSign,
 };
 
+// Per-type accent (HSL) for the activity feed chips. Falls back to slate.
+const ACTIVITY_COLORS: Record<string, string> = {
+  tracker_entry: "350 89% 60%",
+  task_completed: "152 60% 44%",
+  expense: "25 95% 53%",
+};
+
 // ─── Animated Count-Up Hook ───────────────────────────────────────────────────
 
 function useCountUp(target: number, duration: number = 600): number {
@@ -3634,52 +3641,38 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
   const validActivities = useMemo(() => (activities || []).filter(item => {
     const desc = item.description?.trim();
     return desc && desc.length > 0;
-  }).slice(0, 5), [activities]);
+  }).slice(0, 8), [activities]);
 
   if (validActivities.length === 0) return (
     <CollapsibleSection icon={Activity} label="Recent Activity" testId="section-activity">
-      <div className="text-center py-4">
+      <div className="text-center py-6">
         <Activity className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground">No recent activity</p>
+        <p className="text-xs text-muted-foreground">No recent activity yet</p>
+        <p className="text-[11px] text-muted-foreground/60 mt-0.5">Log a tracker, complete a task, or add an expense</p>
       </div>
     </CollapsibleSection>
   );
 
-  type ActivityItem = (typeof validActivities)[0];
-  const groups: { hourLabel: string; items: ActivityItem[] }[] = [];
-  for (const item of validActivities) {
-    const d = new Date(item.timestamp);
-    const hourKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.getHours()}`;
-    const hourLabel = timeAgo(item.timestamp);
-    const last = groups[groups.length - 1];
-    const lastKey = last ? (() => { const ld = new Date(last.items[0].timestamp); return `${ld.getFullYear()}-${ld.getMonth()}-${ld.getDate()}-${ld.getHours()}`; })() : null;
-    if (lastKey === hourKey) {
-      last.items.push(item);
-    } else {
-      groups.push({ hourLabel, items: [item] });
-    }
-  }
-
   return (
     <CollapsibleSection icon={Activity} label="Recent Activity" count={validActivities.length} testId="section-activity">
-      <div className="space-y-1.5">
-        {groups.map((group, gi) => (
-          <div key={gi}>
-            <p className="text-xs-tight text-muted-foreground/60 uppercase tracking-wider mb-0.5 mt-1 first:mt-0">{group.hourLabel}</p>
-            {group.items.map((item, i) => {
-              const Icon = ACTIVITY_ICONS[item.type] || Activity;
-              const route = ACTIVITY_ROUTES[item.type];
-              return (
-                <div key={i}
-                  onClick={() => route && navigate(route)}
-                  className={`flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0 ${route ? "cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors" : ""}`}>
-                  <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
-                  <span className="text-xs truncate flex-1">{item.description}</span>
-                </div>
-              );
-            })}
-          </div>
-        ))}
+      <div className="space-y-0.5">
+        {validActivities.map((item, i) => {
+          const Icon = ACTIVITY_ICONS[item.type] || Activity;
+          const route = ACTIVITY_ROUTES[item.type];
+          const hsl = ACTIVITY_COLORS[item.type] || "215 16% 47%";
+          return (
+            <div key={i}
+              onClick={() => route && navigate(route)}
+              className={`flex items-center gap-2.5 py-1.5 ${route ? "cursor-pointer hover:bg-muted/40 rounded-lg px-1.5 -mx-1.5 transition-colors" : ""}`}
+              data-testid={`activity-item-${i}`}>
+              <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}>
+                <Icon className="h-3.5 w-3.5" />
+              </div>
+              <span className="text-xs truncate flex-1 text-foreground/90">{item.description}</span>
+              <span className="text-[10px] text-muted-foreground/70 shrink-0 tabular-nums">{timeAgo(item.timestamp)}</span>
+            </div>
+          );
+        })}
       </div>
     </CollapsibleSection>
   );
