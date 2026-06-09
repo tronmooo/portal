@@ -464,12 +464,13 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
 // own row at the very top of the dashboard (under AI Summary). The smaller
 // KPISection below becomes a secondary chip row of habits/tasks/journal/docs.
 
-function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = false }: {
+function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = false, hideBudget = false }: {
   enhanced: any;
   stats: DashboardStats | undefined;
   filterMode: string;
   filterIds: string[];
   refetching?: boolean;
+  hideBudget?: boolean;
 }) {
   const [, navigate] = useLocation();
   const [heroPopup, setHeroPopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
@@ -610,7 +611,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           Updating filter…
         </div>
       )}
-      <div className={`grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
+      <div className={`grid grid-cols-1 ${hideBudget ? "sm:grid-cols-2" : "sm:grid-cols-3"} gap-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
       {/* NET WORTH */}
       <button
         type="button"
@@ -639,6 +640,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
       </button>
 
       {/* BUDGET */}
+      {!hideBudget && (
       <button
         type="button"
         onClick={() => setHeroPopup("budget")}
@@ -677,6 +679,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           />
         </div>
       </button>
+      )}
 
       {/* CASH FLOW */}
       <button
@@ -685,22 +688,24 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
         className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
         style={{
           background: cashFlow >= 0
-            ? 'linear-gradient(135deg, hsl(200 70% 55% / 0.16) 0%, hsl(200 70% 55% / 0.04) 60%, transparent 100%)'
-            : 'linear-gradient(135deg, hsl(43 85% 52% / 0.16) 0%, hsl(43 85% 52% / 0.04) 60%, transparent 100%)',
+            ? 'linear-gradient(135deg, hsl(200 80% 52% / 0.18) 0%, hsl(200 80% 52% / 0.04) 60%, transparent 100%)'
+            : 'linear-gradient(135deg, hsl(0 72% 52% / 0.18) 0%, hsl(0 72% 52% / 0.04) 60%, transparent 100%)',
         }}
         data-testid="hero-kpi-cash-flow"
       >
-        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: cashFlow >= 0 ? 'linear-gradient(90deg, hsl(200 70% 55%), transparent)' : 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
+        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: cashFlow >= 0 ? 'linear-gradient(90deg, hsl(200 80% 52%), transparent)' : 'linear-gradient(90deg, hsl(0 72% 52%), transparent)' }} />
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
-            <div className="icon-badge" style={{ background: cashFlow >= 0 ? 'hsl(200 70% 55% / 0.18)' : 'hsl(43 85% 52% / 0.18)' }}>
-              <TrendingUp className="h-4 w-4" style={{ color: cashFlow >= 0 ? 'hsl(200 70% 55%)' : 'hsl(43 85% 52%)' }} />
+            <div className="icon-badge" style={{ background: cashFlow >= 0 ? 'hsl(200 80% 52% / 0.18)' : 'hsl(0 72% 52% / 0.18)' }}>
+              {cashFlow >= 0
+                ? <TrendingUp className="h-4 w-4" style={{ color: 'hsl(200 80% 52%)' }} />
+                : <TrendingDown className="h-4 w-4" style={{ color: 'hsl(0 72% 52%)' }} />}
             </div>
             <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Cash Flow</span>
           </div>
         </div>
         <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: cashFlow >= 0 ? 'hsl(200 70% 55%)' : 'hsl(43 85% 52%)' }}>
+          <span className="text-3xl font-bold tracking-tight" style={{ color: cashFlow >= 0 ? 'hsl(200 80% 52%)' : 'hsl(0 72% 52%)' }}>
             {cashFlow >= 0 ? '+' : '−'}${fmt(animatedCashFlow)}
           </span>
         </div>
@@ -4039,36 +4044,16 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
   if (showSkeleton) return <SkeletonGrid cols={3} rows={2} h="h-14" />;
   return (
     <div className="space-y-3" data-testid="household-dashboard">
-      {/* #3 scope clarity — an explicit banner so it's obvious you're viewing
-          the aggregate, not one person's dashboard. */}
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 text-primary font-semibold">
-          <Users className="h-3.5 w-3.5" /> Household · Everyone
-        </span>
-        <span className="text-muted-foreground/70">Combined view across all profiles</span>
-      </div>
-
-      {/* #1 Combined net worth hero (assets vs liabilities) */}
-      <HouseholdHero allProfiles={allProfiles} />
-
-      {/* #2 Per-profile summaries + ownership breakdown */}
-      <HouseholdGroupHeader icon={Users} label="Household Profiles" />
-      <ProfileSummaryGrid allProfiles={allProfiles} />
-
-      {/* Shared / household-wide obligations + attention items */}
-      <HouseholdGroupHeader icon={AlertTriangle} label="Needs Attention" />
+      {/* Everyone scope = the standard dashboard overview aggregated across all
+          profiles, WITHOUT the Budget card (budget is per-person and lives on
+          the personal dashboard). Net Worth + Cash Flow hero, then the KPI
+          tiles, then the shared/household sections. */}
+      <HeroKPISection enhanced={enhanced} stats={stats} filterMode="everyone" filterIds={[]} refetching={false} hideBudget />
+      {stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={[]} filterMode="everyone" /> : null}
       {stats ? <ActionRequiredSection stats={stats} enhanced={enhanced} profileId={undefined} /> : null}
       <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />
-
-      {/* Household schedule (today's events across everyone) */}
-      <HouseholdGroupHeader icon={Calendar} label="Today" />
       <TodaySection enhanced={enhanced} stats={stats} />
-
-      {/* Cross-profile insights */}
       <AISummaryWidget stats={stats} enhanced={enhanced} filterMode="everyone" filterIds={[]} scopeLabel="Everyone" />
-
-      {/* Recent activity across all profiles */}
-      <HouseholdGroupHeader icon={Activity} label="Recent Activity" />
       {stats ? <ActivitySection activities={stats.recentActivity} /> : null}
     </div>
   );
