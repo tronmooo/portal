@@ -3889,6 +3889,25 @@ function CustomizeDialog({
 // ─────────────────────────────────────────────────────────────────────────────
 const fmtUSD0 = (n: number) => `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString()}`;
 
+// Deterministic accent color per profile so a person reads with the same hue
+// wherever they appear (household cards, avatars). Small fixed HSL palette,
+// hashed by id+name so it's stable across renders.
+const PROFILE_ACCENTS = [
+  "199 89% 48%", "152 60% 44%", "262 83% 62%", "25 95% 53%",
+  "330 81% 60%", "199 89% 60%", "174 72% 41%", "350 89% 60%",
+];
+function profileAccent(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < (seed || "").length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return PROFILE_ACCENTS[h % PROFILE_ACCENTS.length];
+}
+function profileInitials(name: string): string {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function HouseholdGroupHeader({ icon: Icon, label }: { icon: any; label: string }) {
   return (
     <div className="flex items-center gap-2 mt-3 mb-1 px-0.5">
@@ -3899,10 +3918,47 @@ function HouseholdGroupHeader({ icon: Icon, label }: { icon: any; label: string 
   );
 }
 
-// Per-profile summary cards = profile summaries + asset/liability ownership
-// breakdown in one. Net worth per person comes from the SINGLE source of truth
-// (computeNetWorth), so it agrees with the personal dashboard to the dollar.
-// Clicking a card switches the scope to that profile's personal dashboard.
+// #1 Household hero — one combined Net Worth headline with an assets-vs-
+// liabilities split bar. Distinct from the personal dashboard's KPI tiles so
+// "Everyone" reads as an aggregate view at a glance. Uses computeNetWorth (the
+// single source of truth) so it agrees with the per-profile cards + personal
+// dashboards to the dollar.
+function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
+  const { assets, liabilities, netWorth } = useMemo(
+    () => computeNetWorth(allProfiles || [], { mode: "everyone", selectedIds: [] }),
+    [allProfiles],
+  );
+  const total = assets + liabilities;
+  const assetPct = total > 0 ? Math.round((assets / total) * 100) : (assets > 0 ? 100 : 0);
+  const peopleCount = (allProfiles || []).filter((p: any) => p.type === "self" || p.type === "person").length;
+  return (
+    <div className="rounded-2xl border border-border bg-gradient-to-br from-primary/[0.08] to-transparent p-4" data-testid="household-hero">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <Users className="h-3.5 w-3.5" /> Household net worth
+        </div>
+        {peopleCount > 0 && <span className="text-[11px] text-muted-foreground">{peopleCount} {peopleCount === 1 ? "person" : "people"}</span>}
+      </div>
+      <p className={`mt-1 text-3xl font-black tabular-nums ${netWorth >= 0 ? "text-foreground" : "text-rose-500"}`}>{fmtUSD0(netWorth)}</p>
+      <div className="mt-3 h-2.5 w-full rounded-full overflow-hidden bg-rose-500/70 flex" title={`${assetPct}% assets`}>
+        <div className="h-full bg-emerald-500" style={{ width: `${assetPct}%` }} />
+      </div>
+      <div className="mt-2 flex items-center justify-between text-xs">
+        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+          <TrendingUp className="h-3.5 w-3.5" />{fmtUSD0(assets)} <span className="text-muted-foreground/70 font-normal">assets</span>
+        </span>
+        <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-medium">
+          <span className="text-muted-foreground/70 font-normal">debt</span> {fmtUSD0(liabilities)} <TrendingDown className="h-3.5 w-3.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// #2 Per-profile summary cards = profile summaries + asset/liability ownership
+// breakdown + each person's share of household net worth. Net worth per person
+// comes from the SINGLE source of truth (computeNetWorth). Clicking a card
+// switches scope to that profile's personal dashboard.
 function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
   const cards = useMemo(() => {
     const people = (allProfiles || []).filter((p: any) => p.type === "self" || p.type === "person" || p.type === "pet");
@@ -3923,24 +3979,38 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
       .sort((a: any, b: any) => b.netWorth - a.netWorth);
   }, [allProfiles]);
 
-  if (cards.length === 0) return null;
-  const iconFor = (type: string) => (type === "pet" ? Heart : Users);
+  const totalPositiveNW = useMemo(() => cards.reduce((s: number, c: any) => s + Math.max(0, c.netWorth), 0), [cards]);
+
+  if (cards.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border bg-card/50 p-6 text-center">
+        <Users className="h-7 w-7 text-muted-foreground/40 mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">No people or pets yet</p>
+        <p className="text-xs text-muted-foreground/70 mt-0.5">Add a profile to see household totals here</p>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
       {cards.map((c: any) => {
-        const Icon = iconFor(c.type);
+        const accent = profileAccent(c.id + c.name);
+        const share = totalPositiveNW > 0 ? (Math.max(0, c.netWorth) / totalPositiveNW) * 100 : 0;
         return (
           <button
             key={c.id}
             onClick={() => setFilterSelected([c.id], [c.name])}
             className="text-left rounded-xl border border-border bg-card hover:bg-muted/20 transition-colors p-3"
+            style={{ borderLeft: `3px solid hsl(${accent})` }}
             data-testid={`household-profile-${c.id}`}
           >
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-primary/10 text-primary">
-                  <Icon className="h-4 w-4" />
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div
+                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-xs font-bold"
+                  style={{ background: `hsl(${accent} / 0.18)`, color: `hsl(${accent})` }}
+                >
+                  {c.type === "pet" ? <Heart className="h-4 w-4" /> : profileInitials(c.name)}
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold truncate">{c.type === "self" ? `${c.name} (You)` : c.name}</p>
@@ -3948,13 +4018,17 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <p className={`text-sm font-bold tabular-nums ${c.netWorth >= 0 ? "text-foreground" : "text-destructive"}`}>{fmtUSD0(c.netWorth)}</p>
-                <p className="text-[10px] text-muted-foreground">net worth</p>
+                <p className={`text-sm font-bold tabular-nums ${c.netWorth >= 0 ? "text-foreground" : "text-rose-500"}`}>{fmtUSD0(c.netWorth)}</p>
+                <p className="text-[10px] text-muted-foreground">{share >= 1 ? `${share.toFixed(0)}% of household` : "net worth"}</p>
               </div>
             </div>
-            <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1"><TrendingUp className="h-3 w-3 text-emerald-500" />{fmtUSD0(c.assets)} <span className="text-muted-foreground/60">· {c.assetCount} assets</span></span>
-              <span className="inline-flex items-center gap-1"><TrendingDown className="h-3 w-3 text-rose-500" />{fmtUSD0(c.liabilities)} <span className="text-muted-foreground/60">· {c.liabilityCount} debts</span></span>
+            {/* share-of-household bar */}
+            <div className="mt-2 h-1.5 w-full rounded-full overflow-hidden bg-muted">
+              <div className="h-full rounded-full" style={{ width: `${Math.max(share, c.netWorth > 0 ? 2 : 0)}%`, background: `hsl(${accent})` }} />
+            </div>
+            <div className="mt-1.5 flex items-center gap-3 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1"><TrendingUp className="h-3 w-3 text-emerald-500" />{fmtUSD0(c.assets)} <span className="text-muted-foreground/60">· {c.assetCount} {c.assetCount === 1 ? "asset" : "assets"}</span></span>
+              <span className="inline-flex items-center gap-1"><TrendingDown className="h-3 w-3 text-rose-500" />{fmtUSD0(c.liabilities)} <span className="text-muted-foreground/60">· {c.liabilityCount} {c.liabilityCount === 1 ? "debt" : "debts"}</span></span>
             </div>
           </button>
         );
@@ -3972,10 +4046,19 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
   if (showSkeleton) return <SkeletonGrid cols={3} rows={2} h="h-14" />;
   return (
     <div className="space-y-3" data-testid="household-dashboard">
-      {/* Combined financials across all profiles (net worth / cash flow / budget) */}
-      <HeroKPISection enhanced={enhanced} stats={stats} filterMode="everyone" filterIds={[]} refetching={false} />
+      {/* #3 scope clarity — an explicit banner so it's obvious you're viewing
+          the aggregate, not one person's dashboard. */}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 text-primary font-semibold">
+          <Users className="h-3.5 w-3.5" /> Household · Everyone
+        </span>
+        <span className="text-muted-foreground/70">Combined view across all profiles</span>
+      </div>
 
-      {/* Profile summaries + asset/liability ownership breakdown */}
+      {/* #1 Combined net worth hero (assets vs liabilities) */}
+      <HouseholdHero allProfiles={allProfiles} />
+
+      {/* #2 Per-profile summaries + ownership breakdown */}
       <HouseholdGroupHeader icon={Users} label="Household Profiles" />
       <ProfileSummaryGrid allProfiles={allProfiles} />
 
