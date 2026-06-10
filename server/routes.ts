@@ -288,8 +288,30 @@ const responseCache = new Map<string, { data: any; expiresAt: number }>();
 // fallback below is unreachable in practice — but if userId were ever missing
 // we return a per-request-unique token instead of a shared "anon" string, so a
 // cross-user cache bucket can NEVER form. (Hardening follow-up.)
+// ── Cross-instance cache coherence (migration 010) ─────────────────────
+// The response cache is per-serverless-instance, so a write busted here was
+// still served stale by other warm instances (user report 2026-06-10:
+// "deleted items still show up, I constantly have to refresh"). Fix: every
+// per-user cache key embeds the user's DATA VERSION (a Postgres counter
+// bumped by the write middleware). A write on ANY instance changes the key
+// every OTHER instance computes within ~VERSION_MEMO_MS, so stale entries
+// simply stop being addressable. Old entries age out via their TTL.
+const VERSION_MEMO_MS = 2000;
+const versionMemo = new Map<string, { v: number; at: number }>();
+async function currentDataVersion(uid: string): Promise<number> {
+  const hit = versionMemo.get(uid);
+  if (hit && Date.now() - hit.at < VERSION_MEMO_MS) return hit.v;
+  const v = await (storage as any).getDataVersion?.() ?? 0;
+  if (versionMemo.size > 5000) versionMemo.clear();
+  versionMemo.set(uid, { v: Number(v) || 0, at: Date.now() });
+  return Number(v) || 0;
+}
 function cacheUserKey(req: { userId?: string }): string {
-  return req.userId || `nouser-${Math.random().toString(36).slice(2)}`;
+  if (!req.userId) return `nouser-${Math.random().toString(36).slice(2)}`;
+  const v = (req as any).__dataVersion;
+  // Version resolved by the GET middleware below. Fallback "x" (no version
+  // known) still produces a stable key — same-instance busting covers it.
+  return v !== undefined ? `${req.userId}@v${v}` : req.userId;
 }
 function getCached(key: string): any | null {
   if (!CACHE_ENABLED) return null;
@@ -558,11 +580,24 @@ export async function registerRoutes(
       const ckStats = `stats:${uid}:all`;
       const ckEnh = `enhanced:${uid}:all`;
       const ckProf = `profiles:${uid}`;
-      if (!getCached(ckStats)) storage.getStats().then(s => setCache(ckStats, s, 60*1000)).catch(()=>{}); // [P5.1] 60s cap
-      if (!getCached(ckEnh)) storage.getDashboardEnhanced().then(d => setCache(ckEnh, d, 60*1000)).catch(()=>{}); // [P5.1] 60s cap
-      if (!getCached(ckProf)) storage.getProfiles().then(p => setCache(ckProf, p, 60*1000)).catch(()=>{}); // [P5.1] 60s cap
+      if (!getCached(ckStats)) storage.getStats().then(s => setCache(ckStats, s, 5*60*1000)).catch(()=>{}); // version-stamped key: fresh by construction
+      if (!getCached(ckEnh)) storage.getDashboardEnhanced().then(d => setCache(ckEnh, d, 5*60*1000)).catch(()=>{}); // version-stamped key: fresh by construction
+      if (!getCached(ckProf)) storage.getProfiles().then(p => setCache(ckProf, p, 5*60*1000)).catch(()=>{}); // version-stamped key: fresh by construction
     }
   }));
+
+  // Resolve the per-user data version for GET requests (memoized 2s per
+  // instance) so cacheUserKey() produces version-stamped keys. Fail open to
+  // "no version" — same-instance busting still applies, and correctness is
+  // restored on the next successful resolve.
+  app.use("/api", (req, _res, next) => {
+    if (req.method !== "GET") return next();
+    const uid = (req as AuthenticatedRequest).userId;
+    if (!uid) return next();
+    currentDataVersion(uid)
+      .then((v) => { (req as any).__dataVersion = v; next(); })
+      .catch(() => next());
+  });
 
   // Rate limit all write operations (POST/PATCH/DELETE) — 60 writes per minute per user
   app.use("/api", (req, res, next) => {
@@ -600,6 +635,32 @@ export async function registerRoutes(
         bustCache(`notifications:${uid}`);
         bustCache(`cashflow:${uid}`);
         bustCache(`calendar:${uid}`);
+        // Cross-instance: bump the DB data version so version-stamped cache
+        // keys on every OTHER instance go stale within ~2s. Fire-and-forget —
+        // the local bust above already guarantees same-instance freshness.
+        const bumpVersion = () => {
+          versionMemo.delete(uid);
+          Promise.resolve((storage as any).bumpDataVersion?.())
+            .then((v: number) => { if (v) versionMemo.set(uid, { v, at: Date.now() }); })
+            .catch(() => { /* next GET resolves the version from the DB */ });
+        };
+        bumpVersion();
+        // Long-running writes (AI chat can take 5-30s) do their DB writes
+        // DURING the handler — a GET racing mid-handler can cache pre-write
+        // data under the already-bumped version. Re-bust + re-bump when the
+        // response finishes so anything cached mid-write goes stale too.
+        res.once("finish", () => {
+          try {
+            for (const prefix of [
+              "stats:", "enhanced:", "profile-detail:", "profiles:", "trackers:",
+              "tasks:", "expenses:", "events:", "habits:", "obligations:",
+              "journal:", "documents:", "goals:", "insights:", "insights-data:",
+              "activity:", "ai-digest:", "artifacts:", "notifications:",
+              "cashflow:", "calendar:",
+            ]) bustCache(`${prefix}${uid}`);
+          } catch { /* best-effort */ }
+          bumpVersion();
+        });
       } else {
         bustAllCaches();
       }
@@ -2037,7 +2098,7 @@ If unsure, return "profile_fact".`,
         storage.getGoals(),
         storage.getEvents(),
       ]));
-      if (!hit) setCache(ck, dataset, 60 * 1000); // [P5.1] 60s (was 5m): write-busts are per-instance on serverless; bound cross-instance staleness
+      if (!hit) setCache(ck, dataset, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
       const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] =
         dataset as [Awaited<ReturnType<typeof storage.getProfiles>>, Awaited<ReturnType<typeof storage.getTrackers>>, Awaited<ReturnType<typeof storage.getTasks>>, Awaited<ReturnType<typeof storage.getExpenses>>, Awaited<ReturnType<typeof storage.getHabits>>, Awaited<ReturnType<typeof storage.getObligations>>, Awaited<ReturnType<typeof storage.getJournalEntries>>, Awaited<ReturnType<typeof storage.getDocuments>>, Awaited<ReturnType<typeof storage.getGoals>>, Awaited<ReturnType<typeof storage.getEvents>>];
       // BUG-20260528-profile-filter-leakage: previously inline mp() that
@@ -3121,7 +3182,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     const ck = `trackers:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getTrackers());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     // BUG-20260528-finance-tracker: hide legacy rows whose category is no
     // longer surfaced. We filter at read time so we don't have to migrate
     // existing data (which the user wants kept intact).
@@ -3477,7 +3538,7 @@ Rules:
     const ck = `tasks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getTasks>> = hit || await dedupe(ck, () => storage.getTasks());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     // Support both ?profileId=x (single) and ?profileIds=x,y (multi)
     const fp = req.query.profileId as string | undefined;
     const fps = req.query.profileIds as string | undefined;
@@ -3645,7 +3706,7 @@ Rules:
     const ck = `expenses:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getExpenses());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     // Server-side filtering
     if (req.query.category && typeof req.query.category === "string") {
       items = items.filter((e: any) => e.category === req.query.category);
@@ -3755,7 +3816,7 @@ Rules:
     const ck = `paychecks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getPaychecks>> = hit || await dedupe(ck, () => storage.getPaychecks());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -3900,7 +3961,7 @@ Rules:
     const ck = `events:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getEvents());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
       // [P2.4] canonical orphan rule — see filterByProfileScope.
@@ -4200,7 +4261,7 @@ Rules:
     const ck = `habits:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getHabits());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     // [P2.4] single (?profileId=) and multi (?profileIds=) now share the same
     // canonical orphan rule via filterByProfileScope.
     const profileIdsParam = req.query.profileIds as string | undefined;
@@ -4292,7 +4353,7 @@ Rules:
     const ck = `obligations:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getObligations>> = hit || await dedupe(ck, () => storage.getObligations());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     // [P2.4] single (?profileId=) and multi (?profileIds=) now share the same
     // canonical orphan rule via filterByProfileScope.
     const profileIdsParam = req.query.profileIds as string | undefined;
@@ -4765,7 +4826,7 @@ Rules:
     const ck = `journal:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getJournalEntries>> = hit || await dedupe(ck, () => storage.getJournalEntries());
-    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     if (profileIdsParam) {

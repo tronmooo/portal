@@ -1614,6 +1614,25 @@ export class SupabaseStorage implements IStorage {
    * writes. `defaultToSelf: false` means a row whose only owner was the
    * dangling profile ends up un-owned rather than silently re-owned by Self.
    */
+  // ── Per-user data version (cross-instance cache coherence) ────────────
+  // See migrations/010_user_data_versions.sql. Reads resolve the current
+  // version (memoized in routes.ts); writes bump it so cached API responses
+  // on every serverless instance go stale within ~2s of any mutation.
+  async getDataVersion(): Promise<number> {
+    const { data, error } = await this.supabase
+      .from("user_data_versions").select("version")
+      .eq("user_id", this.userId).maybeSingle();
+    if (error) throw error;
+    return Number(data?.version || 0);
+  }
+
+  async bumpDataVersion(): Promise<number> {
+    const { data, error } = await this.supabase
+      .rpc("bump_user_data_version", { p_user_id: this.userId });
+    if (error) throw error;
+    return Number(data || 0);
+  }
+
   async repairOwnershipConsistency(): Promise<{ scanned: number; repaired: number; details: string[] }> {
     // Same table list + soft-delete visibility as getOwnershipConsistency.
     const entityTables: { et: OwnedEntityType; table: string; softDelete: boolean }[] = [

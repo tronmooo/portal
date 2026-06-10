@@ -271,6 +271,9 @@ export interface IStorage {
    *  fix through the single ownership writer (setOwners). `details` is capped
    *  at 50 entries. Optional for the same reason getOwnershipConsistency is —
    *  only the Supabase backend implements the invariant probes. */
+  /** Cross-instance cache coherence (migration 010). Optional: MemStorage has no instances. */
+  getDataVersion?(): Promise<number>;
+  bumpDataVersion?(): Promise<number>;
   repairOwnershipConsistency?(): Promise<{ scanned: number; repaired: number; details: string[] }>;
 }
 
