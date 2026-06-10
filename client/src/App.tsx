@@ -1,5 +1,6 @@
 import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
+import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { hashNavigate } from "./lib/hashNavigate";
@@ -531,16 +532,10 @@ function DataPrefetch() {
       queryFn: async () => {
         const r = await apiRequest('GET', `/api/dashboard-bootstrap${qs}`);
         const b = await r.json();
-        if (b && typeof b === 'object') {
-          if (b.stats) queryClient.setQueryData(['/api/stats', mode, ...ids], b.stats);
-          if (b.enhanced) queryClient.setQueryData(['/api/dashboard-enhanced', mode, ...ids], b.enhanced);
-          if (b.profiles) queryClient.setQueryData(['/api/profiles'], b.profiles);
-          if (b.incomes) queryClient.setQueryData(['/api/incomes', mode, ...ids, 'hero'], b.incomes);
-          if (b.budgetSummary) queryClient.setQueryData(
-            ['/api/budgets/summary', month, mode, ...ids, 'hero'],
-            b.budgetSummary,
-          );
-        }
+        // One round trip seeds EVERY dashboard mount-time query key
+        // (see lib/bootstrap-seed.ts) — the page paints without firing
+        // its ~12 individual GETs.
+        seedDashboardCaches(b, mode, ids, month);
         return b ?? null;
       },
     }).catch(() => { /* best-effort */ });

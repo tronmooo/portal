@@ -9,6 +9,7 @@ import { goalsQueryKey } from "@shared/query-keys";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { computeNetWorth } from "@shared/net-worth";
+import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
@@ -4220,17 +4221,10 @@ export default function DashboardPage() {
     queryFn: async () => {
       const r = await apiRequest("GET", `/api/dashboard-bootstrap${bootstrapQs}`);
       const b = await r.json();
-      if (b && typeof b === "object") {
-        // Pre-fill the cache so dependent hooks resolve from cache instantly.
-        if (b.stats) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], b.stats);
-        if (b.enhanced) queryClient.setQueryData(["/api/dashboard-enhanced", filterMode, ...filterIds], b.enhanced);
-        if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
-        if (b.incomes) queryClient.setQueryData(["/api/incomes", filterMode, ...filterIds, "hero"], b.incomes);
-        if (b.budgetSummary) queryClient.setQueryData(
-          ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
-          b.budgetSummary,
-        );
-      }
+      // Pre-fill EVERY dashboard mount-time query key from the single
+      // bootstrap response (see lib/bootstrap-seed.ts) — dependent hooks
+      // resolve from cache instantly instead of firing ~12 GETs.
+      seedDashboardCaches(b, filterMode, filterIds, currentMonth);
       return b ?? null;
     },
     placeholderData: undefined,

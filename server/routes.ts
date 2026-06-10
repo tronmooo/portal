@@ -2022,7 +2022,7 @@ If unsure, return "profile_fact".`,
       const cachedStats = getCached(statsCacheKey);
       const cachedEnhanced = getCached(enhancedCacheKey);
 
-      const [stats, profiles, incomes, expensesForBudget, budgets] = await Promise.all([
+      const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           const s = await storage.getStats(undefined, filterIds);
           setCache(statsCacheKey, s, 60 * 1000);
@@ -2032,6 +2032,13 @@ If unsure, return "profile_fact".`,
         storage.getIncomes ? storage.getIncomes() : Promise.resolve([] as any[]),
         storage.getExpenses(),
         storage.getBudgets ? storage.getBudgets(month) : Promise.resolve([] as any[]),
+        // [PERF 2026-06-10] Seed payloads: the dashboard fired ~12 separate
+        // GETs on mount — on serverless each parallel request can hit its own
+        // cold instance. Bootstrap now carries every mount-time dataset so the
+        // client seeds its query cache from ONE round trip.
+        (storage as any).getObligations ? (storage as any).getObligations() : Promise.resolve([] as any[]),
+        (storage as any).getAssetPartyLinks ? (storage as any).getAssetPartyLinks() : Promise.resolve([] as any[]),
+        (storage as any).getLiabilityProfileLinks ? (storage as any).getLiabilityProfileLinks() : Promise.resolve([] as any[]),
       ]);
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
@@ -2066,6 +2073,18 @@ If unsure, return "profile_fact".`,
         profiles,
         incomes: filteredIncomes,
         budgetSummary: { totalBudget, totalSpent, remaining },
+        // [PERF 2026-06-10] mount-time seed datasets — shapes mirror the
+        // corresponding GET endpoints exactly (same canonical profile filter,
+        // same paginate(100) first page).
+        expenses: filteredExpenses.slice(0, 100),
+        budgets: budgets || [],
+        obligations: ((!filterIds || filterIds.length === 0)
+          ? obligationsAll
+          : obligationsAll.filter((o: any) =>
+              passesProfileFilter(o.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles })
+            )).slice(0, 100),
+        assetPartyLinks: assetPartyLinks || [],
+        liabilityProfileLinks: liabilityProfileLinks || [],
         month,
         filterIds: filterIds || [],
       };
