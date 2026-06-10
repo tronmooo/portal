@@ -629,7 +629,11 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   const budgetPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
   const budgetBreached = budgetPct > 100;
 
-  const animatedNetWorth = useCountUp(Math.max(0, Math.round(netWorth)));
+  // BUG (2026-06-10, user report): Math.max(0, ...) clamped NEGATIVE net worth
+  // to a permanent "$0" while the sub-label showed the real assets/liabilities.
+  // Animate the magnitude and render the sign + color separately.
+  const netWorthNegative = netWorth < 0;
+  const animatedNetWorth = useCountUp(Math.abs(Math.round(netWorth)));
   const animatedBudget = useCountUp(budgetPct);
   const animatedCashFlow = useCountUp(Math.round(Math.abs(cashFlow)));
 
@@ -667,7 +671,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           </div>
         </div>
         <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: 'hsl(155 60% 44%)' }}>${fmt(animatedNetWorth)}</span>
+          <span className="text-3xl font-bold tracking-tight" style={{ color: netWorthNegative ? 'hsl(0 72% 56%)' : 'hsl(155 60% 44%)' }}>{netWorthNegative ? "-" : ""}${fmt(animatedNetWorth)}</span>
         </div>
         <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground/80 tabular-nums">
           <span>Assets ${fmt(Math.round(totalAssetValue))}</span>

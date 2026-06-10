@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
+import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import {
   insertProfileSchema,
   insertTaskSchema,
@@ -1716,7 +1717,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to a tracker. CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker. If no matching tracker exists, one will be auto-created with the correct name.",
+    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker. If no matching tracker exists, one will be auto-created with the correct name.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4761,6 +4762,36 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
         return entry;
       }
+      // ─── EXPENSE GUARD (2026-06-10, user report) ─────────────────────
+      // "$400 car repairs for Ford F150" must NEVER auto-create a tracker.
+      // Money lives in /expenses. Detection is in shared/expense-shaped.ts
+      // (pure, pinned by tests/expense-shaped.test.ts). Applies ONLY to
+      // auto-creation — logging to an existing tracker still works.
+      {
+        const verdict = classifyTrackerAutoCreate(
+          String(input.trackerName || ""),
+          (input.values || {}) as Record<string, unknown>,
+          String((input as any).__userMessage || ""),
+        );
+        if (verdict.kind === "refuse") return { error: verdict.reason };
+        if (verdict.kind === "divert") {
+          const exp = verdict.expense;
+          logger.info("ai", `Expense guard: diverting tracker auto-create "${input.trackerName}" ($${exp.amount}) to create_expense (profile hint: ${exp.profileHint || input.forProfile || "none"})`);
+          const diverted = await executeTool("create_expense", {
+            amount: exp.amount,
+            description: exp.description,
+            ...(exp.category ? { category: exp.category } : {}),
+            ...((exp.profileHint || input.forProfile) ? { forProfile: exp.profileHint || input.forProfile } : {}),
+            ...(exp.date ? { date: exp.date } : {}),
+            __userMessage: String((input as any).__userMessage || ""),
+          }, userId);
+          if (diverted && !(diverted as any).error) {
+            (diverted as any).__divertedFromTracker = input.trackerName;
+          }
+          return diverted;
+        }
+      }
+
       // Auto-create tracker if not found — infer category from name.
       //
       // ORDER MATTERS. The keyword scan is a first-match-wins waterfall,
