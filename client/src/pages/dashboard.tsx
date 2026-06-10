@@ -7,8 +7,9 @@ import { parseMoney } from "@/lib/utils";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
-import { getProfileFilter, setDashboardProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
+import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { computeNetWorth } from "@shared/net-worth";
+import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -524,24 +525,40 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   });
   const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw as any)?.items || [];
 
-  // Filter helper shared by asset + liability roll-ups. Mirrors the predicate
-  // used by the Finance section tile (lines 2939-2950) so the three Net Worth
-  // surfaces stay in lock-step. While allProfiles is still loading we fall
-  // back to financeSnapshot to avoid a $0 flash.
+  // Co-ownership link tables: a profile passes the filter when the selected
+  // profile is a co-owner via asset_party_links / liability_profile_links,
+  // not only when it's the profile itself or its direct parent.
+  const { data: assetPartyLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()),
+  });
+  const { data: liabilityProfileLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
+  });
+
+  // Filter helper shared by asset + liability roll-ups. P4.1 remediation: the
+  // previous hand-rolled predicate only checked profile.id + parentProfileId,
+  // missing co-owners from the link tables. Route through the canonical
+  // ownerCandidatesForProfile + isInScope primitives (shared/scope.ts) — the
+  // same candidate set the server's finance snapshot and the Net Worth popup
+  // consume — so the surfaces stay in lock-step.
+  const emptySelfIds = useMemo(() => new Set<string>(), []);
   const matchesProfileFilter = (p: any): boolean => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const pParent = p?.parentProfileId;
-    if (pParent && filterIds.includes(pParent)) return true;
-    if (filterIds.includes(p?.id)) return true;
-    return false;
+    return isInScope(
+      ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks),
+      { selectedIds: filterIds, selfIds: emptySelfIds },
+      "out_of_scope",
+    );
   };
   const heroAssetProfiles = useMemo(
     () => (allProfiles || []).filter((p: any) => resolveAssetValue(p) > 0 && matchesProfileFilter(p)),
-    [allProfiles, filterMode, filterIds.join(",")]
+    [allProfiles, filterMode, filterIds.join(","), assetPartyLinks, liabilityProfileLinks]
   );
   const heroLiabilityProfiles = useMemo(
     () => (allProfiles || []).filter((p: any) => resolveLiabilityBalance(p) > 0 && matchesProfileFilter(p)),
-    [allProfiles, filterMode, filterIds.join(",")]
+    [allProfiles, filterMode, filterIds.join(","), assetPartyLinks, liabilityProfileLinks]
   );
   // BUG-20260528-networth-filter-leakage: when a profile filter is active,
   // trust the server's authoritative finance snapshot. The client-side
@@ -584,6 +601,11 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
         ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
         : 0;
   const netWorth = totalAssetValue - totalLiabilities;
+  // P6.1: the stats fallback is safe — /api/stats monthlySpend and
+  // /api/dashboard-enhanced totalMonthlySpend are computed from the same
+  // passesProfileFilter-scoped expense set with the same user-TZ month
+  // window (supabase-storage.ts getStats/getDashboardEnhanced), so the
+  // value cannot flip as the two endpoints race.
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
   const cashFlow = monthlyIncome - monthlySpend;
@@ -4142,7 +4164,9 @@ export default function DashboardPage() {
   // "Everyone" is only ever set by an explicit toolbar choice (which persists it).
   useEffect(() => {
     if (!resolvedFilterId) return;
-    setDashboardProfileFilter(resolvedFilterId, allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || "");
+    // P2.5: inlined from the deleted legacy setDashboardProfileFilter() —
+    // with a truthy id it was exactly setFilterSelected([id], [name]).
+    setFilterSelected([resolvedFilterId], [allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || ""]);
   }, [resolvedFilterId, allProfiles]);
 
   // PERF (2026-05-28): single-shot bootstrap. /api/dashboard-bootstrap returns

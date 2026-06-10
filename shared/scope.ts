@@ -94,6 +94,46 @@ export function isInScope(
 }
 
 /**
+ * Build the candidate owner-id set for an asset/liability profile from the
+ * canonical ownership sources:
+ *   - the profile's own `id` (a profile is its own owner),
+ *   - its `parentProfileId` column (nesting parent),
+ *   - co-owner `partyProfileId`s from the relational link tables
+ *     (`asset_party_links` rows where `assetProfileId` matches, and
+ *     `liability_profile_links` rows where `liabilityProfileId` matches).
+ *
+ * Pass the result to `isInScope(..., "out_of_scope")`. This replaces the
+ * hand-rolled id/parent-only predicates that missed co-owners (P4.1).
+ * Link arrays are small (user-scoped), so the per-call scan is cheap;
+ * callers iterating many profiles inside a useMemo are fine.
+ */
+export function ownerCandidatesForProfile(
+  profile: { id?: string | null; parentProfileId?: string | null } | null | undefined,
+  assetLinks?: ReadonlyArray<{ assetProfileId?: string | null; partyProfileId?: string | null }> | null,
+  liabilityLinks?: ReadonlyArray<{ liabilityProfileId?: string | null; partyProfileId?: string | null }> | null,
+): string[] {
+  const ids: string[] = [];
+  if (!profile) return ids;
+  const pid = profile.id;
+  if (typeof pid === "string" && pid) ids.push(pid);
+  const parentId = profile.parentProfileId;
+  if (typeof parentId === "string" && parentId) ids.push(parentId);
+  if (pid) {
+    for (const l of assetLinks || []) {
+      if (l?.assetProfileId === pid && typeof l.partyProfileId === "string" && l.partyProfileId) {
+        ids.push(l.partyProfileId);
+      }
+    }
+    for (const l of liabilityLinks || []) {
+      if (l?.liabilityProfileId === pid && typeof l.partyProfileId === "string" && l.partyProfileId) {
+        ids.push(l.partyProfileId);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
  * Convenience helper: derive the selfIds set from a profile list. Callers
  * usually have one or both already; this exists so tests and incremental
  * adopters don't have to duplicate the snippet.

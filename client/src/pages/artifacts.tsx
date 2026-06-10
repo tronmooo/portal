@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { getProfileFilter } from "@/lib/profileFilter";
+import { passesProfileFilter } from "@shared/profile-filter";
 import {
   Archive, FileText, BookOpen, Brain, Camera, File, Heart,
   Shield, CreditCard, Scale, Folder, Search, X, Copy, Check as CheckIcon,
@@ -714,14 +715,18 @@ export default function ArtifactsPage() {
     return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [documents, artifacts, profileMap]);
 
-  // Apply profile filter
+  // Apply profile filter. P2.4 remediation: use the unified passesProfileFilter
+  // rule (shared/profile-filter.ts) instead of an inline `linked.some(...)` so
+  // orphan items (no linkedProfiles) still show when the selection includes a
+  // self profile — matching finance/journal/server semantics.
   const profileFiltered = useMemo(() => {
     if (filterMode === "everyone" || filterIds.length === 0) return allItems;
-    return allItems.filter(item => {
-      const linked = item.source?.linkedProfiles || [];
-      return linked.some((id: string) => filterIds.includes(id));
-    });
-  }, [allItems, filterMode, filterIds]);
+    const ctx = {
+      selectedIds: filterIds,
+      allProfiles: profiles.map(p => ({ id: p.id, type: p.type })),
+    };
+    return allItems.filter(item => passesProfileFilter(item.source?.linkedProfiles, ctx));
+  }, [allItems, filterMode, filterIds, profiles]);
 
   // Apply tab filter
   const tabFiltered = useMemo(() => {

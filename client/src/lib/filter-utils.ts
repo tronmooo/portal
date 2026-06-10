@@ -29,21 +29,6 @@ export function filterByCategory<T>(
   return items.filter(item => normalizeFilter(getCategory(item)) === norm);
 }
 
-/**
- * Profile filter helper: filter items by linked profile IDs.
- * Returns all items if mode is "everyone" or no IDs selected.
- */
-export function filterByProfile<T>(
-  items: T[],
-  filterMode: string,
-  filterIds: string[],
-  getLinkedProfiles: (item: T) => string[] | undefined | null
-): T[] {
-  if (filterMode === "everyone" || filterIds.length === 0) return items;
-  return items.filter(item => {
-    const linked = getLinkedProfiles(item) || [];
-    // Items with no linked profiles show when filtering (they're "unassigned")
-    if (linked.length === 0) return false;
-    return linked.some(id => filterIds.includes(id));
-  });
-}
+// P2.5: the legacy filterByProfile() helper was deleted — it unconditionally
+// hid orphan items (no linkedProfiles), diverging from the canonical rule.
+// Use passesProfileFilter from @shared/profile-filter instead.

@@ -51,6 +51,11 @@ export type Domain =
 // Top-level keys for each domain. The bus also runs nested-key
 // predicate matches below (for "/api/profiles/:id/detail" style keys).
 const DOMAIN_KEYS: Record<Domain, string[][]> = {
+  // P4.4: /api/insights + /api/ai-digest are derived analytics over the data
+  // domains below (expenses, incomes, tasks, habits, trackers, obligations,
+  // profiles). They were previously only invalidated via the "dashboard"
+  // domain, which no data mutation ever fired — so insights stayed stale
+  // after writes. Each feeding domain now busts them too.
   tasks: [
     ["/api/tasks"],
     // tasks affect KPI tile + dashboard widget + activity feed
@@ -58,18 +63,23 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/activity"],
     ["/api/calendar/timeline"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
   ],
   habits: [
     ["/api/habits"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/activity"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
   ],
   trackers: [
     ["/api/trackers"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/insights"],
+    ["/api/ai-digest"],
     ["/api/activity"],
     ["/api/goals"], // goals can auto-update from tracker entries
   ],
@@ -78,6 +88,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/activity"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
     // nested keys handled via predicate below
   ],
   assets: [
@@ -115,6 +127,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/budgets/summary"],
     ["/api/cashflow"],
     ["/api/activity"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
   ],
   incomes: [
     ["/api/incomes"],
@@ -122,6 +136,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/paychecks"],
     ["/api/cashflow"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
   ],
   obligations: [
     ["/api/obligations"],
@@ -129,6 +145,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/loans/schedule"],
     ["/api/cashflow"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
   ],
   budgets: [
     ["/api/budgets"],

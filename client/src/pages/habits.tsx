@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { Habit, Profile } from "@shared/schema";
+import { getUserToday, addDays, parseLocalDate } from "@shared/timezone";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -24,8 +25,12 @@ const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Z
 
 function HabitCard({ habit }: { habit: Habit }) {
   const { toast } = useToast();
-  const now = new Date();
-  const today = now.toLocaleDateString('en-CA');
+  // "Today" in the user's timezone. The server has no stored timezone
+  // preference — it derives the user's tz from the X-Timezone header the
+  // client sends (BROWSER_TIMEZONE, see queryClient.ts). Using the same tz
+  // here keeps the client's "today" in lockstep with the server's
+  // getUserToday(timezone) used by the canonical streak calculation.
+  const today = getUserToday(BROWSER_TIMEZONE);
   const todayCheckins = habit.checkins.filter(c => c.date === today).length;
   const targetPerDay = (habit as any).targetPerDay || 1;
   const completedToday = todayCheckins >= targetPerDay;
@@ -217,10 +222,12 @@ function HabitCard({ habit }: { habit: Habit }) {
   const DAY_LABELS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
   const last14: { date: string; done: boolean; count: number; dayLabel: string; isToday: boolean; isSunday: boolean }[] = [];
   for (let i = 13; i >= 0; i--) {
-    const dd = new Date(Date.now() - i * 86400000);
-    const ds = dd.toLocaleDateString('en-CA');
+    // Walk back from the user's-timezone "today" with tz-safe date math
+    // instead of Date.now() millisecond arithmetic (DST/tz-shift safe).
+    const ds = addDays(today, -i);
+    const dayOfWeek = parseLocalDate(ds).getDay();
     const count = habit.checkins.filter(c => c.date === ds).length;
-    last14.push({ date: ds, done: count >= targetPerDay, count, dayLabel: DAY_LABELS[dd.getDay()], isToday: i === 0, isSunday: dd.getDay() === 0 });
+    last14.push({ date: ds, done: count >= targetPerDay, count, dayLabel: DAY_LABELS[dayOfWeek], isToday: i === 0, isSunday: dayOfWeek === 0 });
   }
   const completedDays = last14.filter(d => d.done).length;
 
@@ -430,9 +437,8 @@ export default function HabitsPage() {
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
-  // Summary stats
-  const todayD = new Date();
-  const today = todayD.toLocaleDateString('en-CA');
+  // Summary stats — same user-timezone "today" as HabitCard / the server
+  const today = getUserToday(BROWSER_TIMEZONE);
   const completedToday = habits.filter(h => {
     const tpd = (h as any).targetPerDay || 1;
     return h.checkins.filter(c => c.date === today).length >= tpd;

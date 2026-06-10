@@ -9,6 +9,16 @@
 // automatically operate on the calling user's data.
 
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  computeBaseline,
+  currentMonthYM,
+  detectCategoryAnomalies,
+  expenseAmount,
+  filterByWindow,
+  sumByCategory,
+  topCategories,
+  totalSpend,
+} from "@shared/spending-baseline";
 
 function getAnthropic(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -58,45 +68,40 @@ export async function detectAnomalies(storage: any, profileIds?: string[]): Prom
   ]);
 
   // ── Spending category anomalies ──
-  // Compute weekly avg per category over last 90 days, compare with last 7 days.
-  type CatStat = { total90: number; total7: number; weeks: number };
-  const catStats: Record<string, CatStat> = {};
-  for (const e of expenses as any[]) {
-    const d = new Date(e.date);
-    if (isNaN(d.getTime()) || d < ninetyDayAgo) continue;
-    const cat = String(e.category || "uncategorized");
-    const amt = Math.abs(Number(e.amount || 0));
-    const stat = catStats[cat] || { total90: 0, total7: 0, weeks: 13 };
-    stat.total90 += amt;
-    if (d >= sevenDayAgo) stat.total7 += amt;
-    catStats[cat] = stat;
-  }
-  for (const [cat, s] of Object.entries(catStats)) {
-    const weeklyAvg = s.total90 / 13;
-    if (weeklyAvg < 20) continue; // ignore low-signal categories
-    const pctDelta = weeklyAvg > 0 ? ((s.total7 - weeklyAvg) / weeklyAvg) * 100 : 0;
-    if (s.total7 > weeklyAvg * 1.4 && s.total7 - weeklyAvg > 30) {
-      anomalies.push({
-        id: `spend-up-${cat}`,
-        severity: pctDelta > 80 ? "high" : "medium",
-        category: "spending",
-        title: `${cat} spending up ${Math.round(pctDelta)}% this week`,
-        detail: `${fmtMoney(s.total7)} this week vs ${fmtMoney(weeklyAvg)} weekly avg over the past 90 days.`,
-        amount: s.total7,
-        vsBaseline: pctDelta,
-      });
-    }
+  // Weekly avg per category over last 90 days vs last 7 days, via the
+  // canonical shared/spending-baseline module (shared with the insights
+  // engine). Canonical definition change: the weekly baseline divisor is
+  // lookbackDays / 7 (≈12.86 weeks for 90 days) instead of the old hardcoded
+  // 13 weeks (≈91 days), which understated weekly averages by ~1.1%.
+  const last90 = filterByWindow(expenses as any[], { since: ninetyDayAgo });
+  const weeklyBaseline = computeBaseline(last90, 90, "week", new Date(now));
+  const last7ByCat = sumByCategory(last90, { since: sevenDayAgo });
+  const catAnomalies = detectCategoryAnomalies(last7ByCat, weeklyBaseline, {
+    minBaseline: 20, // ignore low-signal categories (< $20/wk baseline)
+    ratio: 1.4,
+    minAbsDelta: 30,
+    highPctDelta: 80,
+  });
+  for (const a of catAnomalies) {
+    anomalies.push({
+      id: `spend-up-${a.category}`,
+      severity: a.severity,
+      category: "spending",
+      title: `${a.category} spending up ${Math.round(a.pctDelta)}% this week`,
+      detail: `${fmtMoney(a.current)} this week vs ${fmtMoney(a.baseline)} weekly avg over the past 90 days.`,
+      amount: a.current,
+      vsBaseline: a.pctDelta,
+    });
   }
 
   // ── Large single expense ──
   // Last 7 days, any single expense > 3× the user's avg expense.
-  const expensesForBaseline = (expenses as any[]).filter(e => new Date(e.date) >= ninetyDayAgo);
-  const allAmts = expensesForBaseline.map(e => Math.abs(Number(e.amount || 0))).filter(a => a > 0);
+  const allAmts = last90.map(expenseAmount).filter(a => a > 0);
   const avgExp = allAmts.length > 0 ? allAmts.reduce((a, b) => a + b, 0) / allAmts.length : 0;
-  for (const e of expensesForBaseline) {
+  for (const e of last90) {
     const d = new Date(e.date);
     if (d < sevenDayAgo) continue;
-    const amt = Math.abs(Number(e.amount || 0));
+    const amt = expenseAmount(e);
     if (avgExp > 0 && amt > avgExp * 4 && amt > 100) {
       anomalies.push({
         id: `big-expense-${e.id || e.date}-${amt}`,
@@ -111,14 +116,18 @@ export async function detectAnomalies(storage: any, profileIds?: string[]): Prom
 
   // ── Budget breach ──
   // For each budget, if month-to-date spend in that category exceeds amount.
-  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  const monthExpenses = (expenses as any[]).filter(e => new Date(e.date) >= monthStart);
+  // Canonical definition change: "this month" is now the YYYY-MM prefix of
+  // the expense date string (same timezone-stable definition the insights
+  // engine uses, via shared/spending-baseline) instead of Date-parsing each
+  // expense against a server-local month start, which could mis-bucket
+  // boundary-dated expenses on non-UTC servers.
+  const monthByCat = sumByCategory(expenses as any[], { month: currentMonthYM() });
   for (const b of (budgets as any[])) {
     const cat = String(b.category || "").toLowerCase();
     if (!cat) continue;
-    const spent = monthExpenses
-      .filter(e => String(e.category || "").toLowerCase() === cat)
-      .reduce((s, e) => s + Math.abs(Number(e.amount || 0)), 0);
+    const spent = Object.entries(monthByCat)
+      .filter(([k]) => k.toLowerCase() === cat)
+      .reduce((s, [, v]) => s + v, 0);
     const cap = Number(b.amount || 0);
     if (cap > 0 && spent > cap) {
       const overPct = ((spent - cap) / cap) * 100;
@@ -205,17 +214,12 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
   });
   const tasksOpen = (tasks as any[]).filter((t: any) => t.status !== "done").length;
 
-  // Spending this week + by category
-  const expWeek = (expenses as any[]).filter((e: any) => e.date >= weekAgoStr);
-  const totalSpend = expWeek.reduce((s: number, e: any) => s + Math.abs(Number(e.amount || 0)), 0);
-  const byCat: Record<string, number> = {};
-  for (const e of expWeek) {
-    const cat = String(e.category || "uncategorized");
-    byCat[cat] = (byCat[cat] || 0) + Math.abs(Number(e.amount || 0));
-  }
-  const topCats = Object.entries(byCat)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
+  // Spending this week + by category — canonical math from
+  // shared/spending-baseline (same implementation the insights engine uses).
+  const expWeek = filterByWindow(expenses as any[], { sinceDateStr: weekAgoStr });
+  const weekSpend = totalSpend(expWeek);
+  const byCat = sumByCategory(expWeek);
+  const topCats = topCategories(byCat, 5);
 
   // Tracker entries this week
   const trkSummary = (trackers as any[]).map((t: any) => {
@@ -238,7 +242,7 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
     const ctx = {
       tasksDone: tasksDoneThisWeek.length,
       tasksOpen,
-      totalSpend: Math.round(totalSpend),
+      totalSpend: Math.round(weekSpend),
       topCategories: topCats.map(([c, a]) => ({ category: c, amount: Math.round(a) })),
       trackersLogged: trkSummary.length,
       journalEntries: journalThisWeek.length,
@@ -255,7 +259,7 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
     const block = resp.content?.find((b: any) => b.type === "text") as any;
     narrative = (block?.text || "").trim();
   } catch {
-    narrative = `You completed ${tasksDoneThisWeek.length} task${tasksDoneThisWeek.length === 1 ? "" : "s"} and spent ${fmtMoney(totalSpend)} this week.`;
+    narrative = `You completed ${tasksDoneThisWeek.length} task${tasksDoneThisWeek.length === 1 ? "" : "s"} and spent ${fmtMoney(weekSpend)} this week.`;
   }
 
   // ── Build HTML doc body ──
@@ -269,7 +273,7 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
   parts.push(`<h2>Highlights</h2>`);
   parts.push(`<ul>`);
   parts.push(`<li><strong>${tasksDoneThisWeek.length}</strong> task${tasksDoneThisWeek.length === 1 ? "" : "s"} completed (${tasksOpen} still open)</li>`);
-  parts.push(`<li><strong>${fmtMoney(totalSpend)}</strong> spent across ${expWeek.length} transaction${expWeek.length === 1 ? "" : "s"}</li>`);
+  parts.push(`<li><strong>${fmtMoney(weekSpend)}</strong> spent across ${expWeek.length} transaction${expWeek.length === 1 ? "" : "s"}</li>`);
   if (trkSummary.length > 0) parts.push(`<li><strong>${trkSummary.reduce((s, t) => s + t.count, 0)}</strong> tracker entries across ${trkSummary.length} tracker${trkSummary.length === 1 ? "" : "s"}</li>`);
   if (journalThisWeek.length > 0) parts.push(`<li><strong>${journalThisWeek.length}</strong> journal entr${journalThisWeek.length === 1 ? "y" : "ies"}</li>`);
   parts.push(`</ul>`);
@@ -279,7 +283,7 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
     parts.push(`<h2>Spending</h2>`);
     parts.push(`<ul>`);
     for (const [cat, amt] of topCats) {
-      const pct = totalSpend > 0 ? Math.round((amt / totalSpend) * 100) : 0;
+      const pct = weekSpend > 0 ? Math.round((amt / weekSpend) * 100) : 0;
       parts.push(`<li><strong>${escapeHtml(cat)}</strong>: ${fmtMoney(amt)} <em>(${pct}%)</em></li>`);
     }
     parts.push(`</ul>`);

@@ -1,4 +1,5 @@
 import { type Profile } from "./schema";
+import { toMonthlyAmount } from "./obligation-windows";
 
 // ============================================================
 // ASSET ROLLUP — pure function, no I/O, usable from client + server
@@ -101,14 +102,23 @@ function extractMonthlyExpense(fields: Record<string, any>): number {
   const monthly = firstPositive(fields, paths);
   if (monthly > 0) return monthly;
   // Also support generic `cost` + `frequency`: cost=120 frequency="yearly" => 10/mo.
+  // Monthly conversion delegates to the canonical toMonthlyAmount() in
+  // shared/obligation-windows.ts (52/12 weekly, 365/12 daily, etc.) instead of
+  // the old truncated local constants (4.345 weekly, 30.44 daily).
+  // Loose prefix matching is preserved because legacy data stores variants
+  // like "Yearly" / "weeks"; unknown frequencies still fall back to 0 (NOT
+  // toMonthlyAmount's treat-as-monthly default) to preserve prior behavior.
   const cost = toNum((fields as any).cost ?? (fields as any).amount ?? (fields as any).price);
   const freq = String((fields as any).frequency || "").toLowerCase();
   if (cost > 0 && freq) {
-    if (freq.startsWith("month")) return cost;
-    if (freq.startsWith("year") || freq.startsWith("annual")) return cost / 12;
-    if (freq.startsWith("week")) return cost * 4.345;
-    if (freq.startsWith("day")) return cost * 30.44;
-    if (freq.startsWith("quarter")) return cost / 3;
+    const canonical =
+      freq.startsWith("month") ? "monthly" :
+      freq.startsWith("year") || freq.startsWith("annual") ? "yearly" :
+      freq.startsWith("week") ? "weekly" :
+      freq.startsWith("day") || freq.startsWith("dai") ? "daily" :
+      freq.startsWith("quarter") ? "quarterly" :
+      null;
+    if (canonical) return toMonthlyAmount(cost, canonical);
   }
   return 0;
 }

@@ -37,9 +37,9 @@ describe("computeAssetRollup", () => {
   it("aggregates monthly expense across descendants and normalises freq to monthly", () => {
     const home = mk("home", { monthlyCost: 200 });
     const utility = mk("utility", { cost: 1800, frequency: "yearly" }, "home"); // 150/mo
-    const sub = mk("sub", { cost: 14.99, frequency: "weekly" }, "home");        // ~65.13/mo
+    const sub = mk("sub", { cost: 14.99, frequency: "weekly" }, "home");        // ~64.96/mo
     const rollup = computeAssetRollup(home, [utility, sub]);
-    expect(rollup.monthlyExpense).toBeCloseTo(200 + 150 + 14.99 * 4.345, 2);
+    expect(rollup.monthlyExpense).toBeCloseTo(200 + 150 + 14.99 * (52 / 12), 2);
   });
 
   it("aggregates maintenance cost across descendants", () => {

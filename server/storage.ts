@@ -265,6 +265,13 @@ export interface IStorage {
     financeDisagreementCount: number;
     perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }>;
   }>;
+
+  /** [P0.5] Repair counterpart to getOwnershipConsistency: strips
+   *  linked_profiles entries pointing at non-existent profiles, routing every
+   *  fix through the single ownership writer (setOwners). `details` is capped
+   *  at 50 entries. Optional for the same reason getOwnershipConsistency is —
+   *  only the Supabase backend implements the invariant probes. */
+  repairOwnershipConsistency?(): Promise<{ scanned: number; repaired: number; details: string[] }>;
 }
 
 // ---- Human-readable tracker value formatting ----

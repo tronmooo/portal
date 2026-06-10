@@ -150,7 +150,9 @@ import {
 } from "recharts";
 import { Slider } from "@/components/ui/slider";
 import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { calculateStreak } from "@shared/streak";
+import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
@@ -5685,20 +5687,14 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     return Math.floor(ms / (24 * 60 * 60 * 1000));
   }
 
+  // Logging streak for a tracker, via the canonical shared streak math
+  // (shared/streak.ts — same semantics as the server's calculateStreak).
+  // Replaces a divergent local implementation that double-counted multiple
+  // entries on the same day and ignored the user's timezone.
   function getStreak(tracker: any): number {
     if (!tracker.entries?.length) return 0;
-    const sorted = [...tracker.entries].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    let streak = 0;
-    let prevDate = new Date();
-    prevDate.setHours(0, 0, 0, 0);
-    for (const e of sorted) {
-      const d = new Date(e.timestamp);
-      d.setHours(0, 0, 0, 0);
-      const diffDays = Math.round((prevDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
-      if (diffDays <= 1) { streak++; prevDate = d; }
-      else break;
-    }
-    return streak;
+    const dates = tracker.entries.map((e: any) => toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE));
+    return calculateStreak(dates, { today: getUserToday(BROWSER_TIMEZONE) }).current;
   }
 
   // ── log entry mutation ────────────────────────────────────

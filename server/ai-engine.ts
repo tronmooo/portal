@@ -1,9 +1,28 @@
 import { logger } from "./logger";
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
+import {
+  insertProfileSchema,
+  insertTaskSchema,
+  insertExpenseSchema,
+  insertEventSchema,
+  insertHabitSchema,
+  insertObligationSchema,
+  insertTrackerSchema,
+  insertGoalSchema,
+  insertJournalEntrySchema,
+  insertArtifactSchema,
+  insertDocumentSchema,
+  insertIncomeSchema,
+  insertMemorySchema,
+} from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue } from "@shared/extraction-normalize";
+import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
+import { passesProfileFilter } from "@shared/profile-filter";
+import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
+import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -45,6 +64,79 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(key);
 }
 const REDACTED = "[REDACTED]";
+
+// ─── P0.3a: AI write-path validation ───────────────────────────────────────────
+// Every AI-initiated create runs through the same zod insert schema the REST
+// routes use, so malformed model output can never reach storage. On failure the
+// caller returns the error string as a graceful tool result instead of writing.
+function validateAiPayload<S extends z.ZodTypeAny>(
+  schema: S,
+  payload: unknown,
+  entityLabel: string,
+): { ok: true; data: z.output<S> } | { ok: false; error: string } {
+  const parsed = schema.safeParse(payload);
+  if (parsed.success) return { ok: true, data: parsed.data };
+  const issues = parsed.error.issues
+    .slice(0, 3)
+    .map(i => `${i.path.join(".") || "value"}: ${i.message}`)
+    .join("; ");
+  logger.warn("ai", `Rejected invalid ${entityLabel} payload from AI: ${issues}`);
+  return { ok: false, error: `I couldn't save that ${entityLabel} — ${issues}. Please rephrase with the missing or corrected details.` };
+}
+
+// ─── P0.3e: flatten nested AI-supplied profile fields ──────────────────────────
+// Document extraction flattens nested extractedData via flattenExtractedData
+// (processFileUpload). Profile fields written from chat tool calls must keep the
+// same flat-scalar shape: scalar keys pass through untouched (so camelCase field
+// names like `licensePlate` are preserved), while nested objects/arrays are
+// flattened with the SAME shared flattener and re-keyed to camelCase.
+function flattenAiProfileFields(fields: Record<string, any> | undefined | null): Record<string, any> {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return {};
+  const out: Record<string, any> = {};
+  const nested: Record<string, any> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    const uv = unwrapValue(v);
+    if (uv !== null && uv !== undefined && typeof uv === "object") nested[k] = uv;
+    else out[k] = uv;
+  }
+  if (Object.keys(nested).length > 0) {
+    const flat = flattenExtractedData(nested);
+    for (const [label, value] of Object.entries(flat)) {
+      if (isPlaceholderValue(value)) continue;
+      const key = toCamelKey(label);
+      if (!(key in out)) out[key] = value;
+    }
+  }
+  return out;
+}
+
+// ─── Sanitizer parity with /api/profiles/:id/ai-summary ────────────────────────
+// Strip sensitive demographic keys (DOB/age/SSN variants) from a document's
+// extractedData before it is embedded into any LLM-bound context, UNLESS the
+// owning profile still carries the fact. With multiple owners a key is stripped
+// only when NO owner carries it; an unlinked (orphan) document is scanned
+// against the self profile(s). The stored document row is never modified.
+function stripSensitiveDocData(
+  extractedData: any,
+  linkedProfileIds: string[] | undefined | null,
+  allProfiles: Array<{ id: string; type?: string; fields?: Record<string, any> }>,
+): any {
+  const owners = (linkedProfileIds || [])
+    .map(pid => allProfiles.find(p => p.id === pid))
+    .filter(Boolean) as Array<{ fields?: Record<string, any> }>;
+  const scan = owners.length > 0 ? owners : allProfiles.filter(p => p.type === "self");
+  let drop: Set<string> | null = null;
+  for (const p of scan) {
+    const s = computeAiSensitiveStripKeys(p.fields);
+    if (drop === null) {
+      drop = s;
+    } else {
+      const prev: Set<string> = drop;
+      drop = new Set([...prev].filter(k => s.has(k)));
+    }
+  }
+  return deepStripKeys(extractedData ?? {}, drop ?? computeAiSensitiveStripKeys(undefined));
+}
 
 // Rich visual output types (inline — shared/schema was reverted)
 type ChartType = "line" | "bar" | "area" | "pie" | "scatter" | "composed" | "radar";
@@ -1056,7 +1148,10 @@ Return ONLY the JSON array, nothing else.`;
       });
       console.log(`[Upload] Updated existing document "${docName}" (${existingDoc.id}) instead of creating duplicate`);
     } else {
-      document = await storage.createDocument({
+      // P0.3a: validate the model-derived parts (name/type from the extraction
+      // JSON) before persisting. On failure, fall back to a safe payload so the
+      // upload is never lost — only the malformed extraction metadata is dropped.
+      const docPayload = validateAiPayload(insertDocumentSchema, {
         name: docName,
         type: parsed.documentType || "other",
         mimeType,
@@ -1064,7 +1159,21 @@ Return ONLY the JSON array, nothing else.`;
         extractedData: parsed.extractedData || {},
         linkedProfiles,
         tags: [parsed.documentType || "uploaded"],
-      });
+      }, "document");
+      if (docPayload.ok) {
+        document = await storage.createDocument(docPayload.data);
+      } else {
+        logger.warn("ai", `Upload: extraction metadata failed validation — saving document with safe defaults (${docPayload.error})`);
+        document = await storage.createDocument({
+          name: String(fileName),
+          type: "other",
+          mimeType,
+          fileData: base64Data,
+          extractedData: {},
+          linkedProfiles,
+          tags: ["uploaded"],
+        });
+      }
     }
     results.push(document);
 
@@ -1108,28 +1217,34 @@ Return ONLY the JSON array, nothing else.`;
           : "general";
         const desc = parsed.label || parsed.summary || fileName;
         const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-        const expense = await storage.createExpense({
-          amount: numAmount,
-          category,
-          description: desc,
-          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-          tags: ["from-document"],
-        });
-        // Link to the asset/profile AND propagate up to the self (Me) profile
-        if (existingProfileId) {
-          await storage.linkProfileTo(existingProfileId, "expense", expense.id);
-          // Propagate up: Honda → Me, so it shows in Me's Finance tab too
-          try { await storage.propagateEntityToAncestors("expense", expense.id, existingProfileId); } catch (e: any) { logger.warn("ai", `Fast-path propagate failed for expense ${expense.id}: ${e?.message}`); }
-        }
-        // Also always link to self profile so it appears in the main Finance view
+        // P0.3b: resolve EVERY profile the expense belongs to (target asset +
+        // self for the main Finance view) BEFORE the create, so linkedProfiles
+        // is written atomically with the row — no create-then-link window
+        // where the expense exists unowned.
         const profiles = await storage.getProfiles();
         const selfProfile = profiles.find(p => p.type === 'self');
-        if (selfProfile && selfProfile.id !== existingProfileId) {
-          try { await storage.linkProfileTo(selfProfile.id, "expense", expense.id); } catch (e: any) { logger.warn("ai", `Fast-path self-link failed for expense ${expense.id}: ${e?.message}`); }
+        const expenseLinks = Array.from(new Set([existingProfileId, selfProfile?.id].filter(Boolean))) as string[];
+        // P0.3a: validate through the same zod schema the REST route uses.
+        const expensePayload = validateAiPayload(insertExpenseSchema, {
+          amount: numAmount,
+          category,
+          description: String(desc),
+          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          tags: ["from-document"],
+          linkedProfiles: expenseLinks,
+        }, "expense");
+        if (!expensePayload.ok) {
+          console.error("Auto-expense from document skipped:", expensePayload.error);
+        } else {
+          const expense = await storage.createExpense(expensePayload.data);
+          if (existingProfileId) {
+            // Propagate up: Honda → Me, so it shows in intermediate ancestors' Finance tabs too
+            try { await storage.propagateEntityToAncestors("expense", expense.id, existingProfileId); } catch (e: any) { logger.warn("ai", `Fast-path propagate failed for expense ${expense.id}: ${e?.message}`); }
+          }
+          savedItems.push(`$${numAmount} expense saved to Finance`);
+          actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: numAmount, description: desc } });
+          results.push(expense);
         }
-        savedItems.push(`$${numAmount} expense saved to Finance`);
-        actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: numAmount, description: desc } });
-        results.push(expense);
       } catch (e) {
         console.error("Auto-expense from document failed:", e);
       }
@@ -4096,7 +4211,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (existingProfile) {
         // Update existing instead of creating duplicate
         logger.info("ai", `Profile "${input.name}" already exists (${existingProfile.id}) — updating instead of creating`);
-        const mergedFields = { ...existingProfile.fields, ...(input.fields || {}) };
+        // P0.3e: keep update-instead-of-create writes flat too.
+        const mergedFields = { ...existingProfile.fields, ...flattenAiProfileFields(input.fields) };
         return storage.updateProfile(existingProfile.id, {
           fields: mergedFields,
           notes: input.notes || existingProfile.notes,
@@ -4120,7 +4236,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
       // Auto-detect asset subtype based on name and context
-      const finalFields = { ...(input.fields || {}) };
+      // P0.3e: flatten any nested objects/arrays the model stuffed into fields
+      // (same shared flattener the document-extraction path uses) so profile
+      // fields keep a consistent flat-scalar shape.
+      const finalFields = flattenAiProfileFields(input.fields);
       if ((input.type === "asset" || (!input.type && isChildType)) && !finalFields.assetSubtype) {
         const nameLC = (input.name || "").toLowerCase();
         const allText = `${nameLC} ${(input.notes || "").toLowerCase()}`;
@@ -4142,14 +4261,35 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Auto-detected asset subtype: ${finalFields.assetSubtype} for "${input.name}"`);
       }
 
-      const newProfile = await storage.createProfile({
-        type: input.type || "person",
+      // P0.3d: validate the parent actually exists before writing, and run the
+      // same cycle check update_profile uses. (A brand-new profile has no
+      // descendants, so the cycle check is defense-in-depth — the existence
+      // check is what catches a hallucinated/stale parentProfileId.)
+      if (parentProfileId) {
+        const parentProfile = await storage.getProfile(parentProfileId).catch(() => null);
+        if (!parentProfile) {
+          return { error: `I couldn't find the parent profile for "${input.name}" — it may have been deleted. Tell me which profile it belongs to and I'll attach it.` };
+        }
+        const wouldCycle = await storage.wouldCreateCycle("", "", parentProfileId).catch(() => false);
+        if (wouldCycle) {
+          return { error: `Cannot create "${input.name}" under that parent: it would create a cycle in the profile tree.` };
+        }
+      }
+
+      // P0.3a: validate the full payload with the shared insert schema before
+      // any write. Unknown types get the same "person" fallback storage applies.
+      const PROFILE_TYPES = ["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"];
+      const profilePayload = validateAiPayload(insertProfileSchema, {
+        type: PROFILE_TYPES.includes(input.type) ? input.type : "person",
         name: input.name,
         fields: finalFields,
         tags: input.tags || [],
         notes: input.notes || "",
         parentProfileId,
-      });
+      }, "profile");
+      if (!profilePayload.ok) return { error: profilePayload.error };
+
+      const newProfile = await storage.createProfile(profilePayload.data);
 
       // NW-10: do NOT auto-create a "<name> purchase" expense when an asset is
       // added. A physical item is a balance-sheet asset, not money flowing out;
@@ -4238,9 +4378,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // chat UI can offer a Revert button. Only the keys actually being modified
       // are recorded (so reverting restores exactly what was overwritten and
       // leaves anything added later untouched).
+      // P0.3e: flatten nested AI-supplied field values first (same shared
+      // flattener the extraction path uses) so revert capture and the merge
+      // below both operate on the keys that will actually be written.
+      const updateFlatFields = input.changes.fields ? flattenAiProfileFields(input.changes.fields) : undefined;
       const previousFields: Record<string, any> = {};
-      if (input.changes.fields && profile.fields) {
-        for (const key of Object.keys(input.changes.fields)) {
+      if (updateFlatFields && profile.fields) {
+        for (const key of Object.keys(updateFlatFields)) {
           // Use `in` so we record `undefined` for keys that didn't exist before —
           // reverting will then strip those keys back out.
           previousFields[key] = key in profile.fields ? (profile.fields as any)[key] : undefined;
@@ -4251,7 +4395,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const previousType = input.changes.type !== undefined ? profile.type : undefined;
 
       const changes: any = {};
-      if (input.changes.fields) changes.fields = { ...profile.fields, ...input.changes.fields };
+      if (updateFlatFields) changes.fields = { ...profile.fields, ...updateFlatFields };
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
       if (input.changes.type) changes.type = input.changes.type;
@@ -4434,14 +4578,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         taskTags.push(`recur:${recurFreq}`);
       }
 
-      const newTask = await storage.createTask({
+      // P0.3a: validate with the shared insert schema before writing.
+      const taskPayload = validateAiPayload(insertTaskSchema, {
         title: input.title,
         priority: input.priority || "medium",
         dueDate: input.dueDate,
         description: input.description,
         tags: taskTags,
-        linkedProfiles: taskLinkedProfiles.length > 0 ? taskLinkedProfiles : undefined,
-      });
+        linkedProfiles: taskLinkedProfiles,
+      }, "task");
+      if (!taskPayload.ok) return { error: taskPayload.error };
+      const newTask = await storage.createTask(taskPayload.data);
       markCreation(dedupUser, taskDedupKey);
       // Ensure junction table is set
       for (const pid of taskLinkedProfiles) {
@@ -4679,14 +4826,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         ? [targetProfileId]
         : (selfProfileId ? [selfProfileId] : undefined);
 
-      const newTracker = await storage.createTracker({
+      // P0.3a: validate the schema-covered part with the shared insert schema;
+      // linkedProfiles isn't part of insertTrackerSchema, so it rides alongside
+      // the validated payload explicitly (createTracker supports it inline).
+      const autoTrackerPayload = validateAiPayload(insertTrackerSchema, {
         name: trackerDisplayName,
         category: autoCategory,
-        linkedProfiles: newTrackerLinkedProfiles,
         fields: Object.keys(input.values || {}).filter(k => k !== '_notes').map(k => ({
           name: k,
           type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
         })),
+      }, "tracker");
+      if (!autoTrackerPayload.ok) return { error: autoTrackerPayload.error };
+      const newTracker = await storage.createTracker({
+        ...autoTrackerPayload.data,
+        ...(newTrackerLinkedProfiles ? { linkedProfiles: newTrackerLinkedProfiles } : {}),
       } as any);
       // Even for brand-new trackers, run values through the normalizer
       // so unit suffixes get stripped (e.g. "99°F" → 99) before the
@@ -4718,12 +4872,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       });
       if (dupTracker) return dupTracker;
 
-      const newTracker = await storage.createTracker({
+      // P0.3a: validate with the shared insert schema before writing.
+      const trackerPayload = validateAiPayload(insertTrackerSchema, {
         name: input.name,
         category: input.category || "custom",
         unit: input.unit,
         fields: input.fields || [{ name: "value", type: "number" }],
-      });
+      }, "tracker");
+      if (!trackerPayload.ok) return { error: trackerPayload.error };
+      // P0.3b: pass ownership inline at create time (createTracker supports
+      // linkedProfiles) instead of leaving a create-then-link window.
+      // linkedProfiles isn't part of insertTrackerSchema, so it's passed
+      // explicitly alongside the validated payload.
+      const newTracker = await storage.createTracker({
+        ...trackerPayload.data,
+        ...(ctTargetId ? { linkedProfiles: [ctTargetId] } : {}),
+      } as any);
       // Link tracker ONLY to the resolved target profile — never use autoLinkToProfiles for trackers
       if (ctTargetId) {
         try { await storage.linkProfileTo(ctTargetId, "tracker", newTracker.id); } catch (e: any) { /* ignore dup */ }
@@ -4922,14 +5086,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         } as any);
         if (!liability) liability = existing;
       } else {
-        liability = await storage.createProfile({
+        // P0.3a: validate the schema-covered part with the shared insert
+        // schema; type_key isn't in insertProfileSchema (zod would strip it),
+        // so it's passed alongside the validated payload explicitly.
+        const liabilityPayload = validateAiPayload(insertProfileSchema, {
           type: "liability",
-          type_key: input.subtype,
           name: input.name,
           fields,
           notes: input.notes || "",
           tags: [],
           parentProfileId,
+        }, "liability");
+        if (!liabilityPayload.ok) return { error: liabilityPayload.error };
+        liability = await storage.createProfile({
+          ...liabilityPayload.data,
+          type_key: input.subtype,
         } as any);
       }
       // ASSET-LINKING DECISION TREE — three cases:
@@ -5817,15 +5988,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // calling into the AI engine; falling back to LA preserves the old
       // behavior if for some reason the header was missing.
       const userTz = (storage as any)._timezone || 'America/Los_Angeles';
-      const newExpense = await storage.createExpense({
+      // P0.3a: validate with the shared insert schema before writing.
+      const expensePayload = validateAiPayload(insertExpenseSchema, {
         amount: parsedAmount,
         category: inferredCategory,
         description: input.description || "Expense",
         date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz }),
         vendor: input.vendor,
         tags: input.tags || [],
-        linkedProfiles: expenseLinkedProfiles.length > 0 ? expenseLinkedProfiles : undefined,
-      } as any);
+        linkedProfiles: expenseLinkedProfiles,
+      }, "expense");
+      if (!expensePayload.ok) return { error: expensePayload.error };
+      const newExpense = await storage.createExpense(expensePayload.data);
       markCreation(dedupUser, expDedupKey);
       // If we already linked above, just ensure junction table is set. Otherwise auto-link.
       if (expenseLinkedProfiles.length > 0) {
@@ -5864,11 +6038,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       let asset;
       try {
-        asset = await storage.createProfile({
-          name: assetName, type: assetType,
+        // P0.3a: validate with the shared insert schema before writing.
+        const assetPayload = validateAiPayload(insertProfileSchema, {
+          name: assetName,
+          type: ["vehicle", "property", "asset", "investment", "account"].includes(assetType) ? assetType : "asset",
           fields: { purchasePrice: expense.amount, purchaseDate: expense.date, convertedFromExpense: expense.id },
-          tags: [], notes: null,
-        } as any);
+          tags: [], notes: "",
+        }, "asset profile");
+        if (!assetPayload.ok) return { error: assetPayload.error };
+        asset = await storage.createProfile(assetPayload.data);
       } catch (e: any) { return { error: `Could not create asset profile: ${e?.message || "unknown"}` }; }
       await storage.deleteExpense(expense.id);
       return {
@@ -5956,12 +6134,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (matched) {
             eventLinkedProfiles.push(matched.id);
             logger.info("ai", `Inferred medical profile "${matched.name}" for event "${input.title}"`);
-            // Also normalize category to medical for consistency
-            if (!input.category || input.category === "personal") input.category = "medical";
+            // Also normalize category for consistency — "health" is the
+            // schema-valid EventCategory (the old "medical" value failed
+            // insertEventSchema and was never a legal CalendarEvent category).
+            if (!input.category || input.category === "personal") input.category = "health";
           }
         }
       }
-      const newEvent = await storage.createEvent({
+      // P0.3a: validate with the shared insert schema before writing. The model
+      // occasionally invents category labels ("medical", "appointment") — map
+      // the known alias and bucket the rest into "other" rather than failing
+      // the whole event over a cosmetic field.
+      const EVENT_CATEGORIES = ["personal", "work", "health", "finance", "family", "social", "travel", "education", "other"];
+      let evtCategory = input.category === "medical" ? "health" : (input.category || "personal");
+      if (!EVENT_CATEGORIES.includes(evtCategory)) evtCategory = "other";
+      const eventPayload = validateAiPayload(insertEventSchema, {
         title: input.title.trim(),
         date: input.date,
         time: input.time,
@@ -5970,12 +6157,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         location: input.location,
         description: input.description,
         recurrence: input.recurrence || "none",
-        category: input.category || "personal",
+        category: evtCategory,
         source: "chat",
-        linkedProfiles: eventLinkedProfiles.length > 0 ? eventLinkedProfiles : [],
+        linkedProfiles: eventLinkedProfiles,
         linkedDocuments: [],
         tags: [],
-      });
+      }, "event");
+      if (!eventPayload.ok) return { error: eventPayload.error };
+      const newEvent = await storage.createEvent(eventPayload.data);
       markCreation(dedupUser, evtDedupKey);
       // Only auto-link if we didn't already resolve a profile pre-creation
       if (eventLinkedProfiles.length > 0) {
@@ -6042,21 +6231,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Habit name "${input.name}" already taken — using "${habitName}"`);
       }
 
-      const habit = await storage.createHabit({
+      // P0.3a: validate with the shared insert schema before writing.
+      const habitPayload = validateAiPayload(insertHabitSchema, {
         name: habitName,
         frequency: input.frequency || "daily",
         icon: input.icon,
         color: input.color,
-      });
-      // Direct profile linking — don't rely solely on text matching
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        const target = matchProfileByName(profiles, input.forProfile);
-        if (target) {
-          await storage.updateHabit(habit.id, { linkedProfiles: [target.id] } as any);
-          await storage.linkProfileTo(target.id, "habit", habit.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-          logger.info("ai", `Linked habit "${input.name}" to profile "${target.name}"`);
-        }
+      }, "habit");
+      if (!habitPayload.ok) return { error: habitPayload.error };
+      // P0.3b: write ownership in the create itself (createHabit accepts
+      // linkedProfiles inline; it's not part of insertHabitSchema so it rides
+      // alongside the validated payload) instead of create → updateHabit.
+      const habit = await storage.createHabit({
+        ...habitPayload.data,
+        ...(targetProfileId ? { linkedProfiles: [targetProfileId] } : {}),
+      } as any);
+      // Junction-table link for profile views (linked_profiles is already set).
+      if (targetProfileId) {
+        await storage.linkProfileTo(targetProfileId, "habit", habit.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
+        logger.info("ai", `Linked habit "${input.name}" to profile ${targetProfileId}`);
       }
       // Also run general auto-link for text-based matching
       await autoLinkToProfiles("habit", habit.id, `${input.name || ""} ${input.forProfile || ""}`, input.forProfile);
@@ -6112,6 +6305,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const matched = matchProfileByName(allProfiles, oblForProfile);
         if (matched) preResolvedTargetProfileId = matched.id;
       }
+      // P0.3c: verify the pre-resolved profile still exists and belongs to this
+      // user (storage.getProfile is user-scoped) before seeding linkedProfiles
+      // with it — it can vanish between the list scan and the write. Fall back
+      // to the self profile rather than persisting a dangling link.
+      if (preResolvedTargetProfileId) {
+        const verifiedTarget = await storage.getProfile(preResolvedTargetProfileId).catch(() => null);
+        if (!verifiedTarget) {
+          logger.warn("ai", `create_obligation: pre-resolved profile ${preResolvedTargetProfileId} no longer exists — falling back to self`);
+          const selfFallback = (await storage.getProfiles()).find(p => p.type === "self");
+          preResolvedTargetProfileId = selfFallback?.id;
+        }
+      }
 
       // NW-13: dedupe by (name + owning profile), not name alone. Jim can have
       // his own Netflix even if Self (or anyone else) already has one. A match
@@ -6134,7 +6339,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // branches on "once" (single occurrence, never advanced). Normalize here so
       // a one-time bill gets exactly ONE calendar occurrence on its due date and
       // never recurs into next year.
-      const normalizedFrequency = (input.frequency === "one-time") ? "once" : (input.frequency || "monthly");
+      // P0.3a: also fold the common model aliases ("annual", "bi-weekly") into
+      // schema-legal values so validation below rejects only genuine garbage.
+      const FREQ_ALIASES: Record<string, string> = { "one-time": "once", "onetime": "once", "one time": "once", "annual": "yearly", "annually": "yearly", "bi-weekly": "biweekly", "bimonthly": "monthly" };
+      const rawFrequency = String(input.frequency || "monthly").toLowerCase().trim();
+      const normalizedFrequency = FREQ_ALIASES[rawFrequency] || rawFrequency;
 
       // BUG-H: when the user gives a recurring subscription/bill with no explicit
       // due date ("Spotify $11/month"), infer the recurring day-of-month from
@@ -6156,16 +6365,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         dueDateInferenceNote = `Set to recur on the ${ordinal} — let me know if you want a different day.`;
       }
 
-      const newObligation = await storage.createObligation({
+      // P0.3a: validate with the shared insert schema before writing.
+      // linkedProfiles stays seeded here so Supabase storage doesn't
+      // auto-prepend Self when a target profile was resolved.
+      const obligationPayload = validateAiPayload(insertObligationSchema, {
         name: input.name,
         amount: parseFloat(input.amount) || 0,
         frequency: normalizedFrequency,
         category: input.category || "general",
         nextDueDate: input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
         autopay: input.autopay ?? false,
-        // Seed linkedProfiles so Supabase storage doesn't auto-prepend Self
-        ...(preResolvedTargetProfileId ? { linkedProfiles: [preResolvedTargetProfileId] } as any : {}),
-      } as any);
+        linkedProfiles: preResolvedTargetProfileId ? [preResolvedTargetProfileId] : [],
+      }, "obligation");
+      if (!obligationPayload.ok) return { error: obligationPayload.error };
+      const newObligation = await storage.createObligation(obligationPayload.data);
 
       // DIRECT link to profile (idempotent — already in linkedProfiles
       // when preResolvedTargetProfileId was set, but still registers
@@ -6206,7 +6419,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             // Determine parent: use forProfile's profile if specified, otherwise self
             const selfProfile = profiles.find(p => p.type === "self");
             const parentId = targetParentId || selfProfile?.id;
-            const newProfile = await storage.createProfile({
+            // P0.3a: validate with the shared insert schema before writing.
+            const subProfilePayload = validateAiPayload(insertProfileSchema, {
               type: "subscription",
               name: serviceName,
               fields: {
@@ -6218,7 +6432,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               tags: ["subscription"],
               notes: `${input.frequency || "monthly"} subscription — $${input.amount}`,
               parentProfileId: parentId,
-            });
+            }, "subscription profile");
+            if (!subProfilePayload.ok) throw new Error(subProfilePayload.error);
+            const newProfile = await storage.createProfile(subProfilePayload.data);
             // Link the obligation to the new profile + set the FK for dedup
             // Pass the forProfile so autoLink knows NOT to also link to self
             await autoLinkToProfiles("obligation", newObligation.id, serviceName, input.forProfile);
@@ -6345,14 +6561,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         } as any);
         if (!entry) entry = existingToday;
       } else {
-        entry = await storage.createJournalEntry({
-          mood: input.mood || "neutral",
+        // P0.3a: validate with the shared insert schema before writing. Mood is
+        // coerced to "neutral" when off-vocabulary so a bad mood label never
+        // costs the user their journal content.
+        const JOURNAL_MOODS = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];
+        const journalPayload = validateAiPayload(insertJournalEntrySchema, {
+          mood: JOURNAL_MOODS.includes(input.mood) ? input.mood : "neutral",
           content: input.content || "",
           energy: input.energy,
           gratitude: input.gratitude,
           highlights: input.highlights,
           tags: [],
-        });
+        }, "journal entry");
+        if (!journalPayload.ok) return { error: journalPayload.error };
+        entry = await storage.createJournalEntry(journalPayload.data);
       }
 
       // Direct profile linking for forProfile (when we created a new entry).
@@ -6389,10 +6611,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_artifact": {
-      const artifact = await storage.createArtifact({
+      // P0.3a: validate with the shared insert schema before writing. Unknown
+      // artifact types fall back to "note" instead of failing the whole save.
+      const ARTIFACT_TYPES = ["checklist", "note", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"];
+      const artifactPayload = validateAiPayload(insertArtifactSchema, {
         title: input.title,
         content: input.content || "",
-        type: input.type || "note",
+        type: ARTIFACT_TYPES.includes(input.type) ? input.type : "note",
         tags: input.tags || [],
         pinned: false,
         items: input.items || [],
@@ -6400,16 +6625,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         language: input.language,
         dataBindings: input.dataBindings,
         chartData: input.type === "chart" && input.content ? (() => { try { return JSON.parse(input.content); } catch { return undefined; } })() : undefined,
-      });
+      }, "artifact");
+      if (!artifactPayload.ok) return { error: artifactPayload.error };
+      const artifact = await storage.createArtifact(artifactPayload.data);
       return { result: artifact };
     }
 
-    case "save_memory":
-      return storage.saveMemory({
-        key: input.key,
-        value: input.value,
+    case "save_memory": {
+      // P0.3a: validate with the shared insert schema before writing. Scalar
+      // non-string values (the model sometimes sends numbers) are stringified.
+      const memoryPayload = validateAiPayload(insertMemorySchema, {
+        key: input.key != null && typeof input.key !== "string" ? String(input.key) : input.key,
+        value: input.value != null && typeof input.value !== "object" ? String(input.value) : input.value,
         category: input.category || "general",
-      });
+      }, "memory");
+      if (!memoryPayload.ok) return { error: memoryPayload.error };
+      return storage.saveMemory(memoryPayload.data);
+    }
 
     case "open_document": {
       const searchTerm = (input.query || "").toLowerCase();
@@ -6443,11 +6675,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_document": {
-      const doc = await storage.createDocument({
+      // P0.3a: validate the schema-covered part with the shared insert schema;
+      // `size` isn't in insertDocumentSchema so it's passed alongside explicitly.
+      const createDocPayload = validateAiPayload(insertDocumentSchema, {
         name: input.name,
         type: "document",
         mimeType: "text/plain",
         fileData: Buffer.from(input.content || "").toString("base64"),
+      }, "document");
+      if (!createDocPayload.ok) return { error: createDocPayload.error };
+      const doc = await storage.createDocument({
+        ...createDocPayload.data,
         size: input.content?.length || 0,
       });
       if (input.forProfile) {
@@ -6483,17 +6721,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const found = habits.find(h => h.name.toLowerCase().includes(habitId.toLowerCase()));
         habitId = found?.id || undefined;
       }
-      const goal = await storage.createGoal({
+      // P0.3a: validate with the shared insert schema before writing. Unknown
+      // goal types fall back to "custom"; target is coerced numeric so a
+      // string "5000" from the model doesn't fail the save.
+      const GOAL_TYPES = ["weight_loss", "weight_gain", "savings", "habit_streak", "spending_limit", "fitness_distance", "fitness_frequency", "tracker_target", "custom"];
+      const goalPayload = validateAiPayload(insertGoalSchema, {
         title: input.title,
-        type: input.type,
-        target: input.target,
-        unit: input.unit,
+        type: GOAL_TYPES.includes(input.type) ? input.type : "custom",
+        target: typeof input.target === "number" ? input.target : parseFloat(input.target),
+        unit: input.unit ?? "",
         startValue: input.startValue,
         deadline: input.deadline,
         trackerId,
         habitId,
         category: input.category,
-      });
+      }, "goal");
+      if (!goalPayload.ok) return { error: goalPayload.error };
+      const goal = await storage.createGoal(goalPayload.data);
       // Link goal to profile (via tracker's profile or explicit name)
       if (trackerId) {
         const trackers = await storage.getTrackers();
@@ -7244,14 +7488,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "log_income": {
       if (!input.amount || !input.source) return { error: "amount and source are required" };
       const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      const incomeData = {
+      // P0.3a: validate with the shared insert schema before writing.
+      const incomePayload = validateAiPayload(insertIncomeSchema, {
         description: input.source,
-        amount: input.amount,
+        amount: typeof input.amount === "number" ? input.amount : parseFloat(input.amount),
         category: input.category || "salary",
-        frequency: "once" as string,
+        frequency: "once",
         date: input.date || todayDate,
-      };
-      const created = await storage.createIncome(incomeData);
+      }, "income");
+      if (!incomePayload.ok) return { error: incomePayload.error };
+      const created = await storage.createIncome(incomePayload.data);
       return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}` };
     }
 
@@ -8202,7 +8448,7 @@ function parseArtifactFromResponse(text: string, profileId: string): { chatText:
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
-export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string): Promise<{
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[] }): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
@@ -8690,7 +8936,56 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // ALWAYS invalidate cache at the start of every chat request so AI sees the CURRENT database state.
   // This ensures manual UI edits (creates, deletes, updates) are reflected immediately.
   invalidateContextCache(userId);
-  const [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
+  let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
+
+  // P4.5: honor the UI profile filter when the chat route passes it through.
+  // `allProfiles` stays the FULL list — the orphan rule, self lookups and the
+  // document sanitizer must see every profile even when context is scoped down.
+  // When no filter ids arrive, behavior is unchanged.
+  const allProfiles = profiles;
+  const selfProfileId = allProfiles.find((p: any) => p.type === "self")?.id || '';
+  const profileFilterIds = (options?.profileFilterIds || []).filter((id: any) => typeof id === "string" && id.length > 0);
+  if (profileFilterIds.length > 0) {
+    const filterCtx = { selectedIds: profileFilterIds, allProfiles };
+    // Entities: same rule the UI and REST APIs use (shared/profile-filter.ts).
+    // Orphans (no linkedProfiles) count as self's per the longstanding rule.
+    const entityInScope = (e: any) => passesProfileFilter(e?.linkedProfiles, filterCtx);
+    trackers = trackers.filter(entityInScope);
+    tasks = tasks.filter(entityInScope);
+    expenses = expenses.filter(entityInScope);
+    events = events.filter(entityInScope);
+    habits = habits.filter(entityInScope);
+    obligations = obligations.filter(entityInScope);
+    documents = documents.filter(entityInScope);
+    goals = goals.filter(entityInScope);
+    // Profiles: keep the selected ids, their descendants (parentProfileId
+    // chain), and co-owned asset/liability profiles (relational link tables).
+    const [allAssetLinks, allLiabLinks] = await Promise.all([
+      storage.getAssetPartyLinks().catch(() => [] as any[]),
+      storage.getLiabilityProfileLinks().catch(() => [] as any[]),
+    ]);
+    const selectedSet = new Set(profileFilterIds);
+    const byId = new Map(allProfiles.map((p: any) => [p.id, p]));
+    const selfIds = selfIdsFrom(allProfiles);
+    const profileInScope = (p: any): boolean => {
+      if (selectedSet.has(p.id)) return true;
+      // Descendant of a selected profile (walk the parent chain)?
+      const seen = new Set<string>();
+      let parentId: string | undefined = p.parentProfileId;
+      while (parentId && !seen.has(parentId)) {
+        if (selectedSet.has(parentId)) return true;
+        seen.add(parentId);
+        parentId = (byId.get(parentId) as any)?.parentProfileId;
+      }
+      // Co-owned by a selected profile (asset_party_links / liability_profile_links)?
+      return isInScope(
+        ownerCandidatesForProfile(p, allAssetLinks as any, allLiabLinks as any),
+        { selectedIds: profileFilterIds, selfIds },
+        "out_of_scope",
+      );
+    };
+    profiles = allProfiles.filter(profileInScope);
+  }
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   const context = (await Promise.all([
@@ -8789,7 +9084,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     })(),
     `Memories: ${memories.slice(0, 25).map(m => `${m.key}: ${isSensitiveKey(m.key) ? REDACTED : String(m.value).slice(0,50)}`).join("; ") || "none"}`,
     `Documents (${documents.length}): ${documents.slice(0, 25).map(d => {
-      const ed = d.extractedData || {};
+      // Sanitizer parity with /api/profiles/:id/ai-summary: strip sensitive
+      // demographic keys (DOB/age/SSN variants) the owning profile no longer
+      // carries before the extracted data is embedded into the chat context.
+      const ed = stripSensitiveDocData(d.extractedData, d.linkedProfiles, allProfiles) || {};
       // Include ALL extracted fields without truncation for accurate answers
       const allFields = Object.entries(ed).filter(([k]) => k !== 'rawText' && !k.startsWith('_')).map(([k, v]) => {
         if (isSensitiveKey(k)) return `${k}: ${REDACTED}`;
@@ -8838,7 +9136,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     })(),
   ])).filter(Boolean).join("\n");
 
-  const selfProfileId = profiles.find((p: any) => p.type === "self")?.id || '';
+  // (selfProfileId was computed above from the UNFILTERED profile list, so the
+  // system prompt keeps a valid self id even when the profile filter is active.)
   // A4 fix: scrub the assembled context once at the boundary before injection
   // into the system prompt — defense-in-depth against prompt-injection vectors
   // hiding in profile names, memory keys/values, tracker names, etc. Stripping

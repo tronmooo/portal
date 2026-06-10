@@ -9,8 +9,9 @@
  */
 import { useMemo, useState } from "react";
 import { isInScope as scopeIsInScope, selfIdsFrom } from "@shared/scope";
+import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import {
@@ -30,77 +31,9 @@ import {
   ArrowDownToLine, ArrowUpFromLine, ExternalLink,
 } from "lucide-react";
 
-// ─── shared helpers (mirror server resolveAssetValue / resolveLiabilityValue) ───
-
-function parseMoney(v: any): number {
-  if (typeof v === "number" && isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v.replace(/[^0-9.\-]/g, ""));
-    if (isFinite(n)) return n;
-  }
-  return 0;
-}
-// Round-6 fix (BUG-003/004/015): mirror server resolveAssetValue exactly
-// (portal/server/supabase-storage.ts). Previously missing cost/amount/price/
-// accountBalance/marketValue-on-other paths caused $10-$11K drift between
-// the Hero KPI tile and the Net Worth popup.
-function resolveAssetValue(p: any): number {
-  if (!p?.fields) return 0;
-  const fields = p.fields;
-  const housing = fields.housing || {};
-  const other = fields.other || {};
-  const finance = fields.finance || {};
-  const vehicle = fields.vehicle || {};
-  const vehicles = fields.vehicles || {};
-  const investment = fields.investment || {};
-  const candidates: any[] = [
-    fields.currentValue, fields.current_value, housing.currentValue, housing.current_value, other.currentValue, other.current_value,
-    fields.marketValue, fields.market_value, housing.marketValue, housing.market_value, other.marketValue, other.market_value,
-    fields.estimatedValue, fields.estimated_value,
-    fields.value, other.value,
-    fields.purchasePrice, fields.purchase_price, other.purchasePrice, other.purchase_price, housing.purchasePrice, housing.purchase_price,
-    fields.cost, other.cost,
-    fields.amount, other.amount,
-    fields.price, other.price,
-    fields.balance, finance.balance, finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
-    fields.accountBalance, finance.accountBalance, finance.account_balance,
-    vehicle.purchasePrice, vehicle.purchase_price, vehicle.currentValue, vehicle.current_value, vehicle.value,
-    vehicles.purchasePrice, vehicles.purchase_price, vehicles.currentValue, vehicles.current_value, vehicles.value,
-    investment.balance, investment.value, investment.currentValue, investment.current_value,
-  ];
-  for (const c of candidates) { const n = parseMoney(c); if (n > 0) return n; }
-  return 0;
-}
-function resolveLiabilityBalance(p: any): number {
-  if (!p?.fields) return 0;
-  const fields = p.fields;
-  const finance = fields.finance || {};
-  const loan = fields.loan || {};
-  const other = fields.other || {};
-  const candidates: any[] = [
-    fields.currentBalance, fields.current_balance,
-    finance.currentBalance, finance.current_balance,
-    loan.currentBalance, loan.current_balance,
-    fields.balance,
-    fields.remainingBalance, fields.remaining_balance,
-    fields.loanBalance, fields.loan_balance,
-    fields.outstandingBalance, fields.outstanding_balance,
-    finance.remainingBalance, finance.remaining_balance,
-    finance.loanBalance, finance.loan_balance,
-    finance.outstandingBalance, finance.outstanding_balance, finance.balance,
-    loan.remainingBalance, loan.remaining_balance,
-    loan.balance, loan.outstandingBalance, loan.outstanding_balance,
-    other.remainingBalance, other.remaining_balance, other.balance,
-  ];
-  for (const c of candidates) { const n = parseMoney(c); if (n > 0) return n; }
-  // Sum nested loans[] balances if present
-  const loans = Array.isArray(finance.loans) ? finance.loans : Array.isArray(fields.loans) ? fields.loans : [];
-  if (loans.length > 0) {
-    const sum = loans.reduce((s: number, l: any) => s + parseMoney(l?.balance || l?.remainingBalance || l?.remaining_balance), 0);
-    if (sum > 0) return sum;
-  }
-  return 0;
-}
+// P1.2 remediation: the asset/liability value resolvers are imported from
+// @shared/asset-value (the single source of truth) instead of the hand-copied
+// local versions that previously lived here and drifted from the server's.
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
 // BUG-NW-1 fix (2026-06-03): `subscription` removed — subscriptions are
@@ -611,7 +544,11 @@ export function BudgetPopup({
   // the active profile filter, so switching profiles didn't update what the
   // popup showed. Thread filterMode/filterIds the same way the Hero card and
   // Finance section do.
-  const currentMonthForPopup = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+  // P1.1 remediation: use the browser timezone (same BROWSER_TIMEZONE every
+  // request sends as the X-Timezone header), not a hardcoded zone. The server
+  // computes month boundaries from that same header, so client and server
+  // agree on what "this month" means for the user.
+  const currentMonthForPopup = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const budgetsParam = filterMode === "selected" && filterIds.length > 0
     ? `?month=${currentMonthForPopup}&profileIds=${filterIds.join(",")}`
     : `?month=${currentMonthForPopup}`;

@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter, setFilterEveryone } from "@/lib/profileFilter";
+import { passesProfileFilter } from "@shared/profile-filter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -539,12 +540,26 @@ export default function TasksPage() {
     queryFn: () => apiRequest("GET", taskUrl).then(r => r.json()),
   });
 
-  // Apply profile filter client-side (must be before early returns — Rules of Hooks)
-  const profileFilteredTasks = useMemo(() => (tasks || []).filter(t => {
-    if (filterMode === "everyone" || filterIds.length === 0) return true;
-    const linked = t.linkedProfiles || [];
-    return linked.some(id => filterIds.includes(id));
-  }), [tasks, filterMode, filterIds]);
+  // Profiles are needed for the unified filter rule below (it must know which
+  // profiles are `self` to decide whether orphan tasks pass the filter).
+  const { data: allProfiles = [] } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+
+  // Apply profile filter client-side (must be before early returns — Rules of Hooks).
+  // P2.4 remediation: use the unified passesProfileFilter rule
+  // (shared/profile-filter.ts) instead of an inline `linked.some(...)` so
+  // orphan tasks (no linkedProfiles) still show when the selection includes a
+  // self profile — matching finance/journal/server semantics.
+  const profileFilteredTasks = useMemo(() => {
+    if (filterMode === "everyone" || filterIds.length === 0) return tasks || [];
+    const ctx = {
+      selectedIds: filterIds,
+      allProfiles: allProfiles.map(p => ({ id: p.id, type: p.type })),
+    };
+    return (tasks || []).filter(t => passesProfileFilter(t.linkedProfiles, ctx));
+  }, [tasks, filterMode, filterIds, allProfiles]);
   const activeTasks = useMemo(() => profileFilteredTasks.filter(t => t.status !== "done"), [profileFilteredTasks]);
   const completedTasks = useMemo(() => profileFilteredTasks.filter(t => t.status === "done"), [profileFilteredTasks]);
 

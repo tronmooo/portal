@@ -14,6 +14,25 @@
 import { PDFDocument, StandardFonts, rgb, PDFForm } from "pdf-lib";
 import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
+import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
+
+// Sanitizer parity with /api/profiles/:id/ai-summary: compute the union of
+// sensitive demographic key variants (DOB/age/SSN) that NONE of the given
+// profiles carry — those keys get stripped from any model-bound content.
+// With zero profiles to scan, everything sensitive is stripped (safe default).
+function sensitiveStripFor(profileFieldSets: Array<Record<string, any> | null | undefined>): Set<string> {
+  let drop: Set<string> | null = null;
+  for (const fields of profileFieldSets) {
+    const s = computeAiSensitiveStripKeys(fields);
+    if (drop === null) {
+      drop = s;
+    } else {
+      const prev: Set<string> = drop;
+      drop = new Set([...prev].filter((k) => s.has(k)));
+    }
+  }
+  return drop ?? computeAiSensitiveStripKeys(undefined);
+}
 
 // Reuse the same Anthropic client pattern as ai-engine.ts
 let _client: Anthropic | null = null;
@@ -81,12 +100,16 @@ async function buildSourcesContext(sources: SmartFillSource[]): Promise<Record<s
     if (s.kind === "profile" || s.kind === "asset" || s.kind === "liability") {
       const p = profiles.find((pp: any) => pp.id === s.id);
       if (p) {
+        // Strip sensitive demographic variants the profile itself no longer
+        // carries (e.g. a DOB lingering inside a nested group after the user
+        // deleted the Birthday row) before the fields blob reaches the model.
+        const strip = computeAiSensitiveStripKeys(p.fields);
         ctx[`${s.kind}:${p.name}`] = {
           id: p.id,
           type: p.type,
           type_key: p.type_key,
           name: p.name,
-          fields: p.fields ?? {},
+          fields: deepStripKeys(p.fields ?? {}, strip),
           notes: (p.notes || "").slice(0, 400),
           tags: p.tags ?? [],
         };
@@ -94,11 +117,19 @@ async function buildSourcesContext(sources: SmartFillSource[]): Promise<Record<s
     } else if (s.kind === "document") {
       const d = documents.find((dd: any) => dd.id === s.id);
       if (d) {
+        // Same stripping the AI-summary endpoint applies: a key is kept only
+        // if at least one owning profile still carries the fact; unlinked
+        // documents are scanned against the self profile(s).
+        const owners = ((d as any).linkedProfiles || [])
+          .map((pid: string) => profiles.find((pp: any) => pp.id === pid))
+          .filter(Boolean);
+        const scan = owners.length > 0 ? owners : profiles.filter((pp: any) => pp.type === "self");
+        const strip = sensitiveStripFor(scan.map((pp: any) => pp.fields));
         ctx[`document:${d.name}`] = {
           id: d.id,
           type: d.type,
           name: d.name,
-          extractedData: d.extractedData ?? {},
+          extractedData: deepStripKeys(d.extractedData ?? {}, strip),
           expirationDate: d.expirationDate,
         };
       }

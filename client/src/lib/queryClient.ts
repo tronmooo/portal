@@ -272,6 +272,11 @@ function isSafeToPersist(queryKey: any): boolean {
   return true;
 }
 
+// P5.3: warn-once flag for the oversize-snapshot skip below (module scope =
+// once per session; snapshotCache runs on a 1.5s throttle so a per-call warn
+// would flood the console).
+let oversizeSnapshotWarned = false;
+
 function snapshotCache(): void {
   try {
     // Never persist data for a user we can't positively identify from the live
@@ -293,7 +298,20 @@ function snapshotCache(): void {
     // Cap size to avoid blowing localStorage (~5MB browser quota).
     // Stamp the snapshot with the owning user id (see currentSessionUserId).
     const json = JSON.stringify({ uid, entries: out });
-    if (json.length > 2_500_000) return; // ~2.5MB cap
+    if (json.length > 2_500_000) { // ~2.5MB cap
+      // P5.3: don't fail silently — warn once per session so the "skeleton
+      // flash after reload" symptom is diagnosable. Snapshots run every 1.5s,
+      // so the flag keeps this from spamming the console.
+      if (!oversizeSnapshotWarned) {
+        oversizeSnapshotWarned = true;
+        console.warn(
+          `[queryClient] query-cache snapshot is ${(json.length / 1_000_000).toFixed(1)}MB ` +
+          `(> 2.5MB cap) — skipping localStorage persistence. The cache won't ` +
+          `survive a full reload this session.`
+        );
+      }
+      return;
+    }
     localStorage.setItem(STORAGE_KEY, json);
   } catch { /* localStorage may be unavailable (private browsing) */ }
 }

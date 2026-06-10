@@ -446,10 +446,41 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
     } catch (err: any) {
       log.error(`[API Error] ${req.method} ${req.path}:`, err?.message || err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal server error" });
+        // Honor explicit client-error status codes thrown by lower layers
+        // (e.g. the storage layer's optimistic-concurrency ConflictError sets
+        // statusCode = 409). 5xx and unknown statuses stay a generic 500 so
+        // internal details never leak to clients.
+        const status = Number(err?.statusCode || err?.status);
+        if (Number.isInteger(status) && status >= 400 && status < 500) {
+          res.status(status).json({ error: err?.message || "Request failed" });
+        } else {
+          res.status(500).json({ error: "Internal server error" });
+        }
       }
     }
   };
+}
+
+// ── [P2.4] Canonical profile-scope filter for list endpoints ────────────────
+// ONE implementation of the shared orphan rule (shared/profile-filter):
+// an item passes when any of its linkedProfiles is in the selection; orphan
+// items (empty linkedProfiles) pass only when the selection includes a
+// self-type profile. Previously trackers/expenses/events/habits/obligations
+// each inlined a bare `.some()` that silently dropped orphans — and the
+// single-profile (?profileId=) branches duplicated the rule separately.
+// Routing every site through this helper keeps single vs multi param
+// semantics identical and aligned with the tasks/journal reference endpoints.
+async function filterByProfileScope<T>(
+  items: T[],
+  ids: string[],
+  uid: string,
+): Promise<T[]> {
+  if (!ids || ids.length === 0) return items;
+  const allProfiles: Array<{ id: string; type?: string }> =
+    getCached(`profiles:${uid}`) || await storage.getProfiles();
+  return items.filter((item: any) =>
+    passesProfileFilter(item?.linkedProfiles, { selectedIds: ids, allProfiles })
+  );
 }
 
 export async function registerRoutes(
@@ -527,9 +558,9 @@ export async function registerRoutes(
       const ckStats = `stats:${uid}:all`;
       const ckEnh = `enhanced:${uid}:all`;
       const ckProf = `profiles:${uid}`;
-      if (!getCached(ckStats)) storage.getStats().then(s => setCache(ckStats, s, 5*60*1000)).catch(()=>{});
-      if (!getCached(ckEnh)) storage.getDashboardEnhanced().then(d => setCache(ckEnh, d, 5*60*1000)).catch(()=>{});
-      if (!getCached(ckProf)) storage.getProfiles().then(p => setCache(ckProf, p, 5*60*1000)).catch(()=>{});
+      if (!getCached(ckStats)) storage.getStats().then(s => setCache(ckStats, s, 60*1000)).catch(()=>{}); // [P5.1] 60s cap
+      if (!getCached(ckEnh)) storage.getDashboardEnhanced().then(d => setCache(ckEnh, d, 60*1000)).catch(()=>{}); // [P5.1] 60s cap
+      if (!getCached(ckProf)) storage.getProfiles().then(p => setCache(ckProf, p, 60*1000)).catch(()=>{}); // [P5.1] 60s cap
     }
   }));
 
@@ -609,6 +640,11 @@ export async function registerRoutes(
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Message required" });
       }
+      // [P4.5] Optional active profile-filter selection from the client so the
+      // AI engine can scope reads/snapshots to the same selection the UI shows.
+      const profileFilterIds: string[] | undefined = Array.isArray(req.body?.profileFilterIds)
+        ? (req.body.profileFilterIds as any[]).filter((x) => typeof x === "string" && x.length > 0)
+        : undefined;
       if (message.length > 5000) {
         return res.status(400).json({ error: "Message too long (max 5000 characters)" });
       }
@@ -640,7 +676,10 @@ export async function registerRoutes(
       // Pass user's timezone to AI engine so all date operations use the correct local date
       const tz = getTimezone(req);
       (storage as any)._timezone = tz;
-      const result = await processMessage(sanitize(message), Array.isArray(history) ? history : undefined, userId);
+      // [P4.5] 4th arg is the engine options object; cast keeps this compiling
+      // while ai-engine.ts gains `profileFilterIds` support (the engine ignores
+      // unknown extra args until then, so this is forward/backward safe).
+      const result = await (processMessage as any)(sanitize(message), Array.isArray(history) ? history : undefined, userId, { profileFilterIds });
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
       // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
@@ -1813,6 +1852,25 @@ If unsure, return "profile_fact".`,
     res.json(result);
   }));
 
+  // [P0.5] Per-user ownership repair — re-syncs JSONB linked_profiles with the
+  // junction tables for the authenticated user's rows. Authenticated like every
+  // other /api route (global authMiddleware); NOT superadmin-gated because it
+  // only touches the caller's own data.
+  app.post("/api/admin/ownership-repair", asyncHandler(async (req, res) => {
+    if (typeof (storage as any).repairOwnershipConsistency !== "function") {
+      return res.status(501).json({ error: "Ownership repair is not available: storage.repairOwnershipConsistency is not implemented in this deployment" });
+    }
+    try {
+      const summary = await (storage as any).repairOwnershipConsistency();
+      // Repair may rewrite linked_profiles on any entity type — drop all caches.
+      bustAllCaches();
+      res.json({ success: true, summary });
+    } catch (err: any) {
+      log.error("[OwnershipRepair]", err?.message || err);
+      res.status(500).json({ error: "Ownership repair failed" });
+    }
+  }));
+
   app.get("/api/stats", asyncHandler(async (req, res) => {
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
@@ -1979,7 +2037,7 @@ If unsure, return "profile_fact".`,
         storage.getGoals(),
         storage.getEvents(),
       ]));
-      if (!hit) setCache(ck, dataset, 5 * 60 * 1000); // 5 min — insights aggregates 10 tables; cache-bust middleware drops it on any mutation
+      if (!hit) setCache(ck, dataset, 60 * 1000); // [P5.1] 60s (was 5m): write-busts are per-instance on serverless; bound cross-instance staleness
       const [allProfiles, allTrackers, allTasks, allExpenses, habits, allObligations, journal, documents, goals, allEvents] =
         dataset as [Awaited<ReturnType<typeof storage.getProfiles>>, Awaited<ReturnType<typeof storage.getTrackers>>, Awaited<ReturnType<typeof storage.getTasks>>, Awaited<ReturnType<typeof storage.getExpenses>>, Awaited<ReturnType<typeof storage.getHabits>>, Awaited<ReturnType<typeof storage.getObligations>>, Awaited<ReturnType<typeof storage.getJournalEntries>>, Awaited<ReturnType<typeof storage.getDocuments>>, Awaited<ReturnType<typeof storage.getGoals>>, Awaited<ReturnType<typeof storage.getEvents>>];
       // BUG-20260528-profile-filter-leakage: previously inline mp() that
@@ -3063,15 +3121,16 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     const ck = `trackers:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getTrackers());
-    if (!hit) setCache(ck, items, 5 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
     // BUG-20260528-finance-tracker: hide legacy rows whose category is no
     // longer surfaced. We filter at read time so we don't have to migrate
     // existing data (which the user wants kept intact).
     items = items.filter((t: any) => !HIDDEN_TRACKER_CATEGORIES.has(String(t.category || "").toLowerCase().trim()));
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
+      // [P2.4] canonical orphan rule — see filterByProfileScope.
       const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter((t: any) => (t.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
+      items = await filterByProfileScope(items, ids, uid);
     }
     res.json(paginate(items, req, res));
   }));
@@ -3384,9 +3443,17 @@ Rules:
       return res.status(422).json({ error: "AI could not extract any numeric values from text", reason: decision.value.reason });
     }
 
+    // [P1.5] Run through the shared normalizer so smart-entry logs land in
+    // the exact same shape as chat-logged and document-extracted entries
+    // (canonical field names, units converted to the tracker's unit).
+    const { values: normalizedValues, warnings: normWarnings } = normalizeTrackerEntry(tracker as any, cleanValues);
+    if (normWarnings.length > 0) {
+      console.log(`[smart-entry normalize] ${tracker.name}: ${normWarnings.join("; ")}`);
+    }
+
     const parsed = insertTrackerEntrySchema.safeParse({
       trackerId: tracker.id,
-      values: cleanValues,
+      values: normalizedValues,
       notes: decision.value.notes || text,
       timestamp: new Date().toISOString(),
     });
@@ -3410,7 +3477,7 @@ Rules:
     const ck = `tasks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getTasks>> = hit || await dedupe(ck, () => storage.getTasks());
-    if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
     // Support both ?profileId=x (single) and ?profileIds=x,y (multi)
     const fp = req.query.profileId as string | undefined;
     const fps = req.query.profileIds as string | undefined;
@@ -3578,23 +3645,19 @@ Rules:
     const ck = `expenses:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getExpenses());
-    if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
     // Server-side filtering
     if (req.query.category && typeof req.query.category === "string") {
       items = items.filter((e: any) => e.category === req.query.category);
     }
+    // [P2.4] single (?profileId=) and multi (?profileIds=) now share the same
+    // canonical orphan rule via filterByProfileScope.
     const profileIdsParam = req.query.profileIds as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter((e: any) => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
-    } else if (req.query.profileId && typeof req.query.profileId === "string") {
-      const fp = req.query.profileId as string;
-      const allProfiles = await storage.getProfiles();
-      const isSelf = allProfiles.find((p: any) => p.id === fp)?.type === "self";
-      items = items.filter((e: any) => {
-        const lp = e.linkedProfiles || [];
-        return lp.includes(fp) || (isSelf && lp.length === 0);
-      });
+    const expenseFilterIds = profileIdsParam
+      ? profileIdsParam.split(",").filter(Boolean)
+      : (req.query.profileId && typeof req.query.profileId === "string" ? [req.query.profileId as string] : []);
+    if (expenseFilterIds.length > 0) {
+      items = await filterByProfileScope(items, expenseFilterIds, uid);
     }
     if (req.query.from && typeof req.query.from === "string") {
       items = items.filter((e: any) => e.date >= (req.query.from as string));
@@ -3692,7 +3755,7 @@ Rules:
     const ck = `paychecks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getPaychecks>> = hit || await dedupe(ck, () => storage.getPaychecks());
-    if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -3837,11 +3900,12 @@ Rules:
     const ck = `events:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getEvents());
-    if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
+      // [P2.4] canonical orphan rule — see filterByProfileScope.
       const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter((e: any) => (e.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
+      items = await filterByProfileScope(items, ids, uid);
     }
     res.json(paginate(items, req, res));
   }));
@@ -3908,21 +3972,14 @@ Rules:
   // ---- Documents ----
   app.get("/api/documents", asyncHandler(async (req, res) => {
     let items = await storage.getDocuments();
-    // Profile filter (parity with /api/obligations, /api/tasks, etc.)
+    // [P2.4] Profile filter (parity with /api/obligations, /api/tasks, etc.) —
+    // single and multi param share the canonical orphan rule via filterByProfileScope.
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      if (ids.length > 0) {
-        items = items.filter((d: any) => (d.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
-      }
-    } else if (fp) {
-      const allProfiles = await storage.getProfiles();
-      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
-      items = items.filter((d: any) => {
-        const lp = d.linkedProfiles || [];
-        return lp.includes(fp) || (isSelf && lp.length === 0);
-      });
+    const docFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (fp ? [fp] : []);
+    if (docFilterIds.length > 0) {
+      const uid_doc = cacheUserKey(req as AuthenticatedRequest);
+      items = await filterByProfileScope(items, docFilterIds, uid_doc);
     }
     res.json(paginate(items, req, res));
   }));
@@ -4143,19 +4200,14 @@ Rules:
     const ck = `habits:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getHabits());
-    if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    // [P2.4] single (?profileId=) and multi (?profileIds=) now share the same
+    // canonical orphan rule via filterByProfileScope.
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter((item: any) => (item.linkedProfiles || []).some((pid: string) => ids.includes(pid)));
-    } else if (fp) {
-      const allProfiles = await (getCached(`profiles:${uid}`) || storage.getProfiles());
-      const isSelf = allProfiles.find((p: any) => p.id === fp)?.type === "self";
-      items = items.filter((item: any) => {
-        const lp = item.linkedProfiles || [];
-        return lp.includes(fp) || (isSelf && lp.length === 0);
-      });
+    const habitFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (fp ? [fp] : []);
+    if (habitFilterIds.length > 0) {
+      items = await filterByProfileScope(items, habitFilterIds, uid);
     }
     res.json(paginate(items, req, res));
   }));
@@ -4240,19 +4292,14 @@ Rules:
     const ck = `obligations:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getObligations>> = hit || await dedupe(ck, () => storage.getObligations());
-    if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
+    // [P2.4] single (?profileId=) and multi (?profileIds=) now share the same
+    // canonical orphan rule via filterByProfileScope.
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter(item => (item.linkedProfiles || []).some(pid => ids.includes(pid)));
-    } else if (fp) {
-      const allProfiles = await storage.getProfiles();
-      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
-      items = items.filter(item => {
-        const lp = item.linkedProfiles || [];
-        return lp.includes(fp) || (isSelf && lp.length === 0);
-      });
+    const oblFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (fp ? [fp] : []);
+    if (oblFilterIds.length > 0) {
+      items = await filterByProfileScope(items, oblFilterIds, uid);
     }
     res.json(paginate(items, req, res));
   }));
@@ -4510,8 +4557,11 @@ Rules:
     let items = await storage.getArtifacts();
     const profileIdsParam = req.query.profileIds as string | undefined;
     if (profileIdsParam) {
+      // [P3.3] canonical orphan rule — artifacts store linkedProfiles at the
+      // top level (rowToArtifact maps linked_profiles), same as other entities.
       const ids = profileIdsParam.split(",").filter(Boolean);
-      items = items.filter(a => (a.linkedProfiles || []).some(pid => ids.includes(pid)));
+      const uid_ar = cacheUserKey(req as AuthenticatedRequest);
+      items = await filterByProfileScope(items, ids, uid_ar);
     }
     res.json(paginate(items, req, res));
   }));
@@ -4706,7 +4756,7 @@ Rules:
     const ck = `journal:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getJournalEntries>> = hit || await dedupe(ck, () => storage.getJournalEntries());
-    if (!hit) setCache(ck, items, 3 * 60 * 1000);
+    if (!hit) setCache(ck, items, 60 * 1000); // [P5.1] 60s cap: write-busts are per-instance; bound cross-instance staleness
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     if (profileIdsParam) {
@@ -5308,7 +5358,7 @@ Rules:
       // serialized after the previous. On a typical user this means ~1.5s of
       // pure latency stacked up. Resolve all in parallel so the export
       // completes in O(1) round-trip time instead of O(n).
-      const [
+      let [
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
       ] = await Promise.all([
@@ -5325,9 +5375,32 @@ Rules:
         storage.getMemories(),
         storage.getDomains(),
       ]);
+      // [P6.2] Optional ?profileIds= scoping. Each entity collection goes
+      // through the same canonical orphan rule as the list endpoints.
+      // Profiles, memories and domains are reference data with no
+      // linkedProfiles — always exported in full.
+      const profileIdsParam = req.query.profileIds as string | undefined;
+      const exportFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : [];
+      if (exportFilterIds.length > 0) {
+        const uid_ex = cacheUserKey(req as AuthenticatedRequest);
+        [trackers, tasks, expenses, events, documents, habits, obligations, artifacts, journalEntries] =
+          await Promise.all([
+            filterByProfileScope(trackers, exportFilterIds, uid_ex),
+            filterByProfileScope(tasks, exportFilterIds, uid_ex),
+            filterByProfileScope(expenses, exportFilterIds, uid_ex),
+            filterByProfileScope(events, exportFilterIds, uid_ex),
+            filterByProfileScope(documents, exportFilterIds, uid_ex),
+            filterByProfileScope(habits, exportFilterIds, uid_ex),
+            filterByProfileScope(obligations, exportFilterIds, uid_ex),
+            filterByProfileScope(artifacts, exportFilterIds, uid_ex),
+            filterByProfileScope(journalEntries, exportFilterIds, uid_ex),
+          ]);
+      }
       const data = {
         version: 1,
         exportedAt: new Date().toISOString(),
+        scope: exportFilterIds.length > 0 ? "filtered" : "all",
+        ...(exportFilterIds.length > 0 ? { filteredProfileIds: exportFilterIds } : {}),
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
       };

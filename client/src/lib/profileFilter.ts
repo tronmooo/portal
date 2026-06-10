@@ -207,22 +207,10 @@ export function toggleFilterProfile(id: string, name: string) {
   saveToStorage();
 }
 
-/**
- * Check if a specific item passes the current filter.
- *
- * NOTE: This local helper does NOT know about profile types, so it cannot
- * apply the "orphans belong to self" exception. It is intentionally
- * conservative — it hides orphans whenever any filter is active. Pages that
- * need the self-exception (finance, calendar, dashboard) should import
- * `passesProfileFilter` from `@shared/profile-filter` and pass the loaded
- * profile list. This function is left for callers that don't have profile
- * types handy and just want a quick "is this in the selection" check.
- */
-export function passesFilter(linkedProfileIds: string[] | undefined | null): boolean {
-  if (_state.mode === "everyone") return true;
-  if (!linkedProfileIds || linkedProfileIds.length === 0) return false;
-  return linkedProfileIds.some(id => _state.selectedIds.includes(id));
-}
+// P2.5: the legacy passesFilter() helper was deleted — it hid orphan items
+// (no linkedProfiles) whenever a filter was active, diverging from the
+// canonical "orphans belong to self" rule. Use passesProfileFilter from
+// @shared/profile-filter (with the loaded profile list) instead.
 
 /** Get display label for the current filter */
 export function getFilterLabel(): string {
@@ -232,21 +220,6 @@ export function getFilterLabel(): string {
   return `${_state.selectedNames[0]} +${_state.selectedNames.length - 1}`;
 }
 
-// ── Legacy compat (used by pages that still read single filter) ──
-// IMPORTANT: this only returns a single id when exactly one profile is selected.
-// When 2+ are selected, callers MUST switch to getProfileFilter().selectedIds and
-// pass `?profileIds=a,b` to the server — otherwise the filter silently disappears.
-export function getDashboardProfileFilter(): { id: string | undefined; name: string; ids: string[] } {
-  if (_state.mode === "everyone") return { id: undefined, name: "Everyone", ids: [] };
-  if (_state.selectedIds.length === 1) return { id: _state.selectedIds[0], name: _state.selectedNames[0], ids: [..._state.selectedIds] };
-  // 2+ selected: name shows count, callers should rely on `ids` array.
-  return { id: undefined, name: getFilterLabel(), ids: [..._state.selectedIds] };
-}
-
-export function setDashboardProfileFilter(id: string | undefined, name: string) {
-  if (!id) {
-    setFilterEveryone();
-  } else {
-    setFilterSelected([id], [name]);
-  }
-}
+// P2.5: the legacy single-select compat shims getDashboardProfileFilter() /
+// setDashboardProfileFilter() were deleted. Read getProfileFilter().selectedIds
+// and write via setFilterSelected() / setFilterEveryone() instead.

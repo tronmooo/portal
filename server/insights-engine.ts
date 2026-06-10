@@ -5,6 +5,14 @@ import type {
 } from "@shared/schema";
 import { MOOD_SCORES } from "@shared/schema";
 import { getUserToday, addDays as tzAddDays, DEFAULT_TIMEZONE } from "@shared/timezone";
+import {
+  currentMonthYM,
+  previousMonthYM,
+  filterByWindow,
+  totalSpend,
+  sumByCategory,
+  topCategories,
+} from "@shared/spending-baseline";
 
 // ============================================================
 // INSIGHTS ENGINE — Pure data-driven analysis
@@ -73,17 +81,19 @@ function analyzeSpending(expenses: Expense[], now: Date, insights: Insight[], ti
   // already rolled over and "this month" insights would silently drop today's
   // expenses. We compare YYYY-MM strings (timezone-stable since expenses
   // store local YYYY-MM-DD).
-  const userYM = new Date().toLocaleDateString('en-CA', { timeZone: timezone }).slice(0, 7);
-  const monthlyExpenses = expenses.filter(e => (e.date || '').slice(0, 7) === userYM);
-  const monthTotal = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
+  // Category/total math comes from the canonical shared/spending-baseline
+  // module (shared with weekly-review). Canonical deltas vs the old inline
+  // copy: amounts are summed as Math.abs(Number(amount)) and empty categories
+  // bucket under "uncategorized" — no practical change since the schema
+  // enforces positive amounts and a non-empty category.
+  const userYM = currentMonthYM(timezone);
+  const monthlyExpenses = filterByWindow(expenses, { month: userYM });
+  const monthTotal = totalSpend(monthlyExpenses);
 
   if (monthTotal > 0) {
     // Category breakdown
-    const byCat: Record<string, number> = {};
-    for (const e of monthlyExpenses) {
-      byCat[e.category] = (byCat[e.category] || 0) + e.amount;
-    }
-    const sorted = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const byCat = sumByCategory(monthlyExpenses);
+    const sorted = topCategories(byCat);
     const topCat = sorted[0];
 
     insights.push({
@@ -117,14 +127,15 @@ function analyzeSpending(expenses: Expense[], now: Date, insights: Insight[], ti
     }
   }
 
-  // Compare to last month
-  const lastMonth = new Date(now);
-  lastMonth.setMonth(lastMonth.getMonth() - 1);
-  const lastMonthExpenses = expenses.filter(e => {
-    const d = new Date(e.date);
-    return d.getMonth() === lastMonth.getMonth() && d.getFullYear() === lastMonth.getFullYear();
-  });
-  const lastTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
+  // Compare to last month — canonical definition change: previously this
+  // Date-parsed each expense and compared against the SERVER-local previous
+  // month, while "this month" above used a user-timezone YYYY-MM string
+  // compare — two different month definitions in the same function. Both now
+  // use the canonical YYYY-MM string comparison from shared/spending-baseline
+  // (user timezone), so boundary-dated expenses land in the same month for
+  // both sides of the comparison.
+  const lastYM = previousMonthYM(userYM);
+  const lastTotal = totalSpend(expenses, { month: lastYM });
   if (lastTotal > 0 && monthTotal > 0) {
     const pctChange = ((monthTotal - lastTotal) / lastTotal) * 100;
     if (Math.abs(pctChange) > 20) {

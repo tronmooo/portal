@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
+import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { CreateProfileDialog } from "@/pages/profiles";
@@ -3743,54 +3744,31 @@ export default function TrackersPage() {
     queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
   });
 
-  // Build O(1) lookups: for any given party (profile id), which asset/liability
-  // ids does it (co-)own? Used by the visibility predicates below.
-  const assetsByOwner = useMemo(() => {
-    const m = new Map<string, Set<string>>();
-    for (const l of assetPartyLinks || []) {
-      const pid = l.partyProfileId; const aid = l.assetProfileId;
-      if (!pid || !aid) continue;
-      if (!m.has(pid)) m.set(pid, new Set());
-      m.get(pid)!.add(aid);
-    }
-    return m;
-  }, [assetPartyLinks]);
-  const liabilitiesByOwner = useMemo(() => {
-    const m = new Map<string, Set<string>>();
-    for (const l of liabilityProfileLinks || []) {
-      const pid = l.partyProfileId; const lid = l.liabilityProfileId;
-      if (!pid || !lid) continue;
-      if (!m.has(pid)) m.set(pid, new Set());
-      m.get(pid)!.add(lid);
-    }
-    return m;
-  }, [liabilityProfileLinks]);
-
   // Visibility helper: an asset is visible to the selected filter set if it's
   // (a) directly selected, (b) parented to a selected profile, or (c) the
   // selected profile appears as a co-owner via asset_party_links. Same logic
   // for liabilities. Returns true when filterMode is "everyone".
+  // P4.1 remediation: route through the canonical ownerCandidatesForProfile +
+  // isInScope primitives (shared/scope.ts) instead of a hand-rolled predicate
+  // so this page can never drift from the dashboard / net-worth scope rule.
+  const emptySelfIds = useMemo(() => new Set<string>(), []);
   const isAssetVisible = (assetId: string, parentId: string | null | undefined): boolean => {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
-    if (filterIds.includes(assetId)) return true;
-    if (parentId && filterIds.includes(parentId)) return true;
-    for (const fid of filterIds) {
-      const owned = assetsByOwner.get(fid);
-      if (owned && owned.has(assetId)) return true;
-    }
-    return false;
+    return isInScope(
+      ownerCandidatesForProfile({ id: assetId, parentProfileId: parentId ?? null }, assetPartyLinks, null),
+      { selectedIds: filterIds, selfIds: emptySelfIds },
+      "out_of_scope",
+    );
   };
   const isLiabilityVisible = (liabId: string, parentId: string | null | undefined): boolean => {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
-    if (filterIds.includes(liabId)) return true;
-    if (parentId && filterIds.includes(parentId)) return true;
-    for (const fid of filterIds) {
-      const owned = liabilitiesByOwner.get(fid);
-      if (owned && owned.has(liabId)) return true;
-    }
-    return false;
+    return isInScope(
+      ownerCandidatesForProfile({ id: liabId, parentProfileId: parentId ?? null }, null, liabilityProfileLinks),
+      { selectedIds: filterIds, selfIds: emptySelfIds },
+      "out_of_scope",
+    );
   };
 
   // `createOpen` is retained only so the CreateTrackerDialog component
@@ -4061,7 +4039,7 @@ export default function TrackersPage() {
       counts[lab] = (counts[lab] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds, assetsByOwner]);
+  }, [profiles, filterMode, filterIds, assetPartyLinks]);
 
   // Subscriptions/recurring bills are conceptually liabilities (things you owe
   // every month) so they live in the same Liabilities bucket alongside loans,
@@ -4098,7 +4076,7 @@ export default function TrackersPage() {
       counts[c] = (counts[c] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds, liabilitiesByOwner]);
+  }, [profiles, filterMode, filterIds, liabilityProfileLinks]);
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
   const sortedFilterProfiles = useMemo(() => {

@@ -476,6 +476,54 @@ export class SupabaseStorage implements IStorage {
     })).catch(() => {}); // non-critical, never block
   }
 
+  /**
+   * [P0.2] Optimistic concurrency for the updateX methods.
+   *
+   * Callers may include `expectedUpdatedAt` (the `updatedAt` they last read)
+   * in a PATCH body. It is ALWAYS stripped from the patch here so it can
+   * never be persisted. When the caller supplied a value and the row's
+   * current updated_at no longer matches, another request modified the row
+   * after the caller read it — throw a 409 ConflictError (routes'
+   * asyncHandler forwards 4xx statusCode values as-is).
+   *
+   * Tables without an updated_at column pass `undefined` for
+   * `currentUpdatedAt` and skip the comparison — there is nothing to compare
+   * against (the strip still happens so the field never leaks into a write).
+   */
+  private assertNoWriteConflict(patch: Record<string, any>, currentUpdatedAt: string | null | undefined): void {
+    if (!patch || typeof patch !== "object" || !("expectedUpdatedAt" in patch)) return;
+    const expected = patch.expectedUpdatedAt;
+    delete patch.expectedUpdatedAt;
+    if (typeof expected !== "string" || !currentUpdatedAt) return;
+    // String equality first (clients echo back exactly what the API returned);
+    // fall back to millisecond comparison to tolerate timezone/precision
+    // formatting differences between Postgres and the client.
+    const expectedMs = Date.parse(expected);
+    const currentMs = Date.parse(currentUpdatedAt);
+    const matches = expected === currentUpdatedAt
+      || (Number.isFinite(expectedMs) && Number.isFinite(currentMs) && expectedMs === currentMs);
+    if (!matches) {
+      throw Object.assign(
+        new Error("Conflict: record was modified by another request"),
+        { name: "ConflictError", statusCode: 409 },
+      );
+    }
+  }
+
+  /**
+   * [P0.2] Table-targeted variant: fetches the row's current updated_at only
+   * when the caller actually sent expectedUpdatedAt (zero cost otherwise).
+   * Every entity table carries updated_at maintained by a BEFORE UPDATE
+   * trigger (verified live 2026-06-10), so the comparison is authoritative
+   * even though some row mappers don't surface the column.
+   */
+  private async assertNoWriteConflictFor(table: string, id: string, patch: Record<string, any>): Promise<void> {
+    if (!patch || typeof patch !== "object" || (patch as any).expectedUpdatedAt === undefined) return;
+    const { data: curRow } = await this.supabase.from(table)
+      .select("updated_at").eq("id", id).eq("user_id", this.userId).maybeSingle();
+    this.assertNoWriteConflict(patch, curRow?.updated_at);
+  }
+
   // ---- ROW → OBJECT helpers ----
   // PostgreSQL uses snake_case; TypeScript uses camelCase.
   // JSONB columns are already parsed objects from Supabase.
@@ -765,7 +813,7 @@ export class SupabaseStorage implements IStorage {
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("events").select("*")
-        .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("documents")
         .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
@@ -1136,6 +1184,8 @@ export class SupabaseStorage implements IStorage {
   ): Promise<Profile | undefined> {
     const existing = await this.getProfile(id);
     if (!existing) return undefined;
+    // [P0.2] optimistic concurrency — 409 if the row moved since the caller read it.
+    this.assertNoWriteConflict(data as Record<string, any>, existing.updatedAt);
     // Universal-delete: expand UI keys into the full storage-side alias set,
     // then ALSO strip those keys from every nested group. Without this step,
     // deleting "birthday" on a person profile only removes the top-level
@@ -1187,6 +1237,33 @@ export class SupabaseStorage implements IStorage {
       console.log(`[deleteProfile] Cascade-deleting child profile: ${child.name} (${child.type}, id:${child.id})`);
       await this.deleteProfile(child.id);
     }
+
+    // ── [P0.1] Preferred path: atomic cascade in ONE Postgres transaction. ──
+    // The legacy loop below is a non-transactional read-then-write cascade: a
+    // concurrent write between its read and its per-row update is lost, and a
+    // crash mid-loop leaves half-cascaded orphans. delete_profile_cascade()
+    // (migrations/009_delete_profile_cascade.sql) mirrors the loop's exact
+    // semantics inside a single transaction. Fall back to the legacy loop only
+    // when the function hasn't been deployed yet (Postgres 42883 /
+    // PostgREST PGRST202 = function not found).
+    const { data: rpcCounts, error: rpcError } = await this.supabase.rpc("delete_profile_cascade", {
+      p_user_id: this.userId,
+      p_profile_id: id,
+    });
+    if (!rpcError) {
+      console.log(`[deleteProfile] atomic cascade RPC path for ${id}: ${JSON.stringify(rpcCounts)}`);
+      return true;
+    }
+    const fnMissing = rpcError.code === "42883" || rpcError.code === "PGRST202"
+      || /could not find the function/i.test(rpcError.message || "");
+    if (!fnMissing) {
+      // The function exists but the transaction failed and rolled back —
+      // nothing was deleted. Don't run the legacy loop on top of an unknown
+      // failure; report the deletion as failed instead.
+      console.error(`[deleteProfile] cascade RPC failed for ${id} (rolled back): ${rpcError.message}`);
+      return false;
+    }
+    console.warn(`[deleteProfile] delete_profile_cascade not deployed — legacy non-transactional cascade path for ${id}`);
 
     // ── Cascade delete: remove ALL linked entities — no exceptions ──
     const errors: string[] = [];
@@ -1400,6 +1477,29 @@ export class SupabaseStorage implements IStorage {
   private static readonly PROFILE_EXCLUSIVE: Set<string> = new Set(["tracker", "habit", "goal", "journal"]);
 
   /**
+   * [P2.2] Single-writer chokepoint for updateX ownership patches.
+   *
+   * When a PATCH carries `linkedProfiles`, the ownership part of the patch
+   * is applied via setOwners() — which owns the JSONB write, the junction
+   * reconcile, and the audit_log entry — instead of writing linked_profiles
+   * raw alongside the rest of the patch. `defaultToSelf: false` preserves
+   * the historic update semantics: an explicit `[]` clears ownership.
+   *
+   * Throws on failure (ownership-writer contract: "callers should not catch
+   * and proceed") — silently keeping the old owners after a 200 would be a
+   * lost update.
+   */
+  private async applyOwnershipPatch(
+    entityType: OwnedEntityType,
+    entityId: string,
+    linkedProfiles: readonly unknown[],
+  ): Promise<void> {
+    const self = await this.getSelfProfile();
+    // selfId is only consulted in default-to-self mode, which we opt out of.
+    await setOwners(this.supabase, this.userId, entityType, entityId, linkedProfiles, self?.id || this.userId, { defaultToSelf: false });
+  }
+
+  /**
    * Ownership invariant — FIX 4 Phase 2 (post-junction-drop).
    *
    * The original invariant (JSONB vs. profile_<type> junction) is gone because
@@ -1502,6 +1602,68 @@ export class SupabaseStorage implements IStorage {
     }
 
     return { disagreementCount: totalDisagree, jsonbOnlyCount: 0, financeDisagreementCount: financeDisagreement, perType };
+  }
+
+  /**
+   * [P0.5] Repair counterpart to getOwnershipConsistency.
+   *
+   * Scans the same entity tables for `linked_profiles` entries pointing at
+   * profiles that no longer exist (the "dangling reference" invariant breach)
+   * and strips them. Every repair routes through setOwners() so the JSONB
+   * write and the audit trail stay consistent — no raw linked_profiles
+   * writes. `defaultToSelf: false` means a row whose only owner was the
+   * dangling profile ends up un-owned rather than silently re-owned by Self.
+   */
+  async repairOwnershipConsistency(): Promise<{ scanned: number; repaired: number; details: string[] }> {
+    // Same table list + soft-delete visibility as getOwnershipConsistency.
+    const entityTables: { et: OwnedEntityType; table: string; softDelete: boolean }[] = [
+      { et: "expense", table: "expenses", softDelete: true },
+      { et: "tracker", table: "trackers", softDelete: false },
+      { et: "task", table: "tasks", softDelete: true },
+      { et: "event", table: "events", softDelete: false },
+      { et: "obligation", table: "obligations", softDelete: false },
+      { et: "document", table: "documents", softDelete: true },
+      { et: "artifact", table: "artifacts", softDelete: false },
+    ];
+
+    const { data: profileRows } = await this.supabase
+      .from("profiles").select("id").eq("user_id", this.userId).is("deleted_at", null);
+    const validIds = new Set<string>((profileRows || []).map((r: any) => r.id));
+    const self = await this.getSelfProfile();
+    const selfId = self?.id || this.userId; // unused by setOwners in defaultToSelf:false mode
+
+    const MAX_DETAILS = 50;
+    let scanned = 0;
+    let repaired = 0;
+    const details: string[] = [];
+
+    for (const t of entityTables) {
+      let q = this.supabase.from(t.table).select("id, linked_profiles").eq("user_id", this.userId);
+      if (t.softDelete) q = q.is("deleted_at", null);
+      const { data } = await q;
+      for (const e of (data || []) as any[]) {
+        scanned += 1;
+        const lp: string[] = Array.isArray(e.linked_profiles)
+          ? e.linked_profiles.filter((x: any) => typeof x === "string")
+          : [];
+        if (lp.length === 0) continue;
+        const dangling = lp.filter(pid => !validIds.has(pid));
+        if (dangling.length === 0) continue;
+        const next = lp.filter(pid => validIds.has(pid));
+        try {
+          await setOwners(this.supabase, this.userId, t.et, e.id, next, selfId, { defaultToSelf: false });
+          repaired += 1;
+          if (details.length < MAX_DETAILS) {
+            details.push(`${t.et} ${e.id}: removed dangling owner(s) ${dangling.join(", ")}`);
+          }
+        } catch (err: any) {
+          if (details.length < MAX_DETAILS) {
+            details.push(`${t.et} ${e.id}: repair failed — ${err?.message || err}`);
+          }
+        }
+      }
+    }
+    return { scanned, repaired, details };
   }
 
   async linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void> {
@@ -1653,11 +1815,15 @@ export class SupabaseStorage implements IStorage {
         propagated.push(parent.name);
       }
 
-      // Also add parent to document's linkedProfiles JSONB
+      // Also add parent to document's linkedProfiles — [P2.2] routed through
+      // the single writer (setOwners) instead of a raw linked_profiles write.
       const doc = await this.getDocument(documentId);
       if (doc && !doc.linkedProfiles.includes(parentId)) {
-        const updatedLinked = [...doc.linkedProfiles, parentId];
-        await this.supabase.from("documents").update({ linked_profiles: updatedLinked }).eq("id", documentId).eq("user_id", this.userId);
+        try {
+          await this.applyOwnershipPatch("document", documentId, [...doc.linkedProfiles, parentId]);
+        } catch (e: any) {
+          console.error(`[propagateDocumentToAncestors] setOwners failed for ${documentId.slice(0,8)}: ${e?.message || e}`);
+        }
       }
 
       currentId = parentId;
@@ -1731,10 +1897,16 @@ export class SupabaseStorage implements IStorage {
     let count = 0;
     for (const t of trackers) {
       if (!t.linkedProfiles || t.linkedProfiles.length === 0) {
-        // Update tracker's linkedProfiles
-        await this.supabase.from("trackers").update({ linked_profiles: [selfProfile.id] }).eq("id", t.id).eq("user_id", this.userId);
-        // Update profile's linkedTrackers
-        await this.linkProfileTo(selfProfile.id, "tracker", t.id);
+        // [P2.2] Route the ownership write through the single writer instead
+        // of a raw linked_profiles update. setOwners covers everything the
+        // old update + linkProfileTo pair did for trackers (JSONB write +
+        // audit_log) in one chokepoint.
+        try {
+          await setOwners(this.supabase, this.userId, "tracker", t.id, [selfProfile.id], selfProfile.id, { defaultToSelf: false });
+        } catch (e: any) {
+          console.error(`[migrateUnlinkedTrackersToSelf] setOwners failed for ${t.id.slice(0,8)}: ${e?.message || e}`);
+          continue;
+        }
         count++;
       }
     }
@@ -1824,13 +1996,20 @@ export class SupabaseStorage implements IStorage {
   async updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined> {
     const existing = await this.getTracker(id);
     if (!existing) return undefined;
+    // [P0.2] Optimistic concurrency: compare against the trigger-maintained
+    // updated_at column (fetched only when the caller sent expectedUpdatedAt).
+    await this.assertNoWriteConflictFor("trackers", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("trackers").update({
       name: merged.name, category: merged.category, unit: merged.unit || null,
-      icon: merged.icon || null, fields: merged.fields, linked_profiles: merged.linkedProfiles,
+      icon: merged.icon || null, fields: merged.fields,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write alongside the rest of the patch.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("tracker", id, data.linkedProfiles);
+    }
     return this.getTracker(id);
   }
 
@@ -2048,14 +2227,21 @@ export class SupabaseStorage implements IStorage {
   async updateTask(id: string, data: Partial<Task>): Promise<Task | undefined> {
     const existing = await this.getTask(id);
     if (!existing) return undefined;
+    // [P0.2] Optimistic concurrency: compare against the trigger-maintained
+    // updated_at column (fetched only when the caller sent expectedUpdatedAt).
+    await this.assertNoWriteConflictFor("tasks", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("tasks").update({
       title: merged.title, description: merged.description || null, status: merged.status,
       priority: merged.priority, due_date: merged.dueDate || null,
-      linked_profiles: merged.linkedProfiles, tags: merged.tags,
+      tags: merged.tags,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write alongside the rest of the patch.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("task", id, data.linkedProfiles);
+    }
 
     // BUG-B: recurring tasks. When a task carrying a `recur:<freq>` tag flips to
     // done, spawn the next dated instance so the chore reappears. Cadence lives
@@ -2175,14 +2361,21 @@ export class SupabaseStorage implements IStorage {
   async updateExpense(id: string, data: Partial<Expense>): Promise<Expense | undefined> {
     const existing = await this.getExpense(id);
     if (!existing) return undefined;
+    // [P0.2] Optimistic concurrency: compare against the trigger-maintained
+    // updated_at column (fetched only when the caller sent expectedUpdatedAt).
+    await this.assertNoWriteConflictFor("expenses", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("expenses").update({
       amount: merged.amount, category: merged.category, description: merged.description,
       vendor: merged.vendor || null, is_recurring: merged.isRecurring || false,
-      linked_profiles: merged.linkedProfiles, tags: merged.tags, date: merged.date,
+      tags: merged.tags, date: merged.date,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write alongside the rest of the patch.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("expense", id, data.linkedProfiles);
+    }
     return this.getExpense(id);
   }
 
@@ -2249,10 +2442,13 @@ export class SupabaseStorage implements IStorage {
     // edit (manual or via AI updateEntityLinkedProfiles → updateIncome path,
     // bug #12) would wipe the income's profile attribution. The PATCH route
     // accepts these fields and returns 200 — but they never reached the DB.
-    if (data.linkedProfiles !== undefined) updates.linked_profiles = data.linkedProfiles;
     if (data.tags !== undefined) updates.tags = data.tags;
     const { error } = await this.supabase.from("incomes").update(updates).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // [P2.2] Ownership patches go through the single writer (setOwners).
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("income", id, data.linkedProfiles);
+    }
     const all = await this.getIncomes();
     return all.find(i => i.id === id);
   }
@@ -2270,7 +2466,7 @@ export class SupabaseStorage implements IStorage {
       // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth.
       // PERF (durable-fix-phase1): DB pushdown via idx_events_linked_profiles_gin.
       let q = this.supabase
-        .from("events").select("*").eq("user_id", this.userId);
+        .from("events").select("*").eq("user_id", this.userId).is("deleted_at", null);
       q = this._applyProfileFilter(q, profileIds);
       const { data, error } = await q.order("date", { ascending: false });
       if (error) throw error;
@@ -2280,7 +2476,7 @@ export class SupabaseStorage implements IStorage {
 
   async getEvent(id: string): Promise<CalendarEvent | undefined> {
     const { data, error } = await this.supabase
-      .from("events").select("*").eq("id", id).eq("user_id", this.userId).single();
+      .from("events").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToEvent(data);
   }
@@ -2315,6 +2511,9 @@ export class SupabaseStorage implements IStorage {
   async updateEvent(id: string, data: Partial<CalendarEvent>): Promise<CalendarEvent | undefined> {
     const existing = await this.getEvent(id);
     if (!existing) return undefined;
+    // [P0.2] Optimistic concurrency: compare against the trigger-maintained
+    // updated_at column (fetched only when the caller sent expectedUpdatedAt).
+    await this.assertNoWriteConflictFor("events", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("events").update({
       title: merged.title, date: merged.date, time: merged.time || null,
@@ -2323,19 +2522,25 @@ export class SupabaseStorage implements IStorage {
       location: merged.location || null, category: merged.category,
       color: merged.color || null, recurrence: merged.recurrence,
       recurrence_end: merged.recurrenceEnd || null,
-      linked_profiles: merged.linkedProfiles, linked_documents: merged.linkedDocuments,
+      linked_documents: merged.linkedDocuments,
       tags: merged.tags, source: merged.source,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write alongside the rest of the patch.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("event", id, data.linkedProfiles);
+    }
     return this.getEvent(id);
   }
 
   async deleteEvent(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this event */
     await this.cleanupEntityLinks("event", id);
-    // Hard delete — events table doesn't have deleted_at column
-    const { error } = await this.supabase.from("events").delete().eq("id", id).eq("user_id", this.userId);
+    // [P6.3] Soft delete — parity with every other entity (the live events
+    // table has had a deleted_at column all along; the old "no such column"
+    // comment was wrong). Profile-cascade deletion still hard-deletes.
+    const { error } = await this.supabase.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -2374,8 +2579,16 @@ export class SupabaseStorage implements IStorage {
         items.push({ id: `event-${ev.id}-${baseDate}`, type: "event", title: ev.title, date: baseDate, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
       }
       if (ev.recurrence !== "none") {
+        // [P4.3] Expand occurrences all the way to the requested window's end
+        // date instead of a hardcoded 45 iterations (which made daily/weekly
+        // events silently fall off the calendar ~6 weeks out while
+        // obligations materialize 730 days). The `nextStr > endDate` break
+        // below still bounds the loop by the request window; the 500-
+        // occurrence cap mirrors the obligation-engine safety cap and only
+        // bites on pathological windows (e.g. a daily event over 2+ years).
+        const MAX_EVENT_OCCURRENCES = 500;
         const base = parseLocalDate(ev.date.slice(0, 10));
-        for (let i = 1; i <= 45; i++) {
+        for (let i = 1; i <= MAX_EVENT_OCCURRENCES; i++) {
           const next = new Date(base);
           switch (ev.recurrence) {
             case "daily": next.setDate(next.getDate() + i); break;
@@ -2871,6 +3084,13 @@ export class SupabaseStorage implements IStorage {
     if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     const existing = await this.getDocument(id);
     if (!existing) return undefined;
+    // [P0.2] documents has updated_at, but rowToDocument doesn't surface it —
+    // read it directly (only when the caller actually sent expectedUpdatedAt).
+    if ((data as any).expectedUpdatedAt !== undefined) {
+      const { data: curRow } = await this.supabase.from("documents")
+        .select("updated_at").eq("id", id).eq("user_id", this.userId).maybeSingle();
+      this.assertNoWriteConflict(data as Record<string, any>, curRow?.updated_at);
+    }
     if (data.linkedProfiles) {
       // PERF FIX: was sequential getProfile + update per removed profile, then
       // sequential linkProfileTo per added profile — up to 2N round trips.
@@ -2899,9 +3119,16 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("documents").update({
       name: merged.name, type: merged.type, mime_type: merged.mimeType,
       file_data: merged.fileData, extracted_data: merged.extractedData,
-      linked_profiles: merged.linkedProfiles, tags: merged.tags,
+      tags: merged.tags,
+      updated_at: new Date().toISOString(),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write. This also reconciles the removals that the
+    // linkProfileTo calls above (additive, per added pid) don't cover.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("document", id, data.linkedProfiles);
+    }
     return this.getDocument(id);
   }
 
@@ -3106,14 +3333,21 @@ export class SupabaseStorage implements IStorage {
   async updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined> {
     const existing = await this.getHabit(id);
     if (!existing) return undefined;
+    // [P0.2] Optimistic concurrency: compare against the trigger-maintained
+    // updated_at column (fetched only when the caller sent expectedUpdatedAt).
+    await this.assertNoWriteConflictFor("habits", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("habits").update({
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
       target_per_day: merged.targetPerDay || existing.targetPerDay || 1,
-      linked_profiles: merged.linkedProfiles || existing.linkedProfiles || [],
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write alongside the rest of the patch.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("habit", id, data.linkedProfiles);
+    }
     return this.getHabit(id);
   }
 
@@ -3225,13 +3459,15 @@ export class SupabaseStorage implements IStorage {
   async updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined> {
     const existing = await this.getObligation(id);
     if (!existing) return undefined;
+    // [P0.2] optimistic concurrency — 409 if the row moved since the caller read it.
+    this.assertNoWriteConflict(data as Record<string, any>, existing.updatedAt);
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("obligations").update({
       name: merged.name, amount: merged.amount, frequency: merged.frequency,
       category: merged.category,
       kind: merged.kind,
       next_due_date: merged.nextDueDate,
-      autopay: merged.autopay, linked_profiles: merged.linkedProfiles,
+      autopay: merged.autopay,
       lead_time_days: merged.leadTimeDays,
       auto_log_expense: merged.autoLogExpense,
       linked_asset_id: merged.linkedAssetId || null,
@@ -3248,7 +3484,11 @@ export class SupabaseStorage implements IStorage {
       updated_at: new Date().toISOString(),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write alongside the rest of the patch.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("obligation", id, data.linkedProfiles);
+    }
     // Re-materialize when cadence or due date changes — keeps calendar correct.
     if (data.frequency !== undefined || data.nextDueDate !== undefined || data.recurrenceEnd !== undefined) {
       try {
@@ -3484,13 +3724,17 @@ export class SupabaseStorage implements IStorage {
 
     const { error } = await this.supabase.from("artifacts").update({
       type: merged.type, title: merged.title, content: merged.content,
-      items: merged.items, tags: merged.tags, linked_profiles: merged.linkedProfiles,
+      items: merged.items, tags: merged.tags,
       pinned: merged.pinned,
       metadata,
       updated_at: now,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    // FIX 4 Phase 2: linked_profiles JSONB is the sole source of truth; no junction sync.
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write merged from a possibly-stale read.
+    if (data.linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("artifact", id, data.linkedProfiles);
+    }
     return this.getArtifact(id);
   }
 
@@ -3559,9 +3803,12 @@ export class SupabaseStorage implements IStorage {
       date: merged.date, mood: merged.mood, content: merged.content,
       tags: merged.tags, energy: merged.energy ?? null,
       gratitude: merged.gratitude || null, highlights: merged.highlights || null,
-      ...((data as any).linkedProfiles ? { linked_profiles: (data as any).linkedProfiles } : {}),
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // [P2.2] Ownership patches go through the single writer (setOwners).
+    if ((data as any).linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("journal_entry", id, (data as any).linkedProfiles);
+    }
     return this.getJournalEntry(id);
   }
 
@@ -3730,6 +3977,8 @@ export class SupabaseStorage implements IStorage {
   async updateGoal(id: string, data: Partial<Goal>): Promise<Goal | undefined> {
     const existing = await this.getGoal(id);
     if (!existing) return undefined;
+    // [P0.2] optimistic concurrency — 409 if the row moved since the caller read it.
+    this.assertNoWriteConflict(data as Record<string, any>, existing.updatedAt);
     const now = new Date().toISOString();
     const updates: Record<string, any> = { updated_at: now };
     if (data.title !== undefined) updates.title = data.title;
@@ -3743,7 +3992,6 @@ export class SupabaseStorage implements IStorage {
     if (data.habitId !== undefined) updates.habit_id = data.habitId;
     if (data.category !== undefined) updates.category = data.category;
     if (data.status !== undefined) updates.status = data.status;
-    if ((data as any).linkedProfiles !== undefined) updates.linked_profiles = (data as any).linkedProfiles;
     if (data.milestones !== undefined) updates.milestones = data.milestones;
 
     // Auto-complete: if the new (or existing) `current` is >= target and the
@@ -3765,6 +4013,11 @@ export class SupabaseStorage implements IStorage {
 
     const { error } = await this.supabase.from("goals").update(updates).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
+    // [P2.2] Ownership patches go through the single writer (setOwners), not a
+    // raw linked_profiles write alongside the rest of the patch.
+    if ((data as any).linkedProfiles !== undefined) {
+      await this.applyOwnershipPatch("goal", id, (data as any).linkedProfiles);
+    }
     return this.getGoal(id);
   }
 
@@ -5457,15 +5710,16 @@ export class SupabaseStorage implements IStorage {
     };
     const { error } = await this.supabase.from("asset_party_links").insert(row);
     if (error) throw error;
-    // history
-    await this.recordOwnershipHistory({
+    // [P2.3] history is fire-and-forget — a history failure must never block
+    // (or retroactively fail) the ownership write that already succeeded.
+    this.recordOwnershipHistory({
       linkKind: "asset_party", linkId: id,
       subjectId: data.assetProfileId, counterpartyId: data.partyProfileId,
       action: "create",
       fieldChanged: null, oldValue: null,
       newValue: JSON.stringify({ pct: row.ownership_percentage, role: row.role }),
       changedBy: "user", note: null,
-    });
+    }).catch(() => { /* history is best-effort */ });
     return this.rowToAssetPartyLink(row);
   }
 
@@ -5483,24 +5737,25 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await this.supabase.from("asset_party_links")
       .update(update).eq("id", id).eq("user_id", this.userId).select().single();
     if (error) throw error;
-    // record history per changed field
+    // record history per changed field — [P2.3] fire-and-forget so history
+    // failures never block the write that already succeeded.
     if (patch.ownershipPercentage !== undefined && Number(existing.ownership_percentage) !== Number(patch.ownershipPercentage)) {
-      await this.recordOwnershipHistory({
+      this.recordOwnershipHistory({
         linkKind: "asset_party", linkId: id,
         subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
         action: "update", fieldChanged: "ownership_percentage",
         oldValue: String(existing.ownership_percentage), newValue: String(patch.ownershipPercentage),
         changedBy: "user", note: null,
-      });
+      }).catch(() => { /* history is best-effort */ });
     }
     if (patch.role !== undefined && existing.role !== patch.role) {
-      await this.recordOwnershipHistory({
+      this.recordOwnershipHistory({
         linkKind: "asset_party", linkId: id,
         subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
         action: "update", fieldChanged: "role",
         oldValue: existing.role, newValue: String(patch.role),
         changedBy: "user", note: null,
-      });
+      }).catch(() => { /* history is best-effort */ });
     }
     return data ? this.rowToAssetPartyLink(data) : undefined;
   }
@@ -5512,13 +5767,14 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("asset_party_links")
       .delete().eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
-    await this.recordOwnershipHistory({
+    // [P2.3] fire-and-forget — history failures never block the delete.
+    this.recordOwnershipHistory({
       linkKind: "asset_party", linkId: id,
       subjectId: existing.asset_profile_id, counterpartyId: existing.party_profile_id,
       action: "delete", fieldChanged: null,
       oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
       newValue: null, changedBy: "user", note: null,
-    });
+    }).catch(() => { /* history is best-effort */ });
     return true;
   }
 
