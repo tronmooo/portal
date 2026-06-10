@@ -20,8 +20,10 @@ describe("service worker shell freshness", () => {
 
   it("does not use precache-backed navigateFallback", () => {
     // navigateFallback may only be null/absent — a string value serves the
-    // frozen precached shell on every navigation.
-    const m = viteConfig.match(/navigateFallback:\s*([^,\n]+)/);
+    // frozen precached shell on every navigation. Strip // comments so prose
+    // mentioning the option doesn't false-positive.
+    const code = viteConfig.replace(/\/\/[^\n]*/g, "");
+    const m = code.match(/navigateFallback:\s*([^,\n]+)/);
     if (m) expect(m[1].trim()).toBe("null");
   });
 
