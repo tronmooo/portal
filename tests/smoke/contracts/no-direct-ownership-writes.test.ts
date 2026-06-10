@@ -93,4 +93,49 @@ describe("contract: ownership single-writer guard (Stages 3+4 / FIX 4 Phase 2)",
     }
     expect(violations).toHaveLength(0);
   });
+
+  // 2026-06-10 ratchet: ALLOWED_WRITERS blanket-exempts server/supabase-storage.ts,
+  // which means a NEW raw `linked_profiles:` write added there would silently
+  // pass the pattern check above. Pin the file to its CURRENT count of
+  // `linked_profiles:` write-shaped occurrences instead. This budget must only
+  // ever go DOWN — new ownership writes must go through setOwners() /
+  // applyOwnershipPatch() in server/ownership-writer.ts, and migrating an
+  // existing raw write there should be followed by lowering the number.
+  //
+  // Current inventory (24): ten unlink-on-profile-delete .update() calls
+  // (expenses/tasks/habits/obligations/events/documents/artifacts/goals/
+  // incomes/journal_entries around lines 1305-1425), and fourteen row
+  // insert/soft-delete payloads that seed or clear the column (lines ~1985,
+  // 2210, 2292, 2343, 2386, 2424, 2500, 3066, 3170, 3280, 3433, 3658, 3790,
+  // 3969).
+  //
+  // server/storage.ts (MemStorage reference impl) needs no budget: it stores
+  // camelCase `linkedProfiles` on in-memory objects and contains zero
+  // `linked_profiles:` column writes today — so it is already fully covered
+  // by the zero-tolerance pattern scan if it ever grows one (it stays in
+  // ALLOWED_WRITERS only for the dropped-junction tripwire).
+  const SUPABASE_STORAGE_LINKED_PROFILES_BUDGET = 24;
+
+  it(`server/supabase-storage.ts has at most ${SUPABASE_STORAGE_LINKED_PROFILES_BUDGET} raw linked_profiles writes (budget only goes DOWN)`, () => {
+    const text = readFileSync(path.join(SERVER_DIR, "supabase-storage.ts"), "utf8");
+    const offending: string[] = [];
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      // Skip pure comment lines, mirroring the style of the scan above.
+      if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
+      if (/\blinked_profiles\s*:/.test(lines[i])) {
+        offending.push(`      :${i + 1} ${trimmed.slice(0, 140)}`);
+      }
+    }
+    if (offending.length > SUPABASE_STORAGE_LINKED_PROFILES_BUDGET) {
+      throw new Error(
+        `server/supabase-storage.ts now has ${offending.length} \`linked_profiles:\` occurrences ` +
+        `(budget ${SUPABASE_STORAGE_LINKED_PROFILES_BUDGET}). A new raw ownership write was added — ` +
+        `route it through setOwners()/applyOwnershipPatch() in server/ownership-writer.ts instead. ` +
+        `Never raise this budget; lower it when migrating writes.\n${offending.join("\n")}`,
+      );
+    }
+    expect(offending.length).toBeLessThanOrEqual(SUPABASE_STORAGE_LINKED_PROFILES_BUDGET);
+  });
 });
