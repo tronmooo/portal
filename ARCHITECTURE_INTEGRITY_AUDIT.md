@@ -295,6 +295,18 @@ Order of operations: lint gates and contract tests **first** (they freeze the cu
 
 ---
 
+## Execution status (2026-06-10, same day)
+
+The plan was executed and merged. Verified: `tsc` clean, 242/242 unit tests, 47/47 static guardrail contracts, production build green, `delete_profile_cascade` applied to the live database and sanity-tested.
+
+**Done:** P0.1 (atomic cascade RPC + fallback), P0.2 (optimistic concurrency on all 9 updateX — live `updated_at` triggers verified on every table), P0.3 (AI writes zod-validated, atomic ownership, existence/cycle checks, normalize applied), P0.5 (ownership repair method + endpoint), P1.1–P1.5, P2.2 (all updateX + propagate/migrate paths through setOwners; income/journal/artifact included), P2.4 (7 server endpoints + client pages canonicalized, single/multi param unified — documents endpoint had the same bug and was fixed too), P2.5, P3.3, P4.1–P4.5, P5.1 (TTL cap variant), P5.2 (covered by profiles-domain predicate — verified), P5.3, P6.1 (audited: fallbacks proven value-identical, kept), P6.2, P6.3, plus the full enforcement layer (5 new guardrail suites with ratchet budgets).
+
+**Corrections to this audit found during execution:** `ownership_history` IS written (320 rows/30d — OWN-006 was wrong about the never-called claim; the real gap was unguarded awaits, now fire-and-forget); `entity_links` already had target indexes + a unique-pair constraint and zero duplicates (P0.4 moot); every entity table has `updated_at` with BEFORE UPDATE triggers (repo's `supabase-migration.sql` is stale); the live `events` table has had `deleted_at` all along (the "no column" comment was wrong); editor mentions are live-resolved, so rename/delete degrades gracefully rather than corrupting.
+
+**Deferred (deliberate):** P2.1 full junction-as-truth restructure (the writer chokepoint + ratchet budgets deliver the invariant incrementally; remaining raw writes are budget-pinned at 24 and may only decrease); P3.1 ID-backed mention pills (product-behavior change; current live-resolution cannot point at wrong data); P3.2 relationship schema (product decision); P5.4 rollup tables (no measured need); per-user cache version counter (TTL capped at 60s instead — bounded staleness without touching every request path). Ratchet inventories of remaining legacy violations (28 inline filters, 22 literal multipliers, 41 hardcoded timezones — mostly cosmetic defaults inside ai-engine) live in `tests/smoke/contracts/` with file:line lists.
+
+---
+
 ## Appendix: prior-audit reconciliation
 
 - **Fixed and holding:** 7-vs-30-day window, 4.33/2.17 multipliers in stats/enhanced, net-worth four-way fork, goals query-key drift, budget keepPreviousData leak, per-user cache isolation, `dashboard-bootstrap`/`insights` filter leakage.
