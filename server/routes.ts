@@ -4716,8 +4716,12 @@ Rules:
     }
     const token = String(req.params.token || "").trim();
     // Accept legacy 16-byte (32 hex) tokens AND new 32-byte (64 hex) tokens.
+    // Note: legacy 32-hex tokens are 128 bits of randomness, which is still
+    // computationally infeasible to enumerate — they remain safe to honor.
     // Reject anything that isn't hex of an expected length so we don't even
-    // hit the DB for obvious garbage.
+    // hit the DB for obvious garbage. This path goes through deny(), so it
+    // gets the same constant delay as an unknown-token miss (no timing
+    // oracle on format validity).
     if (!/^[a-f0-9]+$/i.test(token) || (token.length !== 32 && token.length !== 64)) {
       return deny();
     }
@@ -4726,25 +4730,30 @@ Rules:
     if (!url || !key) return deny(500);
     const { createClient } = await import("@supabase/supabase-js");
     const admin = createClient(url, key);
+    // Metadata projection: select ONLY the whitelisted metadata keys
+    // (language/sheetData/chartData) instead of the whole metadata column,
+    // so shareToken and any internal flags never even reach this process —
+    // and can never be accidentally echoed in the response below.
     const { data, error } = await admin
       .from("artifacts")
-      .select("id, type, title, content, items, metadata, created_at, updated_at")
+      .select("id, type, title, content, items, created_at, updated_at, language:metadata->>language, sheetData:metadata->sheetData, chartData:metadata->chartData")
       .filter("metadata->>shareToken", "eq", token)
       .limit(1);
     if (error) return deny(500);
-    const row = (data || [])[0];
+    const row = (data || [])[0] as Record<string, any> | undefined;
     if (!row) return deny();
-    const md = (row.metadata as Record<string, any>) || {};
     res.setHeader("Cache-Control", "public, max-age=60");
+    // Whitelisted response fields ONLY — never the raw metadata object or
+    // shareToken.
     res.json({
       id: row.id,
       type: row.type,
       title: row.title,
       content: row.content || "",
       items: row.items || [],
-      language: md.language,
-      sheetData: md.sheetData,
-      chartData: md.chartData,
+      language: row.language ?? undefined,
+      sheetData: row.sheetData ?? undefined,
+      chartData: row.chartData ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     });

@@ -9,6 +9,40 @@
   .px-safe { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
 }
 
+/* WCAG 2.5.5 / Apple HIG: guarantee a ≥44px hit area for small icon buttons
+   on touch devices WITHOUT changing their visual size. An invisible centered
+   pseudo-element extends the tappable region only when the primary pointer
+   is coarse (finger), so desktop/mouse visuals and tightly packed toolbar
+   layouts are completely unaffected. */
+@media (pointer: coarse) {
+  .touch-hit {
+    position: relative;
+  }
+  .touch-hit::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
+}
+
+/* Respect the user's OS-level reduced-motion preference: collapse all
+   animations/transitions to near-zero so motion-triggered discomfort is
+   avoided app-wide (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* LIGHT MODE — warm neutrals with teal accent */
 :root {
   --mobile-nav-height: 60px;
@@ -39,7 +73,9 @@
   --secondary: 36 8% 90%;
   --secondary-foreground: 44 23% 14%;
   --muted: 36 6% 92%;
-  --muted-foreground: 50 3% 47%;
+  /* A11y: was 50 3% 47% — only 3.60:1 on --muted and 3.94:1 on --background.
+     L 47%→40% clears WCAG AA 4.5:1 for body text (4.69:1 / 5.13:1). */
+  --muted-foreground: 50 3% 40%;
   --accent: 36 10% 90%;
   --accent-foreground: 44 23% 14%;
   --destructive: 0 84% 42%;
@@ -51,7 +87,7 @@
   --chart-3: 103 56% 31%;
   --chart-4: 43 74% 49%;
   --chart-5: 320 57% 40%;
-  --font-sans: 'Inter', 'General Sans', system-ui, sans-serif;
+  --font-sans: 'Inter Variable', 'Inter', 'General Sans', system-ui, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: 'JetBrains Mono', monospace;
   --radius: .625rem;
@@ -104,7 +140,9 @@
   --secondary: 40 3% 16%;
   --secondary-foreground: 40 3% 80%;
   --muted: 40 3% 15%;
-  --muted-foreground: 40 2% 47%;
+  /* A11y: was 40 2% 47% — only 3.43:1 on --muted and 4.17:1 on --background.
+     L 47%→56% clears WCAG AA 4.5:1 for body text (4.69:1 / 5.72:1). */
+  --muted-foreground: 40 2% 56%;
   --accent: 40 4% 16%;
   --accent-foreground: 40 3% 80%;
   --destructive: 0 70% 50%;

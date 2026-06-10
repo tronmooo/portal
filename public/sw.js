@@ -1,18 +1,1 @@
-// Self-destructing service worker — unregisters itself and clears all caches
-// Portol is a data-driven app that must never serve stale cached content
-self.addEventListener('install', () => {
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then(names => Promise.all(names.map(name => caches.delete(name))))
-      .then(() => self.registration.unregister())
-      .then(() => self.clients.claim())
-  );
-});
-
-// Pass all requests through to network — no caching
-self.addEventListener('fetch', (event) => {
-  event.respondWith(fetch(event.request));
-});
+if(!self.define){let e,n={};const s=(s,i)=>(s=new URL(s+".js",i).href,n[s]||new Promise(n=>{if("document"in self){const e=document.createElement("script");e.src=s,e.onload=n,document.head.appendChild(e)}else e=s,importScripts(s),n()}).then(()=>{let e=n[s];if(!e)throw new Error(`Module ${s} didn’t register its module`);return e}));self.define=(i,o)=>{const r=e||("document"in self?document.currentScript.src:"")||location.href;if(n[r])return;let t={};const c=e=>s(e,r),f={module:{uri:r},exports:t,require:c};n[r]=Promise.all(i.map(e=>f[e]||c(e))).then(e=>(o(...e),t))}}define(["./workbox-92fdc701"],function(e){"use strict";self.addEventListener("message",e=>{e.data&&"SKIP_WAITING"===e.data.type&&self.skipWaiting()}),e.precacheAndRoute([{url:"index.html",revision:"640a4cf7648d949812874a473d640c10"},{url:"manifest.json",revision:"f2bfc944453f92c9bbaf3399a59d5619"},{url:"favicon.png",revision:"3460f3cee99652fc7b6f82ed8af39704"},{url:"icons/icon-512.png",revision:"c4432b2f01fa14729ef33b40626c18ce"},{url:"icons/icon-192.png",revision:"3460f3cee99652fc7b6f82ed8af39704"},{url:"icons/apple-touch-icon.png",revision:"3460f3cee99652fc7b6f82ed8af39704"}],{}),e.cleanupOutdatedCaches(),e.registerRoute(new e.NavigationRoute(e.createHandlerBoundToURL("/index.html"),{denylist:[/^\/api\//,/^\/auth\/callback/]})),e.registerRoute(({url:e,sameOrigin:n})=>n&&e.pathname.startsWith("/api/"),new e.NetworkOnly,"GET"),e.registerRoute(({url:e,sameOrigin:n})=>n&&e.pathname.startsWith("/assets/"),new e.CacheFirst({cacheName:"portol-assets",plugins:[new e.ExpirationPlugin({maxEntries:300,maxAgeSeconds:2592e3,purgeOnQuotaError:!0}),new e.CacheableResponsePlugin({statuses:[0,200]})]}),"GET"),e.registerRoute(({url:e})=>e.hostname.endsWith("fontshare.com"),new e.StaleWhileRevalidate({cacheName:"portol-fonts",plugins:[new e.ExpirationPlugin({maxEntries:30,maxAgeSeconds:31536e3}),new e.CacheableResponsePlugin({statuses:[0,200]})]}),"GET")});

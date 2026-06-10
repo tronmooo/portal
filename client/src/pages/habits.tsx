@@ -293,6 +293,7 @@ function HabitCard({ habit }: { habit: Habit }) {
                   className="relative active:scale-90 touch-manipulation transition-all duration-200"
                   style={{ width: 26, height: 26, minWidth: 26, cursor: (filled || idx === todayCheckins) ? 'pointer' : 'default' }}
                   title={filled ? 'Tap to undo' : (idx === todayCheckins ? 'Tap to check in' : '')}
+                  aria-label={filled ? `Undo check-in ${idx + 1} for ${habit.name}` : `Check in ${idx + 1} of ${targetPerDay} for ${habit.name}`}
                 >
                   <div
                     className="w-full h-full rounded-full border-2 flex items-center justify-center transition-all duration-150"
@@ -347,7 +348,7 @@ function HabitCard({ habit }: { habit: Habit }) {
         {/* Delete */}
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <button onClick={stopProp()} className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors shrink-0">
+            <button type="button" onClick={stopProp()} aria-label={`Delete habit ${habit.name}`} className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors shrink-0">
               <Trash2 className="h-3.5 w-3.5" />
             </button>
           </AlertDialogTrigger>
@@ -470,7 +471,9 @@ export default function HabitsPage() {
           className="h-full rounded-full transition-all duration-500"
           style={{
             width: totalActive > 0 ? `${(completedToday / totalActive) * 100}%` : "0%",
-            background: "linear-gradient(90deg, #01696F, #4F98A3)",
+            /* Theme-aware: follows the user's chosen primary color instead of
+               a hardcoded teal pair. */
+            background: "linear-gradient(90deg, hsl(var(--primary)), hsl(var(--primary) / 0.65))",
           }}
         />
       </div>

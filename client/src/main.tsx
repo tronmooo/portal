@@ -1,9 +1,22 @@
+/// <reference types="vite-plugin-pwa/client" />
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+// P1.3: self-hosted fonts (were render-blocking Google Fonts CDN links in
+// index.html). Inter Variable registers as font-family "Inter Variable";
+// index.css lists it ahead of "Inter" in --font-sans.
+import "@fontsource-variable/inter";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import { registerSW } from "virtual:pwa-register";
 import { hashNavigate } from "./lib/hashNavigate";
 import { hydrateQueryCache } from "./lib/queryClient";
 import { installStaleChunkHandlers } from "./components/ErrorBoundary";
+
+// P1.2: register the vite-plugin-pwa service worker (autoUpdate: new deploys
+// activate immediately and refresh the page). Registered here — not via an
+// inline script in index.html — so CSP can drop 'unsafe-inline'.
+registerSW({ immediate: true });
 
 // Install BEFORE anything else — catches lazy-import failures thrown from
 // route Switches, sentinels, or any code path that bypasses the React tree.

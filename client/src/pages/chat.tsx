@@ -1,11 +1,30 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
-import { ArtifactPanel } from "@/components/ArtifactPanel";
-import { SmartFillDialog } from "@/components/SmartFillDialog";
+
+// ── Lazy-loaded heavy components ─────────────────────────────────────────────
+// chat.tsx is the EAGER home page (imported non-lazy in App.tsx). Anything
+// imported statically here lands in the cold-load main bundle, so the heavy,
+// conditionally-rendered pieces are code-split:
+//  - ArtifactPanel pulls in recharts (~400KB) — only mounts when a chat
+//    message produces an artifact and the user opens it.
+//  - ChatChartRenderer owns the direct recharts usage for inline charts —
+//    only fetched when a message actually contains a chart/report.
+//  - SmartFillDialog (600-line PDF form-fill flow) — only mounts when the
+//    user starts a Smart Fill.
+//  - DocumentViewer (1200-line viewer + share/link stack) — only mounts when
+//    a message carries a document preview.
+const ArtifactPanel = lazy(() =>
+  import("@/components/ArtifactPanel").then((m) => ({ default: m.ArtifactPanel }))
+);
+const SmartFillDialog = lazy(() =>
+  import("@/components/SmartFillDialog").then((m) => ({ default: m.SmartFillDialog }))
+);
+const DocumentViewer = lazy(() => import("@/components/DocumentViewer"));
+const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -58,20 +77,19 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
-import DocumentViewer, { ShareButton } from "@/components/DocumentViewer";
-import {
-  PieChart, Pie, Cell,
-  BarChart, Bar,
-  LineChart, Line,
-  AreaChart, Area,
-  RadarChart, Radar, PolarGrid, PolarAngleAxis,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-} from "recharts";
+// Type-only import — erased at compile time, does NOT pull recharts into the bundle.
+import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 
-// Chart types (inline — schema was reverted)
-type ChartType2 = "line"|"bar"|"area"|"pie"|"scatter"|"composed"|"radar";
-interface ChartSeries2 { dataKey:string; name:string; color?:string; type?:"line"|"bar"|"area"; stackId?:string; }
-interface ChartSpec2 { type:ChartType2; title:string; subtitle?:string; data:Array<Record<string,any>>; series:ChartSeries2[]; xAxisKey:string; xAxisLabel?:string; yAxisLabel?:string; showLegend?:boolean; showGrid?:boolean; height?:number; nameKey?:string; valueKey?:string; }
+// Keyboard activation helper for non-<button> clickable elements (a11y):
+// makes Enter/Space behave like a click on role="button" divs.
+const onEnterOrSpace = (fn: () => void) => (e: React.KeyboardEvent) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    fn();
+  }
+};
+
+// Table/report spec types (inline — schema was reverted)
 interface TableColumn2 { key:string; label:string; align?:"left"|"center"|"right"; format?:"currency"|"date"|"number"|"percent"|"text"; }
 interface TableSpec2 { title:string; subtitle?:string; columns:TableColumn2[]; rows:Array<Record<string,any>>; summary?:Record<string,any>; }
 interface ReportMetric2 { label:string; value:string|number; change?:string; changeType?:"positive"|"negative"|"neutral"; }
@@ -132,8 +150,6 @@ function CopyButton({
 }
 
 // ─── Rich Visual Components ────────────────────────────────────────────────────────────────────────
-const CHART_PALETTE = ["hsl(188 55% 50%)","#6366f1","#f59e0b","#10b981","#ef4444","#8b5cf6","#06b6d4","#84cc16"];
-
 function fmtVal(v:any, fmt?:string): string {
   if (v===null||v===undefined||v==="") return "\u2014";
   switch(fmt) {
@@ -148,87 +164,18 @@ function fmtVal(v:any, fmt?:string): string {
 function ChatChart({ spec }: { spec: ChartSpec2 }) {
   const [open, setOpen] = useState(true);
   const h = spec.height || 260;
-  const tts = { backgroundColor:"hsl(var(--card))", border:"1px solid hsl(var(--border))", borderRadius:8, color:"hsl(var(--foreground))", fontSize:12 };
-  
-  function renderChart() {
-    if (spec.type==="pie") {
-      // Pie label heuristic:
-      //  - outerRadius lowered to 62% so the surrounding label text stays
-      //    inside the chart frame (was 75%, which clipped long category
-      //    names like "general" → "gene" on narrow containers).
-      //  - drop labels for slices under 9% to prevent neighbouring labels
-      //    overlapping (the slice still appears in the legend below).
-      //  - render category name + percent with a hair-space separator so
-      //    it doesn't break mid-word when the slice arc is short.
-      return (
-        <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-          <Pie
-            data={spec.data}
-            dataKey={spec.valueKey||"amount"}
-            nameKey={spec.nameKey||"category"}
-            cx="50%"
-            cy="50%"
-            outerRadius="62%"
-            label={({name,percent}:{name:string;percent:number})=>percent>=0.09?`${name} · ${(percent*100).toFixed(0)}%`:""}
-            labelLine={false}
-          >
-            {spec.data.map((e,i)=><Cell key={i} fill={e.fill||CHART_PALETTE[i%CHART_PALETTE.length]}/>)}
-          </Pie>
-          <Tooltip contentStyle={tts} formatter={(v:any)=>[typeof v==="number"?`$${Number(v).toFixed(2)}`:v,""]}/>
-          {spec.showLegend!==false&&<Legend/>}
-        </PieChart>
-      );
-    }
-    if (spec.type==="radar") {
-      return (
-        <RadarChart data={spec.data} cx="50%" cy="50%" outerRadius="70%">
-          <PolarGrid stroke="hsl(var(--border))"/>
-          <PolarAngleAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
-          {spec.series.map((s,i)=><Radar key={i} name={s.name} dataKey={s.dataKey} stroke={s.color||CHART_PALETTE[i]} fill={s.color||CHART_PALETTE[i]} fillOpacity={0.25}/>)}
-          <Tooltip contentStyle={tts}/>
-        </RadarChart>
-      );
-    }
-    if (spec.type==="bar") {
-      return (
-        <BarChart data={spec.data} barCategoryGap="30%">
-          {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false}/>}
-          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}} interval="preserveStartEnd" allowDuplicatedCategory={false}/>
-          <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
-          <Tooltip contentStyle={tts}/>
-          {spec.series.map((s,i)=><Bar key={i} dataKey={s.dataKey} name={s.name} fill={s.color||CHART_PALETTE[i]} radius={[3,3,0,0] as any}/>)}
-          {spec.showLegend&&<Legend/>}
-        </BarChart>
-      );
-    }
-    if (spec.type==="area") {
-      return (
-        <AreaChart data={spec.data}>
-          {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))"/>}
-          <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}} interval="preserveStartEnd" allowDuplicatedCategory={false}/>
-          <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
-          <Tooltip contentStyle={tts}/>
-          {spec.series.map((s,i)=><Area key={i} type="monotone" dataKey={s.dataKey} name={s.name} stroke={s.color||CHART_PALETTE[i]} fill={s.color||CHART_PALETTE[i]} fillOpacity={0.15} strokeWidth={2}/>)}
-          {spec.showLegend&&<Legend/>}
-        </AreaChart>
-      );
-    }
-    // Default: line
-    return (
-      <LineChart data={spec.data}>
-        {spec.showGrid!==false&&<CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))"/>}
-        <XAxis dataKey={spec.xAxisKey} tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}} interval="preserveStartEnd" allowDuplicatedCategory={false}/>
-        <YAxis tick={{fontSize:11,fill:"hsl(var(--muted-foreground))"}}/>
-        <Tooltip contentStyle={tts}/>
-        {spec.series.map((s,i)=><Line key={i} type="monotone" dataKey={s.dataKey} name={s.name} stroke={s.color||CHART_PALETTE[i]} strokeWidth={2.5} dot={{r:3}} activeDot={{r:5}}/>)}
-        {spec.showLegend&&<Legend/>}
-      </LineChart>
-    );
-  }
 
   return (
     <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/30" onClick={()=>setOpen(o=>!o)}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} chart: ${spec.title}`}
+        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/30"
+        onClick={()=>setOpen(o=>!o)}
+        onKeyDown={onEnterOrSpace(()=>setOpen(o=>!o))}
+      >
         <div className="flex items-center gap-2">
           <BarChart2 className="h-3.5 w-3.5 text-primary"/>
           <span className="text-xs font-semibold">{spec.title}</span>
@@ -238,7 +185,20 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
       </div>
       {open&&(
         <div className="px-2 pb-3">
-          <ResponsiveContainer width="100%" height={h}>{renderChart()}</ResponsiveContainer>
+          {/* recharts is code-split \u2014 show a same-height skeleton while the chunk loads */}
+          <Suspense
+            fallback={
+              <div
+                className="w-full rounded-lg bg-muted/40 animate-pulse flex items-center justify-center"
+                style={{ height: h }}
+                aria-label="Loading chart"
+              >
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/60" />
+              </div>
+            }
+          >
+            <ChatChartBody spec={spec} />
+          </Suspense>
         </div>
       )}
     </div>
@@ -249,7 +209,15 @@ function ChatTable({ spec }: { spec: TableSpec2 }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/30" onClick={()=>setOpen(o=>!o)}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} table: ${spec.title}`}
+        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/30"
+        onClick={()=>setOpen(o=>!o)}
+        onKeyDown={onEnterOrSpace(()=>setOpen(o=>!o))}
+      >
         <div className="flex items-center gap-2">
           <TableIcon className="h-3.5 w-3.5 text-primary"/>
           <span className="text-xs font-semibold">{spec.title}</span>
@@ -296,7 +264,15 @@ function ChatReport({ spec }: { spec: ReportSpec2 }) {
   const [expanded, setExpanded] = useState<Record<number,boolean>>({});
   return (
     <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2.5 cursor-pointer hover:bg-muted/30 bg-muted/10" onClick={()=>setOpen(o=>!o)}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} report: ${spec.title}`}
+        className="flex items-center justify-between px-3 py-2.5 cursor-pointer hover:bg-muted/30 bg-muted/10"
+        onClick={()=>setOpen(o=>!o)}
+        onKeyDown={onEnterOrSpace(()=>setOpen(o=>!o))}
+      >
         <div className="flex items-center gap-2">
           <FileBarChart className="h-3.5 w-3.5 text-primary"/>
           <span className="text-xs font-bold">{spec.title}</span>
@@ -307,7 +283,15 @@ function ChatReport({ spec }: { spec: ReportSpec2 }) {
         <div className="divide-y divide-border/40">
           {spec.sections.map((sec,si)=>(
             <div key={si}>
-              <div className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/10" onClick={()=>setExpanded(p=>({...p,[si]:!p[si]}))}>
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded[si]!==false}
+                aria-label={`${expanded[si]===false ? "Expand" : "Collapse"} section: ${sec.heading}`}
+                className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/10"
+                onClick={()=>setExpanded(p=>({...p,[si]:!p[si]}))}
+                onKeyDown={onEnterOrSpace(()=>setExpanded(p=>({...p,[si]:!p[si]})))}
+              >
                 <span className="text-xs font-semibold">{sec.heading}</span>
                 {expanded[si]===false?<ChevronDown className="h-3 w-3 text-muted-foreground"/>:<ChevronUp className="h-3 w-3 text-muted-foreground"/>}
               </div>
@@ -567,7 +551,16 @@ function LazyDocumentPreview({
   return (
     <div className="mt-2 space-y-2">
       <div style={{ height: isPdf ? 480 : 360 }}>
-        <DocumentViewer id={id} name={name} mimeType={mimeType} data={data} inline />
+        {/* DocumentViewer is code-split — same-size skeleton while the chunk loads */}
+        <Suspense
+          fallback={
+            <div className="h-full w-full rounded-xl border border-border bg-muted/30 animate-pulse flex items-center justify-center" aria-label="Loading document viewer">
+              <FileText className="h-8 w-8 text-muted-foreground/50" />
+            </div>
+          }
+        >
+          <DocumentViewer id={id} name={name} mimeType={mimeType} data={data} inline />
+        </Suspense>
       </div>
       {fields.length > 0 && (
         <div className="rounded-xl border border-border bg-muted/10 overflow-hidden">
@@ -1636,6 +1629,7 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
                 onClick={() => setEditing(true)}
                 className="p-1 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
                 title="Edit"
+                aria-label="Edit"
               >
                 <Pencil className="h-3 w-3" />
               </button>
@@ -1645,6 +1639,7 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
                 onClick={handleUndo}
                 className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                 title="Undo / Remove"
+                aria-label="Undo / Remove"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -2579,7 +2574,7 @@ export default function ChatPage() {
                 className="flex-1 bg-transparent text-sm outline-none text-foreground placeholder:text-muted-foreground"
                 data-testid="input-chat-search"
               />
-              {searchQuery && <button onClick={() => setSearchQuery('')} className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>}
+              {searchQuery && <button onClick={() => setSearchQuery('')} aria-label="Clear search" className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>}
               <button onClick={() => { setSearchOpen(false); setSearchQuery(''); }} className="text-muted-foreground hover:text-foreground text-xs">Done</button>
             </div>
           )}
@@ -2695,7 +2690,14 @@ export default function ChatPage() {
 
                 {/* Artifact preview card */}
                 {(msg as any).artifact && (
-                  <div className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer" onClick={() => setActiveArtifact((msg as any).artifact)}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`View artifact: ${(msg as any).artifact.title}`}
+                    className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer"
+                    onClick={() => setActiveArtifact((msg as any).artifact)}
+                    onKeyDown={onEnterOrSpace(() => setActiveArtifact((msg as any).artifact))}
+                  >
                     <div className="flex items-center gap-2 px-3 py-2 bg-primary/5">
                       <BarChart3 className="h-4 w-4 text-primary" />
                       <span className="text-sm font-medium">{(msg as any).artifact.title}</span>
@@ -2953,7 +2955,14 @@ export default function ChatPage() {
                               else hashNavigate("/artifacts");
                             };
                             return (
-                            <div className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer" onClick={open}>
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              aria-label="Open artifact"
+                              className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer"
+                              onClick={open}
+                              onKeyDown={onEnterOrSpace(open)}
+                            >
                               <div className="p-3 max-h-[200px] overflow-hidden relative bg-card">
                                 <ArtifactPreview data={action.data} />
                                 <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-card to-transparent" />
@@ -3130,12 +3139,17 @@ export default function ChatPage() {
         />
       )}
 
-      {/* Smart Fill PDF dialog */}
-      <SmartFillDialog
-        open={!!smartFillFile}
-        onOpenChange={(o) => { if (!o) setSmartFillFile(null); }}
-        file={smartFillFile}
-      />
+      {/* Smart Fill PDF dialog — lazy: only fetch/mount the 600-line dialog once
+          the user actually stages a file for Smart Fill */}
+      {smartFillFile && (
+        <Suspense fallback={null}>
+          <SmartFillDialog
+            open={!!smartFillFile}
+            onOpenChange={(o) => { if (!o) setSmartFillFile(null); }}
+            file={smartFillFile}
+          />
+        </Suspense>
+      )}
 
       {/* Text input area (only shown when no attachment pending) */}
       {!hasAttachments && (
@@ -3161,6 +3175,7 @@ export default function ChatPage() {
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isPending}
                     title="Attach file or image"
+                    aria-label="Attach file or image"
                     data-testid="button-attach"
                     className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
                   >
@@ -3185,6 +3200,7 @@ export default function ChatPage() {
                     }}
                     disabled={isPending}
                     title="Take photo / pick image"
+                    aria-label="Take photo or pick image"
                     data-testid="button-camera"
                   >
                     <Camera className="h-4 w-4" />
@@ -3193,6 +3209,7 @@ export default function ChatPage() {
                   <button
                     onClick={() => setSearchOpen(v => !v)}
                     title="Search messages"
+                    aria-label="Search messages"
                     data-testid="button-chat-search"
                     className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
                       searchOpen ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
@@ -3240,6 +3257,8 @@ export default function ChatPage() {
                     <button
                       onClick={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
                       className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex items-center gap-1"
+                      aria-label="Reset chat"
+                      title="Reset chat"
                       data-testid="button-reset-chat"
                     >
                       <RotateCcw className="h-3 w-3" />
@@ -3262,10 +3281,28 @@ export default function ChatPage() {
       )}
       </div>
 
-      {/* Artifact panel */}
+      {/* Artifact panel — lazy boundary only mounts when a chat has an artifact
+          open, so recharts + the artifact rendering stack stay out of the
+          cold-load bundle */}
       {activeArtifact && (
         <div className="w-1/2 border-l border-border">
-          <ArtifactPanel artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />
+          <Suspense
+            fallback={
+              <div className="h-full flex flex-col bg-background border-l border-border" aria-label="Loading artifact panel">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+                  <div className="h-4 w-40 rounded bg-muted/60 animate-pulse" />
+                  <div className="h-7 w-7 rounded bg-muted/60 animate-pulse" />
+                </div>
+                <div className="flex-1 p-4 space-y-3">
+                  <div className="h-24 rounded-lg bg-muted/40 animate-pulse" />
+                  <div className="h-40 rounded-lg bg-muted/40 animate-pulse" />
+                  <div className="h-24 rounded-lg bg-muted/40 animate-pulse" />
+                </div>
+              </div>
+            }
+          >
+            <ArtifactPanel artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />
+          </Suspense>
         </div>
       )}
     </div>

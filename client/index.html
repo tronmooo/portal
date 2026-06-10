@@ -12,6 +12,10 @@
             https://www.perplexity.ai/computer
     -->
     <meta charset="UTF-8" />
+    <!-- Pre-paint theme bootstrap (external file — CSP forbids inline scripts).
+         Applies the saved dark/light class + custom palette before first paint
+         so there is no light->dark flash. Keys mirror theme-provider.tsx. -->
+    <script src="/theme-init.js"></script>
     <!-- Allow pinch-zoom for accessibility (low vision users). The previous
          maximum-scale=1 blocked all zoom on iOS, which was an a11y violation. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -26,28 +30,17 @@
     <meta name="description" content="Portol — Your personal life management system. Track finances, health, documents, and more." />
     <meta property="og:title" content="Portol — Your Life, Organized" />
     <meta property="og:description" content="A personal life management system for tracking finances, health, documents, assets, and more." />
+    <!-- P1.3: Inter + JetBrains Mono are self-hosted via @fontsource imports in
+         src/main.tsx (bundled into the hashed CSS). Only General Sans remains on
+         a CDN (Fontshare — not self-hostable). -->
+    <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
     <link href="https://api.fontshare.com/v2/css?f[]=general-sans@300,400,500,600,700&display=swap" rel="stylesheet">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      // UNREGISTER all service workers and clear all caches
-      // The app is data-driven and must never serve stale cached content
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(registrations => {
-          registrations.forEach(reg => reg.unregister());
-        });
-      }
-      if ('caches' in window) {
-        caches.keys().then(names => {
-          names.forEach(name => caches.delete(name));
-        });
-      }
-    </script>
+    <!-- No inline scripts: the PWA service worker is registered from
+         src/main.tsx (virtual:pwa-register), keeping CSP free of 'unsafe-inline'. -->
   </body>
 </html>

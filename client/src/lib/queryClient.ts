@@ -325,10 +325,24 @@ function scheduleSnapshot(): void {
   }, 1500); // throttle to once per 1.5s
 }
 
+// A-2: user-scoped UI state in localStorage that must not survive logout.
+// These are NOT user-namespaced (unlike portol_profile_filter_v5:<uid>), so a
+// different account signing in on the same browser would inherit them.
+// Deliberately KEPT (device preferences / not user data): theme keys
+// (portol.theme.mode / portol.theme.primary / portol.theme.accent in
+// theme-provider.tsx).
+const USER_SCOPED_LOCAL_KEYS = [
+  "portol_doc_snooze_v1",        // dashboard: per-document expiring-doc snoozes (contains doc ids)
+  "portol_dismissed_action_v2",  // dashboard: dismissed action-required items (contains item ids)
+  "portol_dismissed_action_v1",  // legacy version of the above (dashboard only clears it on read)
+  "portol_editor_links_sidebar", // editor: links-sidebar open/closed UI state
+  "portol:lastError",            // ErrorBoundary crash payload (message/stack/url can embed user data)
+];
+
 // Bug #21: centralized full-cache clear for sign-out (or anywhere else we need
 // to scrub user-scoped state). Wipes the in-memory React Query cache, the
-// persisted localStorage snapshot, and (lazily) the profile filter so the
-// next user doesn't inherit anyone else's data.
+// persisted localStorage snapshot, user-scoped UI state, and (lazily) the
+// profile filter so the next user doesn't inherit anyone else's data.
 export function clearAllClientCaches(): void {
   try {
     queryClient.clear();
@@ -336,6 +350,10 @@ export function clearAllClientCaches(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch { /* private mode — ignore */ }
+  // A-2: scrub user-scoped UI state that previously survived logout.
+  for (const key of USER_SCOPED_LOCAL_KEYS) {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  }
   // Profile filter lives in client/src/lib/profileFilter.ts. We dynamically
   // import to avoid a circular dep between auth, profileFilter, and this file.
   try {

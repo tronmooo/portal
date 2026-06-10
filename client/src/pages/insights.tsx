@@ -156,7 +156,7 @@ export default function InsightsPage() {
     <div className="min-h-screen bg-background">
       <div className="border-b sticky top-0 bg-background/95 backdrop-blur z-10">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => setLocation("/dashboard")} data-testid="button-back">
+          <Button variant="ghost" size="icon" onClick={() => setLocation("/dashboard")} aria-label="Back to Dashboard" data-testid="button-back">
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex-1">

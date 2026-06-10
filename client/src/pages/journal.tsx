@@ -483,7 +483,7 @@ export default function JournalPage() {
               <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Energy Level</p>
               <div className="flex gap-1 items-center">
                 {[1, 2, 3, 4, 5].map(n => (
-                  <button key={n} onClick={() => setEnergy(n)} className={`p-1 transition-colors ${energy >= n ? "text-yellow-500" : "text-muted-foreground/25 hover:text-muted-foreground/50"}`}>
+                  <button key={n} type="button" onClick={() => setEnergy(n)} aria-label={`Set energy level to ${n} (${ENERGY_LABELS[n]})`} aria-pressed={energy >= n} className={`p-1 transition-colors ${energy >= n ? "text-yellow-500" : "text-muted-foreground/25 hover:text-muted-foreground/50"}`}>
                     <Zap className="h-5 w-5" fill={energy >= n ? "currentColor" : "none"} />
                   </button>
                 ))}

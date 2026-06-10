@@ -106,6 +106,15 @@ function journalStreakLabel(streak: number): string {
   return "Great";
 }
 
+// Keyboard activation helper for non-<button> clickable elements (a11y):
+// makes Enter/Space behave like a click on role="button" divs.
+const onEnterOrSpace = (fn: () => void) => (e: React.KeyboardEvent) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    fn();
+  }
+};
+
 function daysUntilStr(days: number): string {
   if (days < 0) return `${Math.abs(days)}d overdue`;
   if (days === 0) return "Today";
@@ -230,6 +239,7 @@ function MiniStat({
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? onEnterOrSpace(onClick) : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
       style={accent ? { background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, transparent 60%)` } : {}}
     >
@@ -311,7 +321,8 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-open-tasks">
+      data-testid="stat-card-open-tasks"
+      role="button" tabIndex={0} aria-label="Open tasks" onKeyDown={onEnterOrSpace(onClick)}>
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(262 65% 62%), transparent)' }} />
       <div className="flex items-start justify-between relative z-10">
         <div className="icon-badge" style={{ background: 'hsl(262 65% 62% / 0.15)' }}>
@@ -341,7 +352,8 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-monthly-spend">
+      data-testid="stat-card-monthly-spend"
+      role="button" tabIndex={0} aria-label="Monthly spend" onKeyDown={onEnterOrSpace(onClick)}>
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
       <div className="flex items-start justify-between relative z-10">
         <div className="icon-badge" style={{ background: 'hsl(43 85% 52% / 0.15)' }}>
@@ -373,7 +385,8 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-habits-today">
+      data-testid="stat-card-habits-today"
+      role="button" tabIndex={0} aria-label="Habits today" onKeyDown={onEnterOrSpace(onClick)}>
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
       <div className="flex items-start justify-between gap-2 relative z-10">
         <div>
@@ -400,7 +413,8 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-journal-streak">
+      data-testid="stat-card-journal-streak"
+      role="button" tabIndex={0} aria-label="Journal streak" onKeyDown={onEnterOrSpace(onClick)}>
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(310 50% 58%), transparent)' }} />
       <div className="flex items-start justify-between relative z-10">
         <div className="icon-badge" style={{ background: 'hsl(310 50% 58% / 0.15)' }}>
@@ -432,7 +446,8 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
-      data-testid="stat-card-expiring-docs">
+      data-testid="stat-card-expiring-docs"
+      role="button" tabIndex={0} aria-label="Expiring documents" onKeyDown={onEnterOrSpace(onClick)}>
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />
       <div className="flex items-start justify-between relative z-10">
         <div className="icon-badge" style={{ background: `hsl(${accent} / 0.15)` }}>
@@ -1959,6 +1974,8 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
           {visibleEvents.map((ev: any) => (
             <div key={ev.id}
               onClick={() => navigate("/calendar")}
+              role="button" tabIndex={0} aria-label={`Open calendar: ${ev.title}`}
+              onKeyDown={onEnterOrSpace(() => navigate("/calendar"))}
               className="flex items-center gap-1.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors rounded px-1 -mx-1">
               <Clock className="h-3 w-3 text-primary shrink-0" />
               <span className="text-xs font-medium text-primary tabular-nums shrink-0 w-10">
@@ -2035,6 +2052,8 @@ function HealthSection({ data }: { data: any[] }) {
             return (
               <div key={item.trackerId}
                 onClick={() => setSelectedTracker(item)}
+                role="button" tabIndex={0} aria-label={`View tracker: ${item.name}`}
+                onKeyDown={onEnterOrSpace(() => setSelectedTracker(item))}
                 className="flex items-start gap-0 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors overflow-hidden relative">
                 {/* Status color band on left */}
                 <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: statusColor }} />
@@ -2191,6 +2210,8 @@ function ObligationsSection({ data }: { data: any[] }) {
             {bills.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((bill: any) => (
               <div key={bill.id}
                 onClick={() => setSelectedBill(bill)}
+                role="button" tabIndex={0} aria-label={`View bill: ${bill.name}`}
+                onKeyDown={onEnterOrSpace(() => setSelectedBill(bill))}
                 className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-muted/40 rounded transition-colors">
                 <span className="text-xs truncate flex-1">{bill.name}</span>
                 {bill.autopay && <span className="text-xs-tight text-green-500 shrink-0">autopay</span>}
@@ -2476,7 +2497,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                       <Check className="h-2.5 w-2.5 text-transparent group-hover:text-green-500" />
                     )}
                   </button>
-                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActionGoal(g)}>
+                  <div className="flex-1 min-w-0 cursor-pointer" role="button" tabIndex={0} aria-label={`Open goal: ${g.title}`} onClick={() => setActionGoal(g)} onKeyDown={onEnterOrSpace(() => setActionGoal(g))}>
                     <div className="flex items-center justify-between">
                       <span className="text-xs-loose font-medium truncate">{g.title}</span>
                       <div className="flex items-center gap-1 ml-2 shrink-0">
@@ -3429,11 +3450,11 @@ function ExpiringWarrantiesCard({
   if (items.length === 0) return null;
 
   const TYPE_COLORS: Record<string, string> = {
-    vehicle: "bg-blue-500/15 text-blue-600",
-    property: "bg-amber-500/15 text-amber-700",
-    asset: "bg-purple-500/15 text-purple-700",
-    investment: "bg-green-500/15 text-green-700",
-    account: "bg-slate-500/15 text-slate-600",
+    vehicle: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+    property: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+    asset: "bg-purple-500/15 text-purple-700 dark:text-purple-400",
+    investment: "bg-green-500/15 text-green-700 dark:text-green-400",
+    account: "bg-slate-500/15 text-slate-600 dark:text-slate-400",
   };
 
   return (
@@ -3690,6 +3711,9 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
           return (
             <div key={i}
               onClick={() => route && navigate(route)}
+              role={route ? "button" : undefined}
+              tabIndex={route ? 0 : undefined}
+              onKeyDown={route ? onEnterOrSpace(() => navigate(route)) : undefined}
               className={`flex items-center gap-2.5 py-1.5 ${route ? "cursor-pointer hover:bg-muted/40 rounded-lg px-1.5 -mx-1.5 transition-colors" : ""}`}
               data-testid={`activity-item-${i}`}>
               <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}>

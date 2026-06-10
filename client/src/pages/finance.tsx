@@ -1160,6 +1160,8 @@ export default function FinancePage() {
                 {/* U2 fix: open confirmation dialog instead of deleting immediately.
                     Also disable while a previous delete is in flight (avoids spam clicks). */}
                 <button className="text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center disabled:opacity-50"
+                  type="button"
+                  aria-label="Delete paycheck"
                   disabled={deletePaycheckMut.isPending}
                   data-testid={`btn-delete-paycheck-${pc.id}`}
                   onClick={stopProp(() => setPaycheckToDelete({ id: pc.id, source: pc.source, amount: (pc.actual_amount || pc.amount) }))}>

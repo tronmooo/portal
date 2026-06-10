@@ -66,20 +66,49 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
-  // CSP: do NOT block existing inline scripts/styles since the app uses them.
-  // Use a permissive policy that still blocks framing + mixed content.
-  res.setHeader('Content-Security-Policy',
-    "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com https://challenges.cloudflare.com; " +
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; " +
-    "font-src 'self' data: https://fonts.gstatic.com https://api.fontshare.com; " +
-    "img-src 'self' data: blob: https:; " +
-    "connect-src 'self' https://*.supabase.co https://api.anthropic.com https://api.resend.com https://challenges.cloudflare.com wss://*.supabase.co; " +
-    "frame-src https://accounts.google.com https://challenges.cloudflare.com; " +
-    "frame-ancestors 'none'; " +
-    "base-uri 'self'; " +
-    "form-action 'self'; " +
-    "upgrade-insecure-requests"
-  );
+  res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
   next();
 }
+
+/**
+ * Canonical CSP — the SINGLE source of truth for the policy string.
+ *
+ * IMPORTANT: this exact string is duplicated verbatim in /vercel.json (the
+ * document-route "headers" entry), because index.html is served statically by
+ * Vercel and never passes through this Express middleware in production.
+ * vercel.json is strict JSON and cannot carry comments, so if you change the
+ * policy here you MUST copy the new string into vercel.json (and vice versa).
+ * Keep the two literally identical.
+ *
+ * Policy notes:
+ *   - script-src: NO 'unsafe-inline' — all inline scripts in index.html
+ *     (service-worker unregister, theme bootstrap) have been externalized.
+ *     'unsafe-eval' is KEPT deliberately: Univer (spreadsheet engine) uses
+ *     new Function() for formula compilation, and the Capacitor
+ *     dynamic-import shim evaluates code at runtime; both break without it.
+ *   - style-src: 'unsafe-inline' is KEPT — React sets element style
+ *     attributes inline and Tailwind arbitrary-value props generate inline
+ *     styles, so nonce-ing/hashing styles is impractical. Accepted tradeoff:
+ *     inline-style injection is far lower risk than inline-script injection.
+ *   - object-src 'none': no plugins/embeds anywhere in the app.
+ *   - worker-src 'self' (+ child-src 'self' as the worker fallback for older
+ *     browsers): the service worker is same-origin.
+ *   - Google Fonts hosts remain in style-src/font-src even though
+ *     Inter/JetBrains Mono are now self-hosted — harmless, and fontshare is
+ *     still loaded remotely.
+ */
+export const CONTENT_SECURITY_POLICY =
+  "default-src 'self'; " +
+  "script-src 'self' 'unsafe-eval' https://accounts.google.com https://apis.google.com https://challenges.cloudflare.com; " +
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; " +
+  "font-src 'self' data: https://fonts.gstatic.com https://api.fontshare.com; " +
+  "img-src 'self' data: blob: https:; " +
+  "connect-src 'self' https://*.supabase.co https://api.anthropic.com https://api.resend.com https://challenges.cloudflare.com wss://*.supabase.co; " +
+  "frame-src https://accounts.google.com https://challenges.cloudflare.com; " +
+  "worker-src 'self'; " +
+  "child-src 'self'; " +
+  "object-src 'none'; " +
+  "frame-ancestors 'none'; " +
+  "base-uri 'self'; " +
+  "form-action 'self'; " +
+  "upgrade-insecure-requests";

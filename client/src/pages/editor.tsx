@@ -1475,21 +1475,21 @@ export default function EditorPage() {
               below the editor content so it sits above the iOS keyboard like
               the reference design. */}
           <div className="hidden md:flex border-b bg-muted/30 px-3 py-1.5 items-center gap-1 flex-wrap shrink-0">
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} data-testid="button-doc-bold"><Bold className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} data-testid="button-doc-italic"><Italic className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleUnderline().run()} aria-pressed={editor?.isActive("underline")} data-testid="button-doc-underline"><UnderlineIcon className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleBold().run()} aria-pressed={editor?.isActive("bold")} aria-label="Bold" data-testid="button-doc-bold"><Bold className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleItalic().run()} aria-pressed={editor?.isActive("italic")} aria-label="Italic" data-testid="button-doc-italic"><Italic className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleUnderline().run()} aria-pressed={editor?.isActive("underline")} aria-label="Underline" data-testid="button-doc-underline"><UnderlineIcon className="h-4 w-4" /></Button>
             <div className="w-px h-5 bg-border mx-1" />
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} data-testid="button-doc-h1"><Heading1 className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} data-testid="button-doc-h2"><Heading2 className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()} aria-label="Heading 1" data-testid="button-doc-h1"><Heading1 className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} aria-label="Heading 2" data-testid="button-doc-h2"><Heading2 className="h-4 w-4" /></Button>
             <div className="w-px h-5 bg-border mx-1" />
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleBulletList().run()} data-testid="button-doc-ul"><List className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleOrderedList().run()} data-testid="button-doc-ol"><ListOrdered className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleBulletList().run()} aria-label="Bulleted list" data-testid="button-doc-ul"><List className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleOrderedList().run()} aria-label="Numbered list" data-testid="button-doc-ol"><ListOrdered className="h-4 w-4" /></Button>
             <div className="w-px h-5 bg-border mx-1" />
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
               const url = window.prompt("URL");
               if (url) editor?.chain().focus().setLink({ href: url }).run();
-            }} data-testid="button-doc-link"><LinkIcon className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleCodeBlock().run()} data-testid="button-doc-code"><Code className="h-4 w-4" /></Button>
+            }} aria-label="Insert link" data-testid="button-doc-link"><LinkIcon className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => editor?.chain().focus().toggleCodeBlock().run()} aria-label="Code block" data-testid="button-doc-code"><Code className="h-4 w-4" /></Button>
           </div>
           {/* Tiptap content — on mobile we apply doc-mobile-black so the canvas
               renders as pure black like IMG_0420. Desktop keeps the standard
@@ -1938,6 +1938,7 @@ export default function EditorPage() {
                 }
               }}
               title="Add sheet"
+              aria-label="Add sheet"
               data-testid="sheet-tab-add"
             ><Plus className="h-3.5 w-3.5" /></Button>
             <button
@@ -2392,6 +2393,7 @@ function CrossLinkSidebar({
           className="h-8 w-8 mt-2"
           onClick={onToggle}
           title="Show linked entities"
+          aria-label="Show linked entities"
           data-testid="button-toggle-links-sidebar"
         >
           <PanelRightOpen className="h-4 w-4" />
@@ -2403,9 +2405,12 @@ function CrossLinkSidebar({
   return (
     <>
       {/* Mobile backdrop — tap to close. Hidden on desktop. */}
+      {/* Decorative scrim: hidden from assistive tech (the panel has its own
+          labelled close button); keyboard users close via that button. */}
       <div
         className="md:hidden fixed inset-0 z-40 bg-black/40"
         onClick={onToggle}
+        aria-hidden="true"
         data-testid="backdrop-links-sidebar"
       />
     <div
@@ -2424,6 +2429,7 @@ function CrossLinkSidebar({
           className="h-7 w-7"
           onClick={onToggle}
           title="Hide sidebar"
+          aria-label="Hide linked entities sidebar"
           data-testid="button-toggle-links-sidebar"
         >
           <PanelRightClose className="h-4 w-4" />

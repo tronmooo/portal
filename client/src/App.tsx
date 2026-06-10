@@ -84,19 +84,23 @@ const EditorPage       = lazy(_editImport);
 const InsightsPage     = lazy(_insightsImport);
 const ShareViewPage    = lazy(_shareViewImport);
 
-// Preload ALL main tab pages immediately so switching tabs is instant — no spinner on first visit.
-// This fires the bundle fetches in parallel as soon as the app JS loads.
-_dashImport();
-_trackImport();
-_profImport();
-_settImport();
-_calImport();
-_artImport();
-_finImport();
-_habImport();
-_jourImport();
-_oblImport();
-_taskImport();
+// PERF-2 (2026-06-10): main-tab chunk preloads used to fire at module load,
+// before auth — logged-out users downloaded megabytes of route chunks they
+// never used. They now run from <RoutePreloader /> below, only once the user
+// is authenticated, and during browser idle time.
+const MAIN_TAB_IMPORTS = [
+  _dashImport,
+  _trackImport,
+  _profImport,
+  _settImport,
+  _calImport,
+  _artImport,
+  _finImport,
+  _habImport,
+  _jourImport,
+  _oblImport,
+  _taskImport,
+];
 
 // Install auth interceptor to add JWT to all API requests
 installAuthInterceptor();
@@ -167,8 +171,66 @@ function ProfileButton() {
   );
 }
 
+// Preload all main tab pages so switching tabs is instant — no spinner on
+// first visit. Runs once per session, only after the user is authenticated
+// (logged-out users on AuthPage never pay for these chunks), and inside
+// requestIdleCallback so it never competes with first-paint work.
+function RoutePreloader() {
+  const { user } = useAuth();
+  const fired = useRef(false);
+  useEffect(() => {
+    if (!user || fired.current) return;
+    fired.current = true;
+    const run = () => {
+      MAIN_TAB_IMPORTS.forEach((imp) => {
+        imp().catch(() => {/* best-effort prefetch; route lazy() retries on demand */});
+      });
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(run, { timeout: 5000 });
+    } else {
+      setTimeout(run, 1500);
+    }
+  }, [user]);
+  return null;
+}
+
+// A-3 deep-link: key where the intended route is stashed while an
+// unauthenticated user is parked on AuthPage, restored right after login.
+const AUTH_RETURN_TO_KEY = "portol_auth_return_to";
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading, authRequired } = useAuth();
+  const [, navigate] = useLocation();
+  const restoredReturnTo = useRef(false);
+
+  // Stash the intended route (hash-router path incl. query) while AuthPage is
+  // shown, so login lands the user where they meant to go.
+  useEffect(() => {
+    if (loading || !authRequired || user) return;
+    // useHashLocation: the route lives in the hash — "#/dashboard?x=1".
+    const target = window.location.hash.replace(/^#/, "");
+    if (!target || target === "/") return;
+    // Never stash auth/public pages.
+    if (/^\/(auth|reset-password|privacy|terms|share)(\/|\?|$)/.test(target)) return;
+    try {
+      sessionStorage.setItem(AUTH_RETURN_TO_KEY, target);
+    } catch { /* storage unavailable — skip */ }
+  }, [user, loading, authRequired]);
+
+  // Once authenticated, navigate to the stashed route exactly once.
+  useEffect(() => {
+    if (!user || restoredReturnTo.current) return;
+    restoredReturnTo.current = true;
+    let target: string | null = null;
+    try {
+      target = sessionStorage.getItem(AUTH_RETURN_TO_KEY);
+      sessionStorage.removeItem(AUTH_RETURN_TO_KEY);
+    } catch { /* storage unavailable — skip */ }
+    if (target && target !== "/" && !target.startsWith("/auth")) {
+      navigate(target, { replace: true });
+    }
+  }, [user, navigate]);
 
   // Allow public pages through without auth
   if (window.location.hash.startsWith("#/reset-password")) {
@@ -570,6 +632,7 @@ function App() {
             <RouteTitle />
             <KeepAlive />
             <DataPrefetch />
+            <RoutePreloader />
             <SwipeNav />
             <PullToRefresh />
             <AuthGate>

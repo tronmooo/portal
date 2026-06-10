@@ -18,7 +18,7 @@ import {
 } from "@/components/asset/asset-overview";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -166,6 +166,15 @@ import { LiabilityProfilePage } from "@/pages/liability-detail";
 // ============================================================
 // HELPERS
 // ============================================================
+
+// Keyboard activation helper for non-<button> clickable elements (a11y):
+// makes Enter/Space behave like a click on role="button" divs.
+const onEnterOrSpace = (fn: () => void) => (e: React.KeyboardEvent) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    fn();
+  }
+};
 
 function getProfileBanner(type: string): string {
   const banners: Record<string, string> = {
@@ -2097,7 +2106,10 @@ function formatTimeAgo(date: Date): string {
 // TIMELINE ITEM
 // ============================================================
 
-function TimelineItem({ entry }: { entry: TimelineEntry }) {
+// Memoised: rendered once per timeline entry (can be hundreds of rows) and its
+// only prop is the entry object, whose reference is stable between parent
+// re-renders (comes straight from react-query data). No callback props.
+const TimelineItem = memo(function TimelineItem({ entry }: { entry: TimelineEntry }) {
   const colors: Record<string, string> = {
     tracker: "bg-chart-1/10 text-chart-1",
     expense: "bg-chart-4/10 text-chart-4",
@@ -2151,7 +2163,7 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
       <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">{entry.type}</Badge>
     </div>
   );
-}
+});
 
 // ============================================================
 // INFO TAB — Universal with type-specific enrichments
@@ -2442,8 +2454,12 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
   if (!editing) {
     return (
       <div
+        role="button"
+        tabIndex={0}
+        aria-label={`Edit ${label}`}
         className="flex items-center justify-between py-2 border-b border-border/30 last:border-0 group cursor-pointer hover:bg-muted/20 px-2 -mx-2 rounded"
         onClick={() => { setDraft(displayValue); setEditing(true); }}
+        onKeyDown={onEnterOrSpace(() => { setDraft(displayValue); setEditing(true); })}
       >
         <span className="text-xs text-muted-foreground">{label}</span>
         <div className="flex items-center gap-1.5">
@@ -3301,7 +3317,9 @@ function InfoTab({
 // a habit assigned to this person always appears here. Creation/check-in
 // management lives on the Habits page (linked below) to keep this surface
 // focused on "what habits does this profile have + how are they doing".
-function ProfileHabitsTab({ habits, profileName }: { habits: any[]; profileName: string }) {
+// Memoised: pure presentation of the linked-habits list; props are a stable
+// react-query array + a string, with no callback props to invalidate the memo.
+const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }: { habits: any[]; profileName: string }) {
   const today = new Date().toISOString().slice(0, 10);
   if (!habits || habits.length === 0) {
     return (
@@ -3349,7 +3367,7 @@ function ProfileHabitsTab({ habits, profileName }: { habits: any[]; profileName:
       <Link href="/habits" className="block text-center text-xs text-primary hover:underline py-2" data-testid="link-manage-habits">Manage habits →</Link>
     </div>
   );
-}
+});
 
 function DocumentsTab({
   documents: embeddedDocuments,
@@ -3762,6 +3780,7 @@ function DocumentsTab({
                           }
                         }}
                         data-testid={`button-view-doc-${doc.id}`}
+                        aria-label={`View ${doc.name}`}
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </Button>
@@ -3778,6 +3797,7 @@ function DocumentsTab({
                         className="h-7 w-7 text-destructive hover:text-destructive"
                         onClick={() => setDeletingDocId(doc.id)}
                         data-testid={`button-delete-doc-${doc.id}`}
+                        aria-label={`Delete ${doc.name}`}
                       >
                         <X className="h-3.5 w-3.5" />
                       </Button>
@@ -6028,7 +6048,10 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
   );
 }
 
-function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
+// Memoised: groups/sorts the full timeline on every render; its only prop is
+// the timeline array (stable react-query reference), so memo skips that work
+// when unrelated page state changes.
+const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
   const [filter, setFilter] = useState<string>("all");
 
   const TIMELINE_ICONS: Record<string, any> = {
@@ -6114,7 +6137,7 @@ function TimelineTab({ timeline }: { timeline: TimelineEntry[] }) {
       ))}
     </div>
   );
-}
+});
 
 // ============================================================
 // TASKS TAB — New standalone tab
@@ -8135,7 +8158,7 @@ function LinkedSubsTab({ profile }: { profile: any }) {
             ) : (
               <div className="divide-y divide-border/30">
                 {sortedChildren.map((sub: any) => (
-                  <div key={sub.id} className="flex items-center justify-between py-2 cursor-pointer hover:bg-muted/30 -mx-3 px-3 rounded" onClick={() => navigate(`/profiles/${sub.id}`)}>
+                  <div key={sub.id} role="button" tabIndex={0} aria-label={`Open subscription: ${sub.name}`} className="flex items-center justify-between py-2 cursor-pointer hover:bg-muted/30 -mx-3 px-3 rounded" onClick={() => navigate(`/profiles/${sub.id}`)} onKeyDown={onEnterOrSpace(() => navigate(`/profiles/${sub.id}`))}>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-medium truncate">{sub.name}</p>
                       <p className="text-xs text-muted-foreground">{sub.fields?.frequency || "monthly"}</p>
@@ -10178,6 +10201,7 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
                       className="h-6 w-6 shrink-0"
                       onClick={() => { if (confirm("Unlink this liability?")) unlinkMut.mutate(item.linkId); }}
                       data-testid={`btn-unlink-liability-${item.id}`}
+                      aria-label={`Unlink ${item.name}`}
                     >
                       <X className="h-3.5 w-3.5" />
                     </Button>

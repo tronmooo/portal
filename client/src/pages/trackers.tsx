@@ -109,6 +109,15 @@ import {
   TreePine,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
+
+// Keyboard activation helper for non-<button> clickable elements (a11y):
+// makes Enter/Space behave like a click on role="button" divs.
+const onEnterOrSpace = (fn: () => void) => (e: React.KeyboardEvent) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    fn();
+  }
+};
 import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document } from "@shared/schema";
@@ -1502,6 +1511,7 @@ function DeleteEntryButton({
         className="h-6 w-6 text-muted-foreground hover:text-destructive"
         onClick={() => setOpen(true)}
         data-testid={`button-delete-entry-${entryId}`}
+        aria-label="Delete entry"
       >
         <Trash2 className="h-3 w-3" />
       </Button>
@@ -1722,6 +1732,10 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
         boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
       }}
       onClick={() => onOpenDetail?.(tracker.id)}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open tracker: ${tracker.name}`}
+      onKeyDown={onEnterOrSpace(() => onOpenDetail?.(tracker.id))}
     >
       {/* Header: icon + title */}
       <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
@@ -2197,6 +2211,7 @@ function CreateTrackerDialog({
                         className="h-8 w-8 shrink-0"
                         onClick={() => removeField(i)}
                         data-testid={`button-remove-field-${i}`}
+                        aria-label={`Remove field ${i + 1}`}
                       >
                         <X className="h-3.5 w-3.5" />
                       </Button>
@@ -3417,7 +3432,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
             const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
             const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
             return (
-              <div key={g.id} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => openEdit(g)} data-testid={`tracker-goal-${g.id}`}>
+              <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{g.title}</span>
                   <Badge variant={g.status === "completed" ? "default" : "secondary"} className="text-xs capitalize">{g.status}</Badge>
@@ -5290,7 +5305,7 @@ export default function TrackersPage() {
                         const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
                         const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
                         return (
-                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)}>
+                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)} role="button" tabIndex={0} aria-label={`View document: ${doc.name}`} onKeyDown={onEnterOrSpace(() => setViewingDoc(doc))}>
                             <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                               <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
                               <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>
@@ -5541,6 +5556,10 @@ export default function TrackersPage() {
                 data-testid={`tracker-row-${tracker.id}`}
                 style={{ background: `linear-gradient(90deg, hsl(${getCategoryAccent(tracker.category)} / 0.08) 0%, transparent 40%)` }}
                 onClick={() => setSelectedTrackerId(tracker.id)}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open tracker: ${tracker.name}`}
+                onKeyDown={onEnterOrSpace(() => setSelectedTrackerId(tracker.id))}
               >
                 {/* Category accent left bar */}
                 <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l" style={{ background: `hsl(${getCategoryAccent(tracker.category)})` }} />

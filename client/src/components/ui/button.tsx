@@ -29,7 +29,9 @@ const buttonVariants = cva(
         default: "min-h-9 px-4 py-2",
         sm: "min-h-8 rounded-md px-3 text-xs",
         lg: "min-h-10 rounded-md px-8",
-        icon: "h-9 w-9",
+        // touch-hit extends the tap target to ≥44px on coarse pointers only
+        // (see index.css) without changing the 36px visual size.
+        icon: "h-9 w-9 touch-hit",
       },
     },
     defaultVariants: {

@@ -160,6 +160,24 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
   );
 }
 
+// ── 429 detection (A-5) ─────────────────────────────────────
+// Detect a rate-limit response robustly. apiRequest throws plain
+// `Error("429: ...")` (no status property), and auth.tsx's humanizeAuthError
+// strips the leading "NNN: " before mapping rate-limit messages to
+// "Too many attempts. Please wait a moment and try again." — so we check a
+// status property if present, then fall back to message matching on both the
+// raw and humanized shapes.
+function isRateLimitError(err: unknown): boolean {
+  if (err == null) return false;
+  const anyErr = err as any;
+  const status = anyErr.status ?? anyErr.statusCode;
+  if (status === 429) return true;
+  const msg = typeof err === "string" ? err : String(anyErr.message || "");
+  return /^\s*429\s*:/.test(msg) || /too many/i.test(msg) || /rate limit/i.test(msg);
+}
+
+const RATE_LIMIT_COOLDOWN_S = 60;
+
 // ── Main Auth Page ──────────────────────────────────────────
 export default function AuthPage() {
   useEffect(() => { document.title = "Portol — AI Life Command Center"; }, []);
@@ -174,6 +192,25 @@ export default function AuthPage() {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotSent, setForgotSent] = useState(false);
   const loginRef = useRef<HTMLDivElement>(null);
+
+  // A-5: 429 backoff. Seconds remaining in the cooldown; 0 = not rate-limited.
+  // Single state + a single interval that ticks it down and self-cleans.
+  const [retryAfter, setRetryAfter] = useState(0);
+  useEffect(() => {
+    if (retryAfter <= 0) return;
+    const id = setInterval(() => {
+      setRetryAfter((s) => (s <= 1 ? 0 : s - 1));
+    }, 1000);
+    return () => clearInterval(id); // also clears on unmount mid-countdown
+    // Re-run only when the countdown starts/stops, not on every tick — the
+    // interval keeps itself going via the functional update above.
+  }, [retryAfter > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rateLimited = retryAfter > 0;
+  // While rate-limited, the countdown message supersedes whatever error the
+  // handler stored.
+  const displayError = rateLimited
+    ? `Too many attempts — try again in ${retryAfter}s`
+    : error;
 
   // QA Bug 1: tracks whether the user has tried to submit so we can show
   // inline 'required' errors on empty fields without nagging them before
@@ -197,9 +234,19 @@ export default function AuthPage() {
     setLoading(true);
     try {
       const result = await signIn(email, password);
-      if (result.error) setError(result.error);
+      if (result.error) {
+        if (isRateLimitError(result.error)) {
+          setRetryAfter(RATE_LIMIT_COOLDOWN_S); // displayError shows the countdown
+        } else {
+          setError(result.error);
+        }
+      }
     } catch (err: any) {
-      setError(err?.message || "Sign in failed. Please try again.");
+      if (isRateLimitError(err)) {
+        setRetryAfter(RATE_LIMIT_COOLDOWN_S);
+      } else {
+        setError(err?.message || "Sign in failed. Please try again.");
+      }
     } finally {
       setLoading(false); // never let the spinner hang
     }
@@ -223,9 +270,19 @@ export default function AuthPage() {
     setLoading(true);
     try {
       const result = await signUp(email, password);
-      if (result.error) setError(result.error);
+      if (result.error) {
+        if (isRateLimitError(result.error)) {
+          setRetryAfter(RATE_LIMIT_COOLDOWN_S);
+        } else {
+          setError(result.error);
+        }
+      }
     } catch (err: any) {
-      setError(err?.message || "Sign up failed. Please try again.");
+      if (isRateLimitError(err)) {
+        setRetryAfter(RATE_LIMIT_COOLDOWN_S);
+      } else {
+        setError(err?.message || "Sign up failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -330,10 +387,10 @@ export default function AuthPage() {
               </Tabs>
             </CardHeader>
             <CardContent>
-              {error && (
+              {displayError && (
                 <div className="flex items-center gap-2 p-3 mb-4 text-sm text-destructive bg-destructive/10 rounded-lg" data-testid="text-auth-error">
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  {error}
+                  {displayError}
                 </div>
               )}
 
@@ -390,7 +447,7 @@ export default function AuthPage() {
                     />
                     {signInPasswordMissing && <p className="text-xs text-destructive">Password is required</p>}
                   </div>
-                  <Button type="submit" className="w-full" disabled={loading} data-testid="button-signin">
+                  <Button type="submit" className="w-full" disabled={loading || rateLimited} data-testid="button-signin">
                     {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Sign In
                   </Button>
@@ -452,7 +509,7 @@ export default function AuthPage() {
                     />
                     {signUpConfirmMissing && <p className="text-xs text-destructive">Please confirm your password</p>}
                   </div>
-                  <Button type="submit" className="w-full" disabled={loading} data-testid="button-signup">
+                  <Button type="submit" className="w-full" disabled={loading || rateLimited} data-testid="button-signup">
                     {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Create Account
                   </Button>

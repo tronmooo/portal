@@ -28,7 +28,10 @@ async function buildForVercel() {
     define: {
       "process.env.NODE_ENV": '"production"',
     },
-    minify: false,
+    // [PERF-1] Minified: ~25-30% smaller serverless bundle → faster cold start.
+    // keepNames preserves function/class names so error stacks stay readable.
+    minify: true,
+    keepNames: true,
     external: [
       "better-sqlite3",
     ],

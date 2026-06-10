@@ -299,22 +299,64 @@ function CodeRenderer({ content, language }: { content: string; language?: strin
   );
 }
 
+// Prefetch the mermaid chunk while the browser is idle so opening a diagram
+// artifact doesn't blank for 1–2s on the dynamic import. Call once on page mount.
+function prefetchMermaid() {
+  const load = () => { import("mermaid").catch(() => { /* offline / chunk error — render path will surface it */ }); };
+  if (typeof (window as any).requestIdleCallback === "function") {
+    (window as any).requestIdleCallback(load, { timeout: 3000 });
+  } else {
+    setTimeout(load, 1500);
+  }
+}
+
 function MermaidRenderer({ content }: { content: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
-    import("mermaid").then((m) => {
-      if (cancelled) return;
-      m.default.initialize({ startOnLoad: false, theme: "dark" });
-      m.default.render("mermaid-" + Date.now(), content).then(({ svg }) => {
+    setError(null);
+    setLoading(true);
+    (async () => {
+      try {
+        const m = await import("mermaid");
+        if (cancelled) return;
+        m.default.initialize({ startOnLoad: false, theme: "dark" });
+        // mermaid.render can throw synchronously OR reject on malformed
+        // diagrams — both paths land in this catch instead of crashing/blanking.
+        const { svg } = await m.default.render("mermaid-" + Date.now(), content);
         if (ref.current && !cancelled) ref.current.innerHTML = svg;
-      }).catch((e) => { if (!cancelled) setError(String(e)); });
-    }).catch((e) => { if (!cancelled) setError(String(e)); });
+        if (!cancelled) setLoading(false);
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e?.message ? String(e.message) : String(e));
+          setLoading(false);
+        }
+      }
+    })();
     return () => { cancelled = true; };
   }, [content]);
-  if (error) return <div className="text-sm text-destructive">Mermaid error: {error}</div>;
-  return <div ref={ref} className="flex justify-center" />;
+  if (error) {
+    return (
+      <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-2" role="alert">
+        <p className="text-sm font-medium text-destructive">Couldn't render this diagram</p>
+        <p className="text-xs text-muted-foreground break-words">{error}</p>
+        <pre className="text-xs font-mono bg-muted/40 rounded p-2 overflow-x-auto max-h-48 whitespace-pre-wrap">{content}</pre>
+      </div>
+    );
+  }
+  return (
+    <div>
+      {loading && (
+        <div className="flex flex-col items-center justify-center gap-2 py-10 animate-pulse" aria-label="Rendering diagram">
+          <div className="h-32 w-full max-w-md rounded-lg bg-muted/50" />
+          <span className="text-xs text-muted-foreground">Rendering diagram…</span>
+        </div>
+      )}
+      <div ref={ref} className="flex justify-center" />
+    </div>
+  );
 }
 
 // Palette used for multi-series charts and pie slices. Tailwind-tinted to match the app.
@@ -463,8 +505,17 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.title}`}
       className="p-3 rounded-lg border border-border/50 bg-card hover:bg-accent/5 cursor-pointer transition-colors group"
       onClick={handleClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
       data-testid={`artifact-card-${item.id}`}
     >
       <div className="flex items-start gap-3">
@@ -504,6 +555,7 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
                 item.pinned ? "text-primary opacity-100" : "opacity-0 group-hover:opacity-60 hover:!opacity-100 text-muted-foreground"
               }`}
               title={item.pinned ? "Unpin" : "Pin"}
+              aria-label={item.pinned ? `Unpin ${item.title}` : `Pin ${item.title}`}
               data-testid={`button-pin-${item.id}`}
             >
               {item.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
@@ -521,6 +573,7 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
               }}
               className="p-1 rounded opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all"
               title="Delete"
+              aria-label={`Delete ${item.title}`}
               data-testid={`button-delete-${item.id}`}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -560,6 +613,8 @@ function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin, onDele
 // ─── Main page ───────────────────────────────────────────────
 export default function ArtifactsPage() {
   useEffect(() => { document.title = "Artifacts — Portol"; }, []);
+  // Warm the mermaid chunk in the background so opening a diagram is instant.
+  useEffect(() => { prefetchMermaid(); }, []);
 
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<FilterTab>("all");

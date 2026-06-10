@@ -34,7 +34,7 @@ export function ArtifactPanel({ artifact, onClose }: { artifact: any; onClose: (
           <h3 className="text-sm font-semibold truncate">{artifact.title}</h3>
           <Badge variant="outline" className="text-xs shrink-0">{artifact.type}</Badge>
         </div>
-        <Button variant="ghost" size="icon" onClick={onClose} className="h-7 w-7 shrink-0">
+        <Button variant="ghost" size="icon" onClick={onClose} className="h-7 w-7 shrink-0" aria-label="Close artifact panel">
           <X className="h-4 w-4" />
         </Button>
       </div>

@@ -13,6 +13,19 @@ if [ "${SKIP_ALL:-0}" = "1" ]; then
   exit 0
 fi
 
+# (0/2) Dependency vulnerability gate — high+ severity in runtime deps blocks.
+# [S0.1] Added 2026-06-10 as part of the product quality audit.
+if [ "${SKIP_AUDIT:-0}" = "1" ]; then
+  echo "[pre-push] SKIP_AUDIT=1 — skipping npm audit gate"
+else
+  echo "[pre-push] (0/2) npm audit (high+ severity, runtime deps)..."
+  if ! npm audit --omit=dev --audit-level=high >/dev/null 2>&1; then
+    echo "[pre-push] FAILED: high-severity dependency vulnerability — push BLOCKED."
+    echo "[pre-push] Run 'npm audit' for details, or bypass with: SKIP_AUDIT=1 git push"
+    exit 1
+  fi
+fi
+
 if [ "${SKIP_TSC:-0}" = "1" ]; then
   echo "[pre-push] SKIP_TSC=1 set — skipping tsc --noEmit"
 else

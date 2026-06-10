@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 
 /**
@@ -42,7 +43,76 @@ function stripEditorChunkPreloads(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), stripEditorChunkPreloads()],
+  plugins: [
+    react(),
+    stripEditorChunkPreloads(),
+    // P1.2 (2026-06-10): real PWA service worker. Replaces the old inline
+    // "unregister everything" script in index.html (which gave zero offline
+    // support and zero asset caching).
+    VitePWA({
+      registerType: "autoUpdate",
+      // Registration happens via `virtual:pwa-register` in client/src/main.tsx —
+      // no injected/inline <script> in index.html (CSP must be able to drop
+      // 'unsafe-inline').
+      injectRegister: false,
+      // Keep the existing hand-maintained client/public/manifest.json and the
+      // <link rel="manifest" href="/manifest.json"> already in index.html.
+      manifest: false,
+      workbox: {
+        // Precache ONLY the small app shell. The hashed /assets/* JS/CSS are
+        // intentionally NOT precached: the lazy editor chunks (univer ~5.4MB,
+        // exceljs, mermaid, pdfjs...) would force every user to download
+        // ~15MB up front. /assets/* is content-hashed + immutable, so a
+        // runtime CacheFirst strategy (below) gives the same repeat-visit
+        // performance without the up-front cost.
+        globPatterns: ["index.html", "manifest.json", "favicon.png", "icons/*.png"],
+        // Belt-and-suspenders: never let a giant chunk slip into the precache.
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        cleanupOutdatedCaches: true,
+        // SPA offline navigation fallback — but never for API or OAuth
+        // callback requests, which must always hit the server.
+        navigateFallback: "/index.html",
+        navigateFallbackDenylist: [/^\/api\//, /^\/auth\/callback/],
+        runtimeCaching: [
+          {
+            // /api/* is NEVER cached — the app is data-driven and must not
+            // serve stale data. NetworkOnly also keeps responses out of the
+            // Cache Storage entirely.
+            urlPattern: ({ url, sameOrigin }) =>
+              sameOrigin && url.pathname.startsWith("/api/"),
+            handler: "NetworkOnly",
+          },
+          {
+            // Content-hashed immutable build assets: cache-first, fetched
+            // lazily as routes are visited.
+            urlPattern: ({ url, sameOrigin }) =>
+              sameOrigin && url.pathname.startsWith("/assets/"),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "portol-assets",
+              expiration: {
+                maxEntries: 300,
+                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                purgeOnQuotaError: true,
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // Fontshare (General Sans) CSS + woff2 — third-party font we
+            // can't self-host; cache it so repeat loads don't block on the CDN.
+            urlPattern: ({ url }) => url.hostname.endsWith("fontshare.com"),
+            handler: "StaleWhileRevalidate",
+            options: {
+              cacheName: "portol-fonts",
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
+      },
+    }),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -63,7 +133,14 @@ export default defineConfig({
   // nested routes turned `./assets/index.js` into /editor/new/assets/index.js
   // and 404'd, leaving the page blank.
   base: "/",
+  // P1.4: strip console.log/console.debug from production bundles (pure
+  // annotations only take effect during minification, so dev is unaffected).
+  // console.error / console.warn are kept for field diagnostics.
+  esbuild: {
+    pure: ["console.log", "console.debug"],
+  },
   build: {
+    target: "es2020",
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
     // First-load perf: pre-segment heavy vendor chunks so the initial bundle

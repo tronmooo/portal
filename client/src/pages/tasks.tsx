@@ -355,6 +355,18 @@ function TaskItem({
           <div
             className="flex-1 min-w-0 cursor-pointer"
             onClick={() => onEdit(task)}
+            // a11y: keyboard-operable stand-in for a click target that wraps
+            // block content (can't be a <button> — it contains EditableTitle's
+            // own interactive controls, and nested buttons are invalid HTML).
+            role="button"
+            tabIndex={0}
+            aria-label={`Edit task: ${task.title}`}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onEdit(task);
+              }
+            }}
             data-testid={`task-edit-trigger-${task.id}`}
           >
             <div
@@ -414,6 +426,7 @@ function TaskItem({
             className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
             onClick={stopProp(() => setDeleteOpen(true))}
             disabled={deleteMutation.isPending}
+            aria-label="Delete task"
             data-testid={`button-delete-task-${task.id}`}
           >
             <Trash2 className="h-3.5 w-3.5" />

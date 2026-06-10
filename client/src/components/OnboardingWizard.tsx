@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   MessageSquare,
   Users,
@@ -345,6 +345,9 @@ export function OnboardingWizard() {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [, setLocation] = useLocation();
+  // a11y: skip the slide/spring animation entirely when the user prefers
+  // reduced motion (steps swap instantly instead of sliding).
+  const reduceMotion = useReducedMotion();
 
   const { data: status, isLoading } = useQuery<OnboardingStatus>({
     queryKey: ["/api/onboarding-status"],
@@ -391,10 +394,10 @@ export function OnboardingWizard() {
               key={step}
               custom={direction}
               variants={slideVariants}
-              initial="enter"
+              initial={reduceMotion ? false : "enter"}
               animate="center"
               exit="exit"
-              transition={slideTransition}
+              transition={reduceMotion ? { duration: 0 } : slideTransition}
               className="w-full"
             >
               {step === 0 && <WelcomeStep onNext={goNext} />}

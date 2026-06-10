@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 // NOTE: We do NOT import @supabase/supabase-js on the client to avoid localStorage
 // references that break sandboxed iframe deployment. Instead we call the Supabase OAuth
 // endpoint directly via URL redirect.
@@ -62,6 +62,27 @@ function loadPersistedTokens(): typeof memoryTokens {
 // Supabase config (loaded lazily from /api/auth/config)
 let supabaseConfig: { url: string; anonKey: string } | null = null;
 
+// A-1: cross-tab logout sync. signOut() writes a timestamp to this localStorage
+// key; OTHER tabs receive the storage event and clear their in-memory session.
+// (localStorage on purpose — sessionStorage is per-tab and fires no cross-tab
+// event. The key's presence/value isn't sensitive: it's just a timestamp.)
+const LOGOUT_BROADCAST_KEY = "portol_logout_broadcast";
+// Written by profileFilter.setActiveUserForFilter() on sign-in; a storage event
+// with a DIFFERENT uid means another tab signed into a different account.
+const ACTIVE_USER_ID_KEY = "portol_active_user_id";
+
+// Refresh-rotation canary: warn once per page load if a successful refresh
+// returns the SAME refresh_token (Supabase should rotate it — a non-rotating
+// token usually means a server/Supabase misconfiguration). Observability only.
+let refreshRotationWarned = false;
+function warnIfRefreshTokenNotRotated(oldToken: string | undefined, newToken: string | undefined): void {
+  if (refreshRotationWarned) return;
+  if (oldToken && newToken && oldToken === newToken) {
+    refreshRotationWarned = true;
+    console.warn("refresh token was not rotated");
+  }
+}
+
 // PERF FIX (2026-05-24): hydrate a provisional user from sessionStorage so the
 // app doesn't blank to a full-page spinner on every return visit. The real
 // session is still validated against the backend in the background, but the
@@ -103,9 +124,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(!provisional.user);
   const [authRequired, setAuthRequired] = useState(false);
 
+  // A-1: ref mirror of `user` so the mount-once storage listener below can read
+  // the CURRENT user without re-subscribing on every auth change.
+  const userRef = useRef<User | null>(user);
+  userRef.current = user;
+
   // Check auth config on mount
   useEffect(() => {
     checkAuthConfig();
+  }, []);
+
+  // A-1: cross-tab auth sync. Storage events only fire in OTHER tabs, so there
+  // is no echo back to the tab that wrote the key.
+  //  - Logout broadcast: another tab signed out → clear this tab's in-memory
+  //    tokens/user/session + all client caches (but only if this tab still has
+  //    a user; the broadcasting tab already cleared itself, and a signed-out
+  //    tab reacting would just churn).
+  //  - Different-user sign-in: another tab signed into a DIFFERENT account →
+  //    this tab's session/caches belong to the old account; full reload is the
+  //    simplest safe way to re-resolve session state from scratch.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LOGOUT_BROADCAST_KEY) {
+        if (e.newValue == null) return; // key removal/cleanup — not a logout
+        if (!userRef.current) return;   // already signed out — avoid loops
+        persistTokens(null);
+        setUser(null);
+        setSession(null);
+        try { clearAllClientCaches(); } catch { /* ignore */ }
+        try { clearChatCache(); } catch { /* ignore */ }
+        return;
+      }
+      if (e.key === ACTIVE_USER_ID_KEY) {
+        const newUid = e.newValue;
+        const currentUid = userRef.current?.id;
+        // newValue null = sign-out (handled by the broadcast above); only a
+        // non-null uid that differs from this tab's user means account switch.
+        if (newUid && currentUid && newUid !== currentUid) {
+          window.location.reload();
+        }
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   // ST3 fix: keep the profile filter namespaced to whichever user is currently
@@ -143,15 +204,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const refreshIn = Math.max((ttlSeconds - 300) * 1000, 10000); // at least 10s
     const timer = setTimeout(async () => {
       if (!memoryTokens?.refresh_token) return;
+      const oldRefreshToken = memoryTokens.refresh_token;
       try {
         const refreshRes = await fetch(`${API_BASE}/api/auth/refresh`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh_token: memoryTokens.refresh_token }),
+          body: JSON.stringify({ refresh_token: oldRefreshToken }),
         });
         if (refreshRes.ok) {
           const data = await refreshRes.json();
           if (data.session) {
+            // Rotation canary — observability only, no behavior change.
+            warnIfRefreshTokenNotRotated(oldRefreshToken, data.session.refresh_token);
             persistTokens(data.session);
             setSession(data.session);
             setUser(data.user);
@@ -376,7 +440,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setSession(null);
 
-    // 5. Notify the server (best-effort)
+    // 5. A-1: broadcast the logout to OTHER tabs via localStorage (storage
+    // events don't fire in the writing tab, so no self-echo). Other tabs hold
+    // their own in-memory copy of the tokens and would otherwise stay "signed
+    // in" until their next 401. The value is just a timestamp — not sensitive.
+    try { localStorage.setItem(LOGOUT_BROADCAST_KEY, String(Date.now())); } catch { /* ignore */ }
+
+    // 6. Notify the server (best-effort)
     fetch(`${API_BASE}/api/auth/signout`, { method: "POST" }).catch(() => {});
   }, []);
 
@@ -427,11 +497,12 @@ export function installAuthInterceptor() {
     if (response.status === 401 && url.includes("/api/") && !url.includes("/api/auth/")) {
       // Try refresh first
       if (memoryTokens?.refresh_token) {
+        const oldRefreshToken = memoryTokens.refresh_token;
         try {
           const refreshRes = await originalFetch!(`${API_BASE}/api/auth/refresh`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ refresh_token: memoryTokens.refresh_token }),
+            body: JSON.stringify({ refresh_token: oldRefreshToken }),
           });
           if (refreshRes.ok) {
             const refreshData = await refreshRes.json().catch(() => null);
@@ -440,6 +511,8 @@ export function installAuthInterceptor() {
             // wipe memoryTokens and we'd retry with a stale/empty Authorization header.
             const newSession = refreshData?.session;
             if (newSession?.access_token && newSession?.refresh_token) {
+              // Rotation canary — observability only, no behavior change.
+              warnIfRefreshTokenNotRotated(oldRefreshToken, newSession.refresh_token);
               persistTokens(newSession);
               // Retry the original request with the freshly-persisted token
               const retryHeaders = new Headers(init?.headers);
