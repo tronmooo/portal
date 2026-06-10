@@ -1,4 +1,5 @@
 import { build as esbuild } from "esbuild";
+import { CONTENT_SECURITY_POLICY } from "../server/security-headers";
 import { build as viteBuild } from "vite";
 import { rm, mkdir, cp, readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -104,6 +105,10 @@ export default async function(req, res) {
     buildCommand: "npm run build",
     installCommand: "npm install",
     outputDirectory: "public",
+    // Run the serverless function in the SAME region as the Supabase DB
+    // (us-west-2). Default iad1 added ~60-70ms x 3-15 DB round trips per
+    // request — the single largest API latency factor (2026-06-10 audit).
+    regions: ["pdx1"],
     rewrites: [
       { source: "/api/:path*", destination: "/api" },
       // SPA fallback: any non-asset, non-api, non-file path → index.html
@@ -114,6 +119,23 @@ export default async function(req, res) {
       {
         source: "/assets/(.*)",
         headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }]
+      },
+      {
+        // Security headers for the STATIC document — Express's middleware
+        // never sees statically-served HTML, so the SPA document must get
+        // its CSP/HSTS here. CSP imported from server/security-headers.ts
+        // (single source of truth — this file used to wipe a hand-edited
+        // vercel.json on every build, silently dropping these headers).
+        source: "/((?!assets/|api/).*)",
+        headers: [
+          { key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Permissions-Policy", value: "geolocation=(), microphone=(), camera=(), payment=()" },
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" }
+        ]
       }
     ],
     functions: {
