@@ -16,7 +16,19 @@ import { installStaleChunkHandlers } from "./components/ErrorBoundary";
 // P1.2: register the vite-plugin-pwa service worker (autoUpdate: new deploys
 // activate immediately and refresh the page). Registered here — not via an
 // inline script in index.html — so CSP can drop 'unsafe-inline'.
-registerSW({ immediate: true });
+registerSW({
+  immediate: true,
+  // Long-lived tabs must converge on new deploys without a manual refresh:
+  // poll for a new service worker every 60s (plus the built-in check on
+  // every navigation). With registerType:"autoUpdate" the new SW activates
+  // immediately (skipWaiting+clientsClaim) and the NetworkFirst shell route
+  // picks up the new bundles on the next navigation.
+  onRegisteredSW(_url, registration) {
+    if (registration) {
+      setInterval(() => { registration.update().catch(() => {}); }, 60_000);
+    }
+  },
+});
 
 // Install BEFORE anything else — catches lazy-import failures thrown from
 // route Switches, sentinels, or any code path that bypasses the React tree.

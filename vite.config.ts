@@ -65,15 +65,39 @@ export default defineConfig({
         // ~15MB up front. /assets/* is content-hashed + immutable, so a
         // runtime CacheFirst strategy (below) gives the same repeat-visit
         // performance without the up-front cost.
-        globPatterns: ["index.html", "manifest.json", "favicon.png", "icons/*.png"],
+        // CRITICAL (2026-06-10 incident): index.html must NEVER be precached.
+        // Precache + navigateFallback served a FROZEN app shell on every
+        // refresh — users were pinned to the deploy that first installed the
+        // SW and could not receive fixes without a double-reload SW update
+        // cycle. Navigations are NetworkFirst below: online users always get
+        // the current shell (and therefore the current hashed bundles);
+        // offline users get the last cached copy.
+        globPatterns: ["manifest.json", "favicon.png", "icons/*.png"],
         // Belt-and-suspenders: never let a giant chunk slip into the precache.
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         cleanupOutdatedCaches: true,
-        // SPA offline navigation fallback — but never for API or OAuth
-        // callback requests, which must always hit the server.
-        navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//, /^\/auth\/callback/],
+        // No navigateFallback: it can only serve from the precache (see
+        // incident note above). The NetworkFirst document route below owns
+        // navigations, including offline fallback.
+        navigateFallback: null,
         runtimeCaching: [
+          {
+            // The app shell (all SPA navigations). NetworkFirst: fresh
+            // index.html whenever online — a new deploy reaches the client on
+            // the very next refresh. 3s timeout falls back to the cached
+            // shell on dead/slow networks, preserving offline support.
+            urlPattern: ({ request, url, sameOrigin }) =>
+              sameOrigin && request.mode === "navigate" &&
+              !url.pathname.startsWith("/api/") &&
+              !url.pathname.startsWith("/auth/callback"),
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "portol-shell",
+              networkTimeoutSeconds: 3,
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
           {
             // /api/* is NEVER cached — the app is data-driven and must not
             // serve stale data. NetworkOnly also keeps responses out of the
