@@ -135,6 +135,7 @@ import {
   Droplet,
   Briefcase,
 } from "lucide-react";
+import { categoryTheme, type CategoryTheme } from "@/lib/category-theme";
 import {
   LineChart,
   Line,
@@ -5791,6 +5792,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
   const [logOpen, setLogOpen] = useState<string | null>(null);
   const [logValue, setLogValue] = useState("");
   const [logNotes, setLogNotes] = useState("");
+  const [notLoggedOpen, setNotLoggedOpen] = useState(false);
 
   // ── filter trackers ────────────────────────────────────────
   // When `includeAll` is true (aggregate Health & Trackers tab) we surface
@@ -5805,31 +5807,9 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
       );
 
   // ── category accent (color + icon) ─────────────────────────
-  function categoryAccent(t: any): { hsl: string; icon: any; label: string } {
-    const cat = (t.category || "").toLowerCase();
-    const name = (t.name || "").toLowerCase();
-    if (cat.includes("nutrition") || cat.includes("diet") || name.includes("calorie") || name.includes("meal") || name.includes("food")) {
-      return { hsl: "20 88% 55%", icon: Flame, label: "nutrition" };
-    }
-    if (cat.includes("fitness") || cat.includes("exercise") || name.includes("run") || name.includes("bench") || name.includes("workout") || name.includes("steps")) {
-      return { hsl: "142 71% 45%", icon: Activity, label: "fitness" };
-    }
-    if (cat.includes("sleep") || name.includes("sleep")) {
-      return { hsl: "260 60% 60%", icon: Sparkles, label: "sleep" };
-    }
-    if (cat.includes("health") || name.includes("blood") || name.includes("pressure") || name.includes("heart") || name.includes("bp")) {
-      return { hsl: "0 75% 58%", icon: HeartPulse, label: "health" };
-    }
-    if (cat.includes("water") || name.includes("hydration") || name.includes("water")) {
-      return { hsl: "199 89% 48%", icon: Droplet, label: "hydration" };
-    }
-    if (cat.includes("weight") || name.includes("weight")) {
-      return { hsl: "183 98% 32%", icon: TrendingUp, label: "weight" };
-    }
-    if (cat.includes("wellness") || cat.includes("lifestyle") || name.includes("wellness") || name.includes("mood")) {
-      return { hsl: "330 75% 60%", icon: Heart, label: "wellness" };
-    }
-    return { hsl: "215 70% 55%", icon: Activity, label: t.category || "tracker" };
+  // Delegates to the central theme system — see lib/category-theme.ts.
+  function categoryAccent(t: any): CategoryTheme {
+    return categoryTheme(t?.category, t?.name);
   }
 
   // ── helpers ───────────────────────────────────────────────
@@ -5946,7 +5926,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
     const daysSince = sorted[0]?.timestamp ? Math.floor((Date.now() - new Date(sorted[0].timestamp).getTime()) / 86400000) : null;
     const accent = categoryAccent(t);
     return { tracker: t, pf, latest, prev, avg7, trend, sparkData, daysSince, accent };
-  }).filter((v: any) => v.latest != null).sort((a: any, b: any) => (a.tracker.name || '').localeCompare(b.tracker.name || ''));
+  }).filter((v: any) => typeof v.latest === 'number' && !isNaN(v.latest)).sort((a: any, b: any) => (a.tracker.name || '').localeCompare(b.tracker.name || ''));
 
   // ── Section 2: Top 3 trend charts ──
   const topChartTrackers = [...healthTrackers]
@@ -5984,10 +5964,10 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
       {vitalCards.length > 0 && (
         <div>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
-            <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-rose-500/15 text-rose-500">
-              <Heart className="h-2.5 w-2.5" />
+            <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-emerald-500/15 text-emerald-500">
+              <Sparkles className="h-2.5 w-2.5" />
             </span>
-            Latest Vitals
+            At a Glance
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
             {vitalCards.map(({ tracker, latest, avg7, trend, sparkData, daysSince, accent }: any) => {
@@ -6153,19 +6133,31 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
           All Trackers
           <span className="text-[10px] font-medium text-muted-foreground normal-case tracking-normal">({healthTrackers.length})</span>
         </p>
-        <div className="space-y-2">
-          {healthTrackers.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((t: any) => {
+        {(() => {
+          // ── Partition trackers ────────────────────────────────────────
+          const sortedAll = healthTrackers.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+          type Bucket = "active" | "label" | "empty";
+          const buckets: Record<Bucket, any[]> = { active: [], label: [], empty: [] };
+          for (const t of sortedAll) {
+            const v = getLatestValue(t);
+            if (v == null || (t.entries?.length || 0) === 0) buckets.empty.push(t);
+            else if (typeof v === "number") buckets.active.push(t);
+            else buckets.label.push(t);
+          }
+
+          // Per-tracker row renderer (numeric or full card).
+          const renderRow = (t: any) => {
             const pf = getPrimaryField(t);
             const latest = getLatestValue(t);
             const sortedEntries = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             const lastEntry = sortedEntries[0];
             const lastDate = lastEntry ? new Date(lastEntry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
-            const daysSince = lastEntry ? Math.floor((Date.now() - new Date(lastEntry.timestamp).getTime()) / 86400000) : null;
             const isExpanded = expandedTrackers.has(t.id);
             const isLogging = logOpen === t.id;
             const accent = categoryAccent(t);
             const lineColor = `hsl(${accent.hsl})`;
             const Icon = accent.icon;
+            const isStringValue = latest != null && typeof latest !== "number";
             const displayVal = latest != null
               ? (typeof latest === "number" ? Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(latest))
               : null;
@@ -6177,7 +6169,6 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                 style={{ borderColor: `hsl(${accent.hsl} / 0.25)` }}
               >
                 <CardContent className="p-0">
-                  {/* Collapsed header */}
                   <button
                     className="w-full flex items-center gap-3 text-left p-3 transition-colors hover:bg-muted/30"
                     onClick={() => setExpandedTrackers(prev => {
@@ -6209,19 +6200,22 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {displayVal != null ? (
-                        <span className="text-base font-bold tabular-nums" style={{ color: lineColor }}>
-                          {displayVal}
-                          {t.unit && <span className="text-[10px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span>}
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground italic">No data</span>
+                      {displayVal != null && (
+                        isStringValue ? (
+                          <span className="text-xs italic text-muted-foreground max-w-[140px] truncate" title={displayVal}>
+                            {displayVal}
+                          </span>
+                        ) : (
+                          <span className="text-base font-bold tabular-nums" style={{ color: lineColor }}>
+                            {displayVal}
+                            {t.unit && <span className="text-[10px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span>}
+                          </span>
+                        )
                       )}
                       {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                     </div>
                   </button>
 
-                  {/* Expanded content */}
                   {isExpanded && (
                     <div className="px-3 pb-3 pt-1 border-t border-border/30 space-y-3">
                       {sortedEntries.length > 0 ? (
@@ -6231,7 +6225,9 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                               <div className="flex items-center gap-2 min-w-0">
                                 <span className="font-mono font-semibold tabular-nums" style={{ color: lineColor }}>
                                   {entry.values?.[pf] != null
-                                    ? `${Number(entry.values[pf]).toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? ` ${t.unit}` : ""}`
+                                    ? (typeof entry.values[pf] === "number" || !isNaN(Number(entry.values[pf]))
+                                        ? `${Number(entry.values[pf]).toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? ` ${t.unit}` : ""}`
+                                        : String(entry.values[pf]))
                                     : Object.values(entry.values || {}).filter(Boolean).join(", ") || "\u2014"}
                                 </span>
                                 {entry.notes && <span className="text-muted-foreground truncate max-w-[120px]" title={entry.notes}>{entry.notes}</span>}
@@ -6243,7 +6239,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                           ))}
                         </div>
                       ) : (
-                        <p className="text-xs text-muted-foreground text-center py-2">No entries yet</p>
+                        <p className="text-xs text-muted-foreground text-center py-2">No entries yet — tap “Log Entry” to start.</p>
                       )}
 
                       {isLogging ? (
@@ -6298,11 +6294,51 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                 </CardContent>
               </Card>
             );
-          })}
-        </div>
+          };
+
+          return (
+            <div className="space-y-2">
+              {/* Active numeric trackers */}
+              {buckets.active.map(renderRow)}
+
+              {/* String-valued / label trackers — small italic style */}
+              {buckets.label.length > 0 && (
+                <>
+                  {buckets.active.length > 0 && (
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-2 px-0.5">Labels</p>
+                  )}
+                  {buckets.label.map(renderRow)}
+                </>
+              )}
+
+              {/* Not yet logged — collapsible */}
+              {buckets.empty.length > 0 && (
+                <div className="pt-1">
+                  <button
+                    className="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg border border-dashed border-border/60 hover:bg-muted/30 transition-colors"
+                    onClick={() => setNotLoggedOpen(v => !v)}
+                    data-testid="button-toggle-not-logged"
+                  >
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Not yet logged ({buckets.empty.length})
+                    </span>
+                    {notLoggedOpen
+                      ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                      : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+                  </button>
+                  {notLoggedOpen && (
+                    <div className="space-y-2 mt-2">
+                      {buckets.empty.map(renderRow)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
-      {/* ── Section 5: Insights ── */}
+            {/* ── Section 5: Insights ── */}
       {insights.length > 0 && (
         <div>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">

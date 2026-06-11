@@ -201,8 +201,13 @@ export const TRACKER_CATEGORY_LABEL: Record<string, string> = {
   general:     "General",
 };
 
+// Central theme delegate — see lib/category-theme.ts. Falls through to the
+// legacy palette only for categories the central system doesn't yet cover.
+import { categoryTheme as _categoryTheme } from "@/lib/category-theme";
 export function getCategoryAccent(category: string): string {
-  return TRACKER_CATEGORY_ACCENT[category?.toLowerCase()] || TRACKER_CATEGORY_ACCENT.general;
+  const direct = TRACKER_CATEGORY_ACCENT[category?.toLowerCase()];
+  if (direct) return direct;
+  return _categoryTheme(category).hsl;
 }
 
 // ── Canonical Category Groups ──────────────────────────────────────────────────
