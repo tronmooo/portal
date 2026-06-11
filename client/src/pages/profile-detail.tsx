@@ -5620,14 +5620,25 @@ function TrackerCard_Profile({
   const allEntries: any[] = Array.isArray(tracker.entries) ? tracker.entries : [];
   const last10 = allEntries.slice(-10);
 
-  // Find the first numeric field. Each entry's `values` may be missing
-  // when an entry was created by an older path — always treat it as a
-  // possibly-undefined dict.
-  const numericField = tracker.fields?.find(
-    (f: any) => last10.some(e => typeof (e?.values?.[f.name]) === "number")
+  // PR O — Resolve the field used for the headline + chart + trend in ONE
+  // pass and reuse it in the entries renderer below. Previously the headline
+  // and the row renderer disagreed (header used first-numeric-field in last10,
+  // row used tracker.fields[0]), producing "430 kcal" up top with "16, 12, 18"
+  // (protein grams) underneath. Order of preference:
+  //   1) tracker.fields entry marked isPrimary (when numeric in any entry)
+  //   2) first tracker.fields entry that has a numeric value in any entry
+  //   3) first tracker.fields entry (for label) — values may be non-numeric
+  //   4) fall back to the first key of the most recent entry
+  const isNum = (v: any) => v != null && v !== "" && !isNaN(Number(v));
+  const primaryField = tracker.fields?.find(
+    (f: any) => f.isPrimary && last10.some(e => isNum(e?.values?.[f.name]))
   );
-  const firstEntryVals = last10[0]?.values;
+  const numericField = primaryField || tracker.fields?.find(
+    (f: any) => last10.some(e => isNum(e?.values?.[f.name]))
+  );
+  const firstEntryVals = last10[last10.length - 1]?.values;
   const fieldName = numericField?.name
+    || tracker.fields?.[0]?.name
     || (firstEntryVals && typeof firstEntryVals === "object" ? Object.keys(firstEntryVals)[0] : null)
     || null;
 
@@ -5800,49 +5811,88 @@ function TrackerCard_Profile({
             <div className="space-y-0 mt-1">
               {(expanded ? sortedEntries : sortedEntries.slice(0, 3)).map(entry => (
                 <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs" data-testid={`entry-row-${entry.id}`}>
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex-1 min-w-0">
                     {(() => {
-                      // Inline tracker row renderer.
-                      // Bug fix (PR #18, June 2026): the old code dumped every
-                      // entry value comma-joined regardless of type, producing
-                      // junk like "2 · 20 · 10:00 · 200 · moderate" on a Running
-                      // tracker. Mirror the trackers.tsx insight logic: prefer a
-                      // numeric primary field with the tracker's unit; only fall
-                      // back to other fields if there is no numeric value; and
-                      // suppress string values that just repeat the tracker name.
+                      // PR O — Multi-field row renderer for the profile page.
+                      // Mirrors the trackers-page row so the user sees ALL the
+                      // fields they logged (e.g. for a meal: "430 kcal · protein:
+                      // 16 g · carbs: 50 g · fat: 12 g · meal: lunch"), not a
+                      // single mystery number. Uses the SAME fieldName resolved
+                      // above for the headline so the primary value matches.
                       const trackerName = (tracker.name || "").toLowerCase().trim();
-                      const pf = tracker.fields?.find((f: any) => f.isPrimary)?.name || tracker.fields?.[0]?.name;
                       const vals = (entry && typeof entry.values === "object" && entry.values !== null) ? entry.values : {};
-                      const pv = pf ? vals[pf] : undefined;
+                      const isNumeric = (v: any) => v != null && v !== "" && !isNaN(Number(v));
                       const isMeaningful = (v: any) => {
                         if (v == null || v === "") return false;
                         if (typeof v === "string" && v.toLowerCase().trim() === trackerName) return false;
                         return true;
                       };
-                      const isNumeric = (v: any) => v != null && v !== "" && !isNaN(Number(v));
-                      // Prefer the primary field when it's numeric.
-                      if (isNumeric(pv)) {
-                        const num = Number(pv).toLocaleString(undefined, { maximumFractionDigits: 2 });
-                        return <span className="font-mono font-semibold text-sm tabular-nums">{num}{tracker.unit ? ` ${tracker.unit}` : ""}</span>;
-                      }
-                      // Otherwise find the first numeric field across all values.
-                      const numericPair = Object.entries(vals).find(([, v]) => isNumeric(v));
-                      if (numericPair) {
-                        const num = Number(numericPair[1]).toLocaleString(undefined, { maximumFractionDigits: 2 });
-                        return <span className="font-mono font-semibold text-sm tabular-nums">{num}{tracker.unit ? ` ${tracker.unit}` : ""}</span>;
-                      }
-                      // No numeric data: prefer the primary string field if it's
-                      // meaningful, then any meaningful string field.
-                      if (typeof pv === "string" && isMeaningful(pv)) {
-                        return <span className="font-medium">{pv}</span>;
-                      }
-                      const meaningfulPair = Object.entries(vals).find(([, v]) => isMeaningful(v));
-                      if (meaningfulPair) {
-                        return <span className="font-medium">{String(meaningfulPair[1])}</span>;
-                      }
-                      return <span className="text-muted-foreground italic">(no value)</span>;
+
+                      // Primary value uses the same fieldName the headline does.
+                      const primaryVal = fieldName ? vals[fieldName] : undefined;
+                      const primaryUnit =
+                        (numericField as any)?.unit ||
+                        (tracker.fields?.find((f: any) => f.name === fieldName) as any)?.unit ||
+                        tracker.unit ||
+                        "";
+
+                      // Every other field with a meaningful value, in tracker
+                      // field order so the user sees them the way they were
+                      // defined. _notes is rendered separately below.
+                      const otherFields = (tracker.fields || []).filter((f: any) => {
+                        if (f.name === fieldName) return false;
+                        if (f.name === "_notes") return false;
+                        return isMeaningful(vals[f.name]);
+                      });
+
+                      // Fall-back: if there's no primary value AND no defined
+                      // fields gave us anything, surface any meaningful key from
+                      // the raw values object so the row never reads blank.
+                      const fallbackPairs = otherFields.length === 0 && primaryVal == null
+                        ? Object.entries(vals).filter(([k, v]) => k !== "_notes" && isMeaningful(v))
+                        : [];
+
+                      const renderPrimary = () => {
+                        if (primaryVal == null || primaryVal === "") {
+                          return <span className="text-muted-foreground italic text-xs">(no value)</span>;
+                        }
+                        if (isNumeric(primaryVal)) {
+                          const num = Number(primaryVal).toLocaleString(undefined, { maximumFractionDigits: 2 });
+                          return (
+                            <>
+                              <span className="font-mono font-semibold text-sm tabular-nums">{num}</span>
+                              {primaryUnit && <span className="text-muted-foreground text-[11px] ml-0.5">{primaryUnit}</span>}
+                            </>
+                          );
+                        }
+                        return <span className="font-medium text-xs">{String(primaryVal)}</span>;
+                      };
+
+                      return (
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <div className="flex items-baseline gap-1.5 flex-wrap">
+                            {renderPrimary()}
+                            {otherFields.map((f: any) => {
+                              const v = vals[f.name];
+                              const num = isNumeric(v) ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(v);
+                              return (
+                                <span key={f.name} className="text-[11px] text-muted-foreground">
+                                  <span className="text-muted-foreground/70">{f.name}:</span> {num}{f.unit ? ` ${f.unit}` : ""}
+                                </span>
+                              );
+                            })}
+                            {fallbackPairs.map(([k, v]) => (
+                              <span key={k} className="text-[11px] text-muted-foreground">
+                                <span className="text-muted-foreground/70">{k}:</span> {String(v)}
+                              </span>
+                            ))}
+                          </div>
+                          {entry.notes && (
+                            <span className="text-[11px] text-muted-foreground/80 truncate" title={entry.notes}>{entry.notes}</span>
+                          )}
+                        </div>
+                      );
                     })()}
-                    {entry.notes && <span className="text-muted-foreground truncate max-w-[100px]" title={entry.notes}>{entry.notes}</span>}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 ml-2">
                     <span className="text-muted-foreground text-xs">
