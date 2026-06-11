@@ -1016,6 +1016,64 @@ export function CreateProfileDialog({
 
 const HIDDEN_FIELDS = ["class", "donor", "provider", "patientId", "property", "_parentProfileId", "ownerProfileId", "ownerName"];
 
+// Asset/security/market-data fields that must NEVER render on a person, pet,
+// or self card — even if some upstream writer (Live-search/quarantine/AI
+// extraction) accidentally drops them into a person's `fields` blob. This is
+// the defense-in-depth half of the fix; the matching DB cleanup migration
+// strips them from existing rows.
+const ASSET_FIELDS_BLOCKED_ON_PEOPLE = new Set([
+  "currentValue", "current_value",
+  "valuationDate", "valuation_date",
+  "valuationRange", "valuation_range",
+  "valuationMethod", "valuation_method",
+  "valuationConfidence", "valuation_confidence",
+  "quarantinedAt", "quarantined_at",
+  "quarantineReason", "quarantine_reason",
+  "sourceUrl", "source_url",
+  "marketSource", "market_source",
+  "tickerSymbol", "ticker_symbol", "symbol",
+  "priceAsOf", "price_as_of",
+  "livePrice", "live_price",
+  "lastQuote", "last_quote",
+  "purchasePrice", "purchase_price",
+  "originalAmount", "original_amount",
+  "remainingBalance", "remaining_balance",
+  "interestRate", "interest_rate",
+  "monthlyPayment", "monthly_payment",
+  "balance", "broker", "accountType",
+]);
+
+// Person-relevant fields, in display priority. Anything not in this list is
+// either irrelevant on the card (still visible on detail view) or blocked.
+const PERSON_FIELD_PRIORITY = [
+  "relationship", "full_name",
+  "birthday", "dateOfBirth", "date_of_birth",
+  "age",
+  "phone", "email",
+  "address", "city", "state", "stateName", "zipCode",
+  "bloodType", "height", "weight",
+  "allergies",
+];
+
+const PET_FIELD_PRIORITY = [
+  "species", "breed", "birthday", "age", "weight", "color",
+  "vetName", "vetPhone", "microchipNumber",
+];
+
+function calcAgeYears(birthday: unknown): number | null {
+  if (typeof birthday !== "string") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(birthday);
+  if (!m) return null;
+  const dob = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+  if (Number.isNaN(dob.getTime())) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - dob.getUTCFullYear();
+  const md = now.getUTCMonth() - dob.getUTCMonth();
+  if (md < 0 || (md === 0 && now.getUTCDate() < dob.getUTCDate())) age--;
+  return age >= 0 && age < 150 ? age : null;
+}
+
+
 // BUG-P05/MISC01: Pretty labels for profile field group keys and common abbreviations.
 const FIELD_LABELS: Record<string, string> = {
   pets: "Pet info",
@@ -1138,13 +1196,60 @@ function getProfileBanner(type: string): string {
 
 function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: string) => void }) {
   const isPersonType = ["self", "person", "pet"].includes(profile.type);
-  // BUG-P05/MISC01: flatten nested groups so the card shows real field names, not group keys.
-  const fields = flattenProfileFields(profile.fields || {}).filter(
-    ([key, v]) => v !== null && v !== undefined && v !== "" &&
-      !HIDDEN_FIELDS.includes(key) &&
-      !(isPersonType && VEHICLE_SPECIFIC_FIELDS.includes(key))
-  );
-  const initials = profile.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+  const isHumanType = profile.type === "person" || profile.type === "self";
+  const isPet = profile.type === "pet";
+
+  // Flatten nested groups (contacts.email, personal.address, etc.) into a flat
+  // map keyed by the inner field name. People rows in Supabase use this nested
+  // shape historically; the flattener already handles it.
+  const flatPairs = flattenProfileFields(profile.fields || {});
+  const flat: Record<string, any> = {};
+  for (const [k, v] of flatPairs) {
+    if (v === null || v === undefined || v === "") continue;
+    if (HIDDEN_FIELDS.includes(k)) continue;
+    if (isPersonType && ASSET_FIELDS_BLOCKED_ON_PEOPLE.has(k)) continue;
+    if (isPersonType && VEHICLE_SPECIFIC_FIELDS.includes(k)) continue;
+    if (flat[k] === undefined) flat[k] = v;
+  }
+
+  // Build the displayed rows in priority order so cards show what matters
+  // (relationship, age, contact) instead of whatever happened to come first.
+  type Row = { key: string; label: string; value: string };
+  const rows: Row[] = [];
+  const pushRow = (key: string, label: string, value: any) => {
+    const s = stringifyFieldValue(value);
+    if (!s) return;
+    if (rows.some(r => r.key === key)) return;
+    rows.push({ key, label, value: s });
+  };
+
+  if (isHumanType) {
+    const bday = flat.birthday ?? flat.dateOfBirth ?? flat.date_of_birth;
+    const age = calcAgeYears(bday);
+    if (flat.relationship) pushRow("relationship", "Relationship", flat.relationship);
+    if (age !== null) pushRow("age", "Age", `${age}`);
+    else if (bday) pushRow("birthday", "Birthday", bday);
+    for (const k of PERSON_FIELD_PRIORITY) {
+      if (rows.length >= 4) break;
+      if (["relationship","birthday","dateOfBirth","date_of_birth","age"].includes(k)) continue;
+      if (flat[k] !== undefined) pushRow(k, prettyFieldLabel(k), flat[k]);
+    }
+  } else if (isPet) {
+    const bday = flat.birthday;
+    const age = calcAgeYears(bday);
+    if (age !== null) pushRow("age", "Age", `${age}`);
+    for (const k of PET_FIELD_PRIORITY) {
+      if (rows.length >= 4) break;
+      if (k === "birthday" && age !== null) continue;
+      if (flat[k] !== undefined) pushRow(k, prettyFieldLabel(k), flat[k]);
+    }
+  } else {
+    for (const [k, v] of Object.entries(flat).slice(0, 5)) {
+      pushRow(k, prettyFieldLabel(k), v);
+    }
+  }
+
+  const initials = profile.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase() || "?";
   const accentHsl = PROFILE_ACCENT[profile.type] || '188 65% 48%';
   const ac = `hsl(${accentHsl})`;
   const linkedCount =
@@ -1155,6 +1260,50 @@ function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: s
     (profile.documents?.length || 0);
 
   const TYPE_ICONS: Record<string, string> = { self: '\u{1F464}', person: '\u{1F465}', pet: '\u{1F43E}', vehicle: '\u{1F697}', asset: '\u2B50', loan: '\u{1F4B3}', subscription: '\u{1F504}', investment: '\u{1F4C8}', property: '\u{1F3E0}', medical: '\u{1FA7A}' };
+
+  // Avatar upload — only available on person/pet/self cards.
+  const fileInputId = `avatar-input-${profile.id}`;
+  const { toast } = useToast();
+  const uploadAvatar = useMutation({
+    mutationFn: async (file: File) => {
+      if (!/^image\//.test(file.type)) throw new Error("Please choose an image file");
+      if (file.size > 5 * 1024 * 1024) throw new Error("Image must be under 5 MB");
+      // Base64-encode and POST as JSON to match the existing /api/upload pattern
+      // (no multipart parser is installed on the server, and the proxy layer
+      // already JSON-parses request bodies).
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("Could not read file"));
+        reader.readAsDataURL(file);
+      });
+      const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+      const res = await apiRequest("POST", `/api/profiles/${profile.id}/avatar`, {
+        fileName: file.name,
+        mimeType: file.type || "image/jpeg",
+        fileData: base64,
+      });
+      return res.json() as Promise<{ avatar: string }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      toast({ title: "Photo updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Could not update photo", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleAvatarClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    document.getElementById(fileInputId)?.click();
+  };
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) uploadAvatar.mutate(f);
+    e.target.value = "";
+  };
 
   return (
     <Link href={`/profiles/${profile.id}`}>
@@ -1168,43 +1317,80 @@ function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: s
         }}
       >
         {/* Header: avatar + name + type */}
-        <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-white text-[10px] font-bold" style={{ background: `linear-gradient(135deg, hsl(${accentHsl}), hsl(${accentHsl} / 0.7))` }}>
-            {initials}
+        <div className="px-3 pt-3 pb-2 flex items-center gap-2.5">
+          <div className="relative shrink-0">
+            {profile.avatar ? (
+              <img
+                src={profile.avatar}
+                alt={profile.name}
+                className="w-12 h-12 rounded-full object-cover"
+                style={{ boxShadow: `0 0 0 2px hsl(${accentHsl} / 0.5)` }}
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                data-testid={`img-avatar-${profile.id}`}
+              />
+            ) : (
+              <div
+                className="w-12 h-12 rounded-full flex items-center justify-center text-white text-sm font-bold"
+                style={{ background: `linear-gradient(135deg, hsl(${accentHsl}), hsl(${accentHsl} / 0.7))` }}
+                data-testid={`avatar-fallback-${profile.id}`}
+              >
+                {initials}
+              </div>
+            )}
+            {isPersonType && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleAvatarClick}
+                  disabled={uploadAvatar.isPending}
+                  className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-background border border-border flex items-center justify-center text-[10px] hover:bg-muted transition-colors"
+                  aria-label="Upload photo"
+                  data-testid={`btn-upload-avatar-${profile.id}`}
+                >
+                  {uploadAvatar.isPending ? "..." : "\u{1F4F7}"}
+                </button>
+                <input
+                  id={fileInputId}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleFileChange}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </>
+            )}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold text-foreground truncate" data-testid={`text-profile-name-${profile.id}`}>{profile.name}</p>
-            <span className="text-[8px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.15)`, color: ac }}>{profile.type}</span>
+            <p className="text-sm font-semibold text-foreground truncate leading-tight" data-testid={`text-profile-name-${profile.id}`}>{profile.name}</p>
+            <span className="inline-block mt-1 text-[9px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.15)`, color: ac }}>
+              {TYPE_ICONS[profile.type] || '\u{1F4CB}'} {TYPE_LABELS[profile.type] || profile.type}
+            </span>
           </div>
         </div>
 
-        {/* KPI lines — show key fields */}
-        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-          {fields
-            .map(([key, val]) => [key, stringifyFieldValue(val)] as const)
-            .filter(([_, val]) => val !== "")
-            .slice(0, 5)
-            .map(([key, val]) => (
-              <div key={key} className="flex items-center justify-between gap-1">
-                <span className="text-[9px] text-muted-foreground truncate">{prettyFieldLabel(key)}</span>
-                <span className="text-[9px] font-bold tabular-nums text-foreground shrink-0">{val.slice(0, 20)}</span>
-              </div>
-            ))}
+        {/* Key info lines */}
+        <div className="px-3 pb-2 flex-1 flex flex-col gap-1">
+          {rows.slice(0, 4).map((r) => (
+            <div key={r.key} className="flex items-center justify-between gap-2">
+              <span className="text-[10px] text-muted-foreground truncate">{r.label}</span>
+              <span className="text-[10px] font-medium text-foreground truncate max-w-[60%] text-right">{r.value}</span>
+            </div>
+          ))}
+          {rows.length === 0 && (
+            <p className="text-[10px] text-muted-foreground italic">Tap to add details</p>
+          )}
           {linkedCount > 0 && (
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[9px] text-muted-foreground">Linked</span>
-              <span className="text-[9px] font-bold text-foreground">{linkedCount} items</span>
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              <span className="text-[10px] text-muted-foreground">Linked</span>
+              <span className="text-[10px] font-medium text-foreground">{linkedCount} {linkedCount === 1 ? "item" : "items"}</span>
             </div>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
-          <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>
-            {TYPE_ICONS[profile.type] || '\u{1F4CB}'} {profile.type}
-          </span>
+        {/* Footer — just the delete affordance on hover */}
+        <div className="px-3 pb-2 pt-0 flex items-center justify-end">
           <button
-            className="h-8 w-8 flex items-center justify-center text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+            className="h-7 w-7 flex items-center justify-center text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(profile.id); }}
             data-testid={`btn-delete-profile-${profile.id}`}
           >

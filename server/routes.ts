@@ -2716,6 +2716,70 @@ If unsure, return "profile_fact".`,
     }
     res.json(updated);
   }));
+
+  // ---- Profile Avatar Upload ----
+  // Accepts base64 JSON ({ fileName, mimeType, fileData }) so it works without
+  // a multipart parser. Uploads to the public `profile-photos` Storage bucket
+  // under `<userId>/<profileId>.<ext>` and writes the resulting public URL
+  // back to profiles.avatar via storage.updateProfile.
+  app.post("/api/profiles/:id/avatar", asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const uid = cacheUserKey(authReq);
+    const userId = authReq.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+
+    const existing = await storage.getProfile(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Profile not found" });
+
+    const { fileName, mimeType, fileData } = req.body || {};
+    if (!fileData || typeof fileData !== "string") {
+      return res.status(400).json({ error: "fileData (base64) is required" });
+    }
+    if (!mimeType || typeof mimeType !== "string" || !mimeType.startsWith("image/")) {
+      return res.status(415).json({ error: "Avatar must be an image" });
+    }
+    const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic"];
+    if (!ALLOWED.includes(mimeType)) {
+      return res.status(415).json({ error: `Unsupported image type: ${mimeType}` });
+    }
+    const MAX_BYTES = 5 * 1024 * 1024;
+    const sizeBytes = Math.ceil((fileData.length * 3) / 4);
+    if (sizeBytes > MAX_BYTES) {
+      return res.status(413).json({ error: `Image too large (${(sizeBytes/1024/1024).toFixed(1)}MB). Max is 5MB.` });
+    }
+
+    const supaUrl = process.env.VITE_SUPABASE_URL;
+    const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supaUrl || !supaKey) return res.status(500).json({ error: "Storage not configured" });
+    const sb = createClient(supaUrl, supaKey);
+
+    const extMap: Record<string, string> = {
+      "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/heic": "heic",
+    };
+    const ext = extMap[mimeType] || "jpg";
+    const path = `${userId}/${req.params.id}.${ext}`;
+    const buffer = Buffer.from(fileData, "base64");
+
+    const { error: upErr } = await sb.storage
+      .from("profile-photos")
+      .upload(path, buffer, { contentType: mimeType, upsert: true });
+    if (upErr) {
+      console.error("[avatar.upload]", upErr.message);
+      return res.status(500).json({ error: "Failed to upload image" });
+    }
+    const { data: pub } = sb.storage.from("profile-photos").getPublicUrl(path);
+    // Cache-bust so the new image shows immediately even if the browser cached
+    // the old one at the same URL (upsert reuses the path).
+    const avatarUrl = `${pub.publicUrl}?v=${Date.now()}`;
+
+    const updated = await storage.updateProfile(req.params.id, { avatar: avatarUrl } as any);
+    if (!updated) return res.status(500).json({ error: "Failed to save avatar URL" });
+
+    bustCache(`profiles:${uid}`);
+    bustCache(`profile-detail:${uid}:`);
+    res.json({ avatar: avatarUrl });
+  }));
+
   app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {
     const uid_p3 = cacheUserKey(req as AuthenticatedRequest);
     const existing = await storage.getProfile(req.params.id);

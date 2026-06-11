@@ -252,6 +252,7 @@ export const insertProfileSchema = z.object({
   type: z.enum(["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"]),
   type_key: z.string().optional(),
   name: z.string().min(1),
+  avatar: z.string().url().optional().or(z.literal("")),
   fields: z.record(z.any()).optional().default({}),
   tags: z.array(z.string()).optional().default([]),
   notes: z.string().optional().default(""),
