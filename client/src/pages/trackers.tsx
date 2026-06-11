@@ -4766,24 +4766,30 @@ export default function TrackersPage() {
         };
         const childProfiles = (profiles || []).filter(p => {
           if (!childTypeSet.has(p.type)) return false;
-          if (isShowAll || (p.parentProfileId) && filterIds.includes((p.parentProfileId) as string)) {
-            // Asset type chip filter — only applies on the Assets tab.
-            // "all" means no chip-level filter; everything passes.
-            if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
-            // Asset nesting filter — applies on BOTH the "All" tab and the "Assets" tab.
-            const parentIsAssetChain = _hasAssetAncestorCards(p);
-            const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
-            if (nestingFilter === "all" || nestingFilter === "topLevel") {
-              if (parentIsAssetChain) return false;
-            } else if (nestingFilter === "hasChildren") {
-              const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
-              if (!hasAssetChild) return false;
-            } else if (nestingFilter === "nested") {
-              if (!parentIsAssetChain) return false;
-            }
-            return true;
+          // Visible if (a) no filter, (b) directly selected, (c) parented to
+          // selected profile, OR (d) co-owned via asset_party_links. Route
+          // through the canonical isAssetVisible helper so this cards view
+          // matches the list view, the chip counts, and every other surface.
+          // Previously this branch only checked parentProfileId, which made
+          // co-owned assets (e.g. Home parented to Mike but 50% owned by
+          // Test) silently disappear when filtering on the co-owner.
+          const pParent = p.parentProfileId as string | null | undefined;
+          if (!isShowAll && !isAssetVisible(p.id, pParent)) return false;
+          // Asset type chip filter — only applies on the Assets tab.
+          // "all" means no chip-level filter; everything passes.
+          if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
+          // Asset nesting filter — applies on BOTH the "All" tab and the "Assets" tab.
+          const parentIsAssetChain = _hasAssetAncestorCards(p);
+          const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
+          if (nestingFilter === "all" || nestingFilter === "topLevel") {
+            if (parentIsAssetChain) return false;
+          } else if (nestingFilter === "hasChildren") {
+            const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
+            if (!hasAssetChild) return false;
+          } else if (nestingFilter === "nested") {
+            if (!parentIsAssetChain) return false;
           }
-          return false;
+          return true;
         });
         if (childProfiles.length === 0) return (
           <div className="rounded-lg border bg-card p-6 text-center">
@@ -5001,15 +5007,11 @@ export default function TrackersPage() {
           // Hide liabilities nested under an asset — they live inside the
           // parent asset's detail page (Linked Liabilities section).
           if (_liabHasAssetAncestor(p)) return false;
-          // Profile-level scope first — liability is in scope if it's directly
-          // selected, parented to a selected profile, or the user is on "everyone".
-          let inScope = isShowAll;
-          if (!inScope) {
-            if (filterIds.includes(p.id)) inScope = true;
-            const pParent = p.parentProfileId;
-            if (pParent && filterIds.includes(pParent)) inScope = true;
-          }
-          if (!inScope) return false;
+          // Profile-level scope — route through canonical isLiabilityVisible
+          // so co-owners via liability_profile_links are also visible (matches
+          // every other surface and the chip counts).
+          const pParent = p.parentProfileId as string | null | undefined;
+          if (!isShowAll && !isLiabilityVisible(p.id, pParent)) return false;
           // Type chip filter — only applies on the Liabilities tab.
           if (sectionFilter === "liabilities" && subCatFilter !== "all") {
             if (liabilitySubcategoryOf(p) !== subCatFilter) return false;
