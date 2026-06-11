@@ -4393,165 +4393,11 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   return (
     <div className="space-y-4">
 
-      {/* ═══════════════════════════════════════════════════════ */}
-      {/* SECTION 0 — Net Worth Overview (person/self only)       */}
-      {/* ═══════════════════════════════════════════════════════ */}
-      {["self","person"].includes(profile.type) && (() => {
-        const children = (profile as any).childProfiles || [];
-        // BUG-20260528-asset-resolver-duplication: previous inline reducer
-        // missed nested namespace paths (fields.housing.*, fields.finance.*,
-        // fields.other.*, fields.estimatedValue, fields.cost, etc.), causing
-        // this card's net worth to differ from the Dashboard. Now uses the
-        // canonical resolveAssetValue / resolveLiabilityBalance from
-        // shared/asset-value.ts.
-        const assetTypes = ["vehicle","property","investment","asset","account","banking"];
-        const assets = children.filter((c: any) => assetTypes.includes(c.type));
-        const totalAssets = assets.reduce((s: number, c: any) => s + resolveAssetValue(c), 0);
-        // Liabilities: loans with a balance (parent-child)
-        const loans = children.filter((c: any) => c.type === "loan" || c.type === "liability" || resolveLiabilityBalance(c) > 0);
-        const childLiabilitiesTotal = loans.reduce((s: number, c: any) => s + resolveLiabilityBalance(c), 0);
-        // Shared liabilities (linked via liability_profile_links, e.g. co-owned mortgage).
-        // Use the user's ownership share, not the full balance.
-        const totalLiabilities = childLiabilitiesTotal + sharedLiabilitiesUserShare;
-        const totalLoanCount = loans.length + sharedLiabilities.length;
-        const netWorth = totalAssets - totalLiabilities;
-        // Monthly subscriptions
-        const subs = children.filter((c: any) => c.type === "subscription" || c.type === "insurance");
-        const monthlySubscriptions = subs.reduce((s: number, c: any) => {
-          const cost = Number(c.fields?.monthlyCost || c.fields?.cost || c.fields?.monthlyPremium || 0);
-          return s + cost;
-        }, 0);
-
-        return (
-          <Card className="bg-card">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-primary" /> Financial Overview
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {/* Net Worth Hero */}
-              <div className={`rounded-xl p-3 mb-3 ${
-                netWorth >= 0 ? "bg-green-500/8 border border-green-500/20" : "bg-red-500/8 border border-red-500/20"
-              }`}>
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Net Worth</p>
-                <p className={`text-2xl font-bold tabular-nums ${netWorth >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
-                  {netWorth < 0 ? "-" : ""}{formatCurrency(Math.abs(netWorth))}
-                </p>
-                {(totalAssets > 0 || totalLiabilities > 0) && (
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    {formatCurrency(totalAssets)} assets − {formatCurrency(totalLiabilities)} liabilities
-                  </p>
-                )}
-              </div>
-              {/* 3-col metrics */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="text-center p-2 rounded-lg bg-muted/30">
-                  <p className="text-base font-bold tabular-nums text-foreground">{formatCurrency(totalAssets)}</p>
-                  <p className="text-[11px] text-muted-foreground">Assets</p>
-                  <p className="text-[10px] text-muted-foreground/70">{assets.length} items</p>
-                </div>
-                <div className="text-center p-2 rounded-lg bg-muted/30">
-                  <p className="text-base font-bold tabular-nums text-red-500">{formatCurrency(totalLiabilities)}</p>
-                  <p className="text-[11px] text-muted-foreground">Liabilities</p>
-                  <p className="text-[10px] text-muted-foreground/70">{totalLoanCount} loan{totalLoanCount !== 1 ? "s" : ""}</p>
-                </div>
-                <div className="text-center p-2 rounded-lg bg-muted/30">
-                  <p className="text-base font-bold tabular-nums text-foreground">{formatCurrency(monthlySubscriptions)}/mo</p>
-                  <p className="text-[11px] text-muted-foreground">Subscriptions</p>
-                  <p className="text-[10px] text-muted-foreground/70">{subs.length} active</p>
-                </div>
-              </div>
-              {/* Asset list */}
-              {assets.length > 0 && (
-                <div className="mt-3 space-y-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Assets</p>
-                  {assets.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 6).map((c: any) => (
-                    <div key={c.id} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs truncate max-w-[140px]">{c.name}</span>
-                        <Badge variant="outline" className="text-[10px] px-1 py-0 capitalize">{c.type}</Badge>
-                      </div>
-                      <span className="text-xs font-semibold tabular-nums">
-                        {formatCurrency(Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || 0))}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {/* Loan/liability list (parent-child) */}
-              {loans.length > 0 && (
-                <div className="mt-3 space-y-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Liabilities</p>
-                  {loans.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).slice(0, 4).map((c: any) => (
-                    <div key={c.id} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
-                      <span className="text-xs truncate max-w-[160px]">{c.name}</span>
-                      <span className="text-xs font-semibold tabular-nums text-red-500">
-                        -{formatCurrency(Number(c.fields?.remainingBalance || c.fields?.loanBalance || c.fields?.balance || 0))}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {/* Shared liabilities (co-owned via liability_profile_links) */}
-              {sharedLiabilities.length > 0 && (
-                <div className="mt-3 space-y-1" data-testid="shared-liabilities-section">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Shared Liabilities</p>
-                  {sharedLiabilities.slice().sort((a: any, b: any) => (a.profile.name || '').localeCompare(b.profile.name || '')).slice(0, 6).map((x: any) => {
-                    const f = x.profile.fields || {};
-                    const fin = f.finance || {};
-                    const fullBal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
-                    const userShare = fullBal * (x.ownership / 100);
-                    return (
-                      <Link key={x.profile.id} href={`/profiles/${x.profile.id}`}>
-                        <div className="flex items-center justify-between py-1 border-b border-border/30 last:border-0 cursor-pointer hover:bg-muted/30 rounded px-1" data-testid={`shared-liability-row-${x.profile.id}`}>
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-xs truncate max-w-[140px]">{x.profile.name}</span>
-                            <Badge variant="outline" className="text-[10px] px-1 py-0">{x.ownership}%</Badge>
-                          </div>
-                          <div className="flex flex-col items-end shrink-0">
-                            <span className="text-xs font-semibold tabular-nums text-red-500">-{formatCurrency(userShare)}</span>
-                            {x.ownership !== 100 && (
-                              <span className="text-[10px] text-muted-foreground tabular-nums">of {formatCurrency(fullBal)}</span>
-                            )}
-                          </div>
-                        </div>
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
-              {/* Monthly burn */}
-              {(monthlyBurn > 0 || monthlySubscriptions > 0 || sharedMonthlyShare > 0) && (
-                <div className="mt-3 pt-3 border-t border-border/40">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Monthly burn rate</span>
-                    <span className="text-xs font-semibold tabular-nums">{formatCurrency(monthlyBurn + monthlySubscriptions + sharedMonthlyShare)}/mo</span>
-                  </div>
-                  {monthlySubscriptions > 0 && (
-                    <div className="flex items-center justify-between mt-0.5">
-                      <span className="text-[11px] text-muted-foreground">Subscriptions</span>
-                      <span className="text-[11px] tabular-nums text-muted-foreground">{formatCurrency(monthlySubscriptions)}/mo</span>
-                    </div>
-                  )}
-                  {sharedMonthlyShare > 0 && (
-                    <div className="flex items-center justify-between mt-0.5">
-                      <span className="text-[11px] text-muted-foreground">Shared loan share</span>
-                      <span className="text-[11px] tabular-nums text-muted-foreground">{formatCurrency(sharedMonthlyShare)}/mo</span>
-                    </div>
-                  )}
-                  {avgPerMonth > 0 && (
-                    <div className="flex items-center justify-between mt-0.5">
-                      <span className="text-[11px] text-muted-foreground">Avg expenses</span>
-                      <span className="text-[11px] tabular-nums text-muted-foreground">{formatCurrency(avgPerMonth)}/mo</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        );
-      })()}
+      {/* SECTION 0 removed (June 2026): the Financial Overview card
+          (Net Worth hero + Assets/Liabilities/Shared Liabilities/Monthly
+          burn) duplicated content that now lives exclusively on the
+          Overview tab via NetWorthStrip + LinkedAssetsTab +
+          LinkedLiabilitiesTab. FinancesTab is now expenses-only. */}
 
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 1 — Summary stat cards                         */}
@@ -5329,17 +5175,45 @@ function TrackerCard_Profile({
                 <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs" data-testid={`entry-row-${entry.id}`}>
                   <div className="flex items-center gap-2 min-w-0">
                     {(() => {
+                      // Inline tracker row renderer.
+                      // Bug fix (PR #18, June 2026): the old code dumped every
+                      // entry value comma-joined regardless of type, producing
+                      // junk like "2 · 20 · 10:00 · 200 · moderate" on a Running
+                      // tracker. Mirror the trackers.tsx insight logic: prefer a
+                      // numeric primary field with the tracker's unit; only fall
+                      // back to other fields if there is no numeric value; and
+                      // suppress string values that just repeat the tracker name.
+                      const trackerName = (tracker.name || "").toLowerCase().trim();
                       const pf = tracker.fields?.find((f: any) => f.isPrimary)?.name || tracker.fields?.[0]?.name;
                       const vals = (entry && typeof entry.values === "object" && entry.values !== null) ? entry.values : {};
                       const pv = pf ? vals[pf] : undefined;
-                      const allVals = Object.entries(vals).filter(([, v]) => v != null && v !== "");
-                      if (pv != null) {
-                        return <span className="font-mono font-semibold text-sm tabular-nums">{pv}{tracker.unit ? ` ${tracker.unit}` : ""}</span>;
-                      } else if (allVals.length > 0) {
-                        return <span className="font-medium">{allVals.map(([k, v]) => `${v}${tracker.unit ? " " + tracker.unit : ""}`).join(", ")}</span>;
-                      } else {
-                        return <span className="text-muted-foreground italic">(no value)</span>;
+                      const isMeaningful = (v: any) => {
+                        if (v == null || v === "") return false;
+                        if (typeof v === "string" && v.toLowerCase().trim() === trackerName) return false;
+                        return true;
+                      };
+                      const isNumeric = (v: any) => v != null && v !== "" && !isNaN(Number(v));
+                      // Prefer the primary field when it's numeric.
+                      if (isNumeric(pv)) {
+                        const num = Number(pv).toLocaleString(undefined, { maximumFractionDigits: 2 });
+                        return <span className="font-mono font-semibold text-sm tabular-nums">{num}{tracker.unit ? ` ${tracker.unit}` : ""}</span>;
                       }
+                      // Otherwise find the first numeric field across all values.
+                      const numericPair = Object.entries(vals).find(([, v]) => isNumeric(v));
+                      if (numericPair) {
+                        const num = Number(numericPair[1]).toLocaleString(undefined, { maximumFractionDigits: 2 });
+                        return <span className="font-mono font-semibold text-sm tabular-nums">{num}{tracker.unit ? ` ${tracker.unit}` : ""}</span>;
+                      }
+                      // No numeric data: prefer the primary string field if it's
+                      // meaningful, then any meaningful string field.
+                      if (typeof pv === "string" && isMeaningful(pv)) {
+                        return <span className="font-medium">{pv}</span>;
+                      }
+                      const meaningfulPair = Object.entries(vals).find(([, v]) => isMeaningful(v));
+                      if (meaningfulPair) {
+                        return <span className="font-medium">{String(meaningfulPair[1])}</span>;
+                      }
+                      return <span className="text-muted-foreground italic">(no value)</span>;
                     })()}
                     {entry.notes && <span className="text-muted-foreground truncate max-w-[100px]" title={entry.notes}>{entry.notes}</span>}
                   </div>
@@ -7252,36 +7126,36 @@ type TabDef = { value: string; label: string; testId: string };
 
 // Context-aware tab configs — each profile type gets tabs that reflect its life, not a generic database
 const ENTITY_TABS: Record<string, TabDef[]> = {
-  // Person / Self — reorganised May 2026 from 10 noisy tabs down to 5
-  // semantically-grouped tabs. The old layout split Assets from Liabilities
-  // from Finance, and Health from Trackers, and Tasks from Activity — so
-  // the user couldn't find anything that belonged to a person without
-  // bouncing between three tabs. The new groupings:
+  // Person / Self — restructured June 2026 to give every piece of data
+  // exactly one home and eliminate cross-tab duplication.
   //
-  //   Overview            → at-a-glance snapshot
-  //   Belongings          → Assets + Liabilities + Finance (everything
-  //                         the person owns + owes + spends)
-  //   Health & Trackers   → health metrics + all other trackers
-  //   Tasks & Schedule    → open tasks + goals + upcoming events
-  //   Documents           → files + notes folded in
+  //   Overview   → profile summary + net worth + assets + liabilities
+  //                (everything you own and owe lives here, nowhere else).
+  //   Finance    → expenses, budgets, recurring costs, payments only
+  //                (no asset/liability rollup — that's Overview).
+  //   Trackers   → trackers only (was previously mixed with Documents).
+  //   Documents  → documents only (was previously labeled "Documents"
+  //                but actually routed to a tab that ALSO showed Notes).
+  //   History    → activity feed: tasks, events, expenses, recent changes.
+  //   Habits     → habits only.
   //
-  // History is still reachable as a sub-section inside Overview and is no
-  // longer a top-level tab. Notes folds into Documents as a small section.
+  // Belongings tab was removed entirely (June 2026) — it duplicated
+  // assets/liabilities/finance with the new Overview + Finance split.
   person: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "belongings", label: "Belongings", testId: "tab-belongings" },
-    { value: "health-trackers", label: "Health & Trackers", testId: "tab-health-trackers" },
-    { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
+    { value: "finance", label: "Finance", testId: "tab-finance" },
+    { value: "person-trackers", label: "Trackers", testId: "tab-person-trackers" },
+    { value: "person-documents", label: "Documents", testId: "tab-person-documents" },
     { value: "habits", label: "Habits", testId: "tab-habits" },
-    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "person-history", label: "History", testId: "tab-person-history" },
   ],
   self: [
     { value: "info", label: "Overview", testId: "tab-info" },
-    { value: "belongings", label: "Belongings", testId: "tab-belongings" },
-    { value: "health-trackers", label: "Health & Trackers", testId: "tab-health-trackers" },
-    { value: "tasks-schedule", label: "Tasks & Schedule", testId: "tab-tasks-schedule" },
+    { value: "finance", label: "Finance", testId: "tab-finance" },
+    { value: "person-trackers", label: "Trackers", testId: "tab-person-trackers" },
+    { value: "person-documents", label: "Documents", testId: "tab-person-documents" },
     { value: "habits", label: "Habits", testId: "tab-habits" },
-    { value: "trackers", label: "Documents", testId: "tab-trackers" },
+    { value: "person-history", label: "History", testId: "tab-person-history" },
   ],
   // Pet — care focused. "Health & Vet" tab removed 2026-05-21: it contained
   // quick-create tracker buttons (Weight/BP/Sleep/Calories/Water/Vaccination)
@@ -12055,6 +11929,23 @@ export default function ProfileDetailPage() {
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
                   <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
+                  {/* Person/Self Overview — single home for net worth, assets,
+                      and liabilities (June 2026 restructure). The Finance tab
+                      no longer shows asset/liability rollups; the Belongings
+                      tab was removed entirely. */}
+                  {["person", "self"].includes(profile.type) && (
+                    <div className="mt-4 space-y-6" data-testid="person-overview-financials">
+                      <NetWorthStrip profileId={profile.id} />
+                      <section>
+                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Assets</p>
+                        <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
+                      </section>
+                      <section>
+                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Liabilities</p>
+                        <LinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                      </section>
+                    </div>
+                  )}
                   {/* Linked People moved off Overview (2026-06-10): the Linked
                       tab in the bottom nav and the per-profile "Linked" tab
                       already surface this; duplicating it on Overview just
@@ -12186,57 +12077,64 @@ export default function ProfileDetailPage() {
                 </TabsContent>
               )}
 
-              {/* ── Aggregate "Belongings" tab for person/self ──
-                  Merges Assets + Liabilities + Finance so the user has a
-                  single place to see everything this person owns, owes,
-                  and spends. The internal headings act as anchors so
-                  deep-links like #belongings→Liabilities still feel
-                  ordered. */}
-              {tabValues.has("belongings") && (
-                <TabsContent value="belongings" className="mt-4 px-1 sm:px-0 space-y-6">
-                  {/* Top-of-tab Net Worth strip — only for person/self,
-                      since vehicle/property/loan don't have a meaningful
-                      "my net worth" rollup. Reads from the same enriched
-                      endpoints the sections below use so numbers stay
-                      consistent. */}
-                  {["person","self"].includes(profile.type) && (
-                    <NetWorthStrip profileId={profile.id} />
+              {/* Person/Self "Finance" tab (June 2026 restructure) --
+                  Expenses, budgets, recurring costs, payments only.
+                  Asset/liability rollup has been stripped from FinancesTab
+                  itself; those now live exclusively on the Overview tab. */}
+              {tabValues.has("finance") && (
+                <TabsContent value="finance" className="mt-4 px-1 sm:px-0">
+                  <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {/* Person/Self "Trackers" tab (June 2026 restructure) --
+                  Trackers only. The previous layout buried trackers under
+                  Health and used the value="trackers" tab for Documents,
+                  which was a value/label mismatch bug. */}
+              {tabValues.has("person-trackers") && (
+                <TabsContent value="person-trackers" className="mt-4 px-1 sm:px-0">
+                  {profile.relatedTrackers.length > 0 ? (
+                    <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                  ) : (
+                    <Card>
+                      <CardContent className="py-8 text-center">
+                        <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                        <p className="text-sm text-muted-foreground">No trackers yet</p>
+                        <p className="text-xs text-muted-foreground mt-1">Create trackers via chat, then link them here</p>
+                      </CardContent>
+                    </Card>
                   )}
-                  <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Assets</p>
-                    <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
-                  </section>
-                  <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Liabilities</p>
-                    <LinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-                  </section>
-                  <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Finance</p>
-                    <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                </TabsContent>
+              )}
+
+              {/* Person/Self "Documents" tab (June 2026 restructure) --
+                  Documents only. Notes fold in as a small section so the
+                  freeform Notes editor still has a home. */}
+              {tabValues.has("person-documents") && (
+                <TabsContent value="person-documents" className="mt-4 px-1 sm:px-0">
+                  <DocumentsTab
+                    documents={profile.relatedDocuments}
+                    profileId={profile.id}
+                    profileName={profile.name}
+                    childProfiles={profile.childProfiles}
+                    profileType={profile.type}
+                    onUploaded={handleSaved}
+                  />
+                  <section className="mt-6">
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Notes</p>
+                    <NotesTab profileId={id} currentNotes={profile.notes || ""} updatedAt={profile.updatedAt} onChanged={handleSaved} />
                   </section>
                 </TabsContent>
               )}
 
-              {/* ── Aggregate "Health & Trackers" tab for person/self ──
-                  Health metrics surface first, then every other tracker
-                  below. Replaces the two near-duplicate tabs the user
-                  was bouncing between. */}
-              {tabValues.has("health-trackers") && (
-                <TabsContent value="health-trackers" className="mt-4 px-1 sm:px-0">
-                  {/* Single HealthTabView render with includeAll=true. The old
-                      two-section layout duplicated "All Trackers" because
-                      HealthTabView already renders its own All Trackers list. */}
-                  <HealthTabView profile={profile} onChanged={handleSaved} includeAll />
-                </TabsContent>
-              )}
-
-              {/* ── Aggregate "Tasks & Schedule" tab for person/self ──
-                  Open tasks + upcoming events stacked together. Past
-                  events fall to the bottom of the activity feed. */}
-              {tabValues.has("tasks-schedule") && (
-                <TabsContent value="tasks-schedule" className="mt-4 px-1 sm:px-0 space-y-6">
+              {/* Person/Self "History" tab (June 2026 restructure) --
+                  Tasks, upcoming events, past activity, and the profile
+                  change log. Replaces Tasks & Schedule and folds in the
+                  change history. */}
+              {tabValues.has("person-history") && (
+                <TabsContent value="person-history" className="mt-4 px-1 sm:px-0 space-y-6">
                   <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Tasks & Goals</p>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Tasks &amp; Goals</p>
                     <TasksTab
                       tasks={profile.relatedTasks}
                       profileId={profile.id}
@@ -12244,12 +12142,11 @@ export default function ProfileDetailPage() {
                     />
                   </section>
                   <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Schedule & Activity</p>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Schedule &amp; Activity</p>
                     {(() => {
                       type FeedItem = { date: string; type: string; title: string; subtitle?: string; color: string };
                       const feed: FeedItem[] = [];
                       for (const t of (profile.relatedTasks || [])) {
-                        // Tasks anchor on dueDate; fall back to createdAt only when there's no due date.
                         feed.push({ date: t.dueDate || (t as any).createdAt || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
                       }
                       for (const ev of (profile.relatedEvents || [])) {
@@ -12267,7 +12164,6 @@ export default function ProfileDetailPage() {
                           </div>
                         );
                       }
-                      // Split: today/future vs past. Done tasks always go to past.
                       const upcoming: FeedItem[] = [];
                       const past: FeedItem[] = [];
                       for (const item of feed) {
@@ -12347,6 +12243,10 @@ export default function ProfileDetailPage() {
                         </div>
                       );
                     })()}
+                  </section>
+                  <section>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Changes</p>
+                    <HistoryTab profileId={profile.id} />
                   </section>
                 </TabsContent>
               )}
