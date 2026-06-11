@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
+import { categoryTheme } from "@/lib/category-theme";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
@@ -2037,17 +2038,19 @@ function HealthSection({ data }: { data: any[] }) {
       <CollapsibleSection accent="173 60% 44%" icon={HeartPulse} label="Health" count={filteredData.length} testId="section-health">
         <div className="grid grid-cols-2 gap-2">
           {filteredData.map((item: any) => {
-            // Determine status color band
-            let statusColor = 'hsl(173 60% 44%)'; // default teal = normal
+            // Theme-driven accent so dashboard tracker cards match the central
+            // category palette used everywhere else in the app.
+            const theme = categoryTheme(item.category, item.name);
+            const themeColor = `hsl(${theme.hsl})`;
+            // Status overrides for medical out-of-range readings.
+            let statusColor = themeColor;
             const name = item.name?.toLowerCase() || '';
             const val = item.latestValue;
             if (name.includes('blood') || name.includes('bp')) {
               if (val > 140 || val < 90) statusColor = '#ef4444';
               else if (val > 130) statusColor = '#f59e0b';
-              else statusColor = '#10b981';
-            } else if (name.includes('weight')) {
-              statusColor = 'hsl(173 60% 44%)';
             }
+            const ItemIcon = theme.icon;
             // Mini sparkline from recent entries (7 points)
             const spark: number[] = item.recentValues || [];
             const sparkMax = Math.max(...spark, 1);
@@ -2063,7 +2066,10 @@ function HealthSection({ data }: { data: any[] }) {
                 {/* Status color band on left */}
                 <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: statusColor }} />
                 <div className="flex-1 min-w-0 pl-2">
-                  <p className="text-[10px] text-muted-foreground truncate font-medium" title={item.name}>{item.name}</p>
+                  <div className="flex items-center gap-1 min-w-0">
+                    <ItemIcon className="h-3 w-3 shrink-0" style={{ color: themeColor }} />
+                    <p className="text-[10px] text-muted-foreground truncate font-medium" title={item.name}>{item.name}</p>
+                  </div>
                   <div className="flex items-baseline gap-1">
                     <span className="text-sm font-bold tabular-nums">{item.dailyTotal != null ? item.dailyTotal : item.latestValue}</span>
                     {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
