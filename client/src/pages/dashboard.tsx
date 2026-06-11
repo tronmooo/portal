@@ -22,6 +22,13 @@ import {
   type UpcomingDate,
   type UpcomingEntityKind,
 } from "@shared/upcoming-dates";
+import {
+  computeKeyFindings,
+  SEVERITY_COLORS as FINDING_SEVERITY_COLORS,
+  DIRECTION_LABEL as FINDING_DIRECTION_LABEL,
+  type KeyFinding,
+  type FindingDirection,
+} from "@shared/tracker-insights";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -64,6 +71,7 @@ import {
   Scale, Activity as ActivityIcon, Moon,
   Users, TrendingDown,
   CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
+  Lightbulb,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -2032,6 +2040,117 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
 }
 
 // ─── Section: Health Snapshot ─────────────────────────────────────────────────
+
+// ─── Section: Key Findings & Tracker Insights ────────────────────────────────
+// PR K — Universal executive-summary section. Replaces the health-only Health
+// swimlane. Surfaces the most meaningful trends, anomalies, milestones, and
+// actionable items across every tracker + finance + habits + net worth + obligations.
+// Hides itself entirely when no findings exist (per design spec).
+
+function DirectionGlyph({ direction }: { direction: FindingDirection }) {
+  if (direction === "improving") return <TrendingUp className="h-3.5 w-3.5" aria-label="Improving" />;
+  if (direction === "declining") return <TrendingDown className="h-3.5 w-3.5" aria-label="Declining" />;
+  return <Minus className="h-3.5 w-3.5" aria-label="Stable" />;
+}
+
+function KeyFindingRow({ finding }: { finding: KeyFinding }) {
+  const [, navigate] = useLocation();
+  const colors = FINDING_SEVERITY_COLORS[finding.severity];
+  const onOpen = () => {
+    const target = finding.href.startsWith("#") ? finding.href.slice(1) : finding.href;
+    navigate(target);
+  };
+  return (
+    <div
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={onEnterOrSpace(onOpen)}
+      data-testid={`finding-${finding.id}`}
+      className="group flex items-start gap-2.5 py-2 px-2 -mx-2 rounded-lg cursor-pointer hover:bg-muted/40 transition-colors border-l-2"
+      style={{ borderLeftColor: `hsl(${colors.border})` }}
+    >
+      <div
+        className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-sm"
+        style={{ background: `hsl(${colors.bg})`, color: `hsl(${colors.fg})` }}
+        aria-hidden
+      >
+        <span>{finding.icon || "💡"}</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium text-foreground/90 leading-tight">{finding.title}</span>
+        </div>
+        {finding.detail && (
+          <p className="text-[11px] text-muted-foreground/80 mt-0.5 leading-snug">{finding.detail}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-1 shrink-0 self-center">
+        <span
+          className="inline-flex items-center gap-1 text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded"
+          style={{ background: `hsl(${colors.bg})`, color: `hsl(${colors.fg})`, border: `1px solid hsl(${colors.border} / 0.4)` }}
+          title={FINDING_DIRECTION_LABEL[finding.direction]}
+        >
+          <DirectionGlyph direction={finding.direction} />
+          <span className="uppercase tracking-wide">{FINDING_DIRECTION_LABEL[finding.direction]}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function KeyFindingsSection({
+  filterIds,
+}: {
+  filterIds: string[];
+}) {
+  // Data: pull from existing dashboard endpoints. None of these are new
+  // requests — react-query dedupes by key, so this is free.
+  const { data: trackers = [] } = useQuery<any[]>({ queryKey: ["/api/trackers"] });
+  const { data: obligations = [] } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
+  const { data: habits = [] } = useQuery<any[]>({ queryKey: ["/api/habits"] });
+  const { data: enhancedData } = useQuery<any>({ queryKey: ["/api/dashboard-enhanced"] });
+  const { data: networthHistory = [] } = useQuery<any[]>({
+    queryKey: ["/api/net-worth/history"],
+    queryFn: () => apiRequest("GET", "/api/net-worth/history?lookbackDays=120").then(r => r.json()).catch(() => []),
+  });
+
+  const findings = useMemo(() => computeKeyFindings({
+    trackers,
+    obligations,
+    habits,
+    financeSnapshot: enhancedData?.financeSnapshot,
+    netWorthHistory: networthHistory,
+    scopedProfileIds: filterIds.length > 0 ? filterIds : undefined,
+  }), [trackers, obligations, habits, enhancedData, networthHistory, filterIds]);
+
+  const TOP_N = 8;
+  const top = findings.slice(0, TOP_N);
+  const moreCount = Math.max(0, findings.length - TOP_N);
+
+  // CRITICAL design contract: no findings → hide the whole section (never render
+  // an empty card per the user's display rules).
+  if (top.length === 0) return null;
+
+  return (
+    <CollapsibleSection
+      accent="262 70% 60%"
+      icon={Lightbulb}
+      label="Key Findings & Tracker Insights"
+      count={findings.length}
+      testId="section-key-findings"
+    >
+      <div className="space-y-0.5">
+        {top.map(f => <KeyFindingRow key={f.id} finding={f} />)}
+        {moreCount > 0 && (
+          <p className="text-[10px] text-muted-foreground/60 text-center pt-1.5">
+            {moreCount} more finding{moreCount === 1 ? "" : "s"} — drill into a tracker to explore
+          </p>
+        )}
+      </div>
+    </CollapsibleSection>
+  );
+}
 
 function HealthSection({ data }: { data: any[] }) {
   const [, navigate] = useLocation();
@@ -4065,8 +4184,8 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
   { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "full" },
-  // === ❤️ Health swimlane ===
-  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "full" },
+  // === 💡 Insights swimlane (PR K — replaced health-only swimlane) ===
+  { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: true, column: "full" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
   // PR I — Cross-app reminder center: birthdays, renewals, expirations, appointments, etc.
   { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: true, column: "full" },
@@ -4075,10 +4194,10 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
   { key: "money",  label: "Money",  emoji: "💰", ids: ["finance", "obligations"] },
   { key: "today",  label: "Today",  emoji: "📅", ids: ["today", "needs-attention", "goals"] },
-  { key: "health", label: "Health", emoji: "❤️", ids: ["health", "activity"] },
+  { key: "insights", label: "Insights", emoji: "💡", ids: ["key-findings", "activity"] },
 ];
 
-const LAYOUT_VERSION = 8; // PR I: introduce Upcoming reminder center // Bump: hide Finance section by default (cross-profile leak)
+const LAYOUT_VERSION = 9; // PR K: Health swimlane replaced by Key Findings // Bump: hide Finance section by default (cross-profile leak)
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -4683,8 +4802,8 @@ export default function DashboardPage() {
       case "needs-attention":
         content = stats ? <ActionRequiredSection stats={stats} enhanced={enhanced} profileId={resolvedFilterId} /> : null;
         break;
-      case "health":
-        content = <HealthSection data={enhanced?.healthSnapshot || []} />;
+      case "key-findings":
+        content = <KeyFindingsSection filterIds={filterIds} />;
         break;
       case "goals":
         content = <GoalsSection profileId={resolvedFilterId} profileIds={filterIds} />;
