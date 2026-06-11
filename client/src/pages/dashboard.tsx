@@ -11,6 +11,17 @@ import { goalsQueryKey } from "@shared/query-keys";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { computeNetWorth } from "@shared/net-worth";
+import {
+  aggregateUpcomingDates,
+  groupByTimeframe,
+  daysUntilLabel,
+  CATEGORY_LABELS as UPCOMING_CATEGORY_LABELS,
+  CATEGORY_ICONS as UPCOMING_CATEGORY_ICONS,
+  URGENCY_COLORS as UPCOMING_URGENCY_COLORS,
+  TIMEFRAME_LABELS as UPCOMING_TIMEFRAME_LABELS,
+  type UpcomingDate,
+  type UpcomingEntityKind,
+} from "@shared/upcoming-dates";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -52,6 +63,7 @@ import {
   Wallet, PieChart as PieChartIcon, Settings2, AlertCircle, Bell, BellOff,
   Scale, Activity as ActivityIcon, Moon,
   Users, TrendingDown,
+  CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -3768,6 +3780,259 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
   );
 }
 
+// ─── Section: Upcoming Dates (cross-app reminder center) ─────────────────────
+// PR I — Aggregates every time-sensitive date in the app (birthdays, anniversaries,
+// holidays, appointments, bills, renewals, expirations, travel, goals, etc.)
+// into one filterable, pinnable, color-coded "what's next" view.
+
+const UPCOMING_PINS_KEY = "portol.upcoming.pins.v1";
+
+function loadUpcomingPins(): Set<string> {
+  try {
+    const raw = localStorage.getItem(UPCOMING_PINS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveUpcomingPins(pins: Set<string>) {
+  try { localStorage.setItem(UPCOMING_PINS_KEY, JSON.stringify([...pins])); } catch {}
+}
+
+const ENTITY_FILTERS: Array<{ key: "all" | UpcomingEntityKind; label: string }> = [
+  { key: "all",      label: "All" },
+  { key: "person",   label: "Person" },
+  { key: "self",     label: "Self" },
+  { key: "asset",    label: "Asset" },
+  { key: "property", label: "Property" },
+  { key: "vehicle",  label: "Vehicle" },
+  { key: "pet",      label: "Pet" },
+  { key: "business", label: "Business" },
+];
+
+function UpcomingDateRow({
+  item, pinned, onTogglePin,
+}: {
+  item: UpcomingDate;
+  pinned: boolean;
+  onTogglePin: (id: string) => void;
+}) {
+  const [, navigate] = useLocation();
+  const urgency = UPCOMING_URGENCY_COLORS[item.urgency];
+  const onOpen = () => {
+    // The href is hash-routed (e.g. #/profiles/<id>). Strip the leading '#'
+    // and feed into wouter.navigate so wouter's hash strategy resolves it.
+    const target = item.href.startsWith("#") ? item.href.slice(1) : item.href;
+    navigate(target);
+  };
+  return (
+    <div
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={onEnterOrSpace(onOpen)}
+      data-testid={`upcoming-item-${item.id}`}
+      className="group flex items-center gap-2.5 py-1.5 px-1.5 -mx-1.5 rounded-lg cursor-pointer hover:bg-muted/40 transition-colors"
+    >
+      <div
+        className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-base"
+        style={{ background: `hsl(${urgency.bg})`, color: `hsl(${urgency.fg})` }}
+        aria-hidden
+      >
+        <span>{item.icon || "📌"}</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-xs font-medium truncate text-foreground/90">{item.title}</span>
+          {pinned && <Pin className="h-3 w-3 shrink-0" style={{ color: "hsl(38 92% 50%)" }} aria-label="Pinned" />}
+          {item.recurring && (
+            <span className="text-[9px] uppercase tracking-wide text-muted-foreground/70 shrink-0">recurs</span>
+          )}
+          {item.needsActionSoon && (
+            <span
+              className="text-[9px] font-semibold uppercase tracking-wide shrink-0 px-1 py-px rounded"
+              style={{ background: `hsl(25 92% 55% / 0.15)`, color: `hsl(25 92% 38%)` }}
+              title="AI: this item may need action soon"
+            >
+              <Sparkle className="inline h-2.5 w-2.5 mr-0.5" />ACT SOON
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/80 mt-0.5">
+          <span className="truncate">{UPCOMING_CATEGORY_LABELS[item.category]}</span>
+          {item.subtitle && (<><span className="opacity-50">·</span><span className="truncate">{item.subtitle}</span></>)}
+        </div>
+      </div>
+      <div className="flex flex-col items-end gap-0.5 shrink-0">
+        <span
+          className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded"
+          style={{ background: `hsl(${urgency.bg})`, color: `hsl(${urgency.fg})`, border: `1px solid hsl(${urgency.border} / 0.4)` }}
+        >
+          {daysUntilLabel(item.daysUntil)}
+        </span>
+        <span className="text-[9px] text-muted-foreground/60 tabular-nums">{item.nextDate}</span>
+      </div>
+      <button
+        onClick={(e) => { e.stopPropagation(); onTogglePin(item.id); }}
+        className="opacity-0 group-hover:opacity-100 shrink-0 p-1 rounded hover:bg-muted/60 transition-opacity"
+        aria-label={pinned ? "Unpin" : "Pin"}
+        data-testid={`upcoming-pin-${item.id}`}
+      >
+        {pinned
+          ? <PinOff className="h-3 w-3 text-muted-foreground" />
+          : <Pin className="h-3 w-3 text-muted-foreground" />}
+      </button>
+    </div>
+  );
+}
+
+function UpcomingSection() {
+  const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const { data: documents = [] } = useQuery<any[]>({ queryKey: ["/api/documents"] });
+  const { data: tasks = [] } = useQuery<any[]>({ queryKey: ["/api/tasks"] });
+  const { data: events = [] } = useQuery<any[]>({ queryKey: ["/api/events"] });
+  const { data: obligations = [] } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
+  const { data: goals = [] } = useQuery<any[]>({ queryKey: ["/api/goals"] });
+
+  const [entityFilter, setEntityFilter] = useState<"all" | UpcomingEntityKind>("all");
+  const [pins, setPins] = useState<Set<string>>(() => loadUpcomingPins());
+
+  const togglePin = (id: string) => {
+    setPins(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      saveUpcomingPins(next);
+      return next;
+    });
+  };
+
+  const all = useMemo(() => aggregateUpcomingDates({
+    profiles, documents, tasks, events, obligations, goals,
+  }), [profiles, documents, tasks, events, obligations, goals]);
+
+  const filtered = useMemo(() => {
+    let items = all;
+    if (entityFilter !== "all") {
+      items = items.filter(u => {
+        if (u.entityKind === entityFilter) return true;
+        // Allow filtering by linked profile kind too — e.g. a document tied to a pet
+        // should surface under the Pet filter.
+        if (u.relatedProfileId) {
+          const p = profiles.find((pp: any) => pp.id === u.relatedProfileId);
+          if (p) {
+            const t = String(p.type || "").toLowerCase();
+            if (t === entityFilter) return true;
+            if (entityFilter === "asset" && (t === "asset" || t === "vehicle" || t === "property")) return true;
+          }
+        }
+        return false;
+      });
+    }
+    // Pinned items float to the top within their bucket.
+    return items
+      .map(u => ({ ...u, _pinned: pins.has(u.id) }))
+      .sort((a, b) => {
+        if (a._pinned !== b._pinned) return a._pinned ? -1 : 1;
+        return a.daysUntil - b.daysUntil || a.title.localeCompare(b.title);
+      });
+  }, [all, entityFilter, pins, profiles]);
+
+  const grouped = useMemo(() => groupByTimeframe(filtered), [filtered]);
+  const actionSoonCount = useMemo(() => filtered.filter(u => u.needsActionSoon).length, [filtered]);
+
+  const headerRight = (
+    <div className="flex items-center gap-1.5">
+      {actionSoonCount > 0 && (
+        <span
+          className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded"
+          style={{ background: "hsl(25 92% 55% / 0.15)", color: "hsl(25 92% 38%)" }}
+          title="Items the AI flagged as needing action soon"
+        >
+          <Sparkle className="inline h-2.5 w-2.5 mr-0.5" />{actionSoonCount} ACT SOON
+        </span>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+          <button
+            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border border-border/40"
+            data-testid="upcoming-filter-trigger"
+            aria-label="Filter by entity"
+          >
+            <FilterIcon className="h-3 w-3" />
+            <span>{ENTITY_FILTERS.find(f => f.key === entityFilter)?.label || "All"}</span>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[140px]">
+          {ENTITY_FILTERS.map(f => (
+            <DropdownMenuItem key={f.key} onClick={() => setEntityFilter(f.key)} data-testid={`upcoming-filter-${f.key}`}>
+              {f.key === entityFilter && <Check className="h-3 w-3 mr-1.5" />}
+              {f.key !== entityFilter && <span className="w-3 mr-1.5" />}
+              {f.label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+
+  if (filtered.length === 0) {
+    return (
+      <CollapsibleSection
+        accent="280 75% 60%"
+        icon={CalendarDays}
+        label="Upcoming"
+        testId="section-upcoming-dates"
+        headerRight={headerRight}
+      >
+        <div className="text-center py-6">
+          <CalendarDays className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-xs text-muted-foreground">No upcoming dates</p>
+          <p className="text-[11px] text-muted-foreground/60 mt-0.5">
+            Birthdays, renewals, appointments, and deadlines surface here automatically
+          </p>
+        </div>
+      </CollapsibleSection>
+    );
+  }
+
+  return (
+    <CollapsibleSection
+      accent="280 75% 60%"
+      icon={CalendarDays}
+      label="Upcoming"
+      count={filtered.length}
+      testId="section-upcoming-dates"
+      headerRight={headerRight}
+    >
+      <div className="space-y-3">
+        {grouped.map(group => (
+          <div key={group.timeframe}>
+            <div className="flex items-center gap-1.5 mb-1 px-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                {UPCOMING_TIMEFRAME_LABELS[group.timeframe]}
+              </span>
+              <span className="text-[10px] text-muted-foreground/50 tabular-nums">{group.items.length}</span>
+              <div className="flex-1 h-px bg-border/40" />
+            </div>
+            <div className="space-y-0.5">
+              {group.items.map(it => (
+                <UpcomingDateRow
+                  key={it.id}
+                  item={it}
+                  pinned={pins.has(it.id)}
+                  onTogglePin={togglePin}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </CollapsibleSection>
+  );
+}
+
 // ─── Customize Dialog ────────────────────────────────────────────────────────
 
 interface DashboardSection {
@@ -3803,6 +4068,8 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   // === ❤️ Health swimlane ===
   { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "full" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
+  // PR I — Cross-app reminder center: birthdays, renewals, expirations, appointments, etc.
+  { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: true, column: "full" },
 ];
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
@@ -3811,7 +4078,7 @@ const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: s
   { key: "health", label: "Health", emoji: "❤️", ids: ["health", "activity"] },
 ];
 
-const LAYOUT_VERSION = 7; // Bump: hide Finance section by default (cross-profile leak)
+const LAYOUT_VERSION = 8; // PR I: introduce Upcoming reminder center // Bump: hide Finance section by default (cross-profile leak)
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -4443,6 +4710,9 @@ export default function DashboardPage() {
         break;
       case "activity":
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
+        break;
+      case "upcoming-dates":
+        content = <UpcomingSection />;
         break;
       default:
         content = null;
