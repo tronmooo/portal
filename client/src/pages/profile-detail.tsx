@@ -18,6 +18,7 @@ import {
 } from "@/components/asset/asset-overview";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { isPast, parseDate, relativeDayLabel, daysFromToday } from "@/lib/dates";
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
@@ -9458,24 +9459,26 @@ function EditAssetPartyLinkModal({
   );
 }
 
-// ── Linked People tab (shown on ASSET profiles via /api/assets/:id/parties) ──
+// ── Linked People tab ──
+// On asset/liability profiles this fetches /api/(assets|liabilities)/:id/parties
+// and renders co-owners with role + ownership%. On person/self profiles it
+// pulls /api/profiles and surfaces every OTHER person/self/pet — the user's
+// people network — with avatar + relationship pill + click-through. This
+// replaces the old graph-BFS path which only returned people who happened
+// to share an asset/liability with the root (so a brand-new person profile
+// always showed "No linked people").
 export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: string; profileType: string; onChanged: () => void }) {
   const { toast } = useToast();
   const isAsset = ["asset","vehicle","property"].includes(profileType);
   const isLiability = profileType === "liability" || profileType === "loan";
   const isPerson = profileType === "person" || profileType === "self";
 
-  // For asset profiles use /api/assets/:id/parties
-  // For liability profiles use /api/liabilities/:id/parties
-  // For person/self: people via graph 2-hops
-  // Query key reflects the actual endpoint so cache-bus predicates and
-  // ownership-mutation invalidations match this entry instead of going
-  // through a fake "/api/rel-people" alias key.
   const partiesQueryKey: any[] = isAsset
     ? ["/api/assets", profileId, "parties"]
     : isLiability
     ? ["/api/liabilities", profileId, "parties"]
-    : ["/api/relationships/graph", profileId, { hops: 2, view: "linked-people" }];
+    : ["/api/profiles", "people-network", profileId];
+
   const { data: parties = [], refetch } = useQuery<any[]>({
     queryKey: partiesQueryKey,
     queryFn: async () => {
@@ -9484,44 +9487,23 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
       } else if (isLiability) {
         return apiRequest("GET", `/api/liabilities/${profileId}/parties`).then(r => r.json());
       } else {
-        // Person/self: only show DIRECTLY co-owning people — i.e. people who
-        // share an explicit asset or liability with the root. Don't bridge
-        // through other person nodes (avoids pulling in the entire user graph).
-        const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
-        const root = g.rootId;
-        const personTypes = new Set(["person","self","business","pet"]);
-        const nodeById: Record<string, any> = {};
-        for (const n of (g.nodes || [])) nodeById[n.id] = n;
-        const adj: Record<string, Set<string>> = {};
-        const addEdge = (a: string, b: string) => { if (!adj[a]) adj[a] = new Set(); adj[a].add(b); };
-        for (const e of (g.edges || [])) {
-          const fromNode = nodeById[e.from];
-          const toNode = nodeById[e.to];
-          if (!fromNode || !toNode) continue;
-          // Don't traverse through other person nodes (other than the root itself).
-          // Only edges to/from the root person + edges between asset/liability nodes are kept.
-          const fromIsPerson = personTypes.has(fromNode.typeKey || fromNode.type);
-          const toIsPerson = personTypes.has(toNode.typeKey || toNode.type);
-          if (fromIsPerson && fromNode.id !== root) continue;
-          if (toIsPerson && toNode.id !== root) continue;
-          addEdge(e.from, e.to);
-          addEdge(e.to, e.from);
-        }
-        const reachable = new Set<string>();
-        const queue: string[] = [root];
-        const visited = new Set<string>([root]);
-        while (queue.length) {
-          const cur = queue.shift()!;
-          for (const nb of (adj[cur] || [])) {
-            if (visited.has(nb)) continue;
-            visited.add(nb);
-            reachable.add(nb);
-            queue.push(nb);
-          }
-        }
-        return (g.nodes || [])
-          .filter((n: any) => reachable.has(n.id) && personTypes.has(n.typeKey || n.type))
-          .map((n: any) => ({ id: n.id, party: { id: n.id, name: n.name, type: n.type, profileType: n.typeKey || n.type } }));
+        // Person/self: show every other person/self/pet in the user's network.
+        // We project them into the shape the renderer expects: { id, party: {…} }.
+        const profs: any[] = await apiRequest("GET", "/api/profiles").then(r => r.json());
+        const personLikeTypes = new Set(["person", "self", "pet"]);
+        return (profs || [])
+          .filter((p: any) => p.id !== profileId && personLikeTypes.has(p.type))
+          .map((p: any) => ({
+            id: p.id,
+            party: {
+              id: p.id,
+              name: p.name,
+              type: p.type,
+              profileType: p.type,
+              avatar: p.avatar,
+              relationship: p?.fields?.relationship || null,
+            },
+          }));
       }
     },
   });
@@ -9562,6 +9544,96 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
 
   const canAdd = (isAsset || isLiability) && availablePeople.length > 0;
 
+  // ── PERSON/SELF render path ─────────────────────────────────────────────────
+  // Rich avatar + relationship pill + clickable navigation. Goes through
+  // hashNavigate via wouter <Link>, NOT through asset-party-link APIs.
+  if (isPerson) {
+    if (parties.length === 0) {
+      return (
+        <div className="text-center py-10 rounded-xl border border-dashed border-border/60 bg-muted/10">
+          <User className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No other people in your network yet</p>
+          <p className="text-xs text-muted-foreground/70 mt-0.5">Add a person from the Profiles page to see them here</p>
+          <Link href="/profiles">
+            <Button size="sm" variant="outline" className="mt-3 h-7 text-xs gap-1">
+              <Plus className="h-3 w-3" /> Manage People
+            </Button>
+          </Link>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-0.5">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+            {parties.length} {parties.length === 1 ? "person" : "people"} in your network
+          </span>
+          <Link href="/profiles">
+            <Button size="sm" variant="ghost" className="h-6 text-xs gap-1 px-2">
+              <Plus className="h-3 w-3" /> Manage
+            </Button>
+          </Link>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {parties.map((item: any) => {
+            const person = item.party || item;
+            const typeKey = person.profileType || person.type || "person";
+            const accent = typeKey === "pet" ? "20 88% 55%" : typeKey === "self" ? "183 98% 32%" : "271 70% 55%";
+            const initials = (person.name || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+            const relationship = person.relationship;
+            return (
+              <Link key={person.id} href={`/profiles/${person.id}`}>
+                <div
+                  className="group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer hover:shadow-md hover:-translate-y-px"
+                  style={{
+                    background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, hsl(var(--card)) 60%)`,
+                    borderColor: `hsl(${accent} / 0.25)`,
+                  }}
+                  data-testid={`linked-person-${person.id}`}
+                >
+                  {person.avatar ? (
+                    <img
+                      src={person.avatar}
+                      alt={person.name}
+                      className="w-10 h-10 rounded-full object-cover shrink-0 border-2"
+                      style={{ borderColor: `hsl(${accent} / 0.4)` }}
+                      loading="lazy"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  ) : (
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-white text-xs font-bold"
+                      style={{ background: `linear-gradient(135deg, hsl(${accent}), hsl(${accent} / 0.7))` }}
+                    >
+                      {initials}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{person.name}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      {relationship ? (
+                        <span
+                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize"
+                          style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}
+                        >
+                          {relationship}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground capitalize">{typeKey}</span>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground/60 group-hover:text-foreground transition-colors shrink-0" />
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── ASSET / LIABILITY render path (unchanged behaviour) ─────────────────────
   if (parties.length === 0) {
     return (
       <div className="space-y-3">
@@ -10448,19 +10520,39 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
           </Button>
         </div>
         <CardContent className="px-4 pb-3 pt-0">
-          {events.length > 0 ? (
-            <div className="space-y-1">
-              {events.slice(0, 5).map((ev: any) => (
-                <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
-                    <span className="text-xs truncate">{ev.title}</span>
+          {events.length > 0 ? (() => {
+            const sorted = [...events].sort((a: any, b: any) => (parseDate(a.date)?.getTime() || 0) - (parseDate(b.date)?.getTime() || 0));
+            const upcoming = sorted.filter((ev: any) => !isPast(ev.date)).slice(0, 5);
+            const recentPast = sorted.filter((ev: any) => isPast(ev.date)).reverse().slice(0, 3);
+            if (upcoming.length === 0 && recentPast.length === 0) {
+              return <p className="text-xs text-muted-foreground py-2">No calendar events linked yet</p>;
+            }
+            return (
+              <div className="space-y-1">
+                {upcoming.map((ev: any) => (
+                  <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Calendar className="h-3 w-3 text-emerald-500 shrink-0" />
+                      <span className="text-xs truncate">{ev.title}</span>
+                    </div>
+                    <span className="text-xs font-medium tabular-nums shrink-0">{relativeDayLabel(ev.date) || "\u2014"}</span>
                   </div>
-                  <span className="text-xs text-muted-foreground tabular-nums shrink-0">{ev.date ? new Date(ev.date).toLocaleDateString() : "—"}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
+                ))}
+                {recentPast.length > 0 && upcoming.length > 0 && (
+                  <div className="text-[10px] uppercase font-semibold tracking-wider text-muted-foreground/60 pt-1.5">Past</div>
+                )}
+                {recentPast.map((ev: any) => (
+                  <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0 opacity-60">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span className="text-xs truncate text-muted-foreground">{ev.title}</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">{relativeDayLabel(ev.date) || "\u2014"}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })() : (
             <p className="text-xs text-muted-foreground py-2">No calendar events linked yet</p>
           )}
         </CardContent>
@@ -11260,7 +11352,7 @@ export default function ProfileDetailPage() {
       {/* Hero Header */}
       <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: getProfileBanner(profile?.type || '') }}>
         <div className="flex items-center justify-between mb-3">
-          <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-back">
+          <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-white/80 hover:text-white transition-colors" data-testid="button-back">
             <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
           </Link>
           <div className="flex items-center gap-1.5">
@@ -11269,7 +11361,7 @@ export default function ProfileDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1 bg-background/60 backdrop-blur-sm"
+              className="h-7 text-xs gap-1 bg-white/15 hover:bg-white/25 text-white border-white/30 backdrop-blur-sm"
               onClick={() => setShowEditDialog(true)}
               data-testid="button-header-edit-profile"
             >
@@ -11278,7 +11370,7 @@ export default function ProfileDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1 text-destructive hover:text-destructive bg-background/60 backdrop-blur-sm"
+              className="h-7 text-xs gap-1 bg-white/15 hover:bg-red-500/30 text-white border-white/30 backdrop-blur-sm"
               onClick={() => setShowDeleteDialog(true)}
               data-testid="button-delete-profile"
             >
@@ -11297,7 +11389,7 @@ export default function ProfileDetailPage() {
             data-testid="input-avatar-upload"
           />
           <button
-            className={`relative w-14 h-14 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ${profileAccent(profile.type)}`}
+            className={`relative w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ring-2 ring-white/40 shadow-lg ${profileAccent(profile.type)}`}
             onClick={() => avatarInputRef.current?.click()}
             disabled={avatarMutation.isPending}
             title="Change profile picture"
@@ -11306,19 +11398,19 @@ export default function ProfileDetailPage() {
             {profile.avatar ? (
               <img src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />
             ) : (
-              profileIcon(profile.type)
+              <span className="scale-150">{profileIcon(profile.type)}</span>
             )}
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <Camera className="h-4 w-4 text-white" />
+              <Camera className="h-5 w-5 text-white" />
             </div>
             {avatarMutation.isPending && (
               <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                <RefreshCw className="h-4 w-4 text-white animate-spin" />
+                <RefreshCw className="h-5 w-5 text-white animate-spin" />
               </div>
             )}
           </button>
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-semibold" data-testid="text-profile-detail-name">{profile.name}</h1>
+            <h1 className="text-xl font-bold text-white drop-shadow-sm" data-testid="text-profile-detail-name">{profile.name}</h1>
             {/* Phase 2 breadcrumb — only renders when this profile has a parent chain. */}
             {(NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType) ||
               ((profile.type as string) === "liability") ||
@@ -11331,16 +11423,16 @@ export default function ProfileDetailPage() {
               />
             )}
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
-              <Badge variant="secondary" className="text-xs capitalize">{profile.type}</Badge>
+              <Badge variant="secondary" className="text-xs capitalize bg-white/20 text-white border-white/30 backdrop-blur-sm hover:bg-white/30">{profile.type}</Badge>
               {(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
-                <Badge key={tag} variant="outline" className="text-xs">
+                <Badge key={tag} variant="outline" className="text-xs bg-white/10 text-white/90 border-white/25">
                   <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
                 </Badge>
               ))}
               {/* owner is now shown in the top-right dropdown button — no badge needed here */}
             </div>
             {profile.notes && (
-              <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{profile.notes}</p>
+              <p className="text-xs text-white/75 mt-2 line-clamp-2">{profile.notes}</p>
             )}
           </div>
         </div>
@@ -11359,9 +11451,9 @@ export default function ProfileDetailPage() {
           return (
             <div className={`grid ${gridCls} gap-2 mt-4`}>
               {stats.map(stat => (
-                <div key={stat.label} className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
-                  <p className="text-lg font-semibold tabular-nums">{stat.value}</p>
-                  <p className="text-xs text-muted-foreground">{stat.label}</p>
+                <div key={stat.label} className="text-center py-2.5 rounded-lg bg-white/15 backdrop-blur-md border border-white/20 shadow-sm">
+                  <p className="text-lg font-bold tabular-nums text-white">{stat.value}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-white/80 font-medium">{stat.label}</p>
                 </div>
               ))}
             </div>
@@ -11624,9 +11716,11 @@ export default function ProfileDetailPage() {
                   <section>
                     <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Schedule & Activity</p>
                     {(() => {
-                      const feed: Array<{date: string; type: string; title: string; subtitle?: string; color: string}> = [];
+                      type FeedItem = { date: string; type: string; title: string; subtitle?: string; color: string };
+                      const feed: FeedItem[] = [];
                       for (const t of (profile.relatedTasks || [])) {
-                        feed.push({ date: (t as any).createdAt || t.dueDate || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
+                        // Tasks anchor on dueDate; fall back to createdAt only when there's no due date.
+                        feed.push({ date: t.dueDate || (t as any).createdAt || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
                       }
                       for (const ev of (profile.relatedEvents || [])) {
                         feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: '#3b82f6' });
@@ -11634,29 +11728,92 @@ export default function ProfileDetailPage() {
                       for (const e of (profile.relatedExpenses || [])) {
                         feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
                       }
-                      feed.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
                       if (feed.length === 0) {
                         return (
-                          <div className="text-center py-8">
-                            <Activity className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
-                            <p className="text-xs text-muted-foreground">No activity yet</p>
+                          <div className="text-center py-10 rounded-xl border border-dashed border-border/60 bg-muted/10">
+                            <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                            <p className="text-sm text-muted-foreground">No activity yet</p>
+                            <p className="text-xs text-muted-foreground/70 mt-0.5">Linked tasks, events, and expenses will appear here</p>
                           </div>
                         );
                       }
-                      return (
-                        <div className="space-y-1.5 pb-4">
-                          {feed.slice(0, 50).map((item, i) => (
-                            <div key={i} className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50">
-                              <div className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: item.color }} />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium truncate">{item.title}</p>
-                                {item.subtitle && <p className="text-xs text-muted-foreground">{item.subtitle}</p>}
+                      // Split: today/future vs past. Done tasks always go to past.
+                      const upcoming: FeedItem[] = [];
+                      const past: FeedItem[] = [];
+                      for (const item of feed) {
+                        const isDoneTask = item.type === 'task' && item.subtitle === 'done';
+                        if (isDoneTask || isPast(item.date)) past.push(item);
+                        else upcoming.push(item);
+                      }
+                      upcoming.sort((a, b) => (parseDate(a.date)?.getTime() || 0) - (parseDate(b.date)?.getTime() || 0));
+                      past.sort((a, b) => (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0));
+                      const renderItem = (item: FeedItem, i: number, variant: 'upcoming' | 'past') => {
+                        const labelDate = parseDate(item.date);
+                        const rel = relativeDayLabel(item.date);
+                        const isMuted = variant === 'past';
+                        return (
+                          <div
+                            key={`${variant}-${i}`}
+                            className={`flex items-start gap-3 p-2.5 rounded-lg border transition-colors ${
+                              isMuted
+                                ? 'border-border/40 bg-muted/20 hover:bg-muted/30 opacity-80'
+                                : 'border-border/70 bg-card hover:bg-muted/40 shadow-sm'
+                            }`}
+                          >
+                            <div
+                              className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                              style={{ background: item.color, boxShadow: `0 0 0 3px ${item.color}1F` }}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-xs font-medium truncate ${isMuted ? 'text-muted-foreground' : ''}`}>{item.title}</p>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <Badge variant="outline" className="h-4 px-1 text-[10px] capitalize">{item.type}</Badge>
+                                {item.subtitle && (
+                                  <span className="text-[10px] text-muted-foreground truncate">{item.subtitle}</span>
+                                )}
                               </div>
-                              <span className="text-xs text-muted-foreground shrink-0">
-                                {item.date ? new Date(item.date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}
-                              </span>
                             </div>
-                          ))}
+                            <div className="text-right shrink-0">
+                              <p className={`text-[11px] font-semibold tabular-nums ${
+                                isMuted ? 'text-muted-foreground' : 'text-foreground'
+                              }`}>{rel || '\u2014'}</p>
+                              {labelDate && (
+                                <p className="text-[9px] text-muted-foreground/70 tabular-nums">
+                                  {labelDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      };
+                      return (
+                        <div className="space-y-4 pb-4">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5 px-0.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Upcoming</p>
+                              <span className="text-[10px] text-muted-foreground">({upcoming.length})</span>
+                            </div>
+                            {upcoming.length === 0 ? (
+                              <p className="text-xs text-muted-foreground italic px-2.5 py-3 rounded-lg bg-muted/10 border border-dashed border-border/40">No upcoming items scheduled</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {upcoming.slice(0, 25).map((it, i) => renderItem(it, i, 'upcoming'))}
+                              </div>
+                            )}
+                          </div>
+                          {past.length > 0 && (
+                            <div>
+                              <div className="flex items-center gap-2 mb-1.5 px-0.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Past</p>
+                                <span className="text-[10px] text-muted-foreground">({past.length})</span>
+                              </div>
+                              <div className="space-y-1.5">
+                                {past.slice(0, 25).map((it, i) => renderItem(it, i, 'past'))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
