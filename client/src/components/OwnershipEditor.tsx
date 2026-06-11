@@ -39,10 +39,22 @@ export function OwnershipEditor({
   profile,
   allProfiles,
   onSaved,
+  kind = "asset",
 }: {
   profile: { id: string; name?: string; type?: string; parentProfileId?: string | null };
   allProfiles: Array<{ id: string; name?: string; type?: string; fields?: any; parentProfileId?: string | null }>;
   onSaved?: () => void;
+  /**
+   * Which junction table this editor manages. "asset" → asset_party_links via
+   * PUT /api/profiles/:id/owners (asset analogue). "liability" →
+   * liability_profile_links via PUT /api/profiles/:id/liability-owners. Both
+   * endpoints atomically replace the OWNER-role set and validate that it
+   * totals exactly 100% — the only safe way to mutate ownership under the
+   * post-2026-06-05 model (where the DB-side guard rejects partial states
+   * whose sum exceeds 100). Defaults to "asset" for backward compatibility
+   * with existing call sites.
+   */
+  kind?: "asset" | "liability";
 }) {
   const { toast } = useToast();
   const [showHistory, setShowHistory] = useState(false);
@@ -65,16 +77,20 @@ export function OwnershipEditor({
     [candidates, profile.parentProfileId],
   );
 
-  // Current owner links for this asset.
+  // Current owner links for this asset/liability. Asset and liability links
+  // live in different junction tables; pick the right endpoint and the right
+  // foreign-key field per kind.
+  const linksEndpoint = kind === "liability" ? "/api/liability-profile-links" : "/api/asset-party-links";
+  const linkSubjectField = kind === "liability" ? "liabilityProfileId" : "assetProfileId";
   const { data: allLinks = [] } = useQuery<any[]>({
-    queryKey: ["/api/asset-party-links"],
-    queryFn: () => apiRequest("GET", "/api/asset-party-links").then((r) => r.json()),
+    queryKey: [linksEndpoint],
+    queryFn: () => apiRequest("GET", linksEndpoint).then((r) => r.json()),
   });
   const savedRows: Row[] = useMemo(() => {
     return (allLinks || [])
-      .filter((l) => l.assetProfileId === profile.id && ["owner", "co_owner", "co-owner"].includes(String(l.role || "owner").toLowerCase()))
+      .filter((l) => l[linkSubjectField] === profile.id && ["owner", "co_owner", "co-owner"].includes(String(l.role || "owner").toLowerCase()))
       .map((l) => ({ partyProfileId: l.partyProfileId, pct: roundPct(Number(l.ownershipPercentage ?? 0)) }));
-  }, [allLinks, profile.id]);
+  }, [allLinks, profile.id, linkSubjectField]);
 
   // Editable draft overlaid on the saved state. `null` = no local edits (show
   // saved). Whenever the saved set changes (initial load, after save, external
@@ -113,19 +129,31 @@ export function OwnershipEditor({
   const saveMut = useMutation({
     mutationFn: async () => {
       const owners = rows.map((r) => ({ partyProfileId: r.partyProfileId, ownershipPercentage: r.pct }));
-      const res = await apiRequest("PUT", `/api/profiles/${profile.id}/owners`, { owners });
+      const path = kind === "liability"
+        ? `/api/profiles/${profile.id}/liability-owners`
+        : `/api/profiles/${profile.id}/owners`;
+      const res = await apiRequest("PUT", path, { owners });
       return res.json();
     },
     onSuccess: () => {
       toast({ title: "Ownership updated" });
       resetDraft();
-      // Recalculate everything that depends on ownership.
+      // Recalculate everything that depends on ownership. We invalidate BOTH
+      // junction-table queries so the editor refreshes cleanly even if a page
+      // is reading both tables (e.g. Linked filter logic).
       queryClient.invalidateQueries({ queryKey: ["/api/asset-party-links"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ownership-history"] });
+      // Liability detail page reads from these:
+      if (kind === "liability") {
+        queryClient.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "parties"] });
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["/api/assets", profile.id, "parties"] });
+      }
       onSaved?.();
     },
     onError: (err: Error) => toast({ title: "Couldn't save ownership", description: err.message, variant: "destructive" }),

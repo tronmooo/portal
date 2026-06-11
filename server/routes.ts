@@ -7307,6 +7307,31 @@ No emojis. No prose outside the JSON.`,
     }
   }));
 
+  // Atomic, validated LIABILITY ownership write — the liability analogue of
+  // PUT /api/profiles/:id/owners. Body: { owners: [{ partyProfileId, ownershipPercentage }] }
+  // An empty array clears ownership (liability reverts to Self-100%).
+  // This is the ONLY supported way to mutate liability ownership; the
+  // per-row POST /api/liability-profile-links endpoint trips the DB >100
+  // guard the moment a co-owner is added on top of an existing 100% link.
+  app.put("/api/profiles/:id/liability-owners", asyncHandler(async (req, res) => {
+    const liability = await storage.getProfile(req.params.id);
+    if (!liability) return res.status(404).json({ error: "Profile not found" });
+    const owners = Array.isArray(req.body?.owners) ? req.body.owners : [];
+    for (const o of owners) {
+      if (!o?.partyProfileId || o.partyProfileId === req.params.id) {
+        return res.status(400).json({ error: "Invalid owner reference" });
+      }
+      const party = await storage.getProfile(o.partyProfileId);
+      if (!party) return res.status(404).json({ error: "Owner profile not found" });
+    }
+    try {
+      const links = await storage.setLiabilityOwners(req.params.id, owners);
+      res.json({ liabilityProfileId: req.params.id, owners: links });
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to set owners" });
+    }
+  }));
+
   // Ownership history
   app.get("/api/ownership-history", asyncHandler(async (req, res) => {
     const subjectId = (req.query.subjectId as string) || undefined;

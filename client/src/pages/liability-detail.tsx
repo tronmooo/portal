@@ -59,6 +59,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LinkedPeopleTab } from "@/pages/profile-detail";
+import { OwnershipEditor } from "@/components/OwnershipEditor";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -994,7 +995,29 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <LinkedAssetsCard liabilityId={profile.id} />
             </section>
 
-            {/* Linked people — single source of truth for ownership/links. */}
+            {/* Ownership — fractional owner shares, atomic + validated. Same
+                slider-based editor as the asset overview, pointed at the
+                liability junction table. The previous "Add Linked Person"
+                modal incrementally inserted rows that tripped the DB-side
+                >100 guard the moment a co-owner was added on top of an
+                existing 100% link. PUT /api/profiles/:id/liability-owners
+                replaces the whole set atomically, validates total=100, and
+                writes phases that never grow the running sum past the
+                guardrail. */}
+            <section data-testid="overview-ownership">
+              <OwnershipEditor
+                profile={profile as any}
+                allProfiles={(ownerCandidates || []) as any}
+                onSaved={() => { /* React Query invalidations handled inside OwnershipEditor */ }}
+                kind="liability"
+              />
+            </section>
+
+            {/* Linked people — non-owner roles (co_signer, guarantor, etc.)
+                still live here. Ownership shares are managed by the editor
+                above; this section shows everyone else attached to the
+                liability (and on a fresh liability, it's how you add the
+                first owner since the dialog also surfaces the role). */}
             <section data-testid="overview-linked-people">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked people</p>
               <LinkedPeopleTab
