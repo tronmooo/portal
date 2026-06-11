@@ -10817,6 +10817,14 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "belongings": return true;
         case "health-trackers": return true;
         case "tasks-schedule": return true;
+        // Person/Self restructure (June 2026): the new tab values used by
+        // ENTITY_TABS.person / ENTITY_TABS.self. Without these cases the tabs
+        // fell through to `default: return false` AND weren't in alwaysShow,
+        // so only Overview + Habits survived the filter.
+        case "finance": return true;
+        case "person-trackers": return true;
+        case "person-documents": return true;
+        case "person-history": return true;
         default: return false;
       }
     })();
@@ -10825,7 +10833,7 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "contained", "financials", "payments", "history", "belongings", "health-trackers", "tasks-schedule"];
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "contained", "financials", "payments", "history", "belongings", "health-trackers", "tasks-schedule", "finance", "person-trackers", "person-documents", "person-history"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
@@ -11940,10 +11948,11 @@ export default function ProfileDetailPage() {
                         <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Assets</p>
                         <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
                       </section>
-                      <section>
-                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Liabilities</p>
-                        <LinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-                      </section>
+                      {/* Liabilities section intentionally NOT rendered here:
+                          InfoTab already renders a richer Liabilities card
+                          (section 5b at line ~3325) with APR / monthly / shared %.
+                          Rendering LinkedLiabilitiesTab here too created the
+                          duplicate the user flagged (2026-06-11). */}
                     </div>
                   )}
                   {/* Linked People moved off Overview (2026-06-10): the Linked
