@@ -568,7 +568,7 @@ function BelongsToEditor({
   return (
     <>
       <div className="flex items-center gap-2 py-1" data-testid="belongs-to-row">
-        <span className="text-xs text-muted-foreground shrink-0">Belongs to:</span>
+        <span className="text-xs text-muted-foreground shrink-0">Located in:</span>
         <span className="text-xs font-medium flex-1 truncate">
           {currentParent ? currentParent.name : <span className="text-muted-foreground italic">None (top-level)</span>}
         </span>
@@ -585,8 +585,8 @@ function BelongsToEditor({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-sm max-h-[80vh] flex flex-col" data-testid="dialog-belongs-to">
           <DialogHeader>
-            <DialogTitle>Set Parent</DialogTitle>
-            <DialogDescription>Choose where this asset belongs.</DialogDescription>
+            <DialogTitle>Set Location</DialogTitle>
+            <DialogDescription>Choose where this asset is located. This is its parent in the asset tree — not its owner. Use the Ownership editor to set ownership shares.</DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
             {/* Current path preview — shows where this asset currently lives */}
