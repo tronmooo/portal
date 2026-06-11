@@ -228,11 +228,43 @@ export function OwnershipTree({
   treeData?: TreeNodeLite | null;
 }) {
   const [, setLocation] = useLocation();
+
+  // Actual owner shares (asset_party_links, role = owner/co_owner). When this
+  // resolves with rows, it IS the source of truth for who owns the asset —
+  // the tree renders one row per owner with their share. The parentProfileId
+  // chain is only a fallback when no explicit owner links exist (legacy
+  // implicit ownership). This is exactly what the user expected: after
+  // splitting Mike's House 50/50 in the Ownership editor, the tree should
+  // show "Mike 50% / Test 50% → Mike\'s House".
+  const partyLinksQuery = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then((r) => r.json()),
+  });
+  const ownerRows = useMemo(() => {
+    const rows = (partyLinksQuery.data || [])
+      .filter((l: any) => l.assetProfileId === profile.id)
+      .filter((l: any) => {
+        const r = String(l.role || "owner").toLowerCase();
+        return r === "owner" || r === "co_owner" || r === "co-owner";
+      });
+    const profileById = new Map(allProfiles.map((p) => [p.id, p] as const));
+    return rows
+      .map((l: any) => ({
+        owner: profileById.get(l.partyProfileId) as AnyProfile | undefined,
+        pct: Number(l.ownershipPercentage ?? 0),
+      }))
+      .filter((r) => !!r.owner)
+      // Largest share first; alphabetical for ties.
+      .sort((a, b) => b.pct - a.pct || (a.owner!.name || "").localeCompare(b.owner!.name || ""));
+  }, [partyLinksQuery.data, profile.id, allProfiles]);
+
   const chain = walkAncestry(profile, allProfiles);
   const directChildren =
     treeData?.children?.filter((c) =>
       NESTED_ASSET_TYPES.includes(c.type),
     ) || [];
+
+  const hasExplicitOwners = ownerRows.length > 0;
 
   return (
     <Card data-testid="card-ownership-tree">
@@ -243,30 +275,61 @@ export function OwnershipTree({
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-0.5 font-mono text-xs leading-relaxed">
-          {chain.map((node, i) => {
-            const indent = i * 14;
-            const isSelf = node.id === profile.id;
-            return (
-              <button
-                key={node.id}
-                disabled={isSelf}
-                onClick={() => setLocation(`/profiles/${node.id}`)}
-                className={`flex items-center gap-1.5 w-full text-left rounded px-1 py-1 ${
-                  isSelf
-                    ? "bg-primary/10 text-primary font-semibold cursor-default"
-                    : "hover:bg-muted text-foreground"
-                }`}
-                style={{ paddingLeft: indent + 4 }}
-                data-testid={`tree-node-${node.id}`}
+          {hasExplicitOwners ? (
+            <>
+              {ownerRows.map((row) => (
+                <button
+                  key={row.owner!.id}
+                  onClick={() => setLocation(`/profiles/${row.owner!.id}`)}
+                  className="flex items-center gap-1.5 w-full text-left rounded px-1 py-1 hover:bg-muted text-foreground"
+                  style={{ paddingLeft: 4 }}
+                  data-testid={`tree-owner-${row.owner!.id}`}
+                >
+                  <span className="truncate">{row.owner!.name}</span>
+                  <span className="text-[10px] opacity-60 capitalize">· {row.owner!.type}</span>
+                  <span className="ml-auto text-[10px] opacity-80 font-semibold pr-1">{row.pct}%</span>
+                </button>
+              ))}
+              {/* The asset itself — one level deeper than the owners. */}
+              <div
+                className="flex items-center gap-1.5 w-full rounded px-1 py-1 bg-primary/10 text-primary font-semibold"
+                style={{ paddingLeft: 18 }}
+                data-testid={`tree-node-${profile.id}`}
               >
-                {i > 0 && <span className="opacity-50">└─</span>}
-                <span className="truncate">{node.name}</span>
-                <span className="text-[10px] opacity-60 capitalize">· {node.type}</span>
-              </button>
-            );
-          })}
+                <span className="opacity-50">└─</span>
+                <span className="truncate">{profile.name}</span>
+                <span className="text-[10px] opacity-60 capitalize">· {profile.type}</span>
+              </div>
+            </>
+          ) : (
+            chain.map((node, i) => {
+              const indent = i * 14;
+              const isSelf = node.id === profile.id;
+              return (
+                <button
+                  key={node.id}
+                  disabled={isSelf}
+                  onClick={() => setLocation(`/profiles/${node.id}`)}
+                  className={`flex items-center gap-1.5 w-full text-left rounded px-1 py-1 ${
+                    isSelf
+                      ? "bg-primary/10 text-primary font-semibold cursor-default"
+                      : "hover:bg-muted text-foreground"
+                  }`}
+                  style={{ paddingLeft: indent + 4 }}
+                  data-testid={`tree-node-${node.id}`}
+                >
+                  {i > 0 && <span className="opacity-50">└─</span>}
+                  <span className="truncate">{node.name}</span>
+                  <span className="text-[10px] opacity-60 capitalize">· {node.type}</span>
+                </button>
+              );
+            })
+          )}
           {directChildren.map((child) => {
-            const indent = chain.length * 14;
+            // Children indent under the asset row: 32px when we have
+            // explicit owners (asset at level 1), or past the full
+            // ancestry chain otherwise.
+            const indent = hasExplicitOwners ? 32 : chain.length * 14;
             return (
               <button
                 key={child.id}

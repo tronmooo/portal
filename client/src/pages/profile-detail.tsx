@@ -10351,18 +10351,42 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
   // render a placeholder "Asset" card again. Preserve sharePct from the
   // ownership row, and prefer live currentValue (kept fresh by edits) over
   // the snapshot in the link payload.
-  const items = (rawItems || []).filter((it: any) => it && it.id && liveById.has(it.id)).map((it: any) => {
-    const live = liveById.get(it.id);
-    const liveValue = live?.currentValue ?? live?.fields?.currentValue ?? live?.fields?.value ?? null;
-    return {
-      id: it.id,
-      linkId: it.linkId,
-      name: (live?.name || it.name || "").trim(),
-      typeKey: live?.type || it.typeKey || "asset",
-      sharePct: it.sharePct,
-      currentValue: liveValue != null ? Number(liveValue) : (it.currentValue ?? null),
-    };
-  });
+  // Asset-like profile types (top-level Belongings/Assets section should
+  // only show these, not liabilities/loans/subscriptions). Netflix is
+  // type="subscription" so it must be excluded from a person's Assets tab.
+  const ASSET_LIKE_TYPES = ["asset", "vehicle", "property", "investment", "account"];
+
+  const items = (rawItems || [])
+    .filter((it: any) => it && it.id && liveById.has(it.id))
+    .filter((it: any) => {
+      // For person/self profiles only: restrict the Assets section to
+      // genuine top-level assets the person owns/co-owns.
+      //   1) Exclude liabilities, loans, subscriptions (e.g. Netflix).
+      //   2) Exclude assets that are nested under another asset — they
+      //      already appear under their parent (top-level only here).
+      if (!isPerson) return true;
+      const live = liveById.get(it.id);
+      if (!live) return false;
+      if (!ASSET_LIKE_TYPES.includes(live.type)) return false;
+      const parentId = live.parentProfileId;
+      if (parentId) {
+        const parent = liveById.get(parentId);
+        if (parent && ASSET_LIKE_TYPES.includes(parent.type)) return false;
+      }
+      return true;
+    })
+    .map((it: any) => {
+      const live = liveById.get(it.id);
+      const liveValue = live?.currentValue ?? live?.fields?.currentValue ?? live?.fields?.value ?? null;
+      return {
+        id: it.id,
+        linkId: it.linkId,
+        name: (live?.name || it.name || "").trim(),
+        typeKey: live?.type || it.typeKey || "asset",
+        sharePct: it.sharePct,
+        currentValue: liveValue != null ? Number(liveValue) : (it.currentValue ?? null),
+      };
+    });
 
   // Asset candidates for person picker: all asset-type profiles not
   // already linked to this person. Pulls from /api/profiles (cached).
