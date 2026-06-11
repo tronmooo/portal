@@ -18,6 +18,7 @@ import {
 } from "@/components/asset/asset-overview";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { isPast, parseDate, relativeDayLabel, daysFromToday } from "@/lib/dates";
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
@@ -130,6 +131,9 @@ import {
   Users,
   Network,
   Link as LinkIcon,
+  Cake,
+  Droplet,
+  Briefcase,
 } from "lucide-react";
 import {
   LineChart,
@@ -2964,6 +2968,124 @@ function InfoTab({
         </Card>
       )}
 
+      {/* ── Person Highlights ── Show the most personal at-a-glance card up
+          front for person/self/pet profiles. Replaces the old Linked People
+          block that was hogging the Overview real-estate. */}
+      {["self","person","pet"].includes(profile.type) && (() => {
+        const f: any = profile.fields || {};
+        const birthdayRaw = f.birthday || f.dateOfBirth || f.dob || f.date_of_birth || null;
+        const ageFromBirthday = (() => {
+          if (!birthdayRaw) return null;
+          const d = new Date(typeof birthdayRaw === "string" ? `${birthdayRaw}T12:00:00` : birthdayRaw);
+          if (isNaN(d.getTime())) return null;
+          const now = new Date();
+          let age = now.getFullYear() - d.getFullYear();
+          const m = now.getMonth() - d.getMonth();
+          if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+          return age >= 0 && age < 130 ? age : null;
+        })();
+        const daysToBirthday = (() => {
+          if (!birthdayRaw) return null;
+          const d = new Date(typeof birthdayRaw === "string" ? `${birthdayRaw}T12:00:00` : birthdayRaw);
+          if (isNaN(d.getTime())) return null;
+          const now = new Date();
+          const next = new Date(now.getFullYear(), d.getMonth(), d.getDate());
+          if (next.getTime() < new Date(now.setHours(0,0,0,0)).getTime()) next.setFullYear(next.getFullYear() + 1);
+          return Math.ceil((next.getTime() - Date.now()) / 86400000);
+        })();
+        const birthdayLabel = (() => {
+          if (!birthdayRaw) return null;
+          const d = new Date(typeof birthdayRaw === "string" ? `${birthdayRaw}T12:00:00` : birthdayRaw);
+          if (isNaN(d.getTime())) return null;
+          return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        })();
+        const phone = f.phone || f.primaryPhone || f.cellPhone || f.homePhone || null;
+        const email = f.email || null;
+        const address = (() => {
+          const parts = [f.streetAddress || f.homeAddress || f.serviceAddress || f.address, f.city, f.state || f.region, f.zip || f.zipCode || f.postalCode].filter(Boolean);
+          return parts.length ? parts.join(", ") : null;
+        })();
+        const relationship = f.relationship || null;
+        const occupation = f.occupation || f.jobTitle || f.role || null;
+        const company = f.employer || f.company || null;
+        const bloodType = f.bloodType || null;
+        const allergies = f.allergies || null;
+        const heightVal = f.height || null;
+        const weightVal = f.weight || null;
+        const notes = f.notes || f.about || f.bio || null;
+        const species = f.species || null;
+        const breed = f.breed || null;
+        const accentHsl = profile.type === "pet" ? "20 88% 55%" : profile.type === "self" ? "183 98% 32%" : "271 70% 55%";
+        const accent = `hsl(${accentHsl})`;
+        const accentSoft = `hsl(${accentHsl} / 0.10)`;
+        const accentBorder = `hsl(${accentHsl} / 0.35)`;
+        const Pill = ({ icon: Icon, label, value }: { icon: any; label: string; value: React.ReactNode }) => (
+          <div
+            className="flex items-start gap-2 rounded-lg border p-2.5 transition-colors hover:shadow-sm"
+            style={{ borderColor: accentBorder, background: accentSoft }}
+          >
+            <div
+              className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
+              style={{ background: `hsl(${accentHsl} / 0.22)`, color: accent }}
+            >
+              <Icon className="h-3.5 w-3.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="text-xs font-semibold mt-0.5 truncate" title={typeof value === "string" ? value : undefined}>{value}</p>
+            </div>
+          </div>
+        );
+        const items: React.ReactNode[] = [];
+        if (relationship) items.push(<Pill key="rel" icon={Heart} label="Relationship" value={String(relationship)} />);
+        if (species || breed) {
+          const speciesBreed = [species, breed].filter(Boolean).join(" · ");
+          items.push(<Pill key="sb" icon={PawPrint} label="Species" value={speciesBreed} />);
+        }
+        if (ageFromBirthday != null) items.push(<Pill key="age" icon={Cake} label="Age" value={`${ageFromBirthday} ${ageFromBirthday === 1 ? "year" : "years"}`} />);
+        if (birthdayLabel) {
+          const sub = daysToBirthday != null ? (daysToBirthday === 0 ? "Today" : daysToBirthday <= 30 ? `in ${daysToBirthday}d` : null) : null;
+          items.push(<Pill key="bd" icon={Calendar} label="Birthday" value={sub ? `${birthdayLabel} · ${sub}` : birthdayLabel} />);
+        }
+        if (phone) items.push(<Pill key="phone" icon={Phone} label="Phone" value={String(phone)} />);
+        if (email) items.push(<Pill key="email" icon={Mail} label="Email" value={String(email)} />);
+        if (address) items.push(<Pill key="addr" icon={MapPin} label="Address" value={address} />);
+        if (occupation) items.push(<Pill key="occ" icon={Briefcase} label="Occupation" value={company ? `${occupation} · ${company}` : String(occupation)} />);
+        if (bloodType) items.push(<Pill key="blood" icon={Droplet} label="Blood Type" value={String(bloodType)} />);
+        if (heightVal || weightVal) {
+          const hw = [heightVal && `${heightVal}`, weightVal && `${weightVal}`].filter(Boolean).join(" · ");
+          items.push(<Pill key="hw" icon={Activity} label="Vitals" value={hw} />);
+        }
+        if (allergies) items.push(<Pill key="alg" icon={AlertTriangle} label="Allergies" value={String(allergies)} />);
+        if (items.length === 0 && !notes) return null;
+        return (
+          <Card
+            className="overflow-hidden border"
+            style={{ borderColor: accentBorder, background: `linear-gradient(135deg, ${accentSoft} 0%, hsl(var(--card)) 60%)` }}
+          >
+            <CardContent className="p-3 space-y-2.5">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center w-5 h-5 rounded-md" style={{ background: `hsl(${accentHsl} / 0.20)`, color: accent }}>
+                  <Sparkles className="h-3 w-3" />
+                </span>
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: accent }}>
+                  {profile.type === "pet" ? "Pet Highlights" : "Personal Highlights"}
+                </p>
+              </div>
+              {items.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{items}</div>
+              )}
+              {notes && (
+                <div className="rounded-lg border bg-card/60 p-2.5" style={{ borderColor: accentBorder }}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">About</p>
+                  <p className="text-xs leading-relaxed text-foreground/90">{String(notes)}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* ── Stats Row ── Only for person/self/pet — hero already shows these stats for asset types */}
       {["self","person","pet"].includes(profile.type) && (
         <div className="grid grid-cols-4 gap-2">
@@ -5660,22 +5782,55 @@ function QuickHealthButton({ profileId, name, unit, field, category, fieldType =
   );
 }
 
-function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChanged: () => void }) {
+function HealthTabView({ profile, onChanged, includeAll = false }: { profile: ProfileDetail; onChanged: () => void; includeAll?: boolean }) {
   const { toast } = useToast();
   const profileId = profile.id;
 
   // ── state ──────────────────────────────────────────────────
   const [expandedTrackers, setExpandedTrackers] = useState<Set<string>>(new Set());
-  const [logOpen, setLogOpen] = useState<string | null>(null); // trackerId
+  const [logOpen, setLogOpen] = useState<string | null>(null);
   const [logValue, setLogValue] = useState("");
   const [logNotes, setLogNotes] = useState("");
 
-
-  // ── filter health trackers ─────────────────────────────────
+  // ── filter trackers ────────────────────────────────────────
+  // When `includeAll` is true (aggregate Health & Trackers tab) we surface
+  // every linked tracker — not just health-categorized ones. This is what
+  // the user sees in the screenshots (Bench Press, Running, Wellness, etc.
+  // all sit together).
   const healthCats = ["health", "fitness", "weight", "sleep", "wellness", "nutrition", "medical", "vitals", "diet", "calories", "water", "blood"];
-  const healthTrackers = profile.relatedTrackers.filter((t: any) =>
-    healthCats.some(c => (t.category || "").toLowerCase().includes(c) || (t.name || "").toLowerCase().includes(c))
-  );
+  const healthTrackers = includeAll
+    ? (profile.relatedTrackers || [])
+    : (profile.relatedTrackers || []).filter((t: any) =>
+        healthCats.some(c => (t.category || "").toLowerCase().includes(c) || (t.name || "").toLowerCase().includes(c))
+      );
+
+  // ── category accent (color + icon) ─────────────────────────
+  function categoryAccent(t: any): { hsl: string; icon: any; label: string } {
+    const cat = (t.category || "").toLowerCase();
+    const name = (t.name || "").toLowerCase();
+    if (cat.includes("nutrition") || cat.includes("diet") || name.includes("calorie") || name.includes("meal") || name.includes("food")) {
+      return { hsl: "20 88% 55%", icon: Flame, label: "nutrition" };
+    }
+    if (cat.includes("fitness") || cat.includes("exercise") || name.includes("run") || name.includes("bench") || name.includes("workout") || name.includes("steps")) {
+      return { hsl: "142 71% 45%", icon: Activity, label: "fitness" };
+    }
+    if (cat.includes("sleep") || name.includes("sleep")) {
+      return { hsl: "260 60% 60%", icon: Sparkles, label: "sleep" };
+    }
+    if (cat.includes("health") || name.includes("blood") || name.includes("pressure") || name.includes("heart") || name.includes("bp")) {
+      return { hsl: "0 75% 58%", icon: HeartPulse, label: "health" };
+    }
+    if (cat.includes("water") || name.includes("hydration") || name.includes("water")) {
+      return { hsl: "199 89% 48%", icon: Droplet, label: "hydration" };
+    }
+    if (cat.includes("weight") || name.includes("weight")) {
+      return { hsl: "183 98% 32%", icon: TrendingUp, label: "weight" };
+    }
+    if (cat.includes("wellness") || cat.includes("lifestyle") || name.includes("wellness") || name.includes("mood")) {
+      return { hsl: "330 75% 60%", icon: Heart, label: "wellness" };
+    }
+    return { hsl: "215 70% 55%", icon: Activity, label: t.category || "tracker" };
+  }
 
   // ── helpers ───────────────────────────────────────────────
   function getPrimaryField(tracker: any): string {
@@ -5726,10 +5881,14 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     return Math.floor(ms / (24 * 60 * 60 * 1000));
   }
 
-  // Logging streak for a tracker, via the canonical shared streak math
-  // (shared/streak.ts — same semantics as the server's calculateStreak).
-  // Replaces a divergent local implementation that double-counted multiple
-  // entries on the same day and ignored the user's timezone.
+  function relativeLastLog(days: number | null): string | null {
+    if (days == null) return null;
+    if (days === 0) return "today";
+    if (days === 1) return "1d ago";
+    if (days < 30) return `${days}d ago`;
+    return `${Math.floor(days / 30)}mo ago`;
+  }
+
   function getStreak(tracker: any): number {
     if (!tracker.entries?.length) return 0;
     const dates = tracker.entries.map((e: any) => toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE));
@@ -5744,7 +5903,6 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
     onSuccess: () => {
       toast({ title: "Entry logged" });
       setLogOpen(null); setLogValue(""); setLogNotes("");
-      setLogOpen(null); setLogValue("");
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
@@ -5758,116 +5916,139 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
   if (healthTrackers.length === 0) {
     return (
       <div className="space-y-3">
-        <Card>
+        <Card className="overflow-hidden border-dashed">
           <CardContent className="py-10 text-center">
-            <HeartPulse className="h-12 w-12 text-muted-foreground/25 mx-auto mb-3" />
-            <p className="text-sm font-semibold text-muted-foreground">No health data yet</p>
-            {/* Quick-create tracker tiles removed 2026-05-21 — trackers
-                are chat-only. Empty state now points users at Portol chat. */}
-            <p className="text-xs text-muted-foreground mt-1.5">Ask Portol in chat to start a health tracker — e.g. “track my weight” or “log vaccinations”.</p>
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-500 mb-3">
+              <HeartPulse className="h-6 w-6" />
+            </div>
+            <p className="text-sm font-semibold">No trackers yet</p>
+            <p className="text-xs text-muted-foreground mt-1.5 max-w-xs mx-auto">Ask Portol in chat to start one — try “track my weight” or “log my workouts”.</p>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  // ── Section 1: Vitals Dashboard ───────────────────────────
+  // ── Section 1: Vital cards ──
   const vitalCards = healthTrackers.map((t: any) => {
     const pf = getPrimaryField(t);
     const latest = getLatestValue(t);
     const prev = getPrevValue(t);
     const avg7 = get7DayAvg(t);
     const trend = getTrend(t);
-    const sparkData = (t.entries || []).slice(-10).map((e: any) => ({
-      v: Number(e.values?.[pf] ?? 0),
-    }));
+    // Sparkline data: most-recent 14 entries, oldest first so the line
+    // reads left-to-right chronologically.
+    const sparkData = [...(t.entries || [])]
+      .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .slice(-14)
+      .map((e: any) => ({ v: Number(e.values?.[pf] ?? 0) }));
     const sorted = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    const lastDate = sorted[0]?.timestamp ? new Date(sorted[0].timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
-    return { tracker: t, pf, latest, prev, avg7, trend, sparkData, lastDate };
+    const daysSince = sorted[0]?.timestamp ? Math.floor((Date.now() - new Date(sorted[0].timestamp).getTime()) / 86400000) : null;
+    const accent = categoryAccent(t);
+    return { tracker: t, pf, latest, prev, avg7, trend, sparkData, daysSince, accent };
   }).filter((v: any) => v.latest != null).sort((a: any, b: any) => (a.tracker.name || '').localeCompare(b.tracker.name || ''));
 
-  // ── Section 2: Top 3 trackers by entry count (trend charts) ─
+  // ── Section 2: Top 3 trend charts ──
   const topChartTrackers = [...healthTrackers]
     .sort((a: any, b: any) => (b.entries?.length || 0) - (a.entries?.length || 0))
     .slice(0, 3)
     .filter((t: any) => (t.entries?.length || 0) >= 2);
 
-  // Quick log removed — use the inline "Log Entry" form within each tracker card instead
-
-  // ── Section 5: AI Health Insights ────────────────────────
+  // ── Section 5: Insights ──
   const insights: { key: string; text: string; level: "warn" | "info" | "good" }[] = [];
-
   for (const t of healthTrackers) {
-    const pf = getPrimaryField(t);
     const latest = getLatestValue(t);
     const avg7 = get7DayAvg(t);
     const trend = getTrend(t);
     const days = getDaysSinceLastEntry(t);
     const streak = getStreak(t);
-    const nameLower = t.name.toLowerCase();
-
-    // Weight trending up
+    const nameLower = (t.name || "").toLowerCase();
     if (nameLower.includes("weight") && trend === "up" && latest != null && avg7 != null) {
       insights.push({ key: `weight-up-${t.id}`, text: `Weight trending up — ${Number(latest).toFixed(1)} ${t.unit || ""} vs ${Number(avg7).toFixed(1)} ${t.unit || ""} (7-day avg)`, level: "warn" });
     }
-    // BP elevated
     if ((nameLower.includes("blood pressure") || nameLower.includes("bp")) && latest != null && Number(latest) > 130) {
       insights.push({ key: `bp-${t.id}`, text: `Blood pressure reading is elevated (${latest} ${t.unit || "mmHg"})`, level: "warn" });
     }
-    // No entries in 3+ days
     if (days != null && days >= 3 && t.entries?.length > 0) {
       insights.push({ key: `no-log-${t.id}`, text: `No ${t.name} logged in ${days} day${days !== 1 ? "s" : ""}`, level: "info" });
     }
-    // Good streak
     if (streak >= 3) {
       insights.push({ key: `streak-${t.id}`, text: `${t.name}: ${streak}-day logging streak`, level: "good" });
     }
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
 
       {/* ── Section 1: Vitals Dashboard ── */}
       {vitalCards.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
-            <Heart className="h-3 w-3" /> Latest Vitals
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+            <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-rose-500/15 text-rose-500">
+              <Heart className="h-2.5 w-2.5" />
+            </span>
+            Latest Vitals
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            {vitalCards.map(({ tracker, latest, prev, avg7, trend, sparkData, lastDate }: any) => {
-              const trendColor = trend === "up" ? "text-green-500" : trend === "down" ? "text-red-500" : "text-muted-foreground";
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+            {vitalCards.map(({ tracker, latest, avg7, trend, sparkData, daysSince, accent }: any) => {
+              const trendColor = trend === "up" ? "text-emerald-500" : trend === "down" ? "text-rose-500" : "text-muted-foreground";
+              const lineColor = `hsl(${accent.hsl})`;
+              const fillId = `vital-fill-${tracker.id}`;
+              const lastLogRel = relativeLastLog(daysSince);
+              const Icon = accent.icon;
               return (
-                <div key={tracker.id} className="rounded-lg border bg-card p-3 flex flex-col gap-1.5">
-                  <p className="text-xs text-muted-foreground truncate font-medium">{tracker.name}</p>
+                <div
+                  key={tracker.id}
+                  className="relative rounded-xl border p-3 flex flex-col gap-1.5 overflow-hidden transition-all hover:-translate-y-0.5 hover:shadow-md"
+                  style={{
+                    borderColor: `hsl(${accent.hsl} / 0.30)`,
+                    background: `linear-gradient(135deg, hsl(${accent.hsl} / 0.12) 0%, hsl(var(--card)) 70%)`,
+                  }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="inline-flex w-5 h-5 items-center justify-center rounded-md shrink-0"
+                      style={{ background: `hsl(${accent.hsl} / 0.22)`, color: lineColor }}
+                    >
+                      <Icon className="h-3 w-3" />
+                    </span>
+                    <p className="text-xs font-semibold truncate flex-1" title={tracker.name}>{tracker.name}</p>
+                  </div>
                   <div className="flex items-end justify-between">
                     <div className="flex items-baseline gap-1">
-                      <span className="text-xl font-bold tabular-nums leading-none">
-                        {typeof latest === "number" ? latest.toLocaleString(undefined, { maximumFractionDigits: 1 }) : latest}
+                      <span className="text-2xl font-bold tabular-nums leading-none" style={{ color: lineColor }}>
+                        {typeof latest === "number" ? Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 }) : latest}
                       </span>
-                      {tracker.unit && <span className="text-xs text-muted-foreground">{tracker.unit}</span>}
+                      {tracker.unit && <span className="text-[10px] text-muted-foreground font-medium">{tracker.unit}</span>}
                     </div>
-                    <div className={`flex items-center gap-0.5 text-xs font-medium ${trendColor}`}>
+                    <div className={`flex items-center gap-0.5 text-[10px] font-bold ${trendColor}`}>
                       {trend === "up" && <ArrowUp className="h-3 w-3" />}
                       {trend === "down" && <ArrowDown className="h-3 w-3" />}
                       {trend === "flat" && <Minus className="h-3 w-3" />}
                     </div>
                   </div>
-                  {sparkData.length >= 2 && (
-                    <div style={{ width: "100%", height: 22 }}>
-                      <ResponsiveContainer width="100%" height={22}>
-                        <AreaChart data={sparkData} margin={{ top: 1, right: 0, left: 0, bottom: 1 }}>
-                          <Area type="monotone" dataKey="v" stroke="#20808D" fill="#20808D22" strokeWidth={1.5} dot={false} />
+                  {sparkData.length >= 2 ? (
+                    <div style={{ width: "100%", height: 30 }}>
+                      <ResponsiveContainer width="100%" height={30}>
+                        <AreaChart data={sparkData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor={lineColor} stopOpacity={0.55} />
+                              <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <Area type="monotone" dataKey="v" stroke={lineColor} fill={`url(#${fillId})`} strokeWidth={1.75} dot={false} isAnimationActive={false} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
+                  ) : (
+                    <div className="h-[30px] flex items-center">
+                      <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/30 to-transparent" />
+                    </div>
                   )}
-                  <div className="flex items-center justify-between">
-                    {avg7 != null && (
-                      <span className="text-xs-tight text-muted-foreground">7d avg {avg7.toFixed(1)}</span>
-                    )}
-                    {lastDate && (
-                      <span className="text-xs-tight text-muted-foreground ml-auto">{lastDate}</span>
-                    )}
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span className="font-medium">{avg7 != null ? `7d avg ${avg7.toFixed(1)}` : ""}</span>
+                    {lastLogRel && <span>{lastLogRel}</span>}
                   </div>
                 </div>
               );
@@ -5879,33 +6060,81 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
       {/* ── Section 2: Trend Charts ── */}
       {topChartTrackers.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
-            <Activity className="h-3 w-3" /> Trends
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+            <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-violet-500/15 text-violet-500">
+              <BarChart2 className="h-2.5 w-2.5" />
+            </span>
+            Trends
           </p>
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {topChartTrackers.map((t: any) => {
               const pf = getPrimaryField(t);
-              const chartData = (t.entries || []).slice(-30).map((e: any) => ({
-                date: new Date(e.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-                value: Number(e.values?.[pf] ?? 0),
-              }));
+              const accent = categoryAccent(t);
+              const lineColor = `hsl(${accent.hsl})`;
+              const fillId = `trend-fill-${t.id}`;
+              // Oldest to newest so the time axis reads left-to-right.
+              const chartData = [...(t.entries || [])]
+                .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+                .slice(-30)
+                .map((e: any) => ({
+                  date: new Date(e.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+                  value: Number(e.values?.[pf] ?? 0),
+                }));
+              const latest = chartData.length ? chartData[chartData.length - 1].value : null;
               return (
-                <Card key={t.id}>
-                  <CardHeader className="py-2 px-3">
-                    <CardTitle className="text-xs font-semibold">{t.name}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="px-3 pb-3 pt-0">
-                    <ResponsiveContainer width="100%" height={100}>
-                      <LineChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                        <XAxis dataKey="date" tick={{ fontSize: 9 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                        <YAxis tick={{ fontSize: 9 }} tickLine={false} axisLine={false} width={36} />
+                <Card
+                  key={t.id}
+                  className="overflow-hidden border"
+                  style={{ borderColor: `hsl(${accent.hsl} / 0.25)` }}
+                >
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="inline-flex w-5 h-5 items-center justify-center rounded-md"
+                          style={{ background: `hsl(${accent.hsl} / 0.22)`, color: lineColor }}
+                        >
+                          <accent.icon className="h-3 w-3" />
+                        </span>
+                        <p className="text-xs font-semibold">{t.name}</p>
+                      </div>
+                      {latest != null && (
+                        <span className="text-sm font-bold tabular-nums" style={{ color: lineColor }}>
+                          {latest.toLocaleString(undefined, { maximumFractionDigits: 1 })}{t.unit ? <span className="text-[10px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span> : null}
+                        </span>
+                      )}
+                    </div>
+                    <ResponsiveContainer width="100%" height={120}>
+                      <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -18, bottom: 4 }}>
+                        <defs>
+                          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={lineColor} stopOpacity={0.5} />
+                            <stop offset="100%" stopColor={lineColor} stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                        <XAxis
+                          dataKey="date"
+                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }}
+                          tickLine={false}
+                          axisLine={false}
+                          interval="preserveStartEnd"
+                          minTickGap={24}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={32}
+                          domain={["auto", "auto"]}
+                        />
                         <Tooltip
-                          contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
+                          contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: `1px solid hsl(${accent.hsl} / 0.4)`, borderRadius: 8, padding: "6px 10px" }}
+                          labelStyle={{ color: "hsl(var(--muted-foreground))", fontSize: 10 }}
                           formatter={(val: number) => [`${val.toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? " " + t.unit : ""}`, t.name]}
                         />
-                        <Line type="monotone" dataKey="value" stroke="#20808D" strokeWidth={2} dot={false} />
-                      </LineChart>
+                        <Area type="monotone" dataKey="value" stroke={lineColor} fill={`url(#${fillId})`} strokeWidth={2.25} isAnimationActive={false} dot={{ r: 2.5, fill: lineColor, strokeWidth: 0 }} activeDot={{ r: 4, fill: lineColor, stroke: "hsl(var(--card))", strokeWidth: 2 }} />
+                      </AreaChart>
                     </ResponsiveContainer>
                   </CardContent>
                 </Card>
@@ -5915,12 +6144,14 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
         </div>
       )}
 
-
-
-      {/* ── Section 3: All Trackers (expandable) ── */}
+      {/* ── Section 3: All Trackers ── */}
       <div>
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
-          <HeartPulse className="h-3 w-3" /> All Trackers
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+          <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-sky-500/15 text-sky-500">
+            <Activity className="h-2.5 w-2.5" />
+          </span>
+          All Trackers
+          <span className="text-[10px] font-medium text-muted-foreground normal-case tracking-normal">({healthTrackers.length})</span>
         </p>
         <div className="space-y-2">
           {healthTrackers.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((t: any) => {
@@ -5929,35 +6160,62 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
             const sortedEntries = [...(t.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             const lastEntry = sortedEntries[0];
             const lastDate = lastEntry ? new Date(lastEntry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+            const daysSince = lastEntry ? Math.floor((Date.now() - new Date(lastEntry.timestamp).getTime()) / 86400000) : null;
             const isExpanded = expandedTrackers.has(t.id);
             const isLogging = logOpen === t.id;
+            const accent = categoryAccent(t);
+            const lineColor = `hsl(${accent.hsl})`;
+            const Icon = accent.icon;
+            const displayVal = latest != null
+              ? (typeof latest === "number" ? Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(latest))
+              : null;
 
             return (
-              <Card key={t.id}>
-                <CardContent className="p-3">
+              <Card
+                key={t.id}
+                className="overflow-hidden border transition-shadow hover:shadow-sm"
+                style={{ borderColor: `hsl(${accent.hsl} / 0.25)` }}
+              >
+                <CardContent className="p-0">
                   {/* Collapsed header */}
                   <button
-                    className="w-full flex items-center justify-between gap-2 text-left"
+                    className="w-full flex items-center gap-3 text-left p-3 transition-colors hover:bg-muted/30"
                     onClick={() => setExpandedTrackers(prev => {
                       const s = new Set(prev);
                       if (s.has(t.id)) s.delete(t.id); else s.add(t.id);
                       return s;
                     })}
+                    data-testid={`button-tracker-${t.id}`}
                   >
+                    <span
+                      className="inline-flex w-9 h-9 items-center justify-center rounded-lg shrink-0"
+                      style={{ background: `hsl(${accent.hsl} / 0.18)`, color: lineColor }}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold truncate">{t.name}</p>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        {t.category && <Badge variant="secondary" className="text-xs-tight py-0">{t.category}</Badge>}
-                        <span className="text-xs text-muted-foreground">{t.entries?.length || 0} entries</span>
-                        {lastDate && <span className="text-xs text-muted-foreground">· last {lastDate}</span>}
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        {t.category && (
+                          <span
+                            className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                            style={{ background: `hsl(${accent.hsl} / 0.15)`, color: lineColor }}
+                          >
+                            {t.category}
+                          </span>
+                        )}
+                        <span className="text-[11px] text-muted-foreground">{t.entries?.length || 0} entries</span>
+                        {lastDate && <span className="text-[11px] text-muted-foreground">· last {lastDate}</span>}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {latest != null && (
-                        <span className="text-base font-bold tabular-nums">
-                          {latest.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                          {t.unit && <span className="text-xs text-muted-foreground ml-0.5 font-normal">{t.unit}</span>}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {displayVal != null ? (
+                        <span className="text-base font-bold tabular-nums" style={{ color: lineColor }}>
+                          {displayVal}
+                          {t.unit && <span className="text-[10px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span>}
                         </span>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground italic">No data</span>
                       )}
                       {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                     </div>
@@ -5965,19 +6223,18 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
 
                   {/* Expanded content */}
                   {isExpanded && (
-                    <div className="mt-3 space-y-3">
-                      {/* Last 10 entries */}
+                    <div className="px-3 pb-3 pt-1 border-t border-border/30 space-y-3">
                       {sortedEntries.length > 0 ? (
                         <div className="space-y-0">
                           {sortedEntries.slice(0, 10).map((entry: any) => (
-                            <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs">
+                            <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border/40 last:border-0 text-xs">
                               <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-mono font-semibold tabular-nums">
+                                <span className="font-mono font-semibold tabular-nums" style={{ color: lineColor }}>
                                   {entry.values?.[pf] != null
                                     ? `${Number(entry.values[pf]).toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? ` ${t.unit}` : ""}`
-                                    : Object.values(entry.values || {}).filter(Boolean).join(", ") || "—"}
+                                    : Object.values(entry.values || {}).filter(Boolean).join(", ") || "\u2014"}
                                 </span>
-                                {entry.notes && <span className="text-muted-foreground truncate max-w-[100px]" title={entry.notes}>{entry.notes}</span>}
+                                {entry.notes && <span className="text-muted-foreground truncate max-w-[120px]" title={entry.notes}>{entry.notes}</span>}
                               </div>
                               <span className="text-xs text-muted-foreground shrink-0 ml-2">
                                 {new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
@@ -5989,9 +6246,8 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
                         <p className="text-xs text-muted-foreground text-center py-2">No entries yet</p>
                       )}
 
-                      {/* Log Entry inline form */}
                       {isLogging ? (
-                        <div className="flex flex-col gap-2 p-2 rounded-lg border bg-muted/30">
+                        <div className="flex flex-col gap-2 p-2.5 rounded-lg border bg-muted/30" style={{ borderColor: `hsl(${accent.hsl} / 0.35)` }}>
                           <p className="text-xs font-medium">Log Entry — {t.name}</p>
                           <div className="flex items-center gap-2">
                             <Input
@@ -6012,11 +6268,11 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
                           </div>
                           <div className="flex gap-1.5">
                             <Button
-                              size="sm" className="h-7 text-xs flex-1"
+                              size="sm"
+                              className="h-7 text-xs flex-1"
+                              style={{ background: lineColor, color: "white" }}
                               disabled={!logValue || logMutation.isPending}
-                              onClick={() => {
-                                logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(logValue) }, notes: logNotes });
-                              }}
+                              onClick={() => logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(logValue) }, notes: logNotes })}
                             >
                               {logMutation.isPending ? "Saving..." : "Save"}
                             </Button>
@@ -6026,8 +6282,14 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
                           </div>
                         </div>
                       ) : (
-                        <Button variant="secondary" size="sm" className="h-7 text-xs w-full gap-1"
-                          onClick={() => { setLogOpen(t.id); setLogValue(""); setLogNotes(""); }}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs w-full gap-1"
+                          style={{ borderColor: `hsl(${accent.hsl} / 0.4)`, color: lineColor }}
+                          onClick={() => { setLogOpen(t.id); setLogValue(""); setLogNotes(""); }}
+                          data-testid={`button-log-entry-${t.id}`}
+                        >
                           <Plus className="h-3.5 w-3.5" /> Log Entry
                         </Button>
                       )}
@@ -6040,23 +6302,26 @@ function HealthTabView({ profile, onChanged }: { profile: ProfileDetail; onChang
         </div>
       </div>
 
-      {/* ── Section 5: AI Health Insights ── */}
+      {/* ── Section 5: Insights ── */}
       {insights.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1">
-            <Sparkles className="h-3 w-3" /> Insights
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+            <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-amber-500/15 text-amber-500">
+              <Sparkles className="h-2.5 w-2.5" />
+            </span>
+            Insights
           </p>
           <div className="space-y-1.5">
             {insights.map(ins => (
               <div key={ins.key} className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
-                ins.level === "warn" ? "border-yellow-500/30 bg-yellow-500/5 text-yellow-700 dark:text-yellow-400" :
-                ins.level === "good" ? "border-green-500/30 bg-green-500/5 text-green-700 dark:text-green-400" :
-                "border-border bg-muted/30 text-muted-foreground"
+                ins.level === "warn" ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300" :
+                ins.level === "good" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" :
+                "border-sky-500/30 bg-sky-500/5 text-sky-700 dark:text-sky-300"
               }`}>
                 {ins.level === "warn" && <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
                 {ins.level === "good" && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
                 {ins.level === "info" && <Activity className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
-                <span>{ins.text}</span>
+                <span className="font-medium">{ins.text}</span>
               </div>
             ))}
           </div>
@@ -9458,24 +9723,26 @@ function EditAssetPartyLinkModal({
   );
 }
 
-// ── Linked People tab (shown on ASSET profiles via /api/assets/:id/parties) ──
+// ── Linked People tab ──
+// On asset/liability profiles this fetches /api/(assets|liabilities)/:id/parties
+// and renders co-owners with role + ownership%. On person/self profiles it
+// pulls /api/profiles and surfaces every OTHER person/self/pet — the user's
+// people network — with avatar + relationship pill + click-through. This
+// replaces the old graph-BFS path which only returned people who happened
+// to share an asset/liability with the root (so a brand-new person profile
+// always showed "No linked people").
 export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profileId: string; profileType: string; onChanged: () => void }) {
   const { toast } = useToast();
   const isAsset = ["asset","vehicle","property"].includes(profileType);
   const isLiability = profileType === "liability" || profileType === "loan";
   const isPerson = profileType === "person" || profileType === "self";
 
-  // For asset profiles use /api/assets/:id/parties
-  // For liability profiles use /api/liabilities/:id/parties
-  // For person/self: people via graph 2-hops
-  // Query key reflects the actual endpoint so cache-bus predicates and
-  // ownership-mutation invalidations match this entry instead of going
-  // through a fake "/api/rel-people" alias key.
   const partiesQueryKey: any[] = isAsset
     ? ["/api/assets", profileId, "parties"]
     : isLiability
     ? ["/api/liabilities", profileId, "parties"]
-    : ["/api/relationships/graph", profileId, { hops: 2, view: "linked-people" }];
+    : ["/api/profiles", "people-network", profileId];
+
   const { data: parties = [], refetch } = useQuery<any[]>({
     queryKey: partiesQueryKey,
     queryFn: async () => {
@@ -9484,44 +9751,23 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
       } else if (isLiability) {
         return apiRequest("GET", `/api/liabilities/${profileId}/parties`).then(r => r.json());
       } else {
-        // Person/self: only show DIRECTLY co-owning people — i.e. people who
-        // share an explicit asset or liability with the root. Don't bridge
-        // through other person nodes (avoids pulling in the entire user graph).
-        const g = await apiRequest("GET", `/api/relationships/graph/${profileId}?hops=2`).then(r => r.json());
-        const root = g.rootId;
-        const personTypes = new Set(["person","self","business","pet"]);
-        const nodeById: Record<string, any> = {};
-        for (const n of (g.nodes || [])) nodeById[n.id] = n;
-        const adj: Record<string, Set<string>> = {};
-        const addEdge = (a: string, b: string) => { if (!adj[a]) adj[a] = new Set(); adj[a].add(b); };
-        for (const e of (g.edges || [])) {
-          const fromNode = nodeById[e.from];
-          const toNode = nodeById[e.to];
-          if (!fromNode || !toNode) continue;
-          // Don't traverse through other person nodes (other than the root itself).
-          // Only edges to/from the root person + edges between asset/liability nodes are kept.
-          const fromIsPerson = personTypes.has(fromNode.typeKey || fromNode.type);
-          const toIsPerson = personTypes.has(toNode.typeKey || toNode.type);
-          if (fromIsPerson && fromNode.id !== root) continue;
-          if (toIsPerson && toNode.id !== root) continue;
-          addEdge(e.from, e.to);
-          addEdge(e.to, e.from);
-        }
-        const reachable = new Set<string>();
-        const queue: string[] = [root];
-        const visited = new Set<string>([root]);
-        while (queue.length) {
-          const cur = queue.shift()!;
-          for (const nb of (adj[cur] || [])) {
-            if (visited.has(nb)) continue;
-            visited.add(nb);
-            reachable.add(nb);
-            queue.push(nb);
-          }
-        }
-        return (g.nodes || [])
-          .filter((n: any) => reachable.has(n.id) && personTypes.has(n.typeKey || n.type))
-          .map((n: any) => ({ id: n.id, party: { id: n.id, name: n.name, type: n.type, profileType: n.typeKey || n.type } }));
+        // Person/self: show every other person/self/pet in the user's network.
+        // We project them into the shape the renderer expects: { id, party: {…} }.
+        const profs: any[] = await apiRequest("GET", "/api/profiles").then(r => r.json());
+        const personLikeTypes = new Set(["person", "self", "pet"]);
+        return (profs || [])
+          .filter((p: any) => p.id !== profileId && personLikeTypes.has(p.type))
+          .map((p: any) => ({
+            id: p.id,
+            party: {
+              id: p.id,
+              name: p.name,
+              type: p.type,
+              profileType: p.type,
+              avatar: p.avatar,
+              relationship: p?.fields?.relationship || null,
+            },
+          }));
       }
     },
   });
@@ -9562,6 +9808,96 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
 
   const canAdd = (isAsset || isLiability) && availablePeople.length > 0;
 
+  // ── PERSON/SELF render path ─────────────────────────────────────────────────
+  // Rich avatar + relationship pill + clickable navigation. Goes through
+  // hashNavigate via wouter <Link>, NOT through asset-party-link APIs.
+  if (isPerson) {
+    if (parties.length === 0) {
+      return (
+        <div className="text-center py-10 rounded-xl border border-dashed border-border/60 bg-muted/10">
+          <User className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No other people in your network yet</p>
+          <p className="text-xs text-muted-foreground/70 mt-0.5">Add a person from the Profiles page to see them here</p>
+          <Link href="/profiles">
+            <Button size="sm" variant="outline" className="mt-3 h-7 text-xs gap-1">
+              <Plus className="h-3 w-3" /> Manage People
+            </Button>
+          </Link>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-0.5">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+            {parties.length} {parties.length === 1 ? "person" : "people"} in your network
+          </span>
+          <Link href="/profiles">
+            <Button size="sm" variant="ghost" className="h-6 text-xs gap-1 px-2">
+              <Plus className="h-3 w-3" /> Manage
+            </Button>
+          </Link>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {parties.map((item: any) => {
+            const person = item.party || item;
+            const typeKey = person.profileType || person.type || "person";
+            const accent = typeKey === "pet" ? "20 88% 55%" : typeKey === "self" ? "183 98% 32%" : "271 70% 55%";
+            const initials = (person.name || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+            const relationship = person.relationship;
+            return (
+              <Link key={person.id} href={`/profiles/${person.id}`}>
+                <div
+                  className="group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer hover:shadow-md hover:-translate-y-px"
+                  style={{
+                    background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, hsl(var(--card)) 60%)`,
+                    borderColor: `hsl(${accent} / 0.25)`,
+                  }}
+                  data-testid={`linked-person-${person.id}`}
+                >
+                  {person.avatar ? (
+                    <img
+                      src={person.avatar}
+                      alt={person.name}
+                      className="w-10 h-10 rounded-full object-cover shrink-0 border-2"
+                      style={{ borderColor: `hsl(${accent} / 0.4)` }}
+                      loading="lazy"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  ) : (
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-white text-xs font-bold"
+                      style={{ background: `linear-gradient(135deg, hsl(${accent}), hsl(${accent} / 0.7))` }}
+                    >
+                      {initials}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{person.name}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      {relationship ? (
+                        <span
+                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize"
+                          style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}
+                        >
+                          {relationship}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground capitalize">{typeKey}</span>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground/60 group-hover:text-foreground transition-colors shrink-0" />
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── ASSET / LIABILITY render path (unchanged behaviour) ─────────────────────
   if (parties.length === 0) {
     return (
       <div className="space-y-3">
@@ -10448,19 +10784,39 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
           </Button>
         </div>
         <CardContent className="px-4 pb-3 pt-0">
-          {events.length > 0 ? (
-            <div className="space-y-1">
-              {events.slice(0, 5).map((ev: any) => (
-                <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
-                    <span className="text-xs truncate">{ev.title}</span>
+          {events.length > 0 ? (() => {
+            const sorted = [...events].sort((a: any, b: any) => (parseDate(a.date)?.getTime() || 0) - (parseDate(b.date)?.getTime() || 0));
+            const upcoming = sorted.filter((ev: any) => !isPast(ev.date)).slice(0, 5);
+            const recentPast = sorted.filter((ev: any) => isPast(ev.date)).reverse().slice(0, 3);
+            if (upcoming.length === 0 && recentPast.length === 0) {
+              return <p className="text-xs text-muted-foreground py-2">No calendar events linked yet</p>;
+            }
+            return (
+              <div className="space-y-1">
+                {upcoming.map((ev: any) => (
+                  <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Calendar className="h-3 w-3 text-emerald-500 shrink-0" />
+                      <span className="text-xs truncate">{ev.title}</span>
+                    </div>
+                    <span className="text-xs font-medium tabular-nums shrink-0">{relativeDayLabel(ev.date) || "\u2014"}</span>
                   </div>
-                  <span className="text-xs text-muted-foreground tabular-nums shrink-0">{ev.date ? new Date(ev.date).toLocaleDateString() : "—"}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
+                ))}
+                {recentPast.length > 0 && upcoming.length > 0 && (
+                  <div className="text-[10px] uppercase font-semibold tracking-wider text-muted-foreground/60 pt-1.5">Past</div>
+                )}
+                {recentPast.map((ev: any) => (
+                  <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0 opacity-60">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span className="text-xs truncate text-muted-foreground">{ev.title}</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">{relativeDayLabel(ev.date) || "\u2014"}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })() : (
             <p className="text-xs text-muted-foreground py-2">No calendar events linked yet</p>
           )}
         </CardContent>
@@ -11260,7 +11616,7 @@ export default function ProfileDetailPage() {
       {/* Hero Header */}
       <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: getProfileBanner(profile?.type || '') }}>
         <div className="flex items-center justify-between mb-3">
-          <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="button-back">
+          <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-white/80 hover:text-white transition-colors" data-testid="button-back">
             <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
           </Link>
           <div className="flex items-center gap-1.5">
@@ -11269,7 +11625,7 @@ export default function ProfileDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1 bg-background/60 backdrop-blur-sm"
+              className="h-7 text-xs gap-1 bg-white/15 hover:bg-white/25 text-white border-white/30 backdrop-blur-sm"
               onClick={() => setShowEditDialog(true)}
               data-testid="button-header-edit-profile"
             >
@@ -11278,7 +11634,7 @@ export default function ProfileDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1 text-destructive hover:text-destructive bg-background/60 backdrop-blur-sm"
+              className="h-7 text-xs gap-1 bg-white/15 hover:bg-red-500/30 text-white border-white/30 backdrop-blur-sm"
               onClick={() => setShowDeleteDialog(true)}
               data-testid="button-delete-profile"
             >
@@ -11297,7 +11653,7 @@ export default function ProfileDetailPage() {
             data-testid="input-avatar-upload"
           />
           <button
-            className={`relative w-14 h-14 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ${profileAccent(profile.type)}`}
+            className={`relative w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ring-2 ring-white/40 shadow-lg ${profileAccent(profile.type)}`}
             onClick={() => avatarInputRef.current?.click()}
             disabled={avatarMutation.isPending}
             title="Change profile picture"
@@ -11306,19 +11662,19 @@ export default function ProfileDetailPage() {
             {profile.avatar ? (
               <img src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />
             ) : (
-              profileIcon(profile.type)
+              <span className="scale-150">{profileIcon(profile.type)}</span>
             )}
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <Camera className="h-4 w-4 text-white" />
+              <Camera className="h-5 w-5 text-white" />
             </div>
             {avatarMutation.isPending && (
               <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                <RefreshCw className="h-4 w-4 text-white animate-spin" />
+                <RefreshCw className="h-5 w-5 text-white animate-spin" />
               </div>
             )}
           </button>
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-semibold" data-testid="text-profile-detail-name">{profile.name}</h1>
+            <h1 className="text-xl font-bold text-white drop-shadow-sm" data-testid="text-profile-detail-name">{profile.name}</h1>
             {/* Phase 2 breadcrumb — only renders when this profile has a parent chain. */}
             {(NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType) ||
               ((profile.type as string) === "liability") ||
@@ -11331,16 +11687,16 @@ export default function ProfileDetailPage() {
               />
             )}
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
-              <Badge variant="secondary" className="text-xs capitalize">{profile.type}</Badge>
+              <Badge variant="secondary" className="text-xs capitalize bg-white/20 text-white border-white/30 backdrop-blur-sm hover:bg-white/30">{profile.type}</Badge>
               {(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
-                <Badge key={tag} variant="outline" className="text-xs">
+                <Badge key={tag} variant="outline" className="text-xs bg-white/10 text-white/90 border-white/25">
                   <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
                 </Badge>
               ))}
               {/* owner is now shown in the top-right dropdown button — no badge needed here */}
             </div>
             {profile.notes && (
-              <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{profile.notes}</p>
+              <p className="text-xs text-white/75 mt-2 line-clamp-2">{profile.notes}</p>
             )}
           </div>
         </div>
@@ -11359,9 +11715,9 @@ export default function ProfileDetailPage() {
           return (
             <div className={`grid ${gridCls} gap-2 mt-4`}>
               {stats.map(stat => (
-                <div key={stat.label} className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
-                  <p className="text-lg font-semibold tabular-nums">{stat.value}</p>
-                  <p className="text-xs text-muted-foreground">{stat.label}</p>
+                <div key={stat.label} className="text-center py-2.5 rounded-lg bg-white/15 backdrop-blur-md border border-white/20 shadow-sm">
+                  <p className="text-lg font-bold tabular-nums text-white">{stat.value}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-white/80 font-medium">{stat.label}</p>
                 </div>
               ))}
             </div>
@@ -11403,17 +11759,10 @@ export default function ProfileDetailPage() {
               {tabValues.has("info") && (
                 <TabsContent value="info" className="mt-4 px-1 sm:px-0">
                   <InfoTab profile={profile} onEdit={() => setShowEditDialog(true)} />
-                  {/* Linked People only — Linked Assets used to live here too
-                      and produced ghost "Asset / Asset" cards that 404'd on
-                      click. Assets, Liabilities and Finance now live on the
-                      dedicated "Belongings" tab, so the Overview stays a
-                      true at-a-glance snapshot. */}
-                  {(["person", "self"].includes(profile.type)) && (
-                    <section className="mt-6">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
-                      <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
-                    </section>
-                  )}
+                  {/* Linked People moved off Overview (2026-06-10): the Linked
+                      tab in the bottom nav and the per-profile "Linked" tab
+                      already surface this; duplicating it on Overview just
+                      pushed the actual person details below the fold. */}
                   {/* Non-person profiles — identity-only Overview (2026-05-26 redo):
                       Overview tab now answers ONE question: "what is this thing?"
                       Money/value/liabilities  → Money tab
@@ -11477,10 +11826,6 @@ export default function ProfileDetailPage() {
                           </div>
                         </div>
                       )}
-                      <section className="mt-6">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked People</p>
-                        <LinkedPeopleTab profileId={profile.id} profileType={profile.type} onChanged={handleSaved} />
-                      </section>
                     </>
                   )}
                 </TabsContent>
@@ -11586,25 +11931,11 @@ export default function ProfileDetailPage() {
                   below. Replaces the two near-duplicate tabs the user
                   was bouncing between. */}
               {tabValues.has("health-trackers") && (
-                <TabsContent value="health-trackers" className="mt-4 px-1 sm:px-0 space-y-6">
-                  <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Health</p>
-                    <HealthTabView profile={profile} onChanged={handleSaved} />
-                  </section>
-                  <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">All Trackers</p>
-                    {profile.relatedTrackers.length > 0 ? (
-                      <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
-                    ) : (
-                      <Card>
-                        <CardContent className="py-8 text-center">
-                          <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                          <p className="text-sm text-muted-foreground">No trackers linked to this profile</p>
-                          <p className="text-xs text-muted-foreground mt-1">Create trackers via chat or the Linked page, then link them here</p>
-                        </CardContent>
-                      </Card>
-                    )}
-                  </section>
+                <TabsContent value="health-trackers" className="mt-4 px-1 sm:px-0">
+                  {/* Single HealthTabView render with includeAll=true. The old
+                      two-section layout duplicated "All Trackers" because
+                      HealthTabView already renders its own All Trackers list. */}
+                  <HealthTabView profile={profile} onChanged={handleSaved} includeAll />
                 </TabsContent>
               )}
 
@@ -11624,9 +11955,11 @@ export default function ProfileDetailPage() {
                   <section>
                     <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Schedule & Activity</p>
                     {(() => {
-                      const feed: Array<{date: string; type: string; title: string; subtitle?: string; color: string}> = [];
+                      type FeedItem = { date: string; type: string; title: string; subtitle?: string; color: string };
+                      const feed: FeedItem[] = [];
                       for (const t of (profile.relatedTasks || [])) {
-                        feed.push({ date: (t as any).createdAt || t.dueDate || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
+                        // Tasks anchor on dueDate; fall back to createdAt only when there's no due date.
+                        feed.push({ date: t.dueDate || (t as any).createdAt || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
                       }
                       for (const ev of (profile.relatedEvents || [])) {
                         feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: '#3b82f6' });
@@ -11634,29 +11967,92 @@ export default function ProfileDetailPage() {
                       for (const e of (profile.relatedExpenses || [])) {
                         feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
                       }
-                      feed.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
                       if (feed.length === 0) {
                         return (
-                          <div className="text-center py-8">
-                            <Activity className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
-                            <p className="text-xs text-muted-foreground">No activity yet</p>
+                          <div className="text-center py-10 rounded-xl border border-dashed border-border/60 bg-muted/10">
+                            <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                            <p className="text-sm text-muted-foreground">No activity yet</p>
+                            <p className="text-xs text-muted-foreground/70 mt-0.5">Linked tasks, events, and expenses will appear here</p>
                           </div>
                         );
                       }
-                      return (
-                        <div className="space-y-1.5 pb-4">
-                          {feed.slice(0, 50).map((item, i) => (
-                            <div key={i} className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50">
-                              <div className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: item.color }} />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium truncate">{item.title}</p>
-                                {item.subtitle && <p className="text-xs text-muted-foreground">{item.subtitle}</p>}
+                      // Split: today/future vs past. Done tasks always go to past.
+                      const upcoming: FeedItem[] = [];
+                      const past: FeedItem[] = [];
+                      for (const item of feed) {
+                        const isDoneTask = item.type === 'task' && item.subtitle === 'done';
+                        if (isDoneTask || isPast(item.date)) past.push(item);
+                        else upcoming.push(item);
+                      }
+                      upcoming.sort((a, b) => (parseDate(a.date)?.getTime() || 0) - (parseDate(b.date)?.getTime() || 0));
+                      past.sort((a, b) => (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0));
+                      const renderItem = (item: FeedItem, i: number, variant: 'upcoming' | 'past') => {
+                        const labelDate = parseDate(item.date);
+                        const rel = relativeDayLabel(item.date);
+                        const isMuted = variant === 'past';
+                        return (
+                          <div
+                            key={`${variant}-${i}`}
+                            className={`flex items-start gap-3 p-2.5 rounded-lg border transition-colors ${
+                              isMuted
+                                ? 'border-border/40 bg-muted/20 hover:bg-muted/30 opacity-80'
+                                : 'border-border/70 bg-card hover:bg-muted/40 shadow-sm'
+                            }`}
+                          >
+                            <div
+                              className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                              style={{ background: item.color, boxShadow: `0 0 0 3px ${item.color}1F` }}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-xs font-medium truncate ${isMuted ? 'text-muted-foreground' : ''}`}>{item.title}</p>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <Badge variant="outline" className="h-4 px-1 text-[10px] capitalize">{item.type}</Badge>
+                                {item.subtitle && (
+                                  <span className="text-[10px] text-muted-foreground truncate">{item.subtitle}</span>
+                                )}
                               </div>
-                              <span className="text-xs text-muted-foreground shrink-0">
-                                {item.date ? new Date(item.date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}
-                              </span>
                             </div>
-                          ))}
+                            <div className="text-right shrink-0">
+                              <p className={`text-[11px] font-semibold tabular-nums ${
+                                isMuted ? 'text-muted-foreground' : 'text-foreground'
+                              }`}>{rel || '\u2014'}</p>
+                              {labelDate && (
+                                <p className="text-[9px] text-muted-foreground/70 tabular-nums">
+                                  {labelDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      };
+                      return (
+                        <div className="space-y-4 pb-4">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5 px-0.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Upcoming</p>
+                              <span className="text-[10px] text-muted-foreground">({upcoming.length})</span>
+                            </div>
+                            {upcoming.length === 0 ? (
+                              <p className="text-xs text-muted-foreground italic px-2.5 py-3 rounded-lg bg-muted/10 border border-dashed border-border/40">No upcoming items scheduled</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {upcoming.slice(0, 25).map((it, i) => renderItem(it, i, 'upcoming'))}
+                              </div>
+                            )}
+                          </div>
+                          {past.length > 0 && (
+                            <div>
+                              <div className="flex items-center gap-2 mb-1.5 px-0.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Past</p>
+                                <span className="text-[10px] text-muted-foreground">({past.length})</span>
+                              </div>
+                              <div className="space-y-1.5">
+                                {past.slice(0, 25).map((it, i) => renderItem(it, i, 'past'))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
