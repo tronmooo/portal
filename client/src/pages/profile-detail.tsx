@@ -5193,22 +5193,35 @@ function TrackerCard_Profile({
   const [expanded, setExpanded] = useState(false);
   const [deleteEntryId, setDeleteEntryId] = useState<string | null>(null);
 
-  const last10 = tracker.entries.slice(-10);
+  // Guard: tracker.entries may be undefined when the API returns a
+  // tracker shape that omits the array. Reading .slice/.length on
+  // undefined crashes the whole profile detail page.
+  const allEntries: any[] = Array.isArray(tracker.entries) ? tracker.entries : [];
+  const last10 = allEntries.slice(-10);
 
-  // Find the first numeric field
+  // Find the first numeric field. Each entry's `values` may be missing
+  // when an entry was created by an older path — always treat it as a
+  // possibly-undefined dict.
   const numericField = tracker.fields?.find(
-    (f: any) => last10.some(e => typeof e.values[f.name] === "number")
+    (f: any) => last10.some(e => typeof (e?.values?.[f.name]) === "number")
   );
-  const fieldName = numericField?.name || (last10[0] ? Object.keys(last10[0].values)[0] : null);
+  const firstEntryVals = last10[0]?.values;
+  const fieldName = numericField?.name
+    || (firstEntryVals && typeof firstEntryVals === "object" ? Object.keys(firstEntryVals)[0] : null)
+    || null;
 
-  const chartData = last10.map((e, i) => ({
-    i,
-    val: fieldName != null ? (typeof e.values[fieldName] === "number" ? e.values[fieldName] : Number(e.values[fieldName])) : 0,
-    date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-  })).filter(d => !isNaN(d.val as number));
+  const chartData = last10.map((e, i) => {
+    const raw = fieldName != null ? e?.values?.[fieldName] : undefined;
+    const num = typeof raw === "number" ? raw : Number(raw);
+    return {
+      i,
+      val: isNaN(num) ? 0 : num,
+      date: e?.timestamp ? new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
+    };
+  }).filter(d => d.val !== 0 || fieldName == null);
 
   const latestEntry = last10[last10.length - 1];
-  const latestVal = latestEntry && fieldName != null ? latestEntry.values[fieldName] : null;
+  const latestVal = latestEntry && fieldName != null ? latestEntry?.values?.[fieldName] ?? null : null;
 
   let trend: "up" | "down" | "flat" = "flat";
   if (chartData.length >= 2) {
@@ -5221,7 +5234,7 @@ function TrackerCard_Profile({
   const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
   const trendColor = trend === "up" ? "text-green-500" : trend === "down" ? "text-red-500" : "text-muted-foreground";
 
-  const sortedEntries = [...tracker.entries].reverse();
+  const sortedEntries = [...allEntries].reverse();
 
   const deleteEntryMutation = useMutation({
     mutationFn: async (entryId: string) => {
@@ -5263,7 +5276,7 @@ function TrackerCard_Profile({
               {tracker.category && (
                 <Badge variant="secondary" className="text-xs">{tracker.category}</Badge>
               )}
-              <span className="text-xs text-muted-foreground">{tracker.entries.length} entries</span>
+              <span className="text-xs text-muted-foreground">{allEntries.length} entries</span>
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -5308,7 +5321,7 @@ function TrackerCard_Profile({
         )}
 
         {/* Entries list: always show recent, expand for all */}
-        {tracker.entries.length > 0 ? (
+        {allEntries.length > 0 ? (
           <>
             {/* Always show last 3 entries */}
             <div className="space-y-0 mt-1">
@@ -5317,8 +5330,9 @@ function TrackerCard_Profile({
                   <div className="flex items-center gap-2 min-w-0">
                     {(() => {
                       const pf = tracker.fields?.find((f: any) => f.isPrimary)?.name || tracker.fields?.[0]?.name;
-                      const pv = pf ? entry.values[pf] : undefined;
-                      const allVals = Object.entries(entry.values).filter(([, v]) => v != null && v !== "");
+                      const vals = (entry && typeof entry.values === "object" && entry.values !== null) ? entry.values : {};
+                      const pv = pf ? vals[pf] : undefined;
+                      const allVals = Object.entries(vals).filter(([, v]) => v != null && v !== "");
                       if (pv != null) {
                         return <span className="font-mono font-semibold text-sm tabular-nums">{pv}{tracker.unit ? ` ${tracker.unit}` : ""}</span>;
                       } else if (allVals.length > 0) {
