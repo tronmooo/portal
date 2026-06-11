@@ -3323,7 +3323,11 @@ function InfoTab({
       )}
 
       {/* ── 5b. Liabilities (Phase 1: liabilities are nested profiles) ── */}
+      {/* For person/self profiles this is suppressed — the Overview renders
+          PersonOwnershipSections instead, which unifies Assets + Liabilities
+          into a single matching design system (PR C, 2026-06-11). */}
       {(() => {
+        if (profile.type === "person" || profile.type === "self") return null;
         const kids = (profile.childProfiles || []) as any[];
         const liabilities = kids.filter(c => c.type === "liability" || c.type === "loan");
         if (liabilities.length === 0) return null;
@@ -10476,6 +10480,197 @@ function CostOfOwnershipCard({ profile }: { profile: any }) {
   );
 }
 
+// ── PR C (2026-06-11): unify Assets + Liabilities design system ──
+// RelLiabilityCard mirrors RelAssetCard exactly so the grid of assets and
+// the grid of liabilities are visually identical (same height, same icon
+// treatment, same Owner % badge, same Your-share line, same View action).
+function RelLiabilityCard({
+  id, name, typeKey, sharePct, currentBalance, apr, monthlyPayment,
+}: {
+  id: string;
+  name: string;
+  typeKey: string;
+  sharePct?: number | null;
+  currentBalance?: number | null;
+  apr?: number | string | null;
+  monthlyPayment?: number | null;
+}) {
+  const safeName = (name && name.trim()) ? name.trim() : "Untitled liability";
+  const pct = sharePct != null ? Number(sharePct) : null;
+  const share = (pct != null && currentBalance != null) ? (Number(currentBalance) * pct) / 100 : null;
+  const aprStr = apr != null && apr !== "" ? `${apr}${String(apr).includes("%") ? "" : "%"} APR` : null;
+  return (
+    <Card style={{height: 160}} className="overflow-hidden" data-testid={`liability-card-${id}`}>
+      <CardContent className="p-3 h-full flex flex-col justify-between">
+        <div className="flex items-start gap-2">
+          <span className="text-orange-500 mt-0.5"><Wallet className="h-4 w-4" /></span>
+          <div className="flex-1 min-w-0">
+            <a href={`#/profiles/${id}`} className="text-sm font-semibold hover:underline truncate block">{safeName}</a>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs text-muted-foreground capitalize">{typeKey || "loan"}</span>
+              {pct != null && pct < 100 && (
+                <Badge variant="outline" className="text-[10px] h-4 px-1.5" data-testid={`badge-liability-share-${id}`}>
+                  {pct.toFixed(pct % 1 === 0 ? 0 : 1)}% owes
+                </Badge>
+              )}
+            </div>
+            {share != null && (
+              <p className="text-xs text-muted-foreground mt-1 tabular-nums">
+                Your share: <span className="font-medium text-red-500">{formatCurrency(share)}</span>
+              </p>
+            )}
+            {(aprStr || monthlyPayment != null) && (
+              <p className="text-[10px] text-muted-foreground/80 mt-0.5 truncate">
+                {aprStr}{aprStr && monthlyPayment != null ? " · " : ""}{monthlyPayment != null ? `${formatCurrency(Number(monthlyPayment))}/mo` : ""}
+              </p>
+            )}
+          </div>
+        </div>
+        <div>
+          <Button size="sm" variant="ghost" className="h-6 text-xs px-2" asChild>
+            <a href={`#/profiles/${id}`}><ExternalLink className="h-3 w-3 mr-1" />View</a>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// PersonOwnershipSections renders the two matching sections (Assets and
+// Liabilities) on a person/self Overview. Each section:
+//   - has a collapsible header (chevron toggle) — collapsed by default per
+//     the universal collapse-by-default rule the user set in this session.
+//   - displays the count and the running total in the header.
+//   - uses the same 2-col grid of 160px cards under the hood (RelAssetCard
+//     for assets, RelLiabilityCard for liabilities).
+function PersonOwnershipSections({ profile }: { profile: any }) {
+  const [assetsOpen, setAssetsOpen] = useState(false);
+  const [liabsOpen, setLiabsOpen] = useState(false);
+
+  // Liabilities computed from childProfiles (same source as InfoTab 5b so
+  // we don't drift from the canonical numbers shown elsewhere in the app).
+  const liabilities = useMemo(() => {
+    const kids = (profile.childProfiles || []) as any[];
+    return kids.filter(c => c.type === "liability" || c.type === "loan");
+  }, [profile.childProfiles]);
+
+  const liabPct = (l: any) => typeof l._ownershipPercentage === "number" ? l._ownershipPercentage : 100;
+  const liabBalance = (l: any) => {
+    const f = l.fields || {}; const fin = f.finance || {};
+    return Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+  };
+  const liabTotal = useMemo(() => {
+    return liabilities.reduce((s: number, l: any) => {
+      const v = liabBalance(l);
+      return s + (Number.isFinite(v) ? v * liabPct(l) / 100 : 0);
+    }, 0);
+  }, [liabilities]);
+
+  // Assets count + total — pulled from /api/parties/:id/assets so it
+  // matches what LinkedAssetsTab actually renders (orphan-filtered, etc).
+  const { data: assetRows = [] } = useQuery<any[]>({
+    queryKey: ["/api/parties", profile.id, "assets"],
+    queryFn: async () => {
+      try {
+        return await apiRequest("GET", `/api/parties/${profile.id}/assets`).then(r => r.json());
+      } catch { return []; }
+    },
+  });
+  const { assetCount, assetTotal } = useMemo(() => {
+    const ASSET_LIKE = new Set(["asset","vehicle","property","investment","account"]);
+    let count = 0; let total = 0;
+    for (const r of (assetRows || [])) {
+      const a = r?.asset; if (!a?.id) continue;
+      if (!ASSET_LIKE.has(a.type)) continue;
+      count += 1;
+      const pct = Number(r.ownershipPercentage ?? 100);
+      const v = Number(a.currentValue ?? 0);
+      if (Number.isFinite(v)) total += v * pct / 100;
+    }
+    return { assetCount: count, assetTotal: total };
+  }, [assetRows]);
+
+  const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+
+  return (
+    <>
+      {/* ── Assets ── */}
+      <section data-testid="section-overview-assets">
+        <div className="flex items-center justify-between mb-2 px-0.5">
+          <button
+            className="flex items-center gap-2 flex-1 text-left group"
+            onClick={() => setAssetsOpen(o => !o)}
+            data-testid="button-toggle-assets-section"
+            aria-expanded={assetsOpen}
+          >
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${assetsOpen ? "rotate-180" : "-rotate-90"}`} />
+            <Package className="h-3.5 w-3.5 text-emerald-500" />
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+              Assets <span className="font-normal normal-case">({assetCount})</span>
+            </span>
+          </button>
+          {assetTotal > 0 && (
+            <span className="text-xs font-bold tabular-nums text-emerald-500">{fmt(assetTotal)}</span>
+          )}
+        </div>
+        {assetsOpen && (
+          <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
+        )}
+      </section>
+
+      {/* ── Liabilities ── */}
+      <section data-testid="section-overview-liabilities">
+        <div className="flex items-center justify-between mb-2 px-0.5">
+          <button
+            className="flex items-center gap-2 flex-1 text-left group"
+            onClick={() => setLiabsOpen(o => !o)}
+            data-testid="button-toggle-liabilities-section"
+            aria-expanded={liabsOpen}
+          >
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${liabsOpen ? "rotate-180" : "-rotate-90"}`} />
+            <Wallet className="h-3.5 w-3.5 text-orange-500" />
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+              Liabilities <span className="font-normal normal-case">({liabilities.length})</span>
+            </span>
+          </button>
+          {liabTotal > 0 && (
+            <span className="text-xs font-bold tabular-nums text-red-500">{fmt(liabTotal)}</span>
+          )}
+        </div>
+        {liabsOpen && (
+          liabilities.length === 0 ? (
+            <div className="text-center py-10" data-testid="linked-liabilities-empty">
+              <Wallet className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No liabilities</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {liabilities
+                .slice()
+                .sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""))
+                .map((l: any) => {
+                  const f = l.fields || {}; const fin = f.finance || {};
+                  return (
+                    <RelLiabilityCard
+                      key={l.id}
+                      id={l.id}
+                      name={l.name}
+                      typeKey={(l.type_key || l.fields?.subtype || l.type || "loan").toString().replace(/_/g, " ")}
+                      sharePct={liabPct(l)}
+                      currentBalance={liabBalance(l)}
+                      apr={f.apr ?? f.interestRate ?? fin.apr ?? fin.interestRate ?? null}
+                      monthlyPayment={f.monthlyPayment ?? fin.monthlyPayment ?? null}
+                    />
+                  );
+                })}
+            </div>
+          )
+        )}
+      </section>
+    </>
+  );
+}
+
 function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profileType: string }) {
   const { toast } = useToast();
   const isLiability = profileType === "liability" || profileType === "loan";
@@ -12044,15 +12239,12 @@ export default function ProfileDetailPage() {
                   {["person", "self"].includes(profile.type) && (
                     <div className="mt-4 space-y-6" data-testid="person-overview-financials">
                       <NetWorthStrip profileId={profile.id} />
-                      <section>
-                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Assets</p>
-                        <LinkedAssetsTab profileId={profile.id} profileType={profile.type} />
-                      </section>
-                      {/* Liabilities section intentionally NOT rendered here:
-                          InfoTab already renders a richer Liabilities card
-                          (section 5b at line ~3325) with APR / monthly / shared %.
-                          Rendering LinkedLiabilitiesTab here too created the
-                          duplicate the user flagged (2026-06-11). */}
+                      {/* PR C (2026-06-11): unified Assets + Liabilities sections.
+                          Both use the same RelAssetCard / RelLiabilityCard grid,
+                          the same collapsible header (collapsed by default),
+                          and surface count + running total. The InfoTab section
+                          5b Liabilities card is suppressed for person/self. */}
+                      <PersonOwnershipSections profile={profile} />
                     </div>
                   )}
                   {/* Linked People moved off Overview (2026-06-10): the Linked
