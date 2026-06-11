@@ -5124,6 +5124,35 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 // TRACKERS TAB — Upgraded with Recharts sparklines
 // ============================================================
 
+// ── PR D (2026-06-11): per-category visual treatment for trackers ──
+// Each tracker category gets its own icon, color, and display label so the
+// grouped tracker view has clear visual hierarchy. The same map is consumed
+// by TrackerCard_Profile (left-edge accent stripe + colored header icon)
+// and by TrackersTab (group header chip + icon).
+const TRACKER_VISUAL_STYLES: Record<string, {
+  label: string;
+  icon: any;
+  text: string;   // tailwind text color for icon
+  bg: string;     // tailwind bg tint for icon chip
+  stripe: string; // tailwind bg for left-edge accent stripe
+}> = {
+  health:       { label: "Health",       icon: HeartPulse, text: "text-red-500",     bg: "bg-red-500/10",     stripe: "bg-red-500" },
+  fitness:      { label: "Fitness",      icon: Activity,   text: "text-orange-500",  bg: "bg-orange-500/10",  stripe: "bg-orange-500" },
+  sleep:        { label: "Sleep",        icon: Clock,      text: "text-indigo-500",  bg: "bg-indigo-500/10",  stripe: "bg-indigo-500" },
+  weight:       { label: "Weight",       icon: BarChart2,  text: "text-blue-500",    bg: "bg-blue-500/10",    stripe: "bg-blue-500" },
+  mood:         { label: "Mood",         icon: Sparkles,   text: "text-yellow-500",  bg: "bg-yellow-500/10",  stripe: "bg-yellow-500" },
+  nutrition:    { label: "Nutrition",    icon: Droplet,    text: "text-green-500",   bg: "bg-green-500/10",   stripe: "bg-green-500" },
+  productivity: { label: "Productivity", icon: Zap,        text: "text-purple-500",  bg: "bg-purple-500/10",  stripe: "bg-purple-500" },
+  finance:      { label: "Finance",      icon: Wallet,     text: "text-emerald-500", bg: "bg-emerald-500/10", stripe: "bg-emerald-500" },
+  custom:       { label: "Custom",       icon: Target,     text: "text-teal-500",    bg: "bg-teal-500/10",    stripe: "bg-teal-500" },
+  other:        { label: "Other",        icon: Target,     text: "text-slate-500",   bg: "bg-slate-500/10",   stripe: "bg-slate-500" },
+};
+const TRACKER_GROUP_ORDER = ["health", "fitness", "sleep", "weight", "mood", "nutrition", "productivity", "finance", "custom", "other"];
+function trackerStyleFor(cat?: string | null) {
+  const k = (cat || "custom").toLowerCase().trim();
+  return TRACKER_VISUAL_STYLES[k] || TRACKER_VISUAL_STYLES.custom;
+}
+
 function TrackerCard_Profile({
   tracker,
   profileId,
@@ -5215,18 +5244,27 @@ function TrackerCard_Profile({
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
+  const trackerStyle = trackerStyleFor(tracker.category);
+  const TrackerCatIcon = trackerStyle.icon;
   return (
-    <Card data-testid={`card-tracker-${tracker.id}`}>
-      <CardContent className="p-3">
+    <Card data-testid={`card-tracker-${tracker.id}`} className="relative overflow-hidden">
+      {/* PR D: per-category left-edge accent stripe */}
+      <div className={`absolute left-0 top-0 bottom-0 w-1 ${trackerStyle.stripe}`} aria-hidden="true" />
+      <CardContent className="p-3 pl-4">
         {/* Header: name, badges, latest value, action buttons */}
         <div className="flex items-start justify-between mb-2">
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold truncate">{tracker.name}</p>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              {tracker.category && (
-                <Badge variant="secondary" className="text-xs">{tracker.category}</Badge>
-              )}
-              <span className="text-xs text-muted-foreground">{allEntries.length} entries</span>
+          <div className="flex-1 min-w-0 flex items-start gap-2">
+            <span className={`flex items-center justify-center h-7 w-7 rounded-full shrink-0 ${trackerStyle.bg}`}>
+              <TrackerCatIcon className={`h-3.5 w-3.5 ${trackerStyle.text}`} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold truncate">{tracker.name}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                {tracker.category && (
+                  <Badge variant="outline" className={`text-[10px] h-4 px-1.5 ${trackerStyle.text} border-current/20`}>{trackerStyle.label}</Badge>
+                )}
+                <span className="text-xs text-muted-foreground">{allEntries.length} entries</span>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -5533,6 +5571,32 @@ function TrackersTab({
 
   const trackerCategories = ["custom", "finance", "fitness", "health", "mood", "nutrition", "other", "productivity", "sleep", "weight"];
 
+  // ── PR D (2026-06-11): group trackers by category for visual hierarchy ──
+  const grouped = useMemo(() => {
+    const buckets: Record<string, typeof trackers> = {};
+    for (const t of trackers) {
+      const cat = (t.category || "custom").toLowerCase().trim() || "custom";
+      const key = TRACKER_VISUAL_STYLES[cat] ? cat : "custom";
+      (buckets[key] = buckets[key] || []).push(t);
+    }
+    // Stable ordering per the TRACKER_GROUP_ORDER list, with unknown buckets
+    // ordered alphabetically at the end.
+    const ordered: { key: string; items: typeof trackers }[] = [];
+    for (const k of TRACKER_GROUP_ORDER) {
+      if (buckets[k] && buckets[k].length > 0) {
+        ordered.push({ key: k, items: buckets[k].slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")) });
+        delete buckets[k];
+      }
+    }
+    for (const k of Object.keys(buckets).sort()) {
+      ordered.push({ key: k, items: buckets[k].slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")) });
+    }
+    return ordered;
+  }, [trackers]);
+
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const toggleGroup = (k: string) => setOpenGroups(s => ({ ...s, [k]: !s[k] }));
+
   return (
     <div className="space-y-3">
       {/* Action buttons — "+ New Tracker" removed 2026-05-21 (chat-only).
@@ -5555,17 +5619,46 @@ function TrackersTab({
           </CardContent>
         </Card>
       ) : (
-        trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
-          <TrackerCard_Profile
-            key={tracker.id}
-            tracker={tracker}
-            profileId={profileId}
-            onChanged={onChanged}
-            onLogEntry={(id) => { setEntryValue(""); setEntryNotes(""); setShowLogEntry(id); }}
-            onUnlink={(id) => setUnlinkTrackerId(id)}
-            onDeleteTracker={(id) => setDeleteTrackerId(id)}
-          />
-        ))
+        grouped.map(group => {
+          const style = TRACKER_VISUAL_STYLES[group.key] || TRACKER_VISUAL_STYLES.custom;
+          const Icon = style.icon;
+          const isOpen = !!openGroups[group.key];
+          return (
+            <section key={group.key} data-testid={`tracker-group-${group.key}`}>
+              <button
+                className="w-full flex items-center justify-between mb-2 px-0.5 group"
+                onClick={() => toggleGroup(group.key)}
+                data-testid={`button-toggle-tracker-group-${group.key}`}
+                aria-expanded={isOpen}
+              >
+                <div className="flex items-center gap-2">
+                  <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : "-rotate-90"}`} />
+                  <span className={`flex items-center justify-center h-6 w-6 rounded-full ${style.bg}`}>
+                    <Icon className={`h-3.5 w-3.5 ${style.text}`} />
+                  </span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    {style.label} <span className="font-normal normal-case text-muted-foreground/70">({group.items.length})</span>
+                  </span>
+                </div>
+              </button>
+              {isOpen && (
+                <div className="space-y-2">
+                  {group.items.map(tracker => (
+                    <TrackerCard_Profile
+                      key={tracker.id}
+                      tracker={tracker}
+                      profileId={profileId}
+                      onChanged={onChanged}
+                      onLogEntry={(id) => { setEntryValue(""); setEntryNotes(""); setShowLogEntry(id); }}
+                      onUnlink={(id) => setUnlinkTrackerId(id)}
+                      onDeleteTracker={(id) => setDeleteTrackerId(id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          );
+        })
       )}
 
       {/* Create Tracker Dialog */}
