@@ -26,6 +26,66 @@ import { isPast, parseDate, relativeDayLabel, daysFromToday } from "@/lib/dates"
  * History/archive remains accessible after the user opts in to view it.
  */
 type _PastActivityItem = { date: string; type: string; title: string; subtitle?: string; color: string };
+/**
+ * PR G: Universal collapse-by-default wrapper for large lists.
+ *
+ * Renders a Card with a clickable header (title + count + optional right slot
+ * such as a total) and a chevron. Children are only rendered when open.
+ * Default state is closed, per user requirement that every large list show
+ * a summary first and require an explicit expand action.
+ */
+function CollapsibleCardSection({
+  icon: Icon,
+  iconClassName,
+  title,
+  count,
+  summaryRight,
+  defaultOpen = false,
+  testId,
+  children,
+}: {
+  icon?: React.ComponentType<{ className?: string }>;
+  iconClassName?: string;
+  title: string;
+  count?: number;
+  summaryRight?: React.ReactNode;
+  defaultOpen?: boolean;
+  testId?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card data-testid={testId}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between py-2.5 px-4 hover:bg-muted/20 transition-colors text-left"
+        aria-expanded={open}
+        data-testid={testId ? `${testId}-toggle` : undefined}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          {Icon && <Icon className={iconClassName || "h-3.5 w-3.5 text-muted-foreground"} />}
+          <span className="text-xs font-semibold">
+            {title}
+            {typeof count === "number" && (
+              <span className="text-muted-foreground font-normal"> ({count})</span>
+            )}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {summaryRight}
+          <ChevronDown
+            className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </div>
+      </button>
+      {open && (
+        <CardContent className="px-4 pb-3 pt-0 space-y-1.5">{children}</CardContent>
+      )}
+    </Card>
+  );
+}
+
 function PastActivityList({
   items,
   renderItem,
@@ -3380,17 +3440,16 @@ function InfoTab({
         }, 0);
         const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
         return (
-          <Card data-testid="profile-liabilities-section">
-            <CardHeader className="py-2.5 px-4 flex flex-row items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <Wallet className="h-3.5 w-3.5 text-orange-500" />
-                <CardTitle className="text-xs font-semibold">Liabilities <span className="text-muted-foreground font-normal">({liabilities.length})</span></CardTitle>
-              </div>
-              {totalBalance > 0 && (
-                <span className="text-xs font-bold tabular-nums text-red-500">{fmt(totalBalance)}</span>
-              )}
-            </CardHeader>
-            <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
+          <CollapsibleCardSection
+            testId="profile-liabilities-section"
+            icon={Wallet}
+            iconClassName="h-3.5 w-3.5 text-orange-500"
+            title="Liabilities"
+            count={liabilities.length}
+            summaryRight={totalBalance > 0 ? (
+              <span className="text-xs font-bold tabular-nums text-red-500">{fmt(totalBalance)}</span>
+            ) : null}
+          >
               {liabilities.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((l: any) => {
                 const f = l.fields || {}; const fin = f.finance || {};
                 const grossBal = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
@@ -3423,8 +3482,7 @@ function InfoTab({
                   </Link>
                 );
               })}
-            </CardContent>
-          </Card>
+          </CollapsibleCardSection>
         );
       })()}
 
@@ -3434,11 +3492,11 @@ function InfoTab({
         const nonAssetChildren = (profile.childProfiles || []).filter((c: any) => !assetLikeTypes.has(c.type));
         if (nonAssetChildren.length === 0) return null;
         return (
-        <Card>
-          <CardHeader className="py-2.5 px-4">
-            <CardTitle className="text-xs font-semibold">Linked Profiles</CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
+        <CollapsibleCardSection
+          icon={Link2}
+          title="Linked Profiles"
+          count={nonAssetChildren.length}
+        >
             {nonAssetChildren.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((child: any) => {
               const iconMap: Record<string, any> = { subscription: CreditCard, vehicle: Car, asset: Package, loan: Wallet, liability: Wallet, investment: TrendingUp, property: Home, person: User, pet: PawPrint };
               const ChildIcon = iconMap[child.type] || Link2;
@@ -3459,8 +3517,7 @@ function InfoTab({
                 </Link>
               );
             })}
-          </CardContent>
-        </Card>
+        </CollapsibleCardSection>
         );
       })()}
 
@@ -4346,10 +4403,11 @@ function DocumentsTab({
       {/* Section 5: From child assets (asset-type profiles only, read-only) */}
       {isAssetTypeForDocs && childAssetDocs.length > 0 && (
         <div className="mt-4" data-testid="section-child-docs">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">
-            From child assets ({childAssetDocs.length})
-          </p>
-          <div className="space-y-2">
+          <CollapsibleCardSection
+            icon={FileText}
+            title="From child assets"
+            count={childAssetDocs.length}
+          >
             {childAssetDocs.map((doc: any) => (
               <Card key={doc.id} data-testid={`card-child-doc-${doc.id}`}>
                 <CardContent className="p-3">
@@ -4368,7 +4426,7 @@ function DocumentsTab({
                 </CardContent>
               </Card>
             ))}
-          </div>
+          </CollapsibleCardSection>
         </div>
       )}
 
@@ -8677,20 +8735,22 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
 
       {/* Linked Obligations */}
       {linkedObs.length > 0 && (
-        <Card className="p-4">
-          <h3 className="text-xs font-semibold mb-2">Linked Payments</h3>
-          <div className="space-y-2">
-            {linkedObs.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((ob: any) => (
-              <div key={ob.id} className="flex items-center justify-between text-xs">
-                <span>{ob.name}</span>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">${ob.amount}/mo</span>
-                  <Badge variant="outline" className="text-xs-tight">{ob.frequency}</Badge>
-                </div>
+        <CollapsibleCardSection
+          icon={Wallet}
+          iconClassName="h-3.5 w-3.5 text-orange-500"
+          title="Linked Payments"
+          count={linkedObs.length}
+        >
+          {linkedObs.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((ob: any) => (
+            <div key={ob.id} className="flex items-center justify-between text-xs">
+              <span>{ob.name}</span>
+              <div className="flex items-center gap-2">
+                <span className="font-medium">${ob.amount}/mo</span>
+                <Badge variant="outline" className="text-xs-tight">{ob.frequency}</Badge>
               </div>
-            ))}
-          </div>
-        </Card>
+            </div>
+          ))}
+        </CollapsibleCardSection>
       )}
     </div>
   );
