@@ -357,7 +357,7 @@ export const TIMEFRAME_LABELS: Record<UpcomingTimeframe, string> = {
   today: "Today",
   this_week: "This Week",
   next_30_days: "Next 30 Days",
-  future: "Future",
+  future: "Next 45 Days",
 };
 
 // =============================================================================
@@ -696,7 +696,24 @@ function extractGoals(goals: any[]): UpcomingDate[] {
 // AGGREGATE
 // =============================================================================
 
-export function aggregateUpcomingDates(input: AggregatorInputs): UpcomingDate[] {
+/**
+ * Default reminder window. Items farther than this are dropped — Upcoming is a
+ * reminder feed, not an annual roster, so a birthday 11 months out doesn't
+ * belong here. Override via aggregateUpcomingDates({ windowDays }).
+ */
+export const DEFAULT_UPCOMING_WINDOW_DAYS = 45;
+
+export interface AggregateOptions {
+  /** Maximum days out to include. Anything > windowDays is dropped. Default 45. */
+  windowDays?: number;
+}
+
+export function aggregateUpcomingDates(
+  input: AggregatorInputs,
+  options: AggregateOptions = {},
+): UpcomingDate[] {
+  const windowDays = options.windowDays ?? DEFAULT_UPCOMING_WINDOW_DAYS;
+
   const all: UpcomingDate[] = [];
   all.push(...extractProfiles(input.profiles || []));
   all.push(...extractDocuments(input.documents || [], input.profiles || []));
@@ -705,20 +722,41 @@ export function aggregateUpcomingDates(input: AggregatorInputs): UpcomingDate[] 
   all.push(...extractObligations(input.obligations || []));
   all.push(...extractGoals(input.goals || []));
 
-  // Dedupe by id (recurrence rolls + explicit calendar entries may collide).
-  const dedup = new Map<string, UpcomingDate>();
+  // First pass: dedupe by id (recurrence rolls + explicit calendar entries may collide).
+  const byId = new Map<string, UpcomingDate>();
   for (const item of all) {
-    const prev = dedup.get(item.id);
-    if (!prev || item.daysUntil < prev.daysUntil) dedup.set(item.id, item);
+    const prev = byId.get(item.id);
+    if (!prev || item.daysUntil < prev.daysUntil) byId.set(item.id, item);
   }
 
-  const out = [...dedup.values()];
-  // Only future or today.
+  // Second pass: semantic dedup. A person's birthday or a vehicle's registration
+  // can be sourced from multiple places (profile field, profile recurring,
+  // attached document). Collapse by (relatedProfileId || sourceId) + category +
+  // nextDate so the user sees each real-world reminder exactly once.
+  const bySemantic = new Map<string, UpcomingDate>();
+  for (const item of byId.values()) {
+    const ownerKey = item.relatedProfileId || item.sourceId;
+    const semKey = `${ownerKey}::${item.category}::${item.nextDate}`;
+    const prev = bySemantic.get(semKey);
+    if (!prev) {
+      bySemantic.set(semKey, item);
+      continue;
+    }
+    // Prefer the entry with the richer subtitle / non-document entityKind so
+    // the dashboard shows "Luna — Birthday · Personal" over "Luna — Birthday · Birthday".
+    const preferIncoming =
+      (item.entityKind !== "document" && prev.entityKind === "document") ||
+      (!!item.subtitle && !prev.subtitle && item.entityKind === prev.entityKind);
+    if (preferIncoming) bySemantic.set(semKey, item);
+  }
+
   const today = todayISO();
   const todayMs = parseDate(today)!.getTime();
-  const filtered = out.filter(u => {
+  const filtered = [...bySemantic.values()].filter(u => {
     const ms = parseDate(u.nextDate)?.getTime();
-    return ms !== undefined && ms >= todayMs;
+    if (ms === undefined || ms < todayMs) return false;
+    // Reminder window — drop anything farther than windowDays out.
+    return u.daysUntil <= windowDays;
   });
   filtered.sort((a, b) => a.daysUntil - b.daysUntil || a.title.localeCompare(b.title));
   return filtered;
