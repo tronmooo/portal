@@ -901,52 +901,102 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       <Dialog open={popup === "spending"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-sm">Spending Breakdown</DialogTitle>
-            <DialogDescription className="text-xs">This month's expenses by category</DialogDescription>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-amber-500" />
+              Spending Breakdown
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {(() => {
+                const now = new Date();
+                const monthName = now.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+                const dayOfMonth = now.getDate();
+                const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                return `${monthName} · day ${dayOfMonth} of ${daysInMonth}`;
+              })()}
+            </DialogDescription>
           </DialogHeader>
           {(() => {
             const categories = finSnap?.spendByCategory
-              ? Object.entries(finSnap.spendByCategory as Record<string, number>).sort(([a], [b]) => a.localeCompare(b))
+              ? Object.entries(finSnap.spendByCategory as Record<string, number>)
+                  .sort(([, a], [, b]) => (b as number) - (a as number))
               : [];
             const total = finSnap?.totalMonthlySpend || 0;
+            const lastMonth = finSnap?.lastMonthTotal || 0;
+            const trendPct = typeof finSnap?.spendTrend === 'number' ? finSnap.spendTrend : 0;
+            const now = new Date();
+            const dayOfMonth = now.getDate();
+            const avgPerDay = dayOfMonth > 0 ? total / dayOfMonth : 0;
             const SPEND_COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ef4444","#3b82f6","#f97316","#ec4899","#84cc16","#6366f1"];
+            const topCategory = categories[0];
             return (
-              <div className="space-y-1.5 py-2">
-                {categories.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No expenses this month</p>}
-                {categories.map(([cat, amt], i) => {
-                  const pct = total > 0 ? Math.round((amt / total) * 100) : 0;
-                  const color = SPEND_COLORS[i % SPEND_COLORS.length];
-                  return (
-                    <div key={cat} className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-                          <span className="text-xs capitalize">{cat}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground">{pct}%</span>
-                          <span className="text-xs font-semibold tabular-nums w-16 text-right">{formatMoney(amt)}</span>
-                        </div>
-                      </div>
-                      <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
-                      </div>
+              <div className="space-y-2 py-1">
+                {/* Header KPIs — only render when data exists */}
+                {total > 0 && (
+                  <div className="grid grid-cols-3 gap-2 p-2 rounded-lg bg-muted/40">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total</p>
+                      <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
                     </div>
-                  );
-                })}
-                {categories.length > 0 && (
-                  <div className="flex items-center justify-between pt-2 border-t">
-                    <span className="text-xs font-semibold">Total</span>
-                    <span className="text-sm font-bold tabular-nums">{formatMoney(total)}</span>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg/day</p>
+                      <p className="text-sm font-bold tabular-nums">{formatMoney(avgPerDay)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Categories</p>
+                      <p className="text-sm font-bold tabular-nums">{categories.length}</p>
+                    </div>
                   </div>
                 )}
-                {finSnap?.lastMonthTotal > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    vs last month: {formatMoney(finSnap.lastMonthTotal)}
-                    <span className={`ml-1 font-medium ${finSnap.spendTrend > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                      {finSnap.spendTrend > 0 ? '+' : ''}{finSnap.spendTrend}%
+                {/* Top category callout */}
+                {topCategory && total > 0 && (
+                  <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-amber-500/5 border border-amber-500/20">
+                    <TrendingUp className="h-3 w-3 text-amber-500 shrink-0" />
+                    <span className="text-xs flex-1 truncate">
+                      <span className="font-semibold capitalize">{topCategory[0]}</span> is your largest category
                     </span>
-                  </p>
+                    <span className="text-xs font-semibold text-amber-500 tabular-nums">
+                      {Math.round(((topCategory[1] as number) / total) * 100)}%
+                    </span>
+                  </div>
+                )}
+                <div className="space-y-1.5 pt-1">
+                  {categories.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No expenses this month</p>}
+                  {categories.map(([cat, amt], i) => {
+                    const pct = total > 0 ? Math.round(((amt as number) / total) * 100) : 0;
+                    const color = SPEND_COLORS[i % SPEND_COLORS.length];
+                    return (
+                      <div key={cat} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                            <span className="text-xs capitalize truncate">{cat}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{pct}%</span>
+                            <span className="text-xs font-semibold tabular-nums w-16 text-right">{formatMoney(amt as number)}</span>
+                          </div>
+                        </div>
+                        <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Footer compare strip — only when last month data exists */}
+                {lastMonth > 0 && (
+                  <div className="pt-2 mt-1 border-t space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Last month total</span>
+                      <span className="tabular-nums">{formatMoney(lastMonth)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Change</span>
+                      <span className={`font-semibold tabular-nums ${trendPct > 0 ? 'text-red-500' : trendPct < 0 ? 'text-green-500' : 'text-muted-foreground'}`}>
+                        {trendPct > 0 ? '+' : ''}{trendPct}% ({formatMoney(total - lastMonth)})
+                      </span>
+                    </div>
+                  </div>
                 )}
               </div>
             );
@@ -958,35 +1008,97 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
       {/* Bills Popup */}
       <Dialog open={popup === "bills"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-sm">Upcoming Bills</DialogTitle>
-            <DialogDescription className="text-xs">Bills due in the next 30 days</DialogDescription>
-          </DialogHeader>
-          <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
-            <div className="space-y-1.5 py-2">
-              {(finSnap?.upcomingBills || []).slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((bill: any) => {
-                const urgent = bill.daysUntil <= 3;
-                const soon = bill.daysUntil <= 7;
-                return (
-                  <div key={bill.id}
-                    className={`flex items-center justify-between p-2 rounded-lg border ${urgent ? "border-red-500/30 bg-red-500/5" : soon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"}`}>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{bill.name}</p>
-                      <p className={`text-xs ${urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
-                        {daysUntilStr(bill.daysUntil)}
-                        {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
-                      </p>
+          {(() => {
+            const bills = (finSnap?.upcomingBills || []) as any[];
+            const total = bills.reduce((s, b) => s + (b.amount || 0), 0);
+            const autopayBills = bills.filter(b => b.autopay);
+            const manualBills = bills.filter(b => !b.autopay);
+            const autopayTotal = autopayBills.reduce((s, b) => s + (b.amount || 0), 0);
+            const manualTotal = manualBills.reduce((s, b) => s + (b.amount || 0), 0);
+            const overdue = bills.filter(b => b.daysUntil < 0 && !b.autopay);
+            const within7 = bills.filter(b => b.daysUntil >= 0 && b.daysUntil <= 7);
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-sm flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-amber-500" />
+                    Upcoming Bills
+                    {bills.length > 0 && <Badge variant="secondary" className="ml-1 tabular-nums">{bills.length}</Badge>}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs">Bills due in the next 30 days</DialogDescription>
+                </DialogHeader>
+                {bills.length > 0 && (
+                  <div className="grid grid-cols-3 gap-2 p-2 rounded-lg bg-muted/40 mt-1">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total due</p>
+                      <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
                     </div>
-                    <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Manual</p>
+                      <p className="text-sm font-bold tabular-nums">{formatMoney(manualTotal)}</p>
+                      <p className="text-[9px] text-muted-foreground">{manualBills.length} bill{manualBills.length !== 1 ? 's' : ''}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Autopay</p>
+                      <p className="text-sm font-bold tabular-nums text-green-500">{formatMoney(autopayTotal)}</p>
+                      <p className="text-[9px] text-muted-foreground">{autopayBills.length} bill{autopayBills.length !== 1 ? 's' : ''}</p>
+                    </div>
                   </div>
-                );
-              })}
-              {(!finSnap?.upcomingBills || finSnap.upcomingBills.length === 0) && (
-                <p className="text-xs text-muted-foreground text-center py-4">No upcoming bills</p>
-              )}
-            </div>
-          </div>
-          <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
+                )}
+                {(overdue.length > 0 || within7.length > 0) && bills.length > 0 && (
+                  <div className="flex gap-2 mt-1">
+                    {overdue.length > 0 && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-500/10 text-red-500">
+                        {overdue.length} overdue
+                      </span>
+                    )}
+                    {within7.length > 0 && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">
+                        {within7.length} due this week
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
+                  <div className="space-y-1.5 py-2">
+                    {bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999)).map((bill: any) => {
+                      const urgent = bill.daysUntil <= 3;
+                      const soon = bill.daysUntil <= 7;
+                      const overdueBill = bill.daysUntil < 0;
+                      return (
+                        <div key={bill.id}
+                          className={`flex items-center justify-between p-2 rounded-lg border ${overdueBill && !bill.autopay ? "border-red-500/40 bg-red-500/8" : urgent ? "border-red-500/30 bg-red-500/5" : soon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"}`}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-xs font-medium truncate">{bill.name}</p>
+                              {bill.category && (
+                                <span className="text-[9px] uppercase tracking-wider text-muted-foreground/60 shrink-0">
+                                  {bill.category}
+                                </span>
+                              )}
+                            </div>
+                            <p className={`text-xs ${overdueBill && !bill.autopay ? "text-red-500 font-semibold" : urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
+                              {daysUntilStr(bill.daysUntil)}
+                              {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
+                              {bill.dueDate && <span className="ml-1 text-muted-foreground/70">· {fmtDate(bill.dueDate)}</span>}
+                            </p>
+                          </div>
+                          <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+                        </div>
+                      );
+                    })}
+                    {bills.length === 0 && (
+                      <div className="text-center py-6">
+                        <CheckCircle2 className="h-7 w-7 text-green-500/40 mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground">No bills due in the next 30 days</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
@@ -1003,7 +1115,20 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
               Expiring Documents
               <Badge variant="secondary" className="ml-1 tabular-nums">{visibleDocs.length}</Badge>
             </DialogTitle>
-            <DialogDescription className="text-xs">Documents with upcoming or past expiration dates. Snooze to hide for 30 days.</DialogDescription>
+            <DialogDescription className="text-xs">
+              {(() => {
+                const expiredCt = visibleDocs.filter((d: any) => normalizeFilter(d.status) === normalizeFilter("expired")).length;
+                const soonCt = visibleDocs.filter((d: any) => normalizeFilter(d.status) === normalizeFilter("expiring_soon")).length;
+                const upcomingCt = visibleDocs.length - expiredCt - soonCt;
+                const parts: string[] = [];
+                if (expiredCt > 0) parts.push(`${expiredCt} expired`);
+                if (soonCt > 0) parts.push(`${soonCt} expiring soon`);
+                if (upcomingCt > 0) parts.push(`${upcomingCt} upcoming`);
+                return parts.length > 0
+                  ? `${parts.join(" · ")}. Tap to view, snooze to hide for 30 days.`
+                  : "Documents with upcoming or past expiration dates. Snooze to hide for 30 days.";
+              })()}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '60vh' }}>
             <div className="space-y-1.5 py-2 pr-2">
@@ -1943,9 +2068,49 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
               All Action Items
               <Badge variant="secondary">{totalCount}</Badge>
             </SheetTitle>
-            <SheetDescription className="text-xs">All items that need your attention</SheetDescription>
+            <SheetDescription className="text-xs">
+              {(() => {
+                const overdueCt = allItems.filter(i => i.accentColor === '#ef4444').length;
+                const soonCt = totalCount - overdueCt;
+                const taskCt = allItems.filter(i => i.sourceType === 'task').length;
+                const billCt = allItems.filter(i => i.sourceType === 'bill').length;
+                const parts: string[] = [];
+                if (overdueCt > 0) parts.push(`${overdueCt} overdue`);
+                if (soonCt > 0) parts.push(`${soonCt} due soon`);
+                const summary = parts.join(' · ');
+                const bySource: string[] = [];
+                if (taskCt > 0) bySource.push(`${taskCt} task${taskCt !== 1 ? 's' : ''}`);
+                if (billCt > 0) bySource.push(`${billCt} bill${billCt !== 1 ? 's' : ''}`);
+                return summary ? `${summary} · ${bySource.join(', ')}` : 'All items that need your attention';
+              })()}
+            </SheetDescription>
           </SheetHeader>
-          <div className="overflow-y-auto overscroll-contain mt-4" style={{ WebkitOverflowScrolling: 'touch', height: 'calc(100vh - 120px)' }}>
+          {/* Quick filter chips */}
+          {totalCount > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-3 pb-2 border-b">
+              {(() => {
+                const overdueCt = allItems.filter(i => i.accentColor === '#ef4444').length;
+                const soonCt = totalCount - overdueCt;
+                return (
+                  <>
+                    {overdueCt > 0 && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/10 text-red-500">
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        {overdueCt} overdue
+                      </span>
+                    )}
+                    {soonCt > 0 && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-500">
+                        <Clock className="h-2.5 w-2.5" />
+                        {soonCt} due soon
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+          <div className="overflow-y-auto overscroll-contain mt-3" style={{ WebkitOverflowScrolling: 'touch', height: 'calc(100vh - 160px)' }}>
             <div className="space-y-0.5 pr-2">
               {allItems.map((item) => (
                 <AttentionItem key={`sheet-${item.sourceType}-${item.id}`} {...item} />
@@ -2431,27 +2596,97 @@ function ObligationsSection({ data }: { data: any[] }) {
 
       {/* Obligation Detail Popup */}
       <Dialog open={!!selectedBill} onOpenChange={o => { if (!o) setSelectedBill(null); }}>
-        <DialogContent className="max-w-xs max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-sm">{selectedBill?.name}</DialogTitle>
-            <DialogDescription className="text-xs">Bill details</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Amount</span><span className="font-semibold">{formatMoney(selectedBill?.amount || 0)}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Due</span><span>{selectedBill?.dueDate ? fmtDate(selectedBill.dueDate) : "N/A"}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Category</span><span className="capitalize">{selectedBill?.category || "general"}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Autopay</span><span>{selectedBill?.autopay ? "Yes" : "No"}</span></div>
-          </div>
-          <div className="flex gap-2 pt-2">
-            <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => selectedBill && payMutation.mutate({ id: selectedBill.id, name: selectedBill.name, amount: selectedBill.amount })}
-              disabled={payMutation.isPending}>
-              <Check className="h-3 w-3 mr-1" /> Mark Paid
-            </Button>
-            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => selectedBill && deleteMutation.mutate({ id: selectedBill.id, name: selectedBill.name })}
-              disabled={deleteMutation.isPending}>
-              <Trash2 className="h-3 w-3 mr-1" /> Delete
-            </Button>
-          </div>
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
+          {(() => {
+            const bill = selectedBill;
+            if (!bill) return null;
+            const days = bill.daysUntil;
+            const overdueBill = typeof days === 'number' && days < 0 && !bill.autopay;
+            const urgent = typeof days === 'number' && days >= 0 && days <= 3;
+            const soon = typeof days === 'number' && days >= 0 && days <= 7;
+            const chipColor = overdueBill ? 'text-red-500 bg-red-500/10 border-red-500/30'
+              : urgent ? 'text-red-500 bg-red-500/10 border-red-500/30'
+              : soon ? 'text-amber-500 bg-amber-500/10 border-amber-500/30'
+              : 'text-muted-foreground bg-muted/40 border-border';
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-sm flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-amber-500" />
+                    <span className="truncate flex-1">{bill.name}</span>
+                  </DialogTitle>
+                  <DialogDescription className="text-xs flex items-center gap-1.5 flex-wrap">
+                    <span>Bill details</span>
+                    {bill.frequency && <span className="text-muted-foreground/70">· {bill.frequency}</span>}
+                  </DialogDescription>
+                </DialogHeader>
+                {/* Amount hero */}
+                <div className="rounded-lg border bg-muted/30 p-3 mt-1">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Amount due</p>
+                  <p className="text-xl font-bold tabular-nums">{formatMoney(bill.amount || 0)}</p>
+                  {typeof days === 'number' && (
+                    <span className={`inline-flex items-center gap-1 mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${chipColor}`}>
+                      <Clock className="h-2.5 w-2.5" />
+                      {overdueBill ? `${Math.abs(days)} day${Math.abs(days) !== 1 ? 's' : ''} overdue` : daysUntilStr(days)}
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-1.5 py-2">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Due date</span>
+                    <span className="font-medium tabular-nums">{bill.dueDate ? fmtDate(bill.dueDate) : "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Category</span>
+                    <span className="capitalize">{bill.category || "general"}</span>
+                  </div>
+                  {bill.frequency && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Frequency</span>
+                      <span className="capitalize">{bill.frequency}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Autopay</span>
+                    <span className={bill.autopay ? "text-green-500 font-medium" : ""}>{bill.autopay ? "Yes — will charge automatically" : "No — pay manually"}</span>
+                  </div>
+                  {bill.provider && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Provider</span>
+                      <span className="truncate ml-2">{bill.provider}</span>
+                    </div>
+                  )}
+                  {bill.profileName && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Linked to</span>
+                      <span className="truncate ml-2">{bill.profileName}</span>
+                    </div>
+                  )}
+                  {bill.notes && (
+                    <div className="pt-1 text-xs">
+                      <p className="text-muted-foreground mb-0.5">Notes</p>
+                      <p className="text-foreground/80 italic">{bill.notes}</p>
+                    </div>
+                  )}
+                </div>
+                {bill.autopay && (
+                  <p className="text-[10px] text-muted-foreground/70 italic px-1">
+                    This bill is on autopay. Marking as paid manually only updates Portol's record.
+                  </p>
+                )}
+                <div className="flex gap-2 pt-2">
+                  <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => payMutation.mutate({ id: bill.id, name: bill.name, amount: bill.amount })}
+                    disabled={payMutation.isPending}>
+                    <Check className="h-3 w-3 mr-1" /> Mark Paid
+                  </Button>
+                  <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: bill.id, name: bill.name })}
+                    disabled={deleteMutation.isPending}>
+                    <Trash2 className="h-3 w-3 mr-1" /> Delete
+                  </Button>
+                </div>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </>
@@ -2743,6 +2978,39 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
           {actionGoal && (() => {
             const currentVal = actionGoal.current || actionGoal.startValue || 0;
             const pct = actionGoal.target > 0 ? Math.min(100, Math.round((currentVal / actionGoal.target) * 100)) : 0;
+            const remaining = Math.max(0, actionGoal.target - currentVal);
+            // Pace analysis — only when both deadline and createdAt exist (no fabrication).
+            const daysLeft = actionGoal.deadline
+              ? Math.ceil((new Date(actionGoal.deadline).getTime() - Date.now()) / 86400000)
+              : null;
+            let pace: { label: string; tone: 'good' | 'warn' | 'bad' | 'neutral'; detail: string } | null = null;
+            if (actionGoal.deadline && actionGoal.createdAt && actionGoal.target > 0) {
+              const startMs = new Date(actionGoal.createdAt).getTime();
+              const endMs = new Date(actionGoal.deadline).getTime();
+              const totalDays = Math.max(1, Math.round((endMs - startMs) / 86400000));
+              const elapsed = Math.max(0, Math.min(totalDays, Math.round((Date.now() - startMs) / 86400000)));
+              const expectedPct = Math.round((elapsed / totalDays) * 100);
+              const delta = pct - expectedPct;
+              if (pct >= 100) {
+                pace = { label: 'Complete', tone: 'good', detail: 'Target reached' };
+              } else if (daysLeft !== null && daysLeft < 0) {
+                pace = { label: 'Overdue', tone: 'bad', detail: `${Math.abs(daysLeft)}d past deadline` };
+              } else if (delta >= 5) {
+                pace = { label: 'Ahead', tone: 'good', detail: `+${delta}% vs expected pace` };
+              } else if (delta <= -10) {
+                pace = { label: 'Behind', tone: 'bad', detail: `${delta}% vs expected pace` };
+              } else if (delta <= -5) {
+                pace = { label: 'Slightly behind', tone: 'warn', detail: `${delta}% vs expected pace` };
+              } else {
+                pace = { label: 'On track', tone: 'good', detail: `Within ${Math.abs(delta)}% of expected pace` };
+              }
+            }
+            const paceTone = pace ? ({
+              good: 'text-green-500 bg-green-500/10 border-green-500/30',
+              warn: 'text-amber-500 bg-amber-500/10 border-amber-500/30',
+              bad: 'text-red-500 bg-red-500/10 border-red-500/30',
+              neutral: 'text-muted-foreground bg-muted/40 border-border',
+            }[pace.tone]) : '';
             return (
               <div className="space-y-4 pt-2">
                 {/* Header with progress */}
@@ -2756,8 +3024,34 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     {currentVal.toLocaleString()} / {actionGoal.target.toLocaleString()} {actionGoal.unit}
-                    {actionGoal.deadline && ` · Due ${new Date(actionGoal.deadline).toLocaleDateString()}`}
+                    {remaining > 0 && ` · ${remaining.toLocaleString()} ${actionGoal.unit} to go`}
                   </p>
+                  {/* Deadline + pace chips */}
+                  {(actionGoal.deadline || pace) && (
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                      {actionGoal.deadline && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted/60 border">
+                          <Clock className="h-2.5 w-2.5" />
+                          {daysLeft !== null && daysLeft > 0
+                            ? `${daysLeft}d left · due ${new Date(actionGoal.deadline).toLocaleDateString()}`
+                            : daysLeft !== null && daysLeft === 0
+                            ? `Due today`
+                            : daysLeft !== null && daysLeft < 0
+                            ? `${Math.abs(daysLeft)}d overdue`
+                            : `Due ${new Date(actionGoal.deadline).toLocaleDateString()}`}
+                        </span>
+                      )}
+                      {pace && (
+                        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${paceTone}`}>
+                          {pace.tone === 'good' ? <TrendingUp className="h-2.5 w-2.5" /> : pace.tone === 'bad' ? <TrendingDown className="h-2.5 w-2.5" /> : <Minus className="h-2.5 w-2.5" />}
+                          {pace.label}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {pace && pace.detail && (
+                    <p className="text-[10px] text-muted-foreground/80 mt-1 italic">{pace.detail}</p>
+                  )}
                 </div>
 
                 {/* Progress input — log increment */}
@@ -2841,9 +3135,50 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
       <Dialog open={creating || !!editGoal} onOpenChange={v => { if (!v) { setCreating(false); setEditGoal(null); resetForm(); } }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="text-sm">{editGoal ? "Edit Goal" : "Create Goal"}</DialogTitle>
-            <DialogDescription className="text-xs">Set a measurable target to track your progress</DialogDescription>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <Target className="h-4 w-4 text-primary" />
+              {editGoal ? "Edit Goal" : "Create Goal"}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {editGoal
+                ? "Update the target, deadline, or category. Progress is preserved."
+                : "Set a measurable target with a unit and an optional deadline so Portol can track your pace."}
+            </DialogDescription>
           </DialogHeader>
+          {/* Live preview — only shows when meaningful values entered */}
+          {(formTitle.trim() || formTarget) && (
+            <div className="rounded-lg border bg-muted/30 p-2.5 mt-1 space-y-1">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Preview</p>
+              <p className="text-xs font-semibold truncate">{formTitle.trim() || "Untitled goal"}</p>
+              <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                {formTarget && Number(formTarget) > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium tabular-nums">
+                    Target: {Number(formTarget).toLocaleString()} {formUnit || "units"}
+                  </span>
+                )}
+                {formDeadline && (
+                  <span className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground">
+                    Due {new Date(formDeadline).toLocaleDateString()}
+                  </span>
+                )}
+                {formType && formType !== 'custom' && (
+                  <span className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground capitalize">
+                    {formType.replace(/_/g, ' ')}
+                  </span>
+                )}
+              </div>
+              {formDeadline && formTarget && Number(formTarget) > 0 && (() => {
+                const daysToDeadline = Math.ceil((new Date(formDeadline).getTime() - Date.now()) / 86400000);
+                if (daysToDeadline <= 0) return null;
+                const perDay = Number(formTarget) / daysToDeadline;
+                return (
+                  <p className="text-[10px] text-muted-foreground/80 italic">
+                    Roughly {perDay >= 1 ? perDay.toFixed(1) : perDay.toFixed(2)} {formUnit || "units"} per day for {daysToDeadline} days
+                  </p>
+                );
+              })()}
+            </div>
+          )}
           <div className="space-y-3 py-2">
             <div>
               <Label className="text-xs">Title</Label>
@@ -4280,8 +4615,22 @@ function CustomizeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md max-h-[85vh] flex flex-col" data-testid="dialog-customize-dashboard">
         <DialogHeader>
-          <DialogTitle className="text-sm">Customize Dashboard</DialogTitle>
-          <DialogDescription className="text-xs">Reorder sections, toggle visibility, and change column placement.</DialogDescription>
+          <DialogTitle className="text-sm flex items-center gap-2">
+            <Settings className="h-4 w-4 text-primary" />
+            Customize Dashboard
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            {(() => {
+              const visible = draft.filter(s => s.visible).length;
+              const hidden = draft.length - visible;
+              return (
+                <>Reorder, toggle, and place sections in columns.
+                <span className="ml-1 font-medium text-foreground">{visible} visible</span>
+                {hidden > 0 && <span className="text-muted-foreground/70"> · {hidden} hidden</span>}
+                </>
+              );
+            })()}
+          </DialogDescription>
         </DialogHeader>
         <div className="flex-1 -mx-6 px-6 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '55vh' }}>
           <div className="space-y-1 py-1">
@@ -4888,20 +5237,44 @@ export default function DashboardPage() {
       <Dialog open={importOpen} onOpenChange={(o) => { if (!o) setImporting(false); setImportOpen(o); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Import Backup</DialogTitle>
-            <DialogDescription className="text-xs">Upload a Portol backup JSON file to restore your data.</DialogDescription>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <UploadCloud className="h-4 w-4 text-primary" />
+              Import Backup
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Restore profiles, finances, documents, tasks, habits, and trackers from a Portol export.
+            </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
+          <div className="py-3">
             <Label htmlFor="import-file" className="cursor-pointer">
-              <div className="border-2 border-dashed rounded-lg p-6 text-center hover:border-primary/50 transition-colors">
+              <div className="border-2 border-dashed rounded-lg p-5 text-center hover:border-primary/50 hover:bg-muted/30 transition-colors">
                 <UploadCloud className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
                 <p className="text-sm font-medium">Click to select backup file</p>
-                <p className="text-xs text-muted-foreground mt-1">.json files only</p>
+                <p className="text-xs text-muted-foreground mt-1">JSON file from Portol's Export Data action</p>
               </div>
             </Label>
             <input id="import-file" type="file" accept=".json" className="hidden" onChange={handleImport} disabled={importing} />
           </div>
-          {importing && <p className="text-xs text-center text-muted-foreground">Importing...</p>}
+          {/* Format details */}
+          <div className="space-y-1.5 text-[11px] text-muted-foreground border-t pt-2">
+            <p className="font-medium text-foreground/80">What gets imported</p>
+            <ul className="space-y-0.5 pl-3 list-disc">
+              <li>Profiles (people, assets, pets, vehicles, properties, businesses)</li>
+              <li>Finances — expenses, income, budgets, obligations</li>
+              <li>Tasks, habits, goals, calendar events</li>
+              <li>Documents, trackers, journal entries</li>
+            </ul>
+            <p className="pt-1 text-amber-500/90 flex items-start gap-1">
+              <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+              <span>Existing items with matching IDs may be overwritten. Export current data first as a safety backup.</span>
+            </p>
+          </div>
+          {importing && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <span className="h-3 w-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              <p className="text-xs text-muted-foreground">Importing — please don't close this window…</p>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
