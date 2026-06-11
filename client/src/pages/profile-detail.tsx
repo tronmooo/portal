@@ -19,6 +19,46 @@ import {
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { isPast, parseDate, relativeDayLabel, daysFromToday } from "@/lib/dates";
+
+/**
+ * PR F: Auto-hide past events on active schedule views.
+ * Collapsible "Past" section — hidden by default, expand via chevron.
+ * History/archive remains accessible after the user opts in to view it.
+ */
+type _PastActivityItem = { date: string; type: string; title: string; subtitle?: string; color: string };
+function PastActivityList({
+  items,
+  renderItem,
+}: {
+  items: _PastActivityItem[];
+  renderItem: (item: _PastActivityItem, i: number, variant: "upcoming" | "past") => JSX.Element;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 mb-1.5 px-0.5 text-left hover:opacity-80 transition-opacity"
+        aria-expanded={open}
+        data-testid="button-toggle-past-activity"
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Past</p>
+        <span className="text-[10px] text-muted-foreground">({items.length})</span>
+        <ChevronDown
+          className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="space-y-1.5">
+          {items.slice(0, 25).map((it, i) => renderItem(it, i, "past"))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
@@ -12958,16 +12998,7 @@ export default function ProfileDetailPage() {
                             )}
                           </div>
                           {past.length > 0 && (
-                            <div>
-                              <div className="flex items-center gap-2 mb-1.5 px-0.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
-                                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Past</p>
-                                <span className="text-[10px] text-muted-foreground">({past.length})</span>
-                              </div>
-                              <div className="space-y-1.5">
-                                {past.slice(0, 25).map((it, i) => renderItem(it, i, 'past'))}
-                              </div>
-                            </div>
+                            <PastActivityList items={past} renderItem={renderItem} />
                           )}
                         </div>
                       );
