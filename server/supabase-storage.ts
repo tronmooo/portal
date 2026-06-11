@@ -560,6 +560,9 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, category: r.category, unit: r.unit || undefined,
       icon: r.icon || undefined, fields: r.fields || [], entries,
       linkedProfiles: r.linked_profiles || [], createdAt: r.created_at,
+      // PR H: surface canonical metric metadata. Older rows return null and
+      // the client falls back to category defaults at render time.
+      metricDefinition: r.metric_definition || undefined,
     };
   }
 
@@ -2009,6 +2012,8 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, category: data.category || "custom",
       unit: data.unit || null, icon: data.icon || null, fields: data.fields || [],
       linked_profiles: linkedProfiles, created_at: now,
+      // PR H: persist canonical metric metadata when supplied.
+      metric_definition: (data as any).metricDefinition || null,
     });
     if (error) throw error;
     // Link to profiles via junction table
@@ -2029,6 +2034,8 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("trackers").update({
       name: merged.name, category: merged.category, unit: merged.unit || null,
       icon: merged.icon || null, fields: merged.fields,
+      // PR H: round-trip metric metadata on updates.
+      metric_definition: (merged as any).metricDefinition ?? null,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a

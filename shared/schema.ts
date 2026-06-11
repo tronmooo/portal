@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  type TrackerMetricDefinition,
+  trackerMetricDefinitionSchema,
+} from "./tracker-metric-definition";
+export type { TrackerMetricDefinition } from "./tracker-metric-definition";
 
 // ============================================================
 // SHARED CONSTANTS
@@ -274,6 +279,12 @@ export interface Tracker {
   entries: TrackerEntry[];
   linkedProfiles: string[];
   createdAt: string;
+  /**
+   * PR H: Canonical metric metadata. Optional for backward compatibility —
+   * existing trackers without metadata fall back to category defaults via
+   * getDefaultMetricDefinition(category) at read time.
+   */
+  metricDefinition?: TrackerMetricDefinition;
 }
 
 export interface TrackerField {
@@ -324,6 +335,7 @@ export const insertTrackerSchema = z.object({
     unit: z.string().optional(),
     isPrimary: z.boolean().optional(),
   })).default([]),
+  metricDefinition: trackerMetricDefinitionSchema.optional(),
 });
 
 export type InsertTracker = z.infer<typeof insertTrackerSchema>;
